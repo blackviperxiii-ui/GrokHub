@@ -587,6 +587,7 @@ impl Cabin {
                                                                 );
                                                                 crate::theme::paint_loadout_token_strip(ui);
                                                             }
+                                                            self.ui_chat_layout_row(ui);
                                                         }
                                                         SettingsSec::Behavior => {
                                                             crate::ui_kit::section_header(

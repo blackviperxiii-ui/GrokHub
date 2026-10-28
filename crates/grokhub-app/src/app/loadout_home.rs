@@ -13,6 +13,8 @@ use grokhub_core::{UpdateCard, UpdateStatus};
 
 use super::*;
 
+mod chat_first;
+
 /// The companion art slots, one per mood (slide 17). Swap a file to change
 /// that picture. `companion.png` is the hanging-out pose.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
@@ -515,6 +517,10 @@ impl Cabin {
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
     /// and its composer take the space that's left.
     pub(super) fn ui_loadout_dock(&mut self, ui: &mut egui::Ui) {
+        if self.cfg.chat_objectives {
+            self.ui_chat_sidebars(ui);
+            return;
+        }
         let Some(width) = dock_width(ui.available_width()) else {
             return;
         };
