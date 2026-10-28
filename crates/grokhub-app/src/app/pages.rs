@@ -1369,6 +1369,55 @@ impl Cabin {
                 });
             }
             ui.add_space(16.0);
+            crate::cards::section_label(ui, "Built-in skills");
+            crate::cards::help_text(
+                ui,
+                "Shipped with Loadout (vstack QA, AV QA, verify, follow-through). Use in chat sends /name.",
+            );
+            ui.add_space(8.0);
+            let builtins: Vec<_> = self
+                .native_skills
+                .iter()
+                .filter(|s| s.source == grokhub_agent::SkillSource::Builtin)
+                .filter(|s| {
+                    q.is_empty()
+                        || s.name.to_ascii_lowercase().contains(&q)
+                        || s.description.to_ascii_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect();
+            if builtins.is_empty() {
+                ui.label(
+                    RichText::new(if q.is_empty() {
+                        "Built-ins load with the native engine."
+                    } else {
+                        "None matched."
+                    })
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                crate::cards::tile_row(ui, builtins.len(), |ui, i| {
+                    let s = &builtins[i];
+                    let body = if s.description.is_empty() {
+                        "builtin".to_string()
+                    } else {
+                        format!("builtin · {}", s.description)
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::icon_for_label(&s.name),
+                        &s.name,
+                        &body,
+                        Some("Use in chat"),
+                        false,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        use_skill = Some(s.name.clone());
+                    }
+                });
+            }
+            ui.add_space(16.0);
             crate::cards::section_label(ui, "Project and user skills");
             crate::cards::help_text(
                 ui,
@@ -1378,6 +1427,7 @@ impl Cabin {
             let skills: Vec<_> = self
                 .native_skills
                 .iter()
+                .filter(|s| s.source != grokhub_agent::SkillSource::Builtin)
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)

@@ -251,6 +251,17 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
             format!("{id}: {}", s.description)
         })
         .collect();
+    // Built-in Loadout skills (vstack QA / verify / follow-through).
+    for (name, body) in crate::skills::BUILTIN_SKILL_BODIES {
+        let desc = body
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("description:")
+                    .map(|v| v.trim().trim_matches('"').to_string())
+            })
+            .unwrap_or_default();
+        rows.push(format!("{name}: {desc} [builtin]"));
+    }
     rows.sort();
     if rows.is_empty() {
         "no skills".into()
