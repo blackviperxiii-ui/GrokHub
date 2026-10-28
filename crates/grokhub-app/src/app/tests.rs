@@ -84,6 +84,9 @@ mod persist_tests;
 #[path = "home_feed_tests.rs"]
 mod home_feed_tests;
 
+#[path = "home_mission_tests.rs"]
+mod home_mission_tests;
+
 #[path = "chat_threads_tests.rs"]
 mod chat_threads_tests;
 

@@ -13,7 +13,7 @@ const COMPOSE_H: f32 = 112.0;
 const DRAFT_ID: &str = "home-mission-draft";
 
 /// Default Home chips (Mission Control preset).
-pub(super) const HOME_CHIPS: [&str; 4] = [
+pub(in crate::app) const HOME_CHIPS: [&str; 4] = [
     "Fix my stutter",
     "Find a duo tonight",
     "Free up storage",
@@ -196,7 +196,7 @@ impl Cabin {
                             .vertical_align(egui::Align::Center)
                             .font(egui::FontId::proportional(crate::theme::TYPE_LABEL)),
                     );
-                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         send = true;
                     }
                     if crate::ui_kit::recipe::button(
@@ -225,6 +225,7 @@ impl Cabin {
     /// Switch to Chat, open a new tab, and send `text` so the reply streams there.
     pub(in crate::app) fn send_home_to_chat(&mut self, text: String) {
         self.new_thread(false);
+        self.nav = Nav::Chat;
         self.send_from_composer(text);
     }
 
