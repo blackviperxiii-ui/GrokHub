@@ -337,9 +337,10 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # Home Mission Control (modular 1L+2M+4S grid) is the first icon on the rail.
-# Beside slide 09 — same HARD DONE sizes as other deck-match pairs.
+# Beside slide 09 — HARD DONE sizes plus narrow for the three-breakpoint proof.
 Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -clickAt 20, 61
 Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -clickAt 20, 61
+Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -clickAt 20, 61
 # Objectives (legacy Objectives page) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
