@@ -14,7 +14,7 @@ summary = "Check services, packages, boot errors, disk, memory and network first
 
 checklist = ["services", "packages", "boot errors", "ports", "disk space", "network"]
 backup = "Take a restore point first (snapper, Timeshift or a btrfs snapshot when there is one) and copy each config file to a .bak before editing it."
-verify = "Run the same probe again after each fix and compare: the failed service is running, the package check is clean, the error is gone."
+verify = "Run the same probe again after each fix and compare: the failed service is running, the package check is clean, the error is gone. After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
 rollback = "Put the .bak copies back and restart what was restarted; for a package change, roll back to the snapshot taken first."
 give_up = [
   "a hard approval was refused",
@@ -92,6 +92,9 @@ run = "systemctl --user restart plasma-plasmashell"
 [[phase.step]]
 name = "Clear cached website addresses"
 run = "resolvectl flush-caches"
+
+[[phase.step]]
+name = "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap"
 
 [[phase.step]]
 name = "Re-check with the same probe"

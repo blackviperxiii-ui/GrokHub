@@ -4257,8 +4257,8 @@ mod tests {
         assert_eq!(
             notes,
             [
-                "\n\nDone: Check services. Next: Check packages.\n\n",
-                "\n\nDone: Check packages. Next: Boot errors.\n\n",
+                "\n\nFinished check services. Now on check packages.\n\n",
+                "\n\nFinished check packages. Now on boot errors.\n\n",
                 "All three checked."
             ]
         );

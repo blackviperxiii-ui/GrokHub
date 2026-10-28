@@ -13,7 +13,7 @@ summary = "Check disks, stopped services, recent errors, the network and updates
 
 checklist = ["services", "updates", "recent errors", "disk space", "network"]
 backup = "Take a System Restore point first and copy each file to a .bak before editing it."
-verify = "Run the same probe again after each fix and compare: the service is running, the error is gone, the network test passes."
+verify = "Run the same probe again after each fix and compare: the service is running, the error is gone, the network test passes. After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
 rollback = "Put the .bak copies back; for a system change, go back to the restore point taken first."
 give_up = [
   "a hard approval was refused",

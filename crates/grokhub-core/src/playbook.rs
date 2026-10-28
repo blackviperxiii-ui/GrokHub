@@ -421,6 +421,21 @@ mod tests {
             ),
             (Some(1), None)
         );
+        // A repair that restarts the computer checks the fix again after it.
+        for text in &BUILTIN[1..3] {
+            let p = parse(text).unwrap();
+            assert!(
+                p.verify.ends_with(
+                    "After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
+                ),
+                "{}",
+                p.id
+            );
+        }
+        // Fix the real setting before linking around it.
+        assert!(parse(BUILTIN[1]).unwrap().prompt_block().contains(
+            "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap"
+        ));
     }
 
     #[test]

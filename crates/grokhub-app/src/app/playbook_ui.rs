@@ -300,7 +300,7 @@ mod tests {
         );
         assert_eq!(
             steps_line(&cabin.playbooks.all[1]),
-            "18 steps, up to Risky, asks first"
+            "19 steps, up to Risky, asks first"
         );
         assert_eq!(fits_line(&cabin.playbooks.all[6]), "Fits task · desktop");
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
