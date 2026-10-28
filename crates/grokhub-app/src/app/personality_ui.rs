@@ -19,6 +19,9 @@ const DETAIL_W: f32 = 280.0;
 const TWO_COL_MIN_W: f32 = 640.0;
 const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 140.0;
+/// Space reserved under the photo so TALK AS / Try it stay in the first
+/// viewport (deck shots do not scroll the detail column).
+const DETAIL_BELOW_PHOTO: f32 = 250.0;
 const PHOTO_SLOTS: u8 = 5;
 const PHOTO_HOLD_SECS: f64 = 2.8;
 const PHOTO_FADE_SECS: f64 = 0.35;
@@ -442,12 +445,15 @@ impl Cabin {
             .request_repaint_after(std::time::Duration::from_millis(50));
         let mut act_on: Option<CardAct> = None;
         let mut hover_id: Option<String> = None;
-        let avail = ui.available_width().max(1.0);
-        ui.set_max_width(avail);
+        let avail_raw = ui.available_width().max(1.0);
+        ui.set_max_width(avail_raw);
         // Finite row height from the visible body clip — never rely on
         // ScrollArea's unbounded available_height for the two-column row.
         let clip = ui.clip_rect();
         let arect = ui.available_rect_before_wrap();
+        // Prefer the real free rect width when it disagrees with available_width
+        // (indent / ScrollArea), so absolute column rects match the cards' max_rect.
+        let avail = avail_raw.min(arect.width()).max(1.0);
         let row_h = arect.intersect(clip).height().max(200.0);
         let cols_widths = two_col_widths(avail);
         let (grid_w, detail_w) = cols_widths.unwrap_or((avail, avail));
@@ -924,50 +930,55 @@ fn paint_grid_card(
         )
     };
     let inner_w = (width - 24.0).max(64.0);
-    // Pin the card to `width` before the Frame measures content — otherwise a
-    // long unwrapped description expands the row and pushes the detail panel off-screen.
+    // Allocate a fixed-width top-down child: the grid row is horizontal_top, and
+    // a plain scope/Frame inherits that so a wrapped description sits in a
+    // 1-char leftover beside the title.
     let resp = ui
-        .scope(|ui| {
-            ui.set_width(width);
-            ui.set_max_width(width);
-            egui::Frame::NONE
-                .fill(fill)
-                .corner_radius(if loadout {
-                    crate::ui_kit::recipe::CARD_RADIUS
-                } else {
-                    12.0
-                })
-                .stroke(stroke)
-                .inner_margin(egui::Margin::symmetric(12, 10))
-                .show(ui, |ui| {
-                    ui.set_width(inner_w);
-                    ui.set_max_width(inner_w);
-                    ui.set_min_height(88.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
-                        ui.vertical(|ui| {
-                            ui.set_max_width((inner_w - 36.0).max(40.0));
-                            ui.label(
-                                RichText::new(&p.name)
-                                    .size(crate::theme::FONT_BODY)
-                                    .strong()
-                                    .color(crate::theme::fg()),
-                            );
-                            paint_preset_tags(ui, p, false);
+        .allocate_ui_with_layout(
+            egui::vec2(width, ui.available_height().max(120.0)),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(width);
+                ui.set_max_width(width);
+                egui::Frame::NONE
+                    .fill(fill)
+                    .corner_radius(if loadout {
+                        crate::ui_kit::recipe::CARD_RADIUS
+                    } else {
+                        12.0
+                    })
+                    .stroke(stroke)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(inner_w);
+                        ui.set_max_width(inner_w);
+                        ui.set_min_height(88.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
+                            ui.vertical(|ui| {
+                                ui.set_max_width((inner_w - 36.0).max(40.0));
+                                ui.label(
+                                    RichText::new(&p.name)
+                                        .size(crate::theme::FONT_BODY)
+                                        .strong()
+                                        .color(crate::theme::fg()),
+                                );
+                                paint_preset_tags(ui, p, false);
+                            });
                         });
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&p.description)
+                                    .size(crate::theme::FONT_META)
+                                    .color(crate::theme::muted()),
+                            )
+                            .wrap(),
+                        );
                     });
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&p.description)
-                                .size(crate::theme::FONT_META)
-                                .color(crate::theme::muted()),
-                        )
-                        .wrap(),
-                    );
-                });
-        })
+            },
+        )
         .response
         .interact(egui::Sense::click());
     let resp = crate::theme::pointing(resp);
@@ -1012,9 +1023,12 @@ fn paint_photo_showcase(
     picker: &mut PickerState,
     now: f64,
     photo_w: f32,
+    photo_h_cap: f32,
 ) {
     let accent = personality_accent(&p.id);
-    let photo_h = (photo_w * 1.15).clamp(120.0, 280.0);
+    let photo_h = (photo_w * 1.15)
+        .clamp(72.0, 280.0)
+        .min(photo_h_cap.max(72.0));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(photo_w, photo_h), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, 12.0, crate::theme::void_bg());
@@ -1176,7 +1190,9 @@ fn paint_detail_panel(
             });
             ui.add_space(10.0);
             let photo_w = ui.available_width().max(100.0);
-            paint_photo_showcase(ui, p, picker, now, photo_w);
+            let room = (ui.clip_rect().bottom() - ui.cursor().top()).max(0.0);
+            let photo_h_cap = (room - DETAIL_BELOW_PHOTO).clamp(72.0, 280.0);
+            paint_photo_showcase(ui, p, picker, now, photo_w, photo_h_cap);
             ui.add_space(10.0);
             ui.label(
                 RichText::new(&p.name)
@@ -1717,11 +1733,17 @@ mod tests {
             src.contains("max_rect(detail_rect)") && src.contains("max_rect(grid_rect)"),
             "side-by-side must reserve absolute column rects"
         );
+        assert!(
+            src.contains("Layout::top_down")
+                && src.contains("allocate_ui_with_layout")
+                && src.contains("DETAIL_BELOW_PHOTO"),
+            "grid cards must force top-down; photo height must leave room for TALK AS"
+        );
     }
 
     /// Deck sizes must keep the Selected panel (and amber TALK AS) on-screen.
-    /// Catches the bug where the grid expands past grid_w and pushes detail
-    /// past the Settings clip rect inside the body ScrollArea.
+    /// Also guards the 1100×720 crush where horizontal_top leaked into cards and
+    /// wrapped descriptions into a 1-character column.
     #[test]
     fn personality_detail_panel_stays_on_screen_at_deck_sizes() {
         let _paint = crate::theme::hold_paint_test();
@@ -1731,7 +1753,12 @@ mod tests {
         cabin.cfg.personality = "viper".into();
         cabin.nav = Nav::Settings;
         cabin.settings_sec = SettingsSec::Personality;
-        for (w, h) in [(1100.0_f32, 720.0_f32), (1600.0, 900.0), (1920.0, 1080.0)] {
+        for (w, h) in [
+            (900.0_f32, 720.0_f32),
+            (1100.0, 720.0),
+            (1600.0, 900.0),
+            (1920.0, 1080.0),
+        ] {
             let ctx = egui::Context::default();
             crate::theme::install_fonts_on(&ctx);
             let raw = egui::RawInput {
@@ -1741,7 +1768,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let mut texts: Vec<(String, egui::Pos2, egui::Rect)> = Vec::new();
+            let mut texts: Vec<(String, egui::Pos2, egui::Rect, egui::Vec2)> = Vec::new();
             for _ in 0..2 {
                 texts.clear();
                 let shapes = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
@@ -1750,29 +1777,57 @@ mod tests {
                 .shapes;
                 for clipped in &shapes {
                     if let egui::Shape::Text(t) = &clipped.shape {
-                        texts.push((t.galley.job.text.clone(), t.pos, clipped.clip_rect));
+                        texts.push((
+                            t.galley.job.text.clone(),
+                            t.pos,
+                            clipped.clip_rect,
+                            t.galley.size(),
+                        ));
                     }
                 }
             }
-            let selected = texts.iter().find(|(t, _, _)| t == "SELECTED");
-            let talk = texts.iter().find(|(t, _, _)| t.starts_with("TALK AS "));
-            let (sel_text, sel_pos, sel_clip) =
+            let selected = texts.iter().find(|(t, _, _, _)| t == "SELECTED");
+            let talk = texts.iter().find(|(t, _, _, _)| t.starts_with("TALK AS "));
+            let (sel_text, sel_pos, sel_clip, _) =
                 selected.unwrap_or_else(|| panic!("SELECTED missing at {w}x{h}; texts={texts:?}"));
             assert_eq!(sel_text, "SELECTED");
             assert!(
-                sel_clip.contains(*sel_pos) && sel_pos.x < w && sel_pos.x > w * 0.45,
-                "SELECTED should sit in the right half on-screen at {w}x{h}: pos={sel_pos:?} clip={sel_clip:?}"
+                sel_clip.contains(*sel_pos) && sel_pos.x >= 0.0 && sel_pos.x < w,
+                "SELECTED on-screen at {w}x{h}: pos={sel_pos:?} clip={sel_clip:?}"
             );
-            let (talk_text, talk_pos, talk_clip) =
+            let (talk_text, talk_pos, talk_clip, _) =
                 talk.unwrap_or_else(|| panic!("TALK AS missing at {w}x{h}"));
             assert!(
                 talk_text.starts_with("TALK AS "),
                 "unexpected talk label {talk_text}"
             );
             assert!(
-                talk_clip.contains(*talk_pos) && talk_pos.x < w && talk_pos.x > w * 0.45,
-                "TALK AS should sit in the right half on-screen at {w}x{h}: pos={talk_pos:?} clip={talk_clip:?}"
+                talk_clip.contains(*talk_pos)
+                    && talk_pos.x >= 0.0
+                    && talk_pos.x < w
+                    && talk_pos.y + 20.0 <= h,
+                "TALK AS fully on-screen at {w}x{h}: pos={talk_pos:?} clip={talk_clip:?}"
             );
+            // Side-by-side decks keep Selected on the right; narrow 900 stacks it on top.
+            if w >= 1100.0 {
+                assert!(
+                    sel_pos.x > w * 0.45 && talk_pos.x > w * 0.45,
+                    "Selected/TALK AS stay in the right half when side-by-side at {w}x{h}"
+                );
+            }
+            // Side-by-side decks paint the grid in-frame; Nyx must not crush to
+            // a ~1-character wrap column (900 stacks detail above and may clip the grid).
+            if w >= 1100.0 {
+                let nyx = texts.iter().find(|(t, _, _, _)| {
+                    t.starts_with("Nerdy gamer") || t.contains("Nerdy gamer and techie")
+                });
+                let (_, pos, _, size) =
+                    nyx.unwrap_or_else(|| panic!("Nyx description missing at {w}x{h}"));
+                assert!(
+                    size.x >= 80.0,
+                    "Nyx description crushed at {w}x{h}: size={size:?} pos={pos:?}"
+                );
+            }
         }
     }
 
