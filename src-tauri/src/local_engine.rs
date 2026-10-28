@@ -9,12 +9,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use grokhub_agent::public_only_resolve;
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
 use grokhub_core::model_download::{self as md, Control, Progress};
 use grokhub_core::runtime_download::{self as rd, Manifest, Outcome as EngineOutcome};
-use grokhub_agent::public_only_resolve;
 use grokhub_core::ssrf::runtime_download_url_ok;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -437,8 +437,7 @@ impl md::Fetch for HfFetch {
         resp.into_reader()
             .read_to_string(&mut body)
             .map_err(|e| e.to_string())?;
-        md::sha256_from_tree(&body, file)
-            .ok_or_else(|| format!("No SHA-256 for {file} in {repo}"))
+        md::sha256_from_tree(&body, file).ok_or_else(|| format!("No SHA-256 for {file} in {repo}"))
     }
 }
 
@@ -473,7 +472,8 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
     let manifest = rd::manifest_for_host().ok_or_else(|| {
         "There's no llama.cpp build for this computer. Install llama-server and put it on PATH, or set GROKHUB_LLAMA_SERVER to its path.".to_string()
     })?;
-    if !ENGINE_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+    if !ENGINE_BUSY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
         return Ok(engine_info(&config_dir));
