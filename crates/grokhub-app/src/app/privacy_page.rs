@@ -667,9 +667,13 @@ mod tests {
             hero_rect.right() + STORY_GUTTER - 1.0 <= switch_rect.left(),
             "hero {hero_rect:?} runs into the switches at {switch_rect:?}"
         );
-        // The test keyring is locked, so the hint names why.
-        let (_, _, hint_justified) = find("Locked: key missing");
-        assert!(!hint_justified, "the Encrypted memory hint is ragged right");
+        // The hint under Encrypted memory says sealed or why not, by keyring.
+        let at = texts
+            .iter()
+            .position(|t| t.0 == "Encrypted memory")
+            .expect("Encrypted memory row");
+        let (hint, _, hint_justified) = &texts[at + 1];
+        assert!(!hint_justified, "{hint} is ragged right");
     }
 
     #[test]
