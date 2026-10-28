@@ -5,8 +5,9 @@
 //! Project skills (`.grok/skills`, then `.claude/skills`, from the workspace up to the
 //! git root) win over the user directory, then cabin skills under
 //! `{GROKHUB_CONFIG}/skills` (the same store `skill_list` / `skill_create` use),
-//! then plugins. Same-name duplicates keep the winner; the walk order is sorted
-//! so the choice does not depend on directory iteration.
+//! then plugins, then Loadout built-ins shipped under `assets/skills/` (vstack
+//! QA / verify / follow-through). Same-name duplicates keep the winner; the walk
+//! order is sorted so the choice does not depend on directory iteration.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -39,6 +40,9 @@ pub enum SkillSource {
     /// `{GROKHUB_CONFIG}/skills` — same store as self-manage `skill_list`.
     Cabin,
     Plugin,
+    /// Shipped with the app (`assets/skills/`). Overridden by any same-name
+    /// project, user, cabin, or plugin skill.
+    Builtin,
 }
 
 impl SkillSource {
@@ -48,8 +52,64 @@ impl SkillSource {
             Self::User => "user",
             Self::Cabin => "cabin",
             Self::Plugin => "plugin",
+            Self::Builtin => "builtin",
         }
     }
+}
+
+/// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`).
+pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
+    (
+        "qa-walkthrough",
+        include_str!("../assets/skills/qa-walkthrough/SKILL.md"),
+    ),
+    (
+        "av-qa-walkthrough",
+        include_str!("../assets/skills/av-qa-walkthrough/SKILL.md"),
+    ),
+    (
+        "create-verification-skill",
+        include_str!("../assets/skills/create-verification-skill/SKILL.md"),
+    ),
+    (
+        "maintain-verification-skill",
+        include_str!("../assets/skills/maintain-verification-skill/SKILL.md"),
+    ),
+    (
+        "follow-through",
+        include_str!("../assets/skills/follow-through/SKILL.md"),
+    ),
+];
+
+fn builtin_body(name: &str) -> Option<&'static str> {
+    BUILTIN_SKILL_BODIES
+        .iter()
+        .find(|(n, _)| *n == name || normalize_name(n) == normalize_name(name))
+        .map(|(_, body)| *body)
+}
+
+fn builtin_skills() -> Vec<Skill> {
+    let mut out = Vec::with_capacity(BUILTIN_SKILL_BODIES.len());
+    for (folder, text) in BUILTIN_SKILL_BODIES {
+        let Some(parsed) = parse_skill(text, Some(folder)) else {
+            continue;
+        };
+        let dir = PathBuf::from(format!("builtin:{folder}"));
+        out.push(Skill {
+            name: parsed.name,
+            description: parsed.description,
+            allowed_tools: parsed.allowed_tools,
+            source: SkillSource::Builtin,
+            path: dir.join("SKILL.md"),
+            dir,
+        });
+    }
+    out
+}
+
+/// Built-in skill names for slash / skill_list without a full discover walk.
+pub fn builtin_names() -> Vec<&'static str> {
+    BUILTIN_SKILL_BODIES.iter().map(|(n, _)| *n).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +271,14 @@ fn discover_uncached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathB
         let rank = 20_000u32.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
         push_skill_root(&mut found, dir, SkillSource::Plugin, rank);
     }
+    // Built-ins last: a same-name project/user/cabin/plugin skill wins.
+    for skill in builtin_skills() {
+        found.push(Found {
+            rank: 30_000,
+            path: skill.path.display().to_string(),
+            skill,
+        });
+    }
     found.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.path.cmp(&b.path)));
     let mut kept: BTreeMap<String, Skill> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
@@ -245,6 +313,12 @@ pub fn reminder(skills: &[Skill]) -> String {
         out.push_str(&line);
     }
     out.push_str("</skills>");
+    // Standing plan→skill wiring (ship / verify / follow-through).
+    let plan = crate::plan_skills::standing_reminder();
+    if out.len().saturating_add(plan.len()).saturating_add(2) <= REMINDER_CAP {
+        out.push_str("\n\n");
+        out.push_str(plan);
+    }
     out
 }
 
@@ -280,9 +354,20 @@ pub fn tool_run(workspace: &Path, args: &Value) -> ToolOutput {
 }
 
 fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
-    let body = match fs::read_to_string(&skill.path) {
-        Ok(text) => clip_chars(&skill_body(&text), BODY_CAP),
-        Err(err) => return ToolOutput::err(format!("read {}: {err}", skill.path.display())),
+    let body = if skill.source == SkillSource::Builtin {
+        match builtin_body(&skill.name) {
+            Some(text) => clip_chars(&skill_body(text), BODY_CAP),
+            None => {
+                return ToolOutput::err(format!("unknown builtin skill `{}`", skill.name));
+            }
+        }
+    } else {
+        match fs::read_to_string(&skill.path) {
+            Ok(text) => clip_chars(&skill_body(&text), BODY_CAP),
+            Err(err) => {
+                return ToolOutput::err(format!("read {}: {err}", skill.path.display()));
+            }
+        }
     };
     let mut out = format!(
         "<skill name=\"{}\" source=\"{}\" path=\"{}\">\n{}\n</skill>\n",
@@ -300,6 +385,17 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
         out.push('\n');
     }
     out.push_str("Files:\n");
+    if skill.source == SkillSource::Builtin {
+        out.push_str("- SKILL.md\n");
+        if let Some(rel) = rel {
+            if rel != "SKILL.md" && rel != "./SKILL.md" {
+                return ToolOutput::err("path is not available");
+            }
+            out.push_str("\nFile SKILL.md:\n");
+            out.push_str(&body);
+        }
+        return ToolOutput::ok(out);
+    }
     for file in list_files(&skill.dir) {
         out.push_str("- ");
         out.push_str(&file);
@@ -885,6 +981,55 @@ mod tests {
         assert!(text.contains("(user)"));
         assert!(text.len() <= REMINDER_CAP + 20, "{}", text.len());
         assert!(!text.contains(&"d".repeat(400)));
+    }
+
+    #[test]
+    fn builtins_are_discovered_and_loadable_via_skill_tool() {
+        let root = scratch("builtins");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let skills = discover(&repo, Some(&home), &[]);
+        for name in [
+            "qa-walkthrough",
+            "av-qa-walkthrough",
+            "create-verification-skill",
+            "maintain-verification-skill",
+            "follow-through",
+        ] {
+            let skill = skills
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("missing builtin {name}: {skills:?}"));
+            assert_eq!(skill.source, SkillSource::Builtin);
+            let loaded = tool_run(&repo, &serde_json::json!({ "name": name }));
+            assert!(!loaded.failed, "{name}: {}", loaded.text);
+            assert!(
+                loaded.text.contains("source=\"builtin\""),
+                "{name}: {}",
+                loaded.text
+            );
+            assert!(
+                loaded.text.contains("<skill name="),
+                "{name}: {}",
+                loaded.text
+            );
+        }
+        assert!(reminder(&skills).contains("qa-walkthrough"));
+        assert!(reminder(&skills).contains("<plan-skills>"));
+        // Project skill with the same name wins over the builtin.
+        skill_md(
+            &repo.join(".grok/skills/qa-walkthrough"),
+            "---\nname: qa-walkthrough\ndescription: project override\n---\nProject QA.\n",
+        );
+        // Bust discover cache (mtime).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let again = discover(&repo, Some(&home), &[]);
+        let qa = again.iter().find(|s| s.name == "qa-walkthrough").unwrap();
+        assert_eq!(qa.source, SkillSource::Project);
+        assert_eq!(qa.description, "project override");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

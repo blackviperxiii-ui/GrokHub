@@ -293,6 +293,17 @@ impl Cabin {
                 {
                     self.nav = Nav::Chat;
                     self.send_chat(skill_use_in_chat_prompt(&s.slash, &s.name));
+                } else if let Some(s) = self.native_skills.iter().find(|s| {
+                    s.name == name
+                        || s.name.eq_ignore_ascii_case(&name)
+                        || format!("/{}", s.name) == name
+                }) {
+                    // Built-in / project / user skills discovered for the engine.
+                    self.nav = Nav::Chat;
+                    self.send_chat(skill_use_in_chat_prompt(
+                        &format!("/{}", s.name),
+                        &s.name,
+                    ));
                 } else {
                     self.status = format!("No skill {name}");
                 }

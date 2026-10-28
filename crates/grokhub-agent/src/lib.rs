@@ -37,6 +37,7 @@ mod scan;
 pub mod self_manage;
 mod session;
 mod session_tools;
+mod plan_skills;
 mod skills;
 mod slash_parity;
 mod sse;
@@ -118,7 +119,15 @@ pub use session::{
     HistoryRow, RunGuard, SessionInfo,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
-pub use skills::{discover as discover_skills, Skill, SkillSource};
+pub use plan_skills::{
+    is_av_change, is_multi_step, is_ship_or_release, moments_for, prompt_block as plan_skills_prompt,
+    skills_for, skills_for_context, standing_reminder as plan_skills_standing, PlanSkillCtx,
+    SkillMoment, AV_QA_WALKTHROUGH, CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION,
+    QA_WALKTHROUGH,
+};
+pub use skills::{
+    builtin_names, discover as discover_skills, Skill, SkillSource, BUILTIN_SKILL_BODIES,
+};
 pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
