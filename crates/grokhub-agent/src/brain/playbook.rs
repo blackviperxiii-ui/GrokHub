@@ -316,7 +316,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (8, Source::Shipped, 0)
+            (11, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -351,6 +351,9 @@ mod tests {
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -373,6 +376,9 @@ mod tests {
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -436,7 +442,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 9);
+        assert_eq!(all.len(), 12);
         assert_eq!(
             problems,
             vec![
@@ -497,9 +503,63 @@ mod tests {
             id("question", "gaming", "linux").as_deref(),
             Some("game-tuning")
         );
+        assert_eq!(
+            id("question", "general", "linux").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(
+            id("task", "planning", "linux").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            id("question", "planning", "windows").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            id("creative", "media", "linux").as_deref(),
+            Some("creative")
+        );
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn work_specialists_are_picked_for_questions_plans_and_drafts() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-work-specialists-pick"));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "linux").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("what is the capital of France?").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(
+            pick_id("plan my day around standup and a 3pm call").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            pick_id("write a poem about autumn").as_deref(),
+            Some("creative")
+        );
+        assert_eq!(
+            pick_id("add a retry to fetch() in src/net.rs").as_deref(),
+            Some("code-dev")
+        );
+        assert_eq!(
+            pick_id("compare the latest mid-range laptops").as_deref(),
+            Some("research")
+        );
+        assert_eq!(
+            pick_id("organize the downloads folder by date").as_deref(),
+            Some("files")
+        );
+        assert_eq!(pick_id("hi there"), None);
     }
 
     #[test]

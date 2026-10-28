@@ -288,7 +288,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 8);
+        assert_eq!(cabin.playbooks.all.len(), 11);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -311,6 +311,24 @@ mod tests {
         assert_eq!(
             steps_line(&cabin.playbooks.all[7]),
             "8 steps, up to Risky, asks first"
+        );
+        assert_eq!(fits_line(&cabin.playbooks.all[8]), "Fits question");
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[8]),
+            "2 steps, up to Look only"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[9]),
+            "Fits task, question · planning"
+        );
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[9]),
+            "4 steps, up to Risky, asks first"
+        );
+        assert_eq!(fits_line(&cabin.playbooks.all[10]), "Fits creative");
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[10]),
+            "3 steps, up to Look only"
         );
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
@@ -363,6 +381,9 @@ mod tests {
                 ("research", "Research", Source::Shipped),
                 ("desktop", "Desktop apps", Source::Shipped),
                 ("game-tuning", "Game tuning", Source::Shipped),
+                ("quick-answer", "Quick answer", Source::Shipped),
+                ("plan-day", "Plan the day", Source::Shipped),
+                ("creative", "Creative draft", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );
