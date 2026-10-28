@@ -666,6 +666,44 @@ impl Cabin {
             .position(|t| t.grok_session.as_deref() == Some(id))
     }
 
+    /// Permanently drop a thread (idea discuss / helpers). No soft-delete trash.
+    pub(super) fn hard_drop_thread_at(&mut self, idx: usize) {
+        if idx >= self.threads.len() {
+            return;
+        }
+        let was_current = idx == self.thread_idx;
+        let gone = self.threads.remove(idx);
+        self.drop_bg_runs_for(&gone.id);
+        if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
+            self.halt_in_flight();
+            self.finish_hub_dispatch("Chat deleted", false);
+        }
+        self.hard_purge_thread_sessions(&gone);
+        if self.threads.is_empty() {
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+            self.stamp_current_access();
+        } else if was_current {
+            let next = if idx < self.threads.len() {
+                idx
+            } else {
+                self.threads.len().saturating_sub(1)
+            };
+            // Force a leave so messages reload onto the surviving row.
+            self.thread_idx = usize::MAX;
+            self.apply_switch_thread(next);
+        } else if idx < self.thread_idx {
+            self.thread_idx -= 1;
+        }
+        self.rename_idx = None;
+        self.persist();
+    }
+
     pub(super) fn delete_thread_at(&mut self, idx: usize) {
         if idx >= self.threads.len() {
             return;
