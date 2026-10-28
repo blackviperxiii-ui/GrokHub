@@ -1,0 +1,1 @@
+- Build: beta compiles clean again with no Personality photos in place (clippy dead_code fix).

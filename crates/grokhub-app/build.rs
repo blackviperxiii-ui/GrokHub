@@ -152,7 +152,10 @@ fn embed_personality_photos(manifest: &Path) {
             }
         }
     }
-    // Empty arms must not emit `match { _ => None }` — clippy::match_single_binding.
+    // Nothing reads the photos outside tests until finals land, and with no
+    // files the match would be a lone `_` arm (clippy::match_single_binding).
+    // Home Mission Control tip also reads COUNT/png from the Selected card,
+    // so keep the symbols un-cfg'd (no dead_code allow).
     let body = if arms.is_empty() {
         "    let _ = (id, slot);\n    None\n".to_string()
     } else {
