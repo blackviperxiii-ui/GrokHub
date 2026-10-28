@@ -2074,6 +2074,7 @@ fn quiet_cabin() -> Cabin {
         window_focused: true,
         focus: Default::default(),
         pc_health: Default::default(),
+        print_alerts: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
@@ -2314,6 +2315,7 @@ fn quiet_cabin() -> Cabin {
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),
         activity: Default::default(),
+        diagnostics_last_zip: None,
         home_layout: grokhub_core::home::HomeLayout::default(),
         home_edit: None,
     }
