@@ -196,6 +196,7 @@ pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
 mod proactive_ui;
@@ -284,6 +285,7 @@ enum Nav {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSec {
     Account,
+    Privacy,
     Appearance,
     Behavior,
     Update,

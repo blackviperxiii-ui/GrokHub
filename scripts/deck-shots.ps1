@@ -281,6 +281,9 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Privacy & data is the second entry in the Settings list; the dialog is centred.
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -keys '^,' -clickAt 410, 246
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -keys '^,' -clickAt 160, 156
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m

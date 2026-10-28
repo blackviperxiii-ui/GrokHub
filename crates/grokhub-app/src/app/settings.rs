@@ -29,6 +29,7 @@ pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
+        SettingsSec::Privacy => "Privacy & data",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
         SettingsSec::Update => "Update",
@@ -431,6 +432,7 @@ impl Cabin {
                                                 }
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
+                                                    (SettingsSec::Privacy, "Privacy & data"),
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Personality, "Personality"),
                                                     (SettingsSec::Playbooks, "Playbooks"),
@@ -1055,6 +1057,7 @@ impl Cabin {
                                                         SettingsSec::Playbooks => self.ui_settings_playbooks(ui),
                                                         SettingsSec::Pulse => self.ui_settings_pulse(ui),
                                                         SettingsSec::Background => self.ui_settings_background(ui),
+                                                        SettingsSec::Privacy => self.ui_settings_privacy(ui),
                                                     }
                                                 });
                                             });
@@ -1273,7 +1276,7 @@ impl Cabin {
     }
 
     /// Next cabin turn picks up a Settings pin the same way a composer pill does.
-    fn drop_turn_for_pin(&mut self) {
+    pub(super) fn drop_turn_for_pin(&mut self) {
         self.confirm = None;
         if self.running {
             self.halt_in_flight();
