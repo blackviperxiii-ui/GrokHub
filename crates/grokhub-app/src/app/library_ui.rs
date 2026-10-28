@@ -1,10 +1,13 @@
 //! Library (deck slide 11, layout C): the Steam games on this PC as a cover
 //! grid with filter tabs and a search, and the picked game's detail column
-//! with Play. Everything comes from the local library `steam.rs` reads; the
-//! covers are drawn here, so nothing is fetched.
+//! with Play. The games come from the local library `steam.rs` reads. Each
+//! cover is the game's real art ([`game_art`]) over a painted cover that
+//! stays when a game has none.
+
+mod game_art;
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
-use grokhub_core::steam::SteamGame;
+use grokhub_core::steam::{CoverKind, SteamGame};
 
 use super::loadout_home::{caption, card, diamond, objective_progress};
 use super::*;
@@ -52,6 +55,20 @@ struct LibraryView {
     tab: LibraryTab,
     query: String,
     picked: Option<u32>,
+}
+
+/// Deck shots set `GROKHUB_DECK_LIBRARY_PICK` to an app id, so Library opens on
+/// that game and the detail header shows its store art without a tile click.
+const DECK_PICK_ENV: &str = "GROKHUB_DECK_LIBRARY_PICK";
+
+/// The view on first open: the deck shot's pick, else the first game.
+fn first_view() -> LibraryView {
+    LibraryView {
+        picked: std::env::var(DECK_PICK_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse().ok()),
+        ..Default::default()
+    }
 }
 
 /// The library reads only installed games, so All and Installed list the
@@ -242,6 +259,9 @@ fn cover_tile(ui: &mut egui::Ui, game: &SteamGame, size: egui::Vec2, picked: boo
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter_at(rect);
     paint_cover(&painter, rect, game.app_id);
+    if let Some(cover) = game_art::game_cover(ui.ctx(), game.app_id, CoverKind::Tall) {
+        game_art::paint_art(ui, rect, &cover, crate::theme::RADIUS_SM);
+    }
     let name = game.name.to_uppercase();
     let font = crate::theme::loadout_font(14.0);
     let galley = ui.fonts_mut(|f| f.layout(name, font, crate::theme::fg(), rect.width() - 24.0));
@@ -290,7 +310,7 @@ impl Cabin {
 
     pub(super) fn ui_library(&mut self, ui: &mut egui::Ui) {
         let id = egui::Id::new(LIBRARY_VIEW_ID);
-        let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+        let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(first_view);
         let now = now_ms();
         let (found, games) = self.steam_library(now);
         let games = games.to_vec();
@@ -389,6 +409,9 @@ impl Cabin {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, w * 0.6), egui::Sense::hover());
         let painter = ui.painter_at(rect);
         paint_cover(&painter, rect, game.app_id);
+        if let Some(cover) = game_art::game_cover(ui.ctx(), game.app_id, CoverKind::Wide) {
+            game_art::paint_art(ui, rect, &cover, 0.0);
+        }
         painter.text(
             egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
             egui::Align2::LEFT_BOTTOM,
@@ -463,9 +486,11 @@ impl Cabin {
             self.composer = format!("Help me optimize my settings for {}.", game.name);
         }
         ui.label(
-            egui::RichText::new("Read from Steam on this PC. Nothing is sent anywhere.")
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
+            egui::RichText::new(
+                "Read from Steam on this PC. Cover art missing here comes from Steam's store.",
+            )
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
         );
     }
 }
@@ -510,6 +535,19 @@ fn library_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deck_shot_opens_library_on_its_picked_game() {
+        let before = std::env::var(DECK_PICK_ENV).ok();
+        std::env::remove_var(DECK_PICK_ENV);
+        assert_eq!(first_view().picked, None, "the first game by default");
+        std::env::set_var(DECK_PICK_ENV, " 1086940 ");
+        assert_eq!(first_view().picked, Some(1086940));
+        match before {
+            Some(v) => std::env::set_var(DECK_PICK_ENV, v),
+            None => std::env::remove_var(DECK_PICK_ENV),
+        }
+    }
 
     fn game(app_id: u32, name: &str, last_played: u64, playtime_min: u64) -> SteamGame {
         SteamGame {
