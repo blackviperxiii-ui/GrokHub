@@ -98,7 +98,21 @@ pub struct AppliesWhen {
     /// `linux`, `windows`, `macos`; empty matches any.
     #[serde(default)]
     pub os: Vec<String>,
+    /// Brief intents that never get this playbook, even when `intent` is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Breaks a tie between two playbooks that fit equally well; higher wins.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priority: u8,
 }
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// Talk, not work: a playbook fits these intents only when it names them, so
+/// small talk never falls through to a task playbook.
+pub const TALK_INTENTS: &[&str] = &["chat"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,8 +173,6 @@ impl Playbook {
             .flat_map(|p| p.steps.iter().map(move |s| (p, s)))
     }
 
-    /// How closely it fits: one point per named intent, domain and OS that
-    /// matches; `None` when any named one doesn't.
     /// The playbook as one paragraph for the turn's prompt: phases in order
     /// with their steps, then how to back up, check, undo and when to stop.
     pub fn prompt_block(&self) -> String {
@@ -195,8 +207,16 @@ impl Playbook {
         out.join("\n").replace("\n\n", "\n")
     }
 
+    /// How closely it fits: one point per named intent, domain and OS that
+    /// matches; `None` when any named one doesn't, when it excludes the
+    /// intent, or when the intent is talk and the playbook doesn't name it.
     pub fn fit(&self, intent: &str, domain: &str, os: &str) -> Option<usize> {
         let a = &self.applies_when;
+        if a.exclude.iter().any(|x| x == intent)
+            || (TALK_INTENTS.contains(&intent) && !a.intent.iter().any(|x| x == intent))
+        {
+            return None;
+        }
         let mut score = 0;
         for (list, v) in [(&a.intent, intent), (&a.domain, domain), (&a.os, os)] {
             if list.is_empty() {
@@ -267,6 +287,7 @@ pub fn check(p: &Playbook) -> Result<(), String> {
         ("intent", &a.intent, crate::brain_policy::INTENTS),
         ("domain", &a.domain, DOMAINS),
         ("os", &a.os, OSES),
+        ("exclude", &a.exclude, crate::brain_policy::INTENTS),
     ] {
         if let Some(bad) = list.iter().find(|v| !known.contains(&v.as_str())) {
             return Err(format!(

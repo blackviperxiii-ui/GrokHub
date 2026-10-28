@@ -243,6 +243,47 @@ const QUESTION_WORDS: &[&str] = &[
 const CHAT_WORDS: &[&str] = &[
     "hi", "hello", "hey", "thanks", "thank", "thx", "yo", "morning", "lol", "cool", "nice", "bye",
 ];
+/// Laughing or teasing: a short line with one of these is banter.
+const BANTER_WORDS: &[&str] = &[
+    "lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "hehe", "jk", "kidding", "joking", "omg",
+    "bruh",
+];
+/// Small talk that reads like a question or an order but is neither.
+const SMALL_TALK_PHRASES: &[&str] = &[
+    "how are you",
+    "how are u",
+    "how's it going",
+    "hows it going",
+    "what's up",
+    "whats up",
+    "wyd",
+    "what are you up to",
+    "what you up to",
+    "how was your",
+    "tell me a joke",
+    "make me laugh",
+    "you there",
+    "miss me",
+    "about yourself",
+];
+/// Words after a task verb that are nothing to act on: "turn around",
+/// "stop it lol", "make me laugh" are banter, "turn off the lights" is a task.
+const NOT_AN_OBJECT: &[&str] = &[
+    "around", "it", "that", "this", "me", "you", "us", "talking", "joking", "kidding", "laughing",
+    "laugh", "smile", "lying", "yapping", "being", "over", "already", "now", "please", "lol",
+    "lmao", "haha", "bro", "dude", "man", "ok", "okay", "then", "so",
+];
+/// A question about the ask's subject, not about the assistant.
+const SUBJECT_WORDS: &[&str] = &[
+    "about",
+    "explain",
+    "mean",
+    "means",
+    "difference",
+    "work",
+    "works",
+    "recommend",
+];
 const FOLLOW_UPS: &[&str] = &[
     "yes",
     "yeah",
@@ -381,14 +422,60 @@ fn domain_of(
     }
 }
 
+/// A task verb only makes a task when it has something to act on.
+fn has_object(after_verb: &[&str]) -> bool {
+    after_verb.iter().any(|w| !NOT_AN_OBJECT.contains(w))
+}
+
+/// The last few user lines were all small talk: we're hanging out.
+fn hanging_out(recent: &[String]) -> bool {
+    let last = &recent[recent.len().saturating_sub(3)..];
+    !last.is_empty()
+        && last.iter().all(|r| {
+            rules(&BriefInput {
+                text: r,
+                ..Default::default()
+            })
+            .is_some_and(|b| b.intent == Intent::Chat)
+        })
+}
+
+/// "how are you?", "do you like games?": a short line about the assistant,
+/// not about a subject. `ws` is the line without its "can you" opener.
+fn small_talk(t: &str, ws: &[&str]) -> bool {
+    let about_you = any_word(ws, &["you", "your", "you're", "yourself", "u", "ya"]);
+    any_phrase(t, SMALL_TALK_PHRASES)
+        || (about_you && ws.len() <= 8 && !any_word(ws, SUBJECT_WORDS))
+}
+
 /// The rules' Brief, or `None` when they can't tell what the ask is.
 pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let t = input.text.trim().to_lowercase();
     let ws = words(&t);
     let system = system_change(&t, &ws);
+    let last_was_work = || {
+        input.recent.last().is_some_and(|r| {
+            rules(&BriefInput {
+                text: r,
+                recent: &[],
+                ..*input
+            })
+            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair))
+        })
+    };
+    let mut rest = t.as_str();
+    for p in POLITE {
+        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
+    }
+    let rest_words = words(rest);
+    let first = rest_words.first().copied().unwrap_or_default();
+    let acted_on = has_object(rest_words.get(1..).unwrap_or_default());
+    // "stop", "delete it": a task verb with nothing named to act on.
+    let bare_verb = TASK_VERBS.contains(&first) && !acted_on;
     if !input.background
         && !input.recent.is_empty()
-        && FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+        && (FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+            || (bare_verb && last_was_work()))
     {
         let last = input.recent.last().map(String::as_str).unwrap_or_default();
         return rules(&BriefInput {
@@ -400,11 +487,13 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     if t.is_empty() && input.files == 0 {
         return None;
     }
-    let mut rest = t.as_str();
-    for p in POLITE {
-        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
-    }
-    let first = words(rest).first().copied().unwrap_or_default();
+    // Hanging out, a plain line about nothing in particular stays chat.
+    let chatting = !input.background && hanging_out(input.recent);
+    let generic = domain_of(&t, &ws, input, Intent::Chat, system) == "general";
+    let casual = small_talk(&t, &rest_words)
+        || (ws.len() <= 6 && any_word(&ws, BANTER_WORDS))
+        || (chatting && generic && ws.len() <= 8);
+    let task_verb = TASK_VERBS.contains(&first) && acted_on;
     // "use X for Y", with X up to four words.
     let use_for = ws
         .iter()
@@ -423,8 +512,10 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
         Intent::Research
-    } else if TASK_VERBS.contains(&first) || input.files > 0 || !input.tools.is_empty() || system {
+    } else if task_verb || input.files > 0 || !input.tools.is_empty() || system {
         Intent::Task
+    } else if casual || bare_verb {
+        Intent::Chat
     } else if QUESTION_WORDS.contains(&first) || t.ends_with('?') {
         Intent::Question
     } else if ws.len() <= 4 && CHAT_WORDS.contains(&first) {
@@ -824,6 +915,74 @@ mod tests {
         assert_eq!(
             short(&rules(&follow).unwrap()),
             (Intent::Repair, Care::Critical, "system", "calm")
+        );
+    }
+
+    #[test]
+    fn casual_lines_stay_chat_and_real_tasks_stay_tasks() {
+        for text in [
+            "lol",
+            "haha you're funny",
+            "stop it lol",
+            "turn around",
+            "make me laugh",
+            "how are you?",
+            "what are you up to tonight?",
+            "do you like games?",
+            "tell me about yourself",
+            "can you tell me a joke",
+            "stop",
+            "start over",
+            "jk jk",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!((b.intent, b.care), (Intent::Chat, Care::Casual), "{text}");
+        }
+        for (text, intent) in [
+            ("turn off the bedroom lights", Intent::Task),
+            ("could you set a timer for ten minutes", Intent::Task),
+            ("make me a playlist of chill songs", Intent::Task),
+            ("start the backup now", Intent::Task),
+            ("can you explain how you work?", Intent::Question),
+            ("what do you know about black holes?", Intent::Question),
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!(b.intent, intent, "{text}");
+        }
+        // Hanging out, a short question stays chat; a real task is still a task.
+        let hangout = ["hey".to_string(), "lol same".to_string()];
+        let chat = |text| BriefInput {
+            text,
+            recent: &hangout,
+            ..Default::default()
+        };
+        assert_eq!(
+            rules(&chat("what game should we play?")).unwrap().intent,
+            Intent::Chat
+        );
+        assert_eq!(
+            rules(&chat("is it late where you are")).unwrap().intent,
+            Intent::Chat
+        );
+        assert_eq!(
+            short(&rules(&chat("rename the photos in my downloads folder")).unwrap()),
+            (Intent::Task, Care::Careful, "files", "calm")
+        );
+        // Without the hangout, the same question is a question.
+        assert_eq!(
+            rules(&input("what game should we play?")).unwrap().intent,
+            Intent::Question
+        );
+        // After real work, a bare "stop it" or "delete it" is about that work.
+        let work = ["delete the old backups in Documents".to_string()];
+        let after = BriefInput {
+            text: "delete it",
+            recent: &work,
+            ..Default::default()
+        };
+        assert_eq!(
+            short(&rules(&after).unwrap()),
+            (Intent::Task, Care::Critical, "files", "calm")
         );
     }
 

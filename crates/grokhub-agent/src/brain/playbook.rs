@@ -255,14 +255,18 @@ pub fn host_os() -> &'static str {
     }
 }
 
-/// The playbook that fits a Brief best: the one naming the most of intent,
-/// domain and OS that all match; the first listed wins a tie.
+/// The playbook that fits a Brief best, in this order: the safety checks in
+/// [`Playbook::fit`] first (an excluded intent, or talk the playbook doesn't
+/// name, never fits), then a specialist naming the most of intent, domain and
+/// OS, then the default for that kind of ask (intent only), then a generic
+/// fallback that names nothing. `priority` breaks a tie, then the first listed.
 pub fn pick<'a>(all: &'a [Loaded], intent: &str, domain: &str, os: &str) -> Option<&'a Playbook> {
-    let mut best: Option<(usize, &Playbook)> = None;
+    let mut best: Option<((usize, u8), &Playbook)> = None;
     for l in all {
         if let Some(score) = l.playbook.fit(intent, domain, os) {
-            if best.is_none_or(|(b, _)| score > b) {
-                best = Some((score, &l.playbook));
+            let key = (score, l.playbook.applies_when.priority);
+            if best.is_none_or(|(b, _)| key > b) {
+                best = Some((key, &l.playbook));
             }
         }
     }
@@ -484,6 +488,51 @@ mod tests {
         assert_eq!(id("task", "desktop", "linux").as_deref(), Some("desktop"));
         assert_eq!(id("task", "general", "linux").as_deref(), Some(SHIPPED));
         assert_eq!(id("chat", "general", "linux"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn chat_never_falls_through_to_a_task_playbook_and_priority_breaks_ties() {
+        let dir = crate::harness::test_dir("playbook-order");
+        // A generic fallback that names nothing fits any work, never small talk.
+        let generic = core_pb::renamed(core_pb::BUILTIN[0], "any-work", "Any work").replacen(
+            "intent = [\"task\", \"repair\"]\n# Small talk never gets a task playbook, even in a copy that names no intent.\nexclude = [\"chat\"]",
+            "",
+            1,
+        );
+        assert!(!generic.contains("exclude"));
+        save(&dir, &generic).unwrap();
+        // A talk playbook names chat, so chat gets it.
+        let talk = generic
+            .replacen("[applies_when]", "[applies_when]\nintent = [\"chat\"]", 1)
+            .replace("any-work", "hangout-test");
+        let (all, _) = load(&dir);
+        let id = |all: &[Loaded], i, d| pick(all, i, d, "linux").map(|p| p.id.clone());
+        assert_eq!(id(&all, "chat", "general"), None);
+        assert_eq!(id(&all, "question", "general").as_deref(), Some("any-work"));
+        // The default for its kind beats the generic fallback.
+        assert_eq!(id(&all, "task", "general").as_deref(), Some(SHIPPED));
+        // Excluding an intent drops it even when nothing else is named.
+        let shut = generic.replacen(
+            "[applies_when]",
+            "[applies_when]\nexclude = [\"question\"]",
+            1,
+        );
+        save(&dir, &shut).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "question", "general"), None);
+        save(&dir, &talk).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("hangout-test"));
+        // Two that fit equally: the higher priority wins over the first listed.
+        let first = core_pb::renamed(core_pb::BUILTIN[0], "files-alt", "Files alt").replacen(
+            "intent = [\"task\", \"repair\"]",
+            "intent = [\"task\"]\ndomain = [\"files\"]\npriority = 5",
+            1,
+        );
+        save(&dir, &first).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "task", "files").as_deref(), Some("files-alt"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
