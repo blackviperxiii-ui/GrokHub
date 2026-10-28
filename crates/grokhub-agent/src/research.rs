@@ -25,7 +25,9 @@ fn recipe(query: &str) -> String {
         "Deep research. Work in this order, then answer.\n\
          \n\
          1. Plan a few distinct questions that cover the query. Each question needs its own evidence.\n\
-         2. Research those questions with web_search, x_search, and web_fetch. Open the pages you rely on with web_fetch.\n\
+         2. Research those questions with the search tools you were offered: web_search (cabin \
+or hosted), x_search when listed, and web_fetch. Open the pages you rely on with web_fetch. \
+Do not call a tool that is not in your tool list.\n\
          3. Check claims against more than one source before you keep them.\n\
          4. Write a cited report. Mark each claim with its source and list the sources at the end.\n\
          \n\
@@ -51,6 +53,7 @@ mod tests {
         assert!(text.contains("web_search"), "{text}");
         assert!(text.contains("x_search"), "{text}");
         assert!(text.contains("web_fetch"), "{text}");
+        assert!(text.contains("tool list"), "{text}");
         assert!(text.to_ascii_lowercase().contains("plan"), "{text}");
         assert!(text.to_ascii_lowercase().contains("cited"), "{text}");
         assert!(text.contains("cats"), "{text}");

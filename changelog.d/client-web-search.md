@@ -1,0 +1,1 @@
+- OpenRouter and local chats get a free cabin `web_search` tool (DuckDuckGo Lite by default; optional SearXNG or Brave key). xAI keeps hosted search.
