@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|general\"}";
+\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -98,7 +98,7 @@ pub struct Brief {
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
-    /// `system`, `code`, `files`, `desktop`, `web`, `media` or `general`.
+    /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming` or `general`.
     pub domain: String,
     /// `rules`, `model`, or `default` (unclear and no model call).
     pub by: String,
@@ -283,8 +283,53 @@ const CODE_WORDS: &[&str] = &[
 const DESKTOP_WORDS: &[&str] = &[
     "click", "window", "screen", "desktop", "app", "button", "taskbar",
 ];
+/// Tuning a game to this PC: FPS, upscalers, named titles. Broad words like
+/// `steam` alone stay out so a Pulse/library feature ask is not gaming.
+const GAMING_WORDS: &[&str] = &[
+    "fps",
+    "game",
+    "games",
+    "gaming",
+    "dlss",
+    "fsr",
+    "xess",
+    "vsync",
+    "vrr",
+    "vram",
+    "fortnite",
+    "cyberpunk",
+    "warzone",
+    "valorant",
+    "overwatch",
+    "minecraft",
+    "apex",
+];
+const GAMING_PHRASES: &[&str] = &[
+    "frame rate",
+    "frame-rate",
+    "frame time",
+    "frame times",
+    "frame-time",
+    "v-sync",
+    "game settings",
+    "graphics settings",
+    "in-game settings",
+    "tune my game",
+    "tune the game",
+    "boost fps",
+    "more fps",
+    "low fps",
+    "dropping frames",
+];
+const GAMING_TASK_WORDS: &[&str] = &[
+    "tune", "tuning", "optimize", "optimise", "boost", "cap", "uncap",
+];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
+
+fn is_gaming(t: &str, ws: &[&str]) -> bool {
+    any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES)
+}
 
 fn words(t: &str) -> Vec<&str> {
     t.split(|c: char| !(c.is_alphanumeric() || c == '\''))
@@ -309,11 +354,23 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
     let list: &[&str] = match (intent, domain) {
         (Intent::Repair, "system") => &["services", "packages", "boot errors", "ports"],
         (Intent::Repair, "code") => &["it builds", "tests pass", "the error is gone"],
+        (Intent::Repair, "gaming") | (Intent::Task, "gaming") => &[
+            "hardware read from this PC",
+            "game install and config found",
+            "goal and target FPS agreed",
+            "settings fit this GPU",
+            "change verified or user confirmed",
+        ],
         (Intent::Repair, _) => &["the error is gone", "it works again"],
         (Intent::Task, "system") => &["change applied", "service running", "undo noted"],
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
         (Intent::Task, "desktop") => &["the asked change is made", "result checked on screen"],
+        (Intent::Question, "gaming") => &[
+            "hardware read from this PC",
+            "recommendation fits this GPU",
+            "answered",
+        ],
         (Intent::Task, _) => &["the asked change is made", "result checked"],
         (Intent::Question, _) => &["answered"],
         (Intent::Research, _) => &["sources named", "answer summarized"],
@@ -364,7 +421,9 @@ fn domain_of(
                 "documents",
             ],
         );
-    if system || any_word(ws, MACHINE_WORDS) {
+    if is_gaming(t, ws) {
+        "gaming"
+    } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
         "code"
@@ -412,7 +471,11 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"));
     let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
     let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
-    let repair = broken || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
+    let gaming = is_gaming(&t, &ws);
+    let gaming_lag = gaming
+        && (any_phrase(&t, &["low fps", "dropping frames", "stutter", "stuttering"])
+            || any_word(&ws, &["lag", "laggy", "stutter", "choppy"]));
+    let repair = broken || gaming_lag || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
     } else if repair {
@@ -423,10 +486,19 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
         Intent::Research
-    } else if TASK_VERBS.contains(&first) || input.files > 0 || !input.tools.is_empty() || system {
+    } else if TASK_VERBS.contains(&first)
+        || input.files > 0
+        || !input.tools.is_empty()
+        || system
+        || (gaming && (any_word(&ws, GAMING_TASK_WORDS) || any_phrase(&t, GAMING_PHRASES)))
+    {
         Intent::Task
     } else if QUESTION_WORDS.contains(&first) || t.ends_with('?') {
         Intent::Question
+    } else if gaming {
+        // "Cyberpunk settings on this PC" with no verb still needs the
+        // game-tuning playbook, not a silent fall-through to the model.
+        Intent::Task
     } else if ws.len() <= 4 && CHAT_WORDS.contains(&first) {
         Intent::Chat
     } else {
@@ -775,6 +847,34 @@ mod tests {
                 Intent::Repair,
                 Care::Critical,
                 "general",
+                "calm",
+            ),
+            (
+                "tune Cyberpunk for my PC for more FPS",
+                Intent::Task,
+                Care::Careful,
+                "gaming",
+                "calm",
+            ),
+            (
+                "boost FPS in Fortnite, target 144",
+                Intent::Task,
+                Care::Careful,
+                "gaming",
+                "calm",
+            ),
+            (
+                "my game is stuttering and FPS is low",
+                Intent::Repair,
+                Care::Critical,
+                "gaming",
+                "calm",
+            ),
+            (
+                "which DLSS mode should I use in Warzone?",
+                Intent::Question,
+                Care::Casual,
+                "gaming",
                 "calm",
             ),
         ];

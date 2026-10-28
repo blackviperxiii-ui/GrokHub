@@ -17,6 +17,7 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-tuning.toml"),
 ];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
@@ -27,7 +28,7 @@ pub const PLAYBOOK_LINE: &str =
     "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
-    "system", "code", "files", "desktop", "web", "media", "general",
+    "system", "code", "files", "desktop", "web", "media", "gaming", "general",
 ];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
@@ -379,8 +380,18 @@ mod tests {
                 "code-dev",
                 "files",
                 "research",
-                "desktop"
+                "desktop",
+                "game-tuning"
             ]
+        );
+        let game = parse(BUILTIN[7]).unwrap();
+        assert_eq!(
+            (
+                game.fit("task", "gaming", "windows"),
+                game.fit("chat", "general", "windows"),
+                game.fit("question", "gaming", "linux")
+            ),
+            (Some(2), None, Some(2))
         );
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(
