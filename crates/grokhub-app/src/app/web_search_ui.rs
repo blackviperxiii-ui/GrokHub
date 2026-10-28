@@ -16,6 +16,11 @@ const BACKENDS: [(&str, &str); 3] = [
 
 impl Cabin {
     pub(super) fn ui_web_search_rows(&mut self, ui: &mut egui::Ui) {
+        // Windows proof shot: keep the optional SearXNG / Brave fields on screen
+        // (Cabin defaults is long; local-model rows sit above this section).
+        if super::loadout_home::web_search_settings_shot() {
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
         crate::ui_kit::section_header(ui, "Web search", None);
         crate::cards::settings_note(
             ui,

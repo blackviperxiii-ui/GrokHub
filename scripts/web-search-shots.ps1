@@ -157,7 +157,7 @@ function Seed-Chat([string]$cfg, [hashtable]$app, [string]$id, [string]$title, [
     Write-Utf8 (Join-Path $cfg "sessions/$id.jsonl") "$header`n"
 }
 
-function Capture-Window([System.Diagnostics.Process]$p, [string]$name, [string]$png) {
+function Capture-Window([System.Diagnostics.Process]$p, [string]$name, [string]$png, [int]$settleSec = 14, [switch]$PageDown) {
     $hwnd = [IntPtr]::Zero
     for ($i = 0; $i -lt 60 -and $hwnd -eq [IntPtr]::Zero; $i++) {
         Start-Sleep -Seconds 1
@@ -169,7 +169,17 @@ function Capture-Window([System.Diagnostics.Process]$p, [string]$name, [string]$
         throw "no $($brand.productName) window for $name"
     }
     [void][WebSearchWin]::SetForegroundWindow($hwnd)
-    Start-Sleep -Seconds 14
+    Start-Sleep -Seconds $settleSec
+    if ($PageDown) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][WebSearchWin]::SetForegroundWindow($hwnd)
+        # Settings → Cabin defaults: nudge the body so Web search is on screen.
+        1..4 | ForEach-Object {
+            [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+            Start-Sleep -Milliseconds 400
+        }
+        Start-Sleep -Seconds 2
+    }
     $r = New-Object WebSearchWin+RECT
     [void][WebSearchWin]::GetWindowRect($hwnd, [ref]$r)
     $cw = $r.R - $r.L; $ch = $r.B - $r.T
@@ -254,7 +264,7 @@ function Shot-Settings([int]$w, [int]$h, [string]$name) {
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     try {
-        Capture-Window $p $name (Join-Path $Out "$name.png")
+        Capture-Window $p $name (Join-Path $Out "$name.png") -settleSec 16 -PageDown
     } catch {
         Get-Content (Join-Path $root 'err.txt') -ErrorAction SilentlyContinue | Select-Object -Last 40
         throw

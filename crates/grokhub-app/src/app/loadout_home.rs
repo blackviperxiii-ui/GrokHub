@@ -551,7 +551,7 @@ fn web_search_shot_env() -> bool {
 }
 
 /// Open Settings → Cabin defaults (Web search fields) for proof shots.
-fn web_search_settings_shot() -> bool {
+pub(super) fn web_search_settings_shot() -> bool {
     std::env::var("GROKHUB_WEB_SEARCH_SETTINGS")
         .ok()
         .is_some_and(|v| v.trim() == "1")
