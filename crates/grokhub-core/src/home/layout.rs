@@ -349,7 +349,7 @@ fn place_narrow(
     let s_rows = if smalls.is_empty() {
         0.0
     } else {
-        ((smalls.len() + 1) / 2) as f32
+        smalls.len().div_ceil(2) as f32
     };
     // Keep Medium + smalls in the first viewport (slide 09 900×700) instead of
     // a 440 px Large that leaves an empty lower half with siblings off-screen.
@@ -363,7 +363,7 @@ fn place_narrow(
         // Prefer fitting L+M+S in `avail` (900×700 body); floor only so Large stays readable.
         (avail - sibling_h).clamp(120.0, MIN_BODY_H)
     } else {
-        avail.max(MIN_BODY_H).min(440.0)
+        avail.clamp(MIN_BODY_H, 440.0)
     };
     push_large(&mut out, large, ox, y, w, l_h, as_m);
     if large.filter(|s| !s.is_empty()).is_some() {

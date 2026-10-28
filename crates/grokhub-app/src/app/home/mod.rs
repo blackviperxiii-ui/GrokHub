@@ -99,7 +99,8 @@ mod tests {
         assert_eq!(loaded, HomeLayout::default());
         assert!(home_layout_path(&dir).is_file());
         let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &loaded);
-        assert_eq!(placed.len(), 7);
+        // Mission Control / slide 09: Objectives | PC Loadout | Up Next.
+        assert_eq!(placed.len(), 3);
         let _ = fs::remove_dir_all(&dir);
     }
 }

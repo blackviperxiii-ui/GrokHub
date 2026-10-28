@@ -194,10 +194,7 @@ mod tests {
         assert_eq!(d.version, 2);
         assert_eq!(d.large, "objectives");
         assert_eq!(d.medium, vec!["pc_loadout".to_string()]);
-        assert_eq!(
-            d.small,
-            [Some("up_next".into()), None, None, None,]
-        );
+        assert_eq!(d.small, [Some("up_next".into()), None, None, None,]);
         assert!(d.xp_bar);
         assert_eq!(d.preset, "mission_control");
         assert_eq!(HomePreset::MissionControl.label(), "Mission Control");
