@@ -664,6 +664,7 @@ impl Cabin {
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         self.pin_chat_tail();
+        self.seed_activity_dock_for_deck();
     }
 
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
