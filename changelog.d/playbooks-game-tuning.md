@@ -1,0 +1,1 @@
+- Playbooks: add Game tuning, a specialist playbook that reads this PC's hardware before recommending FPS and graphics settings for a game.
