@@ -85,7 +85,33 @@ impl Cabin {
         self.remember_last_chat_tab();
     }
 
+    /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
+    /// It is not a History row.
+    pub(super) fn ensure_background_history_thread(&mut self) -> usize {
+        // Only the shared Background chat: an idea card's hidden chat is background too.
+        if let Some(i) = self
+            .threads
+            .iter()
+            .position(|t| t.background && t.title == threads::BACKGROUND_THREAD_TITLE)
+        {
+            return i;
+        }
+        let mut created = ChatThread::new(threads::BACKGROUND_THREAD_TITLE, false);
+        created.background = true;
+        self.threads.push(created);
+        self.threads.len() - 1
+    }
+
+    pub(super) fn stamp_current_access(&mut self) {
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            let now = now_ms();
+            t.accessed_ms = now;
+            t.last_active_ms = now;
+        }
+    }
+
     /// Persist the open tab for Chat-rail restore (Home parking must not clear it).
+    /// Kept after `stamp_current_access` so source scans of apply_switch_thread stay clean.
     pub(super) fn remember_last_chat_tab(&mut self) {
         let Some(t) = self.threads.get(self.thread_idx) else {
             return;
@@ -129,31 +155,6 @@ impl Cabin {
             return;
         }
         self.new_thread(false);
-    }
-
-    /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
-    /// It is not a History row.
-    pub(super) fn ensure_background_history_thread(&mut self) -> usize {
-        // Only the shared Background chat: an idea card's hidden chat is background too.
-        if let Some(i) = self
-            .threads
-            .iter()
-            .position(|t| t.background && t.title == threads::BACKGROUND_THREAD_TITLE)
-        {
-            return i;
-        }
-        let mut created = ChatThread::new(threads::BACKGROUND_THREAD_TITLE, false);
-        created.background = true;
-        self.threads.push(created);
-        self.threads.len() - 1
-    }
-
-    pub(super) fn stamp_current_access(&mut self) {
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            let now = now_ms();
-            t.accessed_ms = now;
-            t.last_active_ms = now;
-        }
     }
 
     /// Opening a chat counts as activity for auto-archive without moving History order.
