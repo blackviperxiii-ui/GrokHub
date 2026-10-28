@@ -21,11 +21,15 @@ pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
 mod web_fetch;
+pub(crate) mod web_search;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
+pub use web_search::{
+    brave_key_present, seal_brave_key, Backend as WebSearchBackend, Settings as WebSearchSettings,
+};
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
 pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
@@ -191,6 +195,7 @@ pub fn dispatch_for_job(
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
         "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
+        "web_search" => web_search::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }

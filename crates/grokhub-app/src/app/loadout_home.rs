@@ -522,6 +522,16 @@ pub(super) fn deck_shot_requested() -> bool {
     deck_shot_env() || pinned_mood().is_some()
 }
 
+/// Windows web_search proof shots (`scripts/web-search-shots.ps1`).
+pub(super) fn web_search_shot_requested() -> bool {
+    web_search_shot_env()
+}
+
+/// Hide the signed-out auth banner for any proof-shot launch.
+pub(super) fn proof_shot_requested() -> bool {
+    deck_shot_requested() || web_search_shot_requested()
+}
+
 fn deck_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
@@ -529,6 +539,22 @@ fn deck_shot_env() -> bool {
             .ok()
             .is_some_and(|v| v.trim() == "1")
     })
+}
+
+fn web_search_shot_env() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("GROKHUB_WEB_SEARCH_SHOT")
+            .ok()
+            .is_some_and(|v| v.trim() == "1")
+    })
+}
+
+/// Open Settings → Cabin defaults (Web search fields) for proof shots.
+pub(super) fn web_search_settings_shot() -> bool {
+    std::env::var("GROKHUB_WEB_SEARCH_SETTINGS")
+        .ok()
+        .is_some_and(|v| v.trim() == "1")
 }
 
 /// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
@@ -758,6 +784,89 @@ impl Cabin {
             self.settings_sec = sec;
             self.nav = Nav::Settings;
         }
+    }
+
+    /// After `open_fresh_home`, restore a citation transcript for web_search
+    /// Windows proof shots. Seed file: `{config}/web-search-shot-seed.json`
+    /// written by `scripts/web-search-shots.ps1` (title + messages). Launch
+    /// clears a loaded transcript, so this must run after home open — same
+    /// pattern as [`Self::apply_deck_shot_seed`].
+    ///
+    /// `GROKHUB_WEB_SEARCH_SETTINGS=1` opens Settings → Cabin defaults so the
+    /// optional SearXNG / Brave fields are visible (no fragile click).
+    pub(super) fn apply_web_search_shot_seed(&mut self) {
+        if !web_search_shot_requested() {
+            return;
+        }
+        if web_search_settings_shot() {
+            if self.nav != Nav::Settings {
+                self.settings_back = self.nav;
+            }
+            self.nav = Nav::Settings;
+            self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Defaults);
+            return;
+        }
+        let path = crate::config::config_dir().join("web-search-shot-seed.json");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("ws-proof")
+            .to_string();
+        let title = v
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("web search")
+            .to_string();
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        if let Some(arr) = v.get("messages").and_then(|m| m.as_array()) {
+            for row in arr {
+                let Some(pair) = row.as_array() else {
+                    continue;
+                };
+                if pair.len() < 2 {
+                    continue;
+                }
+                let role = pair[0].as_str().unwrap_or("").to_string();
+                let text = pair[1].as_str().unwrap_or("").to_string();
+                if role.is_empty() || text.is_empty() {
+                    continue;
+                }
+                pairs.push((role, text));
+            }
+        }
+        if pairs.is_empty() {
+            return;
+        }
+        let transcript = Arc::new(pairs);
+        let now = now_ms();
+        if let Some(i) = self.threads.iter().position(|t| t.id == id) {
+            self.thread_idx = i;
+        } else {
+            let mut t = ChatThread::new(&title, false);
+            t.id = id.clone();
+            t.native = true;
+            t.grok_session = Some(id.clone());
+            self.threads.push(t);
+            self.thread_idx = self.threads.len() - 1;
+        }
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.title = title;
+            t.native = true;
+            t.grok_session = Some(id.clone());
+            t.grok_show_pending = false;
+            t.messages = transcript.clone();
+            t.accessed_ms = now;
+            t.last_active_ms = now;
+        }
+        self.messages = transcript;
+        self.cfg.current_thread = id;
+        self.pin_chat_tail();
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
@@ -1481,6 +1590,79 @@ mod tests {
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn web_search_shot_seed_restores_citation_transcript() {
+        let _g = crate::config::hold_test_config();
+        let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
+        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS");
+        let cite = "https://doc.rust-lang.org/stable/releases.html";
+        let seed = serde_json::json!({
+            "id": "ws-openrouter",
+            "title": "OpenRouter · web search",
+            "messages": [
+                ["user", "Search the web and cite real links."],
+                ["assistant", format!("Found it: {cite}")]
+            ]
+        });
+        let path = crate::config::config_dir().join("web-search-shot-seed.json");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, seed.to_string()).expect("seed");
+        let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
+        cabin.open_fresh_home();
+        cabin.apply_web_search_shot_seed();
+        assert_eq!(
+            cabin.threads[cabin.thread_idx].title,
+            "OpenRouter · web search"
+        );
+        assert_eq!(cabin.messages.len(), 2);
+        assert!(
+            cabin.messages[1].1.contains(cite),
+            "assistant must cite the live URL: {}",
+            cabin.messages[1].1
+        );
+        assert!(proof_shot_requested());
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+    }
+
+    #[test]
+    fn web_search_settings_shot_opens_cabin_defaults() {
+        let _g = crate::config::hold_test_config();
+        let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
+        let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
+        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", "1");
+        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "defaults");
+        let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
+        cabin.open_fresh_home();
+        cabin.apply_web_search_shot_seed();
+        assert!(matches!(cabin.nav, Nav::Settings));
+        assert!(matches!(cabin.settings_sec, SettingsSec::Defaults));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+        match prev_sec {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
+            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
         }
     }
 
