@@ -193,6 +193,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         # Game launch companion: a real Steam game last played 30 days ago, so
         # the card has its news since then; Steam's RunningAppID marks the launch.
         $app.gameCompanion = $true
+        # A game already running at start is not a launch: clear it first.
+        if (Test-Path 'HKCU:\Software\Valve\Steam') { Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord }
         $last = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 30 * 86400
         Write-Utf8 (Join-Path $root '.steam/steam/steamapps/appmanifest_1086940.acf') "`"AppState`"`n{`n`"appid`" `"1086940`"`n`"name`" `"Baldur's Gate 3`"`n`"LastPlayed`" `"$last`"`n}`n"
     }
