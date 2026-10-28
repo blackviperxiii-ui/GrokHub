@@ -1,0 +1,1 @@
+CI: PRs run fmt, guards, pii-guard and one Linux and one Windows job (clippy and tests in one build). Cross-check, macOS shell, phone-ios, windows-release and deny (unless Cargo.lock or deny.toml changed) move to push, nightly and manual runs. Shell and phone-android are path-filtered. ci.yml and pii-guard.yml accept merge_group.
