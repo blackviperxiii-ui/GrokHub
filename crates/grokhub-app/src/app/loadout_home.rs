@@ -1081,7 +1081,8 @@ impl Cabin {
             self.set_nav_id(&id);
             // `set_nav_id` falls back to Chat for an id it doesn't know; a typo
             // must not shoot Chat in place of the page, so undo it and say so.
-            if self.nav == Nav::Chat && !matches!(id.as_str(), "chat" | "eyes") {
+            // `profile` opens the menu over the current page, which may be Chat.
+            if self.nav == Nav::Chat && !matches!(id.as_str(), "chat" | "eyes" | "profile") {
                 eprintln!("GROKHUB_DECK_NAV: unknown page `{id}`, ignored");
                 self.nav = before;
             } else {
@@ -2151,6 +2152,13 @@ mod tests {
             "a typo keeps the last page, never Chat"
         );
         assert!(cabin.activity.open, "an unknown page leaves the list alone");
+        cabin.nav = Nav::Chat;
+        cabin.settings_menu_open = false;
+        std::env::set_var("GROKHUB_DECK_NAV", "profile");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav_id(), "profile");
+        assert!(!cabin.activity.open, "profile over Chat is a known page");
+        cabin.settings_menu_open = false;
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();
         assert!(
