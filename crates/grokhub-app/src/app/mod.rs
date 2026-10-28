@@ -141,6 +141,7 @@ mod persist;
 mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod activity_dock;
 mod attach_tray;
 mod audio_check_ui;
 mod background;
@@ -878,6 +879,8 @@ pub struct Cabin {
     toasts: egui_notify::Toasts,
     /// Last `status` already mirrored into `toasts` (dedupe).
     status_toasted: status_toasts::StatusToastState,
+    /// Activity Dock (running / waiting / recent), titlebar chrome.
+    activity: activity_dock::DockState,
 }
 
 #[cfg(test)]
@@ -1441,6 +1444,7 @@ impl Cabin {
             dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
+            activity: Default::default(),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1900,6 +1904,7 @@ impl Cabin {
             dock_state: dock_ui::default_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
+            activity: Default::default(),
         }
     }
 
@@ -4216,6 +4221,7 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
+        self.note_activity_chat_end(false, err);
         self.note_no_route_turn(err);
         if grokhub_core::proc_util::is_sigterm_status(err) {
             return "Stopped".into();
