@@ -1464,6 +1464,7 @@ impl Cabin {
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
+            c.apply_deck_shot_seed();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
             steps.mark("startup:new:home");
@@ -5544,7 +5545,6 @@ fn tool_header_text(label: &str, running: bool) -> String {
         label.to_string()
     }
 }
-
 fn tool_header_color(failed: bool) -> Color32 {
     if failed {
         crate::cards::chip_tone_color(crate::cards::ChipTone::Offline)
@@ -5778,7 +5778,6 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
 }
-
 fn health_settings_sec() -> SettingsSec {
     SettingsSec::About
 }

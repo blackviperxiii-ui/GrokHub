@@ -517,7 +517,8 @@ fn chat_composer_pins_stop_on_the_right() {
         "vertical_centered_justified fills leftover height and drops the chips: {home}"
     );
     let stack = src
-        .find("for slot in composer_stack_order()")
+        .find("for slot in composer_stack_slots(")
+        .or_else(|| src.find("for slot in composer_stack_order()"))
         .expect("stack");
     let cap = &src[stack.saturating_sub(280)..stack];
     assert!(
