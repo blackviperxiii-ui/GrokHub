@@ -57,6 +57,20 @@ struct LibraryView {
     picked: Option<u32>,
 }
 
+/// Deck shots set `GROKHUB_DECK_LIBRARY_PICK` to an app id, so Library opens on
+/// that game and the detail header shows its store art without a tile click.
+const DECK_PICK_ENV: &str = "GROKHUB_DECK_LIBRARY_PICK";
+
+/// The view on first open: the deck shot's pick, else the first game.
+fn first_view() -> LibraryView {
+    LibraryView {
+        picked: std::env::var(DECK_PICK_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse().ok()),
+        ..Default::default()
+    }
+}
+
 /// The library reads only installed games, so All and Installed list the
 /// same ones. Backlog is never played; On objective is named in the open
 /// mission's goal or checklist. The search matches the name.
@@ -296,7 +310,7 @@ impl Cabin {
 
     pub(super) fn ui_library(&mut self, ui: &mut egui::Ui) {
         let id = egui::Id::new(LIBRARY_VIEW_ID);
-        let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+        let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(first_view);
         let now = now_ms();
         let (found, games) = self.steam_library(now);
         let games = games.to_vec();
@@ -521,6 +535,19 @@ fn library_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deck_shot_opens_library_on_its_picked_game() {
+        let before = std::env::var(DECK_PICK_ENV).ok();
+        std::env::remove_var(DECK_PICK_ENV);
+        assert_eq!(first_view().picked, None, "the first game by default");
+        std::env::set_var(DECK_PICK_ENV, " 1086940 ");
+        assert_eq!(first_view().picked, Some(1086940));
+        match before {
+            Some(v) => std::env::set_var(DECK_PICK_ENV, v),
+            None => std::env::remove_var(DECK_PICK_ENV),
+        }
+    }
 
     fn game(app_id: u32, name: &str, last_played: u64, playtime_min: u64) -> SteamGame {
         SteamGame {
