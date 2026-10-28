@@ -229,13 +229,23 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($dock -and -not $mood -and -not $action) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($action) { $env:GROKHUB_DECK_ACTION = $action } else { Remove-Item Env:GROKHUB_DECK_ACTION -ErrorAction SilentlyContinue }
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
-    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
-    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
-    # $openSettings opens Settings on that section at launch, with no click.
-    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings) { '1' } else { '' })
+    # pinPersonality and openSettings both pin a section and open Settings at
+    # launch. Clear with Remove-Item (empty string still "exists" for child envs).
+    $settingsSec = if ($pinPersonality) { 'personality' } elseif ($openSettings) { $openSettings } else { '' }
+    if ($settingsSec) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = $settingsSec
+        $env:GROKHUB_DECK_OPEN_SETTINGS = '1'
+    } else {
+        Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue
+        Remove-Item Env:GROKHUB_DECK_OPEN_SETTINGS -ErrorAction SilentlyContinue
+    }
     # The Activity popover would cover the Library tiles and the Settings page.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings) { '0' } else { '' })
+    if ($library -or $settingsSec) {
+        $env:GROKHUB_DECK_ACTIVITY = '0'
+    } else {
+        Remove-Item Env:GROKHUB_DECK_ACTIVITY -ErrorAction SilentlyContinue
+    }
+    Write-Host "Shot ${name}: personality=$personality settingsSec=$settingsSec openSettings=$openSettings pinPersonality=$pinPersonality"
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -393,14 +403,17 @@ Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -openSettings 'privacy'
 Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -openSettings 'privacy'
 # Nyx is the default personality: Settings -> Personality at launch. Fresh
 # installs pass nyx; upgrades pass the retired 'default' id (cabin load
-# rewrites it to Nyx and keeps it).
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -openSettings 'personality'
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -openSettings 'personality'
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -openSettings 'personality'
-Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -openSettings 'personality'
-# Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
-Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -keys '^,'
-Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
+# rewrites it to Nyx and keeps it). Splat so -personality and -openSettings
+# both bind (named-arg order was dropping openSettings on the runner).
+$nyxFresh = @{ personality = 'nyx'; openSettings = 'personality' }
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' @nyxFresh
+Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' @nyxFresh
+$nyxUpgrade = @{ personality = 'default'; openSettings = 'personality' }
+Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' @nyxUpgrade
+Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' @nyxUpgrade
+# Personality picker beside slide 19; pinPersonality now opens Settings at launch.
+Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
+Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
 # Companion corner-box: DEFAULT rotation (Nyx deck poses) and an ACTION photo.
 Shot 1600 900 'companion-default-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
 Shot 1100 720 'companion-default-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
