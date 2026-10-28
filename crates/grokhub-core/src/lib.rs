@@ -136,6 +136,7 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod watch_learn;
+pub mod week_recap;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;

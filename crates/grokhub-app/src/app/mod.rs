@@ -231,6 +231,7 @@ mod tests;
 mod threads_nav;
 mod voice;
 mod web_search_ui;
+mod week_recap_ui;
 mod wishlist_ui;
 
 use background::BgWork;
@@ -3531,9 +3532,7 @@ impl Cabin {
             }
             match act {
                 HeartbeatAct::Housekeep => {
-                    self.roll_today();
-                    self.release_situation_ping();
-                    self.note_rhythm();
+                    self.housekeep_rhythm_and_recap();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
