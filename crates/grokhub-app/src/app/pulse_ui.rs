@@ -958,6 +958,12 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
+    if grokhub_core::wind_down::is_wind_down_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Sleep the PC")
+    {
+        act = Some(FeedPostAct::Open);
+    }
     if super::fix_it::is_diagnosis_report_card(card) {
         if let Some(rec) = paint_recording(ui, card) {
             act = Some(rec);

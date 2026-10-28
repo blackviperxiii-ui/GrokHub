@@ -24,6 +24,8 @@ pub(super) struct FocusState {
     context_pending: bool,
     /// "Pick up where you left off" for code, the other what-you-were-doing help.
     pub resume: super::code_resume_ui::ResumeState,
+    /// The late-night wind-down reminder.
+    pub wind: super::wind_down_ui::WindDownState,
 }
 
 impl Cabin {
@@ -32,6 +34,7 @@ impl Cabin {
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
+        self.tick_wind_down();
     }
 
     /// Each frame with the window's focus. Only transitions do anything.

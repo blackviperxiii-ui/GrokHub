@@ -90,6 +90,18 @@ fn sample_loop(config_dir: &Path) {
     }
 }
 
+/// One fresh reading for the wind-down reminder (`wind_down_ui`), slow
+/// signals included. Blocks on the OS readers, so call it off the UI thread.
+pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
+    let s = Reader::default().sample(None);
+    grokhub_core::wind_down::Machine {
+        idle_secs: s.idle_secs,
+        game: s.game,
+        fullscreen: s.fullscreen,
+        external_gpu_pct: s.external_gpu_pct,
+    }
+}
+
 #[derive(Default)]
 struct Reader {
     tick: u32,

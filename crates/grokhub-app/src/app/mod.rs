@@ -229,6 +229,7 @@ mod systems_brief_ui;
 mod tests;
 mod threads_nav;
 mod voice;
+mod wind_down_ui;
 mod wishlist_ui;
 
 use background::BgWork;

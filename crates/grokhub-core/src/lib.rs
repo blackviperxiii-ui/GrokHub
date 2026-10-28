@@ -138,6 +138,7 @@ pub mod watch_learn;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;
+pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;
