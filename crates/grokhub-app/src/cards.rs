@@ -801,7 +801,7 @@ pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
         )),
         "always-approve" => Some((
             "Always",
-            "Skip every tool prompt except money, sending, deleting your data, credentials and irreversible system changes. Resets to Ask next time. /always-approve.",
+            "Skip every tool prompt except money, sending, deleting your data, credentials and irreversible system changes. Stays on until you pick Ask or Auto. /always-approve.",
         )),
         _ => None,
     }

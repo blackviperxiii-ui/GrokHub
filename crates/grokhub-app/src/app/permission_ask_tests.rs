@@ -356,12 +356,18 @@ fn set_permission_mode_saves_auto_and_always() {
     cabin.set_permission_mode(PermissionMode::Auto);
     assert_eq!(cabin.permission_mode, PermissionMode::Auto);
     assert_eq!(cabin.cfg.permission_mode, "auto");
+    assert!(!cabin.cfg.always_confirmed);
     cabin.set_permission_mode(PermissionMode::AlwaysApprove);
     assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
-    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.cfg.permission_mode, "always-approve");
+    assert!(cabin.cfg.always_confirmed);
     cabin.set_permission_mode(PermissionMode::Ask);
     assert_eq!(cabin.permission_mode, PermissionMode::Ask);
     assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert!(
+        cabin.cfg.always_confirmed,
+        "confirm flag stays so the next Always pick skips the sheet"
+    );
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
