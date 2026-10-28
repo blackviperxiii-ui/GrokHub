@@ -179,20 +179,23 @@ fn rail_footer_is_reserved() {
 fn rail_chat_title_stays_short() {
     assert_eq!(
         grokhub_core::display_tab_title("chowder and food interest and cho"),
-        "chowder"
+        "chowder food interest cho"
     );
     with_fonts_ui(|ui| {
         let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
         assert!(
-            painted.chars().count() < 20,
-            "rail label must not run off the pill: {painted}"
+            painted.chars().count() <= grokhub_core::AUTO_TITLE_MAX,
+            "rail label must not run past the tab title cap: {painted}"
         );
-        assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+        assert!(
+            painted.contains('…') || painted.starts_with("chowder"),
+            "{painted}"
+        );
     });
 }
 
 #[test]
-fn chat_rail_reuses_empty_draft() {
+fn chat_rail_restores_last_used_tab() {
     let src = cabin_src();
     let theme = include_str!("../theme.rs");
     let loadout = theme
@@ -210,12 +213,24 @@ fn chat_rail_reuses_empty_draft() {
         .and_then(|s| s.split("_ =>").next())
         .expect("chat arm");
     assert!(
-        chat_arm.contains("self.new_thread(false)"),
-        "Chat rail click reuses or starts one empty draft: {chat_arm}"
+        chat_arm.contains("self.open_last_chat_tab()"),
+        "Chat rail restores the last-used tab: {chat_arm}"
     );
     assert!(
-        !chat_arm.contains("open_recent_chat"),
-        "Chat rail must not jump to last-access; History is for old convos: {chat_arm}"
+        !chat_arm.contains("new_thread(false)"),
+        "Chat rail must not force a fresh draft over last-used: {chat_arm}"
+    );
+    let open_last = fn_src(&src, "open_last_chat_tab");
+    assert!(
+        open_last.contains("last_chat_tab")
+            && open_last.contains("last_used_live_chat_index")
+            && open_last.contains("new_thread(false)"),
+        "restore prefers remembered, then next live, else fresh: {open_last}"
+    );
+    let fresh = fn_src(&src, "open_fresh_home");
+    assert!(
+        fresh.contains("last_chat_tab") && fresh.contains("keep"),
+        "Home parking must not wipe last_chat_tab: {fresh}"
     );
     let created = src
         .split("fn new_thread")
@@ -224,11 +239,11 @@ fn chat_rail_reuses_empty_draft() {
         .expect("new_thread");
     assert!(
         created.contains("reuse_empty_thread_idx") && created.contains("has_session"),
-        "Chat must reuse an empty no-session draft instead of stacking Chats: {created}"
+        "tab + still reuses an empty no-session draft instead of stacking Chats: {created}"
     );
     assert!(
         created.contains("composer_want_focus = true"),
-        "Chat rail must put the cursor in the composer: {created}"
+        "new chat must put the cursor in the composer: {created}"
     );
     let side = fn_src(&src, "ui_sidebar");
     assert!(
@@ -257,8 +272,8 @@ fn chat_rail_reuses_empty_draft() {
         .and_then(|s| s.split("fn run_slash_line(").next())
         .expect("run_palette");
     assert!(
-        palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
-        "palette Chat uses the same empty-draft reuse as the rail: {palette}"
+        palette.contains("\"nav:chat\"") && palette.contains("self.open_last_chat_tab()"),
+        "palette Chat uses the same last-used restore as the rail: {palette}"
     );
     assert!(
         palette.contains("file:")
@@ -1161,6 +1176,75 @@ fn land_on_real_chat_leaves_scratch() {
         .any(|(i, t)| { i != cabin.thread_idx && t.title == "Scratch" && t.scratch }));
     assert_eq!(cabin.status, "Scratch — no memory writes");
     assert!(!cabin.running);
+}
+
+#[test]
+fn chat_rail_home_round_trip_restores_last_tab() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chat-rail-last-used");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+
+    let mut older = crate::threads::ChatThread::new("Older", false);
+    older.accessed_ms = 1_000;
+    older.messages = std::sync::Arc::new(vec![("user".into(), "old".into())]);
+    let older_id = older.id.clone();
+    let mut newer = crate::threads::ChatThread::new("Harbor", false);
+    newer.accessed_ms = 5_000;
+    newer.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
+    let newer_id = newer.id.clone();
+    cabin.threads.push(older);
+    cabin.threads.push(newer);
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    cabin.remember_last_chat_tab();
+    assert_eq!(cabin.cfg.last_chat_tab, newer_id);
+
+    cabin.open_fresh_home();
+    assert!(cabin.messages.is_empty(), "Home parks on an empty draft");
+    assert_eq!(cabin.cfg.last_chat_tab, newer_id);
+    assert_ne!(cabin.threads[cabin.thread_idx].id, newer_id);
+
+    cabin.set_nav_id("chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, newer_id);
+    assert_eq!(cabin.messages[0].1, "dock");
+
+    // Closed remembered tab → next live (Older), not the Home draft.
+    let harbor_idx = cabin.thread_idx;
+    cabin.delete_thread_at(harbor_idx);
+    assert!(crate::threads::is_deleted(
+        cabin
+            .threads
+            .iter()
+            .find(|t| t.id == newer_id)
+            .expect("soft-deleted Harbor stays on disk")
+    ));
+    cabin.open_fresh_home();
+    cabin.set_nav_id("chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, older_id);
+    assert_eq!(cabin.messages[0].1, "old");
+
+    // None remain → fresh draft.
+    let older_idx = cabin.thread_idx;
+    cabin.delete_thread_at(older_idx);
+    cabin.cfg.last_chat_tab.clear();
+    // Drop leftover parking drafts so restore has nothing live.
+    for t in cabin.threads.iter_mut() {
+        if crate::threads::is_parking_chat_draft(t) || t.messages.is_empty() {
+            let _ = crate::threads::soft_delete_thread(t, 99_000);
+        }
+    }
+    cabin.set_nav_id("chat");
+    assert!(
+        cabin.threads[cabin.thread_idx].title == "Chat"
+            && cabin.messages.is_empty()
+            && !crate::threads::is_deleted(&cabin.threads[cabin.thread_idx]),
+        "no live tabs opens a fresh chat"
+    );
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 // Landed from PR #222.

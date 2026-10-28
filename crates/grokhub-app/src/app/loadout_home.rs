@@ -531,6 +531,29 @@ fn deck_shot_env() -> bool {
     })
 }
 
+/// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
+pub(super) fn deck_tab_count() -> Option<usize> {
+    std::env::var("GROKHUB_DECK_TABS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 3)
+}
+
+/// When set, the tab strip paints the overflow menu open for HARD DONE shots.
+pub(super) fn deck_overflow_open() -> bool {
+    std::env::var("GROKHUB_DECK_OVERFLOW")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
+pub(super) fn deck_last_chat_mode() -> Option<String> {
+    std::env::var("GROKHUB_DECK_LAST_CHAT")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == "home" || v == "chat")
+}
+
 /// Slide 02 Hangout: quick replies above the composer (not Connect / Start here).
 pub(super) fn hangout_quick_chips() -> Vec<QuickChip> {
     [
@@ -673,8 +696,41 @@ impl Cabin {
             false,
             now.saturating_sub(30_000),
         );
+        // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
+        let want = deck_tab_count().unwrap_or(3).max(3);
+        let extras = [
+            ("deck-duo", "Duo finder"),
+            ("deck-stutter", "Fix stutter"),
+            ("deck-fans", "Fan curve"),
+            ("deck-shaders", "Shader cache"),
+            ("deck-rank", "Rank climb"),
+            ("deck-patch", "Season patch"),
+            ("deck-aim", "Aim routine"),
+            ("deck-warmup", "Warm up range"),
+            ("deck-build", "Roast build"),
+            ("deck-backlog", "Backlog sort"),
+            ("deck-gpu", "GPU drivers"),
+            ("deck-queue", "Queue night"),
+            ("deck-voip", "Voip check"),
+            ("deck-map", "Map pool"),
+            ("deck-scrim", "Scrim notes"),
+            ("deck-perk", "Perk loadout"),
+        ];
+        for (n, (id, title)) in extras.iter().enumerate() {
+            // Hangout + Weekend + Driver already planted → total so far is 3.
+            if 3 + n >= want {
+                break;
+            }
+            self.ensure_deck_extra_tab(
+                id,
+                title,
+                false,
+                now.saturating_sub(90_000 + n as u64 * 1_000),
+            );
+        }
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
+        self.cfg.last_chat_tab = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         // Viper is an adults-only preset; without this gate the titlebar falls
         // back to Nyx and HARD DONE shots look wrong.
@@ -683,6 +739,16 @@ impl Cabin {
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
+        // Windows proof: Home parks empty; Chat rail restores Hangout.
+        match deck_last_chat_mode().as_deref() {
+            Some("home") => self.open_fresh_home(),
+            Some("chat") => {
+                self.open_fresh_home();
+                self.open_last_chat_tab();
+                self.nav = Nav::Chat;
+            }
+            _ => {}
+        }
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
@@ -1309,8 +1375,10 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var("GROKHUB_DECK_MOOD");
+        std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
         let transcript = deck_transcript();
         let mut seeded = ChatThread::new("Hangout", false);
         seeded.id = DECK_THREAD_ID.to_string();
@@ -1325,6 +1393,7 @@ mod tests {
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.messages.len(), 4);
         assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        assert_eq!(cabin.cfg.last_chat_tab, DECK_THREAD_ID);
         let titles: Vec<&str> = cabin.threads.iter().map(|t| t.title.as_str()).collect();
         assert!(
             titles.contains(&"Hangout")
@@ -1368,6 +1437,41 @@ mod tests {
         match prev_mood {
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+        match prev_last {
+            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
+            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn deck_last_chat_home_then_chat_restores_hangout() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "home");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert!(
+            cabin.messages.is_empty(),
+            "home mode parks on an empty draft"
+        );
+        assert_eq!(cabin.cfg.last_chat_tab, DECK_THREAD_ID);
+        assert_ne!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "chat");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        assert_eq!(cabin.messages.len(), 4);
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_last {
+            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
+            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
         }
     }
 
