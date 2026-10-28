@@ -109,11 +109,70 @@ function Get-LiveHits([string]$q, [int]$max = 4) {
     return $hits
 }
 
-function Format-Assistant([object[]]$hits, [string]$via) {
-    # User-facing reply only: numbered answer + clean Sources. Never include
-    # <<<UNTRUSTED>>> fences (those are model-only tool results).
+function Query-Tokens([string]$q) {
+    $stop = @(
+        'a','an','the','and','or','for','to','of','in','on','at','is','are','was','be',
+        'with','from','by','as','it','this','that','these','those','current','latest',
+        'new','how','what','where','when','why','which','who','web','search','find',
+        'look','about','please','show','get','cite','real','links','link','today','now'
+    )
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($raw in [regex]::Split($q.ToLowerInvariant(), '[^a-z0-9]+')) {
+        if ($raw.Length -lt 3) { continue }
+        if ($stop -contains $raw) { continue }
+        if ($seen.Add($raw)) { [void]$out.Add($raw) }
+    }
+    return $out
+}
+
+function Looks-Programming([string]$q) {
+    $sig = @(
+        'release','notes','changelog','cargo','crate','crates','compiler','language',
+        'lang','docs','documentation','rfc','stable','nightly','edition','npm','pip',
+        'pypi','maven','sdk','api','programming','stdlib','toolchain'
+    )
+    $lower = $q.ToLowerInvariant()
+    foreach ($s in $sig) { if ($lower.Contains($s)) { return $true } }
+    return $false
+}
+
+function Is-RustGameHost([string]$hostName) {
+    return ($hostName -eq 'facepunch.com') -or $hostName.EndsWith('.facepunch.com')
+}
+
+function Filter-RelevantHits([object[]]$hits, [string]$q) {
+    if ($null -eq $hits -or $hits.Count -eq 0) { return @() }
+    $tokens = @(Query-Tokens $q)
+    $prog = Looks-Programming $q
+    $rustQ = ($tokens -contains 'rust')
+    $scored = New-Object System.Collections.Generic.List[object]
+    foreach ($h in $hits) {
+        $hostName = Hit-Host $h.url
+        if ($prog -and $rustQ -and (Is-RustGameHost $hostName)) { continue }
+        $blob = ("$($h.title) $($h.url) $($h.snippet)").ToLowerInvariant()
+        $score = 0
+        if ($tokens.Count -eq 0) {
+            $score = 1
+        } else {
+            foreach ($t in $tokens) { if ($blob.Contains($t)) { $score++ } }
+        }
+        [void]$scored.Add([pscustomobject]@{ score = $score; hit = $h })
+    }
+    if ($scored.Count -eq 0) { return @($hits) }
+    $best = ($scored | Measure-Object -Property score -Maximum).Maximum
+    $minKeep = if ($best -eq 0) { 0 } else { [int][Math]::Ceiling($best / 2.0) }
+    $kept = @($scored | Where-Object { $_.score -ge $minKeep } | ForEach-Object { $_.hit })
+    if ($kept.Count -eq 0) { return @($hits) }
+    return $kept
+}
+
+function Format-Assistant([object[]]$hits, [string]$topic) {
+    # User-facing reply only: natural intro + numbered answer + clean Sources.
+    # Never include <<<UNTRUSTED>>> fences (those are model-only tool results)
+    # and never name tool backends, cabin internals, or providers.
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("Here is what cabin ``web_search`` (DuckDuckGo Lite, free) found via **$via**:")
+    $lines.Add("Here is what I found for **$topic**:")
     $lines.Add('')
     $n = 1
     foreach ($h in $hits) {
@@ -271,16 +330,27 @@ function Shot-Settings([int]$w, [int]$h, [string]$name) {
     }
 }
 
-$hits = @(Get-LiveHits $Query 4)
+$rawHits = @(Get-LiveHits $Query 8)
+$userTopic = 'current Rust release notes'
+$hits = @(Filter-RelevantHits $rawHits $userTopic)
+if ($hits.Count -gt 4) { $hits = @($hits | Select-Object -First 4) }
+if ($hits.Count -lt 2) {
+    throw "relevance filter left fewer than 2 hits for '$userTopic' (raw $($rawHits.Count))"
+}
 $urls = @($hits | ForEach-Object { $_.url })
 Write-Host "live cites:"
 $urls | ForEach-Object { Write-Host "  $_" }
 Write-Host "snippets:"
 $hits | ForEach-Object { Write-Host "  $($_.title): $($_.snippet.Substring(0, [Math]::Min(80, $_.snippet.Length)))" }
+foreach ($u in $urls) {
+    if ((Hit-Host $u).EndsWith('facepunch.com') -or (Hit-Host $u) -eq 'facepunch.com') {
+        throw "off-topic Facepunch hit survived relevance filter: $u"
+    }
+}
 
 $userAsk = "Search the web for current Rust release notes and cite the real links."
-$orAssistant = Format-Assistant $hits 'OpenRouter + cabin web_search'
-$localAssistant = Format-Assistant $hits 'local model + cabin web_search'
+$orAssistant = Format-Assistant $hits $userTopic
+$localAssistant = Format-Assistant $hits $userTopic
 $offlineAsk = "Search the web for today's headlines."
 $offlineAssistant = "Web search is unavailable (no network or the search host did not answer). Continue without live sources, or try again when online."
 
