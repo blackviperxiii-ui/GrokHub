@@ -59,6 +59,7 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
         {
             Some("personality") => Some(SettingsSec::Personality),
             Some("privacy") => Some(SettingsSec::Privacy),
+            Some("labs") => Some(SettingsSec::Labs),
             // Cabin defaults holds Models & providers → Web search (optional
             // SearXNG URL / Brave key). Used by web-search-shots.ps1.
             Some("defaults") | Some("cabin") | Some("websearch") | Some("web_search") => {
