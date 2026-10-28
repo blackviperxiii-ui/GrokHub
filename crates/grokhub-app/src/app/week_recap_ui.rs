@@ -72,7 +72,16 @@ fn load_counters() -> WeekCounters {
 }
 
 impl Cabin {
-    /// Housekeep: post the weekly recap once per week at the usual active hour.
+    /// Housekeep slot: day roll, situation ping, rhythm minute, then week recap.
+    /// Keeps those four calls out of `mod.rs` (god-file line budget).
+    pub(super) fn housekeep_rhythm_and_recap(&mut self) {
+        self.roll_today();
+        self.release_situation_ping();
+        self.note_rhythm();
+        self.tick_week_recap();
+    }
+
+    /// Post the weekly recap once per week at the usual active hour.
     pub(super) fn tick_week_recap(&mut self) {
         let now = grokhub_core::now_ms();
         let clock = Self::local_clock();
@@ -226,12 +235,15 @@ mod tests {
 
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.resume_code = true;
-        cabin.focus.resume.seed_repos_for_test(vec![grokhub_core::code_resume::RepoStatus {
-            name: "grokhub".into(),
-            last_commit_s: now_s - 30,
-            ahead: 5,
-            ..Default::default()
-        }]);
+        cabin
+            .focus
+            .resume
+            .seed_repos_for_test(vec![grokhub_core::code_resume::RepoStatus {
+                name: "grokhub".into(),
+                last_commit_s: now_s - 30,
+                ahead: 5,
+                ..Default::default()
+            }]);
         cabin.sources.steam.seed_library_for_test(
             vec![SteamGame {
                 app_id: 1,
@@ -294,14 +306,8 @@ mod tests {
         assert!(details.contains("## Top GrokHub tasks"), "{details}");
 
         // Pure helpers still match gather shape.
-        assert_eq!(
-            cabin.week_recap_games(now),
-            Vec::<GamePlayed>::new()
-        );
-        assert_eq!(
-            cabin.week_recap_projects(now),
-            Vec::<ProjectTouched>::new()
-        );
+        assert_eq!(cabin.week_recap_games(now), Vec::<GamePlayed>::new());
+        assert_eq!(cabin.week_recap_projects(now), Vec::<ProjectTouched>::new());
 
         drop(cabin);
         let _ = std::fs::remove_dir_all(&root);

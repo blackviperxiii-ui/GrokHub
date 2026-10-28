@@ -199,10 +199,7 @@ impl WeekRecap {
 
     /// Lines for a shareable image layout (same content as [`share_text`]).
     pub fn share_lines(&self) -> Vec<String> {
-        self.share_text()
-            .lines()
-            .map(str::to_string)
-            .collect()
+        self.share_text().lines().map(str::to_string).collect()
     }
 }
 
@@ -232,11 +229,7 @@ pub fn assert_share_safe(text: &str) {
 /// Strip a repo path down to a bare folder name.
 pub fn project_name(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches(['/', '\\']);
-    let name = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(trimmed)
-        .trim();
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).trim();
     if name.is_empty() {
         "project".into()
     } else {
@@ -261,35 +254,21 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         .map(|p| {
             let name = project_name(&p.name);
             let n = p.commits.max(1);
-            format!(
-                "{name} · {n} commit{}",
-                if n == 1 { "" } else { "s" }
-            )
+            format!("{name} · {n} commit{}", if n == 1 { "" } else { "s" })
         })
         .collect();
-    let prints = input.prints_made.and_then(|n| {
-        (n > 0).then(|| {
-            format!(
-                "{n} print{}",
-                if n == 1 { "" } else { "s" }
-            )
-        })
-    });
-    let disk = input.disk_freed_bytes.and_then(|b| {
-        (b > 0).then(|| format!("{} freed", bytes_label(b)))
-    });
+    let prints = input
+        .prints_made
+        .and_then(|n| (n > 0).then(|| format!("{n} print{}", if n == 1 { "" } else { "s" })));
+    let disk = input
+        .disk_freed_bytes
+        .and_then(|b| (b > 0).then(|| format!("{} freed", bytes_label(b))));
     let tasks: Vec<String> = input
         .top_tasks
         .iter()
         .filter(|t| !t.label.trim().is_empty() && t.count > 0)
         .take(TOP_TASKS_CAP)
-        .map(|t| {
-            format!(
-                "{} · {}×",
-                t.label.trim(),
-                t.count
-            )
-        })
+        .map(|t| format!("{} · {}×", t.label.trim(), t.count))
         .collect();
     let suggestion = input
         .suggestion
@@ -297,7 +276,11 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let greeting = greeting_line(&input.tone, &input.week_key, has_any(&games, &projects, &prints, &disk, &tasks));
+    let greeting = greeting_line(
+        &input.tone,
+        &input.week_key,
+        has_any(&games, &projects, &prints, &disk, &tasks),
+    );
     let closing = closing_line(&input.tone);
     WeekRecap {
         week_key: input.week_key.clone(),
@@ -363,7 +346,9 @@ fn closing_line(tone: &RecapTone) -> String {
         (true, Verbosity::Terse) => "Don't trip next week.".into(),
         (true, _) => "Try not to nap through next week.".into(),
         (false, Verbosity::Terse) => "Onward.".into(),
-        (false, Verbosity::Chatty) => "Share this card if you want — no personal paths on it.".into(),
+        (false, Verbosity::Chatty) => {
+            "Share this card if you want — no personal paths on it.".into()
+        }
         (false, Verbosity::Normal) => "See you next week.".into(),
     }
 }
@@ -485,18 +470,13 @@ fn days_to_civil(mut z: i64) -> (i32, u32, u32) {
 }
 
 /// Games with `last_played` inside the week window, ranked by playtime.
-pub fn games_from_library(
-    games: &[(String, u64, u64)],
-    now_ms: u64,
-) -> Vec<GamePlayed> {
+pub fn games_from_library(games: &[(String, u64, u64)], now_ms: u64) -> Vec<GamePlayed> {
     // (name, last_played_unix_s, playtime_min)
     let now_s = now_ms / 1000;
     let week_s = WEEK_MS / 1000;
     let mut out: Vec<GamePlayed> = games
         .iter()
-        .filter(|(_, last, mins)| {
-            *last > 0 && *mins > 0 && now_s.saturating_sub(*last) <= week_s
-        })
+        .filter(|(_, last, mins)| *last > 0 && *mins > 0 && now_s.saturating_sub(*last) <= week_s)
         .map(|(name, _, mins)| GamePlayed {
             name: name.trim().to_string(),
             minutes: *mins,
@@ -510,10 +490,7 @@ pub fn games_from_library(
 
 /// Projects with a HEAD commit inside the week. `commits` is the existing
 /// ahead counter (unpushed), at least 1 when touched.
-pub fn projects_from_repos(
-    repos: &[(String, u64, u32)],
-    now_ms: u64,
-) -> Vec<ProjectTouched> {
+pub fn projects_from_repos(repos: &[(String, u64, u32)], now_ms: u64) -> Vec<ProjectTouched> {
     // (name_or_path, last_commit_s, ahead)
     let now_s = now_ms / 1000;
     let week_s = WEEK_MS / 1000;
@@ -623,14 +600,7 @@ fn draw_text(
             for col in 0..5 {
                 if bits & (1 << (4 - col)) != 0 {
                     put_px(rgba, width, height, x + col, y + row as i32 * 2, color);
-                    put_px(
-                        rgba,
-                        width,
-                        height,
-                        x + col,
-                        y + row as i32 * 2 + 1,
-                        color,
-                    );
+                    put_px(rgba, width, height, x + col, y + row as i32 * 2 + 1, color);
                 }
             }
         }
@@ -788,11 +758,7 @@ impl Crc32 {
         for &byte in data {
             self.value ^= u32::from(byte);
             for _ in 0..8 {
-                let mask = if self.value & 1 != 0 {
-                    0xedb8_8320
-                } else {
-                    0
-                };
+                let mask = if self.value & 1 != 0 { 0xedb8_8320 } else { 0 };
                 self.value = (self.value >> 1) ^ mask;
             }
         }
@@ -858,9 +824,17 @@ mod tests {
         let recap = build_recap(&fixture_full());
         assert_eq!(recap.week_key, "2026-10-27");
         assert_eq!(recap.games.len(), 2);
-        assert!(recap.games[0].starts_with("Hades · 2h 30m"), "{}", recap.games[0]);
+        assert!(
+            recap.games[0].starts_with("Hades · 2h 30m"),
+            "{}",
+            recap.games[0]
+        );
         assert_eq!(recap.projects[0], "grokhub · 12 commits");
-        assert!(!recap.projects[0].contains("/home/"), "{}", recap.projects[0]);
+        assert!(
+            !recap.projects[0].contains("/home/"),
+            "{}",
+            recap.projects[0]
+        );
         assert_eq!(recap.prints.as_deref(), Some("4 prints"));
         assert!(
             recap.disk.as_deref().unwrap().contains("GB freed"),
@@ -868,10 +842,7 @@ mod tests {
             recap.disk
         );
         assert_eq!(recap.tasks[0], "weekly-report · 3×");
-        assert_eq!(
-            recap.suggestion.as_deref(),
-            Some("Lean into gaming again")
-        );
+        assert_eq!(recap.suggestion.as_deref(), Some("Lean into gaming again"));
         let body = recap.card_body();
         assert!(body.contains("Games · Hades"), "{body}");
         assert!(body.contains("Next · Lean into gaming"), "{body}");
@@ -952,14 +923,7 @@ mod tests {
             hour: 19,
             minute: 0,
         };
-        assert!(week_recap_due(
-            None,
-            "2026-10-27",
-            &clock,
-            true,
-            None,
-            true
-        ));
+        assert!(week_recap_due(None, "2026-10-27", &clock, true, None, true));
         assert!(!week_recap_due(
             Some("2026-10-27"),
             "2026-10-27",
@@ -971,10 +935,7 @@ mod tests {
         assert!(!week_recap_due(
             None,
             "2026-10-27",
-            &LocalClock {
-                hour: 10,
-                ..clock
-            },
+            &LocalClock { hour: 10, ..clock },
             false,
             None,
             true
@@ -982,10 +943,7 @@ mod tests {
         assert!(week_recap_due(
             None,
             "2026-10-27",
-            &LocalClock {
-                hour: 9,
-                ..clock
-            },
+            &LocalClock { hour: 9, ..clock },
             false,
             Some(9),
             true
@@ -993,10 +951,7 @@ mod tests {
         assert!(week_recap_due(
             None,
             "2026-10-27",
-            &LocalClock {
-                hour: 18,
-                ..clock
-            },
+            &LocalClock { hour: 18, ..clock },
             false,
             None,
             false
@@ -1004,10 +959,7 @@ mod tests {
         assert!(!week_recap_due(
             None,
             "2026-10-27",
-            &LocalClock {
-                hour: 12,
-                ..clock
-            },
+            &LocalClock { hour: 12, ..clock },
             false,
             None,
             false
@@ -1043,10 +995,13 @@ mod tests {
             ],
             now,
         );
-        assert_eq!(projects, vec![ProjectTouched {
-            name: "alpha".into(),
-            commits: 4,
-        }]);
+        assert_eq!(
+            projects,
+            vec![ProjectTouched {
+                name: "alpha".into(),
+                commits: 4,
+            }]
+        );
         let outcomes = vec![
             TaskOutcome {
                 task: "t1".into(),
