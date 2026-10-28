@@ -1,1 +1,1 @@
-- Add gaming specialist playbooks: gaming-help, build-loadout, and game-news-library (builds on game-tuning + gaming domain).
+- Brief routes gaming tips, PC/loadout compares, and Steam library or patch-note asks to gaming-help, build-loadout, and game-news-library (game-help / loadout / library domains); game-tuning still wins FPS asks.
