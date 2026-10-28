@@ -271,10 +271,11 @@ fn category_tint(cat: PulseCategory) -> egui::Color32 {
 }
 
 /// One fixed color per card type, so the small type word reads at a glance.
+/// Automate is amber on the deck (slides 13 / 15); Do stays bright.
 pub(super) fn type_color(kind: PulseType) -> egui::Color32 {
     match kind {
         PulseType::Do => egui::Color32::from_rgb(0xe7, 0xe9, 0xea),
-        PulseType::Automate => egui::Color32::from_rgb(0x9b, 0x7b, 0xea),
+        PulseType::Automate => crate::theme::amber(),
         PulseType::Learn => egui::Color32::from_rgb(0xf4, 0xb7, 0x40),
         PulseType::Watch => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
         PulseType::Quiet => crate::theme::muted(),
@@ -459,17 +460,46 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
     }
 }
 
-/// The glyph on a dark tile with a dim red rim (deck slide 15).
+/// The glyph on a dark tile with a signal-red rim (deck slides 13 / 15).
 fn icon(ui: &mut egui::Ui, glyph: Glyph, tint: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON, ICON), egui::Sense::hover());
     ui.painter().rect(
         rect,
-        8.0,
+        crate::ui_kit::recipe::BUTTON_RADIUS,
         crate::theme::void_bg(),
-        egui::Stroke::new(1.0_f32, crate::theme::red_dim()),
+        egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, crate::theme::signal_red()),
         egui::StrokeKind::Inside,
     );
     paint_glyph(ui.painter(), rect.shrink(5.0), glyph, tint);
+}
+
+/// Feed | Ideas header tab: amber outline + underline when selected (slide 13).
+fn pulse_header_tab(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    if !crate::theme::is_loadout_paint() {
+        return crate::cards::felt_tab(ui, label, on);
+    }
+    use crate::ui_kit::recipe::{look, paint, state, Mark, Part};
+    let font = egui::FontId::proportional(crate::theme::FONT_BODY);
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let pad = ui.style().spacing.button_padding;
+    let size = egui::vec2((galley.size().x + pad.x * 2.0).max(52.0), 32.0);
+    let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    // Selected uses Accent (amber rim); keep the slide's amber underline too.
+    let mut l = look(Part::Tab, state(resp.hovered(), false, on));
+    if on {
+        l.mark = Mark::Underline;
+    }
+    paint(ui.painter(), rect, &l);
+    ui.painter().galley(
+        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        l.ink,
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
+    resp.clicked()
 }
 
 /// Up to `rows` lines, then an ellipsis.
@@ -1280,7 +1310,7 @@ impl Cabin {
                 ui.add_space(6.0);
                 for tab in PulseTab::ORDER.iter().rev() {
                     let on = self.pulse_view.tab == *tab;
-                    if crate::cards::felt_segment(ui, tab.label(), on).clicked() {
+                    if pulse_header_tab(ui, tab.label(), on) {
                         self.pulse_view.tab = *tab;
                         self.pulse_view.scroll_to = Some(*tab);
                     }

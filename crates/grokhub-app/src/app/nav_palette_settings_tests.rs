@@ -814,8 +814,8 @@ fn palette_arrow_down_reveals_the_next_row_before_the_edge() {
 fn motion_wave2e_pulse_header_control_unmoved() {
     let pulse = include_str!("pulse_ui.rs");
     assert!(
-        pulse.contains("HEADER_SLOT_W") && pulse.contains("felt_segment"),
-        "Feed|Ideas must keep the fixed header slot"
+        pulse.contains("HEADER_SLOT_W") && pulse.contains("pulse_header_tab"),
+        "Feed|Ideas must keep the fixed header slot with deck outlined tabs"
     );
     assert!(
         pulse.contains("pulse_tab_t") && pulse.contains("ideas_axis_x"),

@@ -971,6 +971,38 @@ fn suggest_goes_short_on_the_one_column_page() {
     assert_eq!(suggest_label(true, PulseFit::Stacked), "Suggesting…");
 }
 
+/// Deck-match 6: Pulse header/cards follow slides 13 and 15 chrome.
+#[test]
+fn pulse_deck_match_6_chrome_tokens() {
+    let _paint = crate::theme::hold_paint_test();
+    crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+    let pulse = include_str!("pulse_ui.rs");
+    let ideas = include_str!("ideas_ui.rs");
+    assert!(
+        pulse.contains("fn pulse_header_tab(") && !pulse.contains("felt_segment(ui, tab.label()"),
+        "Feed|Ideas must use outlined recipe tabs, not felt_segment pills"
+    );
+    assert!(
+        pulse.contains("recipe::STROKE_W") && pulse.contains("signal_red()"),
+        "idea icon tiles must use the signal-red recipe rim"
+    );
+    assert!(
+        ideas.contains("paint_group_diamond") && ideas.contains("theme::amber()"),
+        "Up next / category headers keep amber diamonds"
+    );
+    assert_eq!(
+        super::pulse_ui::type_color(grokhub_core::pulse::PulseType::Automate),
+        crate::theme::amber(),
+        "AUTOMATE tag is amber on the deck"
+    );
+    assert!(
+        pulse.contains("Quick::Primary")
+            && pulse.contains("Quick::Outline")
+            && pulse.contains("Quick::Quiet"),
+        "Run / Snooze / Dismiss keep the Loadout button styles"
+    );
+}
+
 /// Text shapes with their top-left corner.
 fn pulse_text_pos(cabin: &mut super::Cabin, w: f32) -> Vec<(String, egui::Pos2)> {
     let _paint = crate::theme::hold_paint_test();
