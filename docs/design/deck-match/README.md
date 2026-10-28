@@ -17,6 +17,7 @@ Side-by-side captures of the running Windows cabin (`grokhub.exe`) next to the l
 | `dm8-win-personality-1600x900-slide19.png` | 1600×900 | 19 Personality picker |
 | `dm8-win-personality-1100x720-slide19.png` | 1100×720 | 19 |
 | `dm8-win-personality-1920x1080-slide19.png` | 1920×1080 | 19 |
+| `dm8-win-personality-900x720-slide19.png` | 900×720 | 19 narrow / stacked Selected |
 | `dm10-win-dock-1600x900-slide02.png` | 1600×900 | 02 Activity Dock |
 | `dm10-win-dock-1100x720-slide02.png` | 1100×720 | 02 |
 | `dm10-win-dock-1100x720-scrolled-slide02.png` | 1100×720 | 02 dock scrolled |

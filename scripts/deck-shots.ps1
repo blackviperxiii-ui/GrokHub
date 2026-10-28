@@ -355,6 +355,8 @@ Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'defau
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
 Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
+# Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
+Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
