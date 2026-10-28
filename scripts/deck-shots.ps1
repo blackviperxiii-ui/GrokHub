@@ -380,6 +380,8 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Backup reminders: the unpushed-work post on top of Pulse.
 Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup -nav 'pulse'
 Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'backup-1100x720-scrolled' 'ops-dark' '14' -pulse -backup -nav 'pulse' -wheel 12
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
