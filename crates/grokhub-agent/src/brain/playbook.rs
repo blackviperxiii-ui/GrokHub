@@ -507,10 +507,7 @@ mod tests {
             id("question", "general", "linux").as_deref(),
             Some("quick-answer")
         );
-        assert_eq!(
-            id("task", "planning", "linux").as_deref(),
-            Some("plan-day")
-        );
+        assert_eq!(id("task", "planning", "linux").as_deref(), Some("plan-day"));
         assert_eq!(
             id("question", "planning", "windows").as_deref(),
             Some("plan-day")

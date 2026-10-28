@@ -386,10 +386,9 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
         (Intent::Task, "desktop") => &["the asked change is made", "result checked on screen"],
-        (Intent::Task, "planning") | (Intent::Question, "planning") => &[
-            "one plan drafted",
-            "nothing booked automatically",
-        ],
+        (Intent::Task, "planning") | (Intent::Question, "planning") => {
+            &["one plan drafted", "nothing booked automatically"]
+        }
         (Intent::Question, "gaming") => &[
             "hardware read from this PC",
             "recommendation fits this GPU",
