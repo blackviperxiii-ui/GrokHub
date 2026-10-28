@@ -17,7 +17,10 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-news-library.toml"),
+    include_str!("../assets/playbooks/gaming-help.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
+    include_str!("../assets/playbooks/build-loadout.toml"),
     include_str!("../assets/playbooks/quick-answer.toml"),
     include_str!("../assets/playbooks/plan-day.toml"),
     include_str!("../assets/playbooks/creative.toml"),
@@ -384,13 +387,16 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
+                "game-news-library",
+                "gaming-help",
                 "game-tuning",
+                "build-loadout",
                 "quick-answer",
                 "plan-day",
                 "creative",
             ]
         );
-        let game = parse(BUILTIN[7]).unwrap();
+        let game = parse(BUILTIN[9]).unwrap();
         assert_eq!(
             (
                 game.fit("task", "gaming", "windows"),
@@ -399,9 +405,9 @@ mod tests {
             ),
             (Some(2), None, Some(2))
         );
-        let quick = parse(BUILTIN[8]).unwrap();
-        let plan = parse(BUILTIN[9]).unwrap();
-        let creative = parse(BUILTIN[10]).unwrap();
+        let quick = parse(BUILTIN[11]).unwrap();
+        let plan = parse(BUILTIN[12]).unwrap();
+        let creative = parse(BUILTIN[13]).unwrap();
         assert_eq!(
             (
                 quick.fit("question", "general", "linux"),

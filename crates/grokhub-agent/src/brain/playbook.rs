@@ -316,7 +316,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (11, Source::Shipped, 0)
+            (14, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -350,7 +350,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
@@ -375,7 +378,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
@@ -442,7 +448,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 12);
+        assert_eq!(all.len(), 15);
         assert_eq!(
             problems,
             vec![
@@ -501,7 +507,7 @@ mod tests {
         );
         assert_eq!(
             id("question", "gaming", "linux").as_deref(),
-            Some("game-tuning")
+            Some("gaming-help")
         );
         assert_eq!(
             id("question", "general", "linux").as_deref(),
