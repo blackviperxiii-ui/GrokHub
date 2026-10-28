@@ -80,7 +80,13 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
     # checklist never loads; mission shots seed it empty.
     if (-not $transcript) { $messages = @() }
     $thread = @{ id = $id; title = 'Hangout'; native = $true; grokSession = $id; accessedMs = $now; lastActiveMs = $now; messages = $messages }
-    Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject @($thread) -Depth 4)
+    $threads = @($thread)
+    if (-not $transcript) {
+        # Older chats for the chat-first Recent list.
+        $threads += @{ id = 'deck-fan'; title = 'Fan curve tweak'; native = $true; accessedMs = $now - 3600000; lastActiveMs = $now - 3600000; messages = @(,@('user', 'make the fans quieter')) }
+        $threads += @{ id = 'deck-backlog'; title = 'Backlog sort'; native = $true; accessedMs = $now - 7200000; lastActiveMs = $now - 7200000; messages = @(,@('user', 'sort my backlog')) }
+    }
+    Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject $threads -Depth 4)
     Write-Utf8 (Join-Path $cfg 'projects.json') '[]'
     $cards = @(
         @{ id = 'done-drv'; kind = 'automation_done'; title = 'I can update your GPU driver tonight'; body = 'Restore point first';
@@ -157,7 +163,7 @@ function Seed-Pulse([string]$cfg) {
 # (x, y in the window) clicks once more after that. $library seeds the dock
 # and a Steam library; the shot clicks Library on the rail with $clickAt.
 # $mood pins the companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -165,10 +171,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $app = @{ getStartedDone = $true; setupDone = $true; theme = $theme; deviceName = 'my-pc';
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
     if (-not $upgrade) { $app.themeMigrated = $true }
+    if ($chatFirst) { $app.chatObjectives = $true }
     if ($library) {
         Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday' $false
         Seed-Library $root
-    } elseif ($dock) { Seed-Dock $cfg $app }
+    } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
     $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
     $env:GROKHUB_CONFIG = $cfg
@@ -300,6 +307,15 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Layout B: the chat with objectives and recent chats left, snapshot right.
+Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
+Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
+# Objectives (mission control) is the third icon on the rail.
+Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
+Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
+# Privacy & data is the second entry in the Settings list; the dialog is centred.
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -keys '^,' -clickAt 410, 246
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -keys '^,' -clickAt 160, 156
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m

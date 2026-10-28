@@ -17,6 +17,7 @@ const TILE_MIN_W: f32 = 150.0;
 /// Covers keep the deck's tall box art shape.
 const TILE_ASPECT: f32 = 1.52;
 const PAGE_PAD: f32 = 24.0;
+const LIBRARY_VIEW_ID: &str = "library-view";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum LibraryTab {
@@ -145,7 +146,13 @@ pub(super) fn cover_style(app_id: u32) -> (egui::Color32, u32) {
     (egui::Color32::from_rgb(r, g, b), app_id % 4)
 }
 
-fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
+pub(super) fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
+    paint_cover_at(painter, rect, app_id, rect.width());
+}
+
+/// [`paint_cover`] with the motifs sized from `unit` instead of the width,
+/// for covers wider than they are tall.
+pub(super) fn paint_cover_at(painter: &egui::Painter, rect: egui::Rect, app_id: u32, unit: f32) {
     let (top, motif) = cover_style(app_id);
     let bottom = egui::Color32::from_rgb(14, 14, 16);
     let mut mesh = egui::Mesh::default();
@@ -176,12 +183,12 @@ fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
     };
     match motif {
         0 => {
-            painter.circle_filled(at(0.72, 0.31), w * 0.3, amber);
+            painter.circle_filled(at(0.72, 0.31), unit * 0.3, amber);
             peaks(&painter);
         }
         1 => {
             let c = at(0.5, 0.35);
-            let r = w * 0.34;
+            let r = unit * 0.34;
             painter.add(egui::Shape::closed_line(
                 vec![
                     c - egui::vec2(0.0, r),
@@ -189,7 +196,7 @@ fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
                     c + egui::vec2(0.0, r),
                     c - egui::vec2(r, 0.0),
                 ],
-                egui::Stroke::new(w * 0.025, amber),
+                egui::Stroke::new(unit * 0.025, amber),
             ));
             painter.add(egui::Shape::convex_polygon(
                 vec![at(-0.1, 1.0), at(0.5, 0.62), at(1.1, 1.0)],
@@ -207,7 +214,7 @@ fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
                 );
             }
             let c = at(0.5, 0.3);
-            let r = w * 0.27;
+            let r = unit * 0.27;
             let (s, co) = (0.22_f32.sin(), 0.22_f32.cos());
             let corner = |dx: f32, dy: f32| c + egui::vec2(dx * co - dy * s, dx * s + dy * co) * r;
             let pts = vec![
@@ -219,12 +226,12 @@ fn paint_cover(painter: &egui::Painter, rect: egui::Rect, app_id: u32) {
             painter.add(egui::Shape::convex_polygon(
                 pts,
                 ink,
-                egui::Stroke::new(w * 0.025, red),
+                egui::Stroke::new(unit * 0.025, red),
             ));
         }
         _ => {
-            painter.circle_filled(at(0.5, 0.95), w * 0.62, ink);
-            painter.circle_filled(at(0.5, 0.73), w * 0.07, amber);
+            painter.circle_filled(at(0.5, 0.95), unit * 0.62, ink);
+            painter.circle_filled(at(0.5, 0.73), unit * 0.07, amber);
         }
     }
 }
@@ -271,8 +278,18 @@ fn stat_tile(ui: &mut egui::Ui, label: &str, value: &str) {
 }
 
 impl Cabin {
+    /// Opens Library on one game, with the tabs and search cleared.
+    pub(super) fn show_in_library(&mut self, ctx: &egui::Context, app_id: u32) {
+        let view = LibraryView {
+            picked: Some(app_id),
+            ..Default::default()
+        };
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(LIBRARY_VIEW_ID), view));
+        self.set_nav_id("library");
+    }
+
     pub(super) fn ui_library(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new("library-view");
+        let id = egui::Id::new(LIBRARY_VIEW_ID);
         let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         let now = now_ms();
         let (found, games) = self.steam_library(now);

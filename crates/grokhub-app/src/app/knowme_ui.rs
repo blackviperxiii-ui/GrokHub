@@ -77,6 +77,31 @@ impl Cabin {
         }
     }
 
+    pub(super) fn know_me_on(&mut self) -> bool {
+        self.know_me().on
+    }
+
+    pub(super) fn set_know_me_on(&mut self, on: bool) {
+        self.know_me().on = on;
+        self.save_know_me();
+        self.kick_know_me(true);
+    }
+
+    /// Turns Know me off and deletes every tag it learned, with the topics
+    /// those tags added.
+    pub(super) fn wipe_know_me(&mut self) {
+        let gone = self.know_me().wipe();
+        self.save_know_me();
+        let mut dropped = false;
+        for tag in gone {
+            dropped |= self.drop_know_me_topic(tag.topic.as_deref());
+        }
+        if dropped {
+            self.persist_interests();
+        }
+        self.status = "Know me is off and everything it learned is gone.".into();
+    }
+
     /// Starts a scan on a worker thread. `force` ignores the weekly wait.
     pub(super) fn kick_know_me(&mut self, force: bool) {
         if self.sources.know_me.rx.is_some() {
@@ -162,9 +187,7 @@ impl Cabin {
             )
             .changed()
         {
-            self.know_me().on = on;
-            self.save_know_me();
-            self.kick_know_me(true);
+            self.set_know_me_on(on);
         }
         if !on {
             ui.add_space(12.0);
@@ -259,16 +282,7 @@ impl Cabin {
             }
         }
         if !tags.is_empty() && crate::cards::ghost_pill(ui, "Wipe all") {
-            let gone = self.know_me().wipe();
-            self.save_know_me();
-            let mut dropped = false;
-            for tag in gone {
-                dropped |= self.drop_know_me_topic(tag.topic.as_deref());
-            }
-            if dropped {
-                self.persist_interests();
-            }
-            self.status = "Know me is off and everything it learned is gone.".into();
+            self.wipe_know_me();
         }
         ui.add_space(16.0);
     }

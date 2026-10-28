@@ -893,6 +893,7 @@ impl Cabin {
             Nav::Settings => "settings",
             Nav::Skills => "skills",
             Nav::Library => "library",
+            Nav::Objectives => "objectives",
             Nav::Night => "automations",
             Nav::Command => "command",
             Nav::Agents => "queue",
@@ -912,6 +913,7 @@ impl Cabin {
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "devices" => Nav::Devices,
             "chat" | "home" => Nav::Chat,
@@ -938,6 +940,7 @@ impl Cabin {
             }
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "command" => Nav::Command,
             "queue" => Nav::Agents,

@@ -845,6 +845,7 @@ mod tests {
             Nav::Imagine,
             Nav::Skills,
             Nav::Library,
+            Nav::Objectives,
             Nav::Night,
             Nav::History,
             Nav::Journal,
@@ -863,6 +864,7 @@ mod tests {
                 | Nav::Imagine
                 | Nav::Skills
                 | Nav::Library
+                | Nav::Objectives
                 | Nav::Night
                 | Nav::History
                 | Nav::Journal
@@ -871,6 +873,6 @@ mod tests {
                 | Nav::Settings => {}
             }
         }
-        assert_eq!(all.len(), 14);
+        assert_eq!(all.len(), 15);
     }
 }

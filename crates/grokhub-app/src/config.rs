@@ -424,6 +424,11 @@ pub struct AppConfig {
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
+    /// Settings → Appearance: chat pages show the objectives and recent chats on
+    /// the left and a PC snapshot on the right (deck slide 10) instead of the
+    /// companion dock. Off by default.
+    #[serde(default)]
+    pub chat_objectives: bool,
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
@@ -701,6 +706,7 @@ impl Default for AppConfig {
             resume_code: false,
             code_folders: Vec::new(),
             dock_panels: false,
+            chat_objectives: false,
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
