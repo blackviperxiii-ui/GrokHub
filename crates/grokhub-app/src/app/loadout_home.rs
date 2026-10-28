@@ -547,6 +547,15 @@ pub(super) fn deck_overflow_open() -> bool {
 }
 
 /// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
+/// so the shot never depends on a synthetic click landing on the rail.
+fn deck_nav() -> Option<String> {
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
 pub(super) fn deck_last_chat_mode() -> Option<String> {
     std::env::var("GROKHUB_DECK_LAST_CHAT")
         .ok()
@@ -748,6 +757,11 @@ impl Cabin {
                 self.nav = Nav::Chat;
             }
             _ => {}
+        }
+        if let Some(id) = deck_nav() {
+            // The seeded Activity list would cover the page's top right.
+            self.activity.open = false;
+            self.set_nav_id(&id);
         }
     }
 
@@ -1472,6 +1486,33 @@ mod tests {
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn a_deck_shot_opens_the_pinned_rail_page_with_activity_closed() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", " Pulse ");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Pulse);
+        assert_eq!(cabin.nav_id(), "pulse");
+        assert!(!cabin.activity.open);
+        std::env::remove_var("GROKHUB_DECK_NAV");
+        cabin.apply_deck_shot_seed();
+        assert!(
+            cabin.activity.open,
+            "without a pinned page the list stays open"
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        if let Some(v) = prev_nav {
+            std::env::set_var("GROKHUB_DECK_NAV", v);
         }
     }
 

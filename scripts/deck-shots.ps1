@@ -185,7 +185,9 @@ function Write-ModelDrop([string]$root) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [switch]$modelDrop) {
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
+# Pulse rail click, and closes the seeded Activity list over the page.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -222,6 +224,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
@@ -253,7 +256,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
-    if ($pulse) {
+    if ($pulse -and -not $nav) {
         # Pulse is the fourth icon on the 40 px rail, at every window size.
         [void][DeckWin]::SetForegroundWindow($hwnd)
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
@@ -368,8 +371,8 @@ Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # 3D model drop: the new-model post with its preview on top of Pulse.
-Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop
-Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop
+Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
+Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
