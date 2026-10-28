@@ -1470,6 +1470,7 @@ impl Cabin {
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
             c.apply_deck_shot_seed();
+            c.apply_web_search_shot_seed();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
             steps.mark("startup:new:home");

@@ -83,19 +83,24 @@ function Format-Assistant([object[]]$hits, [string]$via) {
     return ($lines -join "`n")
 }
 
+function Json-Escape([string]$s) {
+    if ($null -eq $s) { return '' }
+    $s = $s.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t')
+    return $s
+}
+
 function Seed-Chat([string]$cfg, [hashtable]$app, [string]$id, [string]$title, [string]$userAsk, [string]$assistant, [hashtable]$extraApp) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     foreach ($k in $extraApp.Keys) { $app[$k] = $extraApp[$k] }
     $app.currentThread = $id
-    $messages = @(
-        @('user', $userAsk),
-        @('assistant', $assistant)
-    )
-    $thread = @{
-        id = $id; title = $title; native = $true; grokSession = $id
-        accessedMs = $now; lastActiveMs = $now; messages = $messages
-    }
-    Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject @($thread) -Depth 6)
+    # Hand-built JSON: Windows PowerShell ConvertTo-Json mangles nested string arrays,
+    # and open_fresh_home drops a loaded transcript — the cabin re-reads this seed
+    # under GROKHUB_WEB_SEARCH_SHOT=1 after home open.
+    $seed = @"
+{"id":"$(Json-Escape $id)","title":"$(Json-Escape $title)","messages":[["user","$(Json-Escape $userAsk)"],["assistant","$(Json-Escape $assistant)"]]}
+"@
+    Write-Utf8 (Join-Path $cfg 'web-search-shot-seed.json') $seed
+    Write-Utf8 (Join-Path $cfg 'threads.json') '[]'
     Write-Utf8 (Join-Path $cfg 'projects.json') '[]'
     $header = @{ id = $id; title = $title; created = $now; cwd = '.'; model = 'cabin'; engine = 'native'; renamed = $false } | ConvertTo-Json -Compress
     Write-Utf8 (Join-Path $cfg "sessions/$id.jsonl") "$header`n"
@@ -120,7 +125,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$id, [string]$title, [str
     $env:APPDATA = Join-Path $root 'AppData'
     $env:LOCALAPPDATA = Join-Path $root 'LocalAppData'
     $env:GROKHUB_RENDERER = 'wgpu'
-    # Do not set GROKHUB_DECK_SHOT — that seed overwrites the citation transcript.
+    # Cabin seed after open_fresh_home; never set DECK_SHOT (that overwrites Hangout).
+    $env:GROKHUB_WEB_SEARCH_SHOT = '1'
     Remove-Item Env:GROKHUB_DECK_SHOT -ErrorAction SilentlyContinue
     Remove-Item Env:GROKHUB_DECK_MOOD -ErrorAction SilentlyContinue
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
