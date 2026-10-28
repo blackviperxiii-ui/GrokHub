@@ -140,6 +140,7 @@ mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod activity_dock;
+mod ask_offers_ui;
 mod attach_tray;
 mod audio_check_ui;
 mod background;
@@ -157,6 +158,8 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
+mod diagnostics_ui;
 mod dock_ui;
 mod episode_ui;
 mod evidence_ui;
@@ -164,6 +167,7 @@ mod feed_ui;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
+mod game_companion_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -181,6 +185,7 @@ mod knowme_ui;
 mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
+mod local_models_ui;
 mod local_pick_ui;
 mod local_probe;
 mod local_signals;
@@ -875,6 +880,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
+    /// Last Labs Diagnostics zip on the Desktop (Open folder).
+    diagnostics_last_zip: Option<std::path::PathBuf>,
     /// Modular Home slot layout (`home_layout.json` v2).
     home_layout: grokhub_core::home::HomeLayout,
     /// Edit Home modules dialog draft (`None` = closed).
@@ -1445,6 +1452,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
             home_edit: None,
         };
@@ -1909,6 +1917,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
         }
@@ -2988,23 +2997,6 @@ impl Cabin {
         Some(cmd)
     }
 
-    fn doctor_text(&self) -> String {
-        self.doctor_checks()
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
-        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
-        lines.extend(grokhub_core::doctor_extras(
-            self.last_receipt_ok,
-            self.skill_list.len(),
-        ));
-        lines
-    }
-
     /// `/health` from what this session already knows: the last update probe,
     /// the doctor checks, failing automations, MCP servers and the newest dream.
     fn health_input(&self) -> grokhub_core::health::HealthInput {
@@ -3523,7 +3515,10 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => self.tick_housekeep(),
+                HeartbeatAct::Housekeep => {
+                    self.tick_housekeep();
+                    self.tick_day_brief();
+                }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),
@@ -5430,6 +5425,7 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.paint_focus_overlays(&ctx);
         self.tick_setup_wizard();
         self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);

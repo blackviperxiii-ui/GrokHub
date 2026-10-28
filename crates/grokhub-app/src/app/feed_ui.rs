@@ -273,6 +273,7 @@ impl Cabin {
             self.persist_cfg();
         }
         self.tick_nudge_watchers();
+        self.tick_ask_offers();
         self.tick_hobby_paths();
     }
 
@@ -505,7 +506,14 @@ impl Cabin {
             .updates
             .iter()
             .find(|c| c.id == id)
-            .map(|c| c.title.clone())
+            .map(|c| {
+                let from_preview = grokhub_core::automate_accept_seed(c);
+                if from_preview.trim().is_empty() {
+                    c.title.clone()
+                } else {
+                    from_preview
+                }
+            })
             .unwrap_or_default();
         self.persist_updates();
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
@@ -528,7 +536,14 @@ impl Cabin {
             .updates
             .iter()
             .find(|c| c.id == id)
-            .map(|c| c.title.clone())
+            .map(|c| {
+                let from_preview = grokhub_core::automate_accept_seed(c);
+                if from_preview.trim().is_empty() {
+                    c.title.clone()
+                } else {
+                    from_preview
+                }
+            })
             .unwrap_or_default();
         self.persist_updates();
         let route = route_schedule(&seed);
@@ -1001,6 +1016,9 @@ impl Cabin {
             Some(UpdateAction::OpenWorkboard) => self.nav = Nav::Workboard,
             Some(UpdateAction::OpenAutomations) => self.nav = Nav::Night,
             Some(UpdateAction::DeepLink { href }) => {
+                if self.open_local_model_link(&href) {
+                    return;
+                }
                 let href = href.trim();
                 if !href.is_empty() {
                     self.status = href.to_string();

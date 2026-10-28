@@ -28,6 +28,11 @@ impl ResumeState {
         &self.repos
     }
 
+    /// Preferred editor binary, if one was found on PATH.
+    pub(super) fn editor(&self) -> Option<&str> {
+        self.editor.as_deref()
+    }
+
     /// Seed repos for tests (no git scan).
     #[cfg(test)]
     pub(super) fn seed_repos_for_test(&mut self, repos: Vec<RepoStatus>) {
