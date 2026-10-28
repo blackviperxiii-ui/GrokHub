@@ -257,13 +257,19 @@ pub fn host_os() -> &'static str {
 
 /// The playbook that fits a Brief best, in this order: the safety checks in
 /// [`Playbook::fit`] first (an excluded intent, or talk the playbook doesn't
-/// name, never fits), then a specialist naming the most of intent, domain and
-/// OS, then the default for that kind of ask (intent only), then a generic
+/// name, never fits), then a specialist naming the most of intent, domain,
+/// OS and mood, then the default for that kind of ask (intent only), then a generic
 /// fallback that names nothing. `priority` breaks a tie, then the first listed.
-pub fn pick<'a>(all: &'a [Loaded], intent: &str, domain: &str, os: &str) -> Option<&'a Playbook> {
+pub fn pick<'a>(
+    all: &'a [Loaded],
+    intent: &str,
+    domain: &str,
+    os: &str,
+    mood: &str,
+) -> Option<&'a Playbook> {
     let mut best: Option<((usize, u8), &Playbook)> = None;
     for l in all {
-        if let Some(score) = l.playbook.fit(intent, domain, os) {
+        if let Some(score) = l.playbook.fit(intent, domain, os, mood) {
             let key = (score, l.playbook.applies_when.priority);
             if best.is_none_or(|(b, _)| key > b) {
                 best = Some((key, &l.playbook));
@@ -320,7 +326,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (7, Source::Shipped, 0)
+            (9, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -354,6 +360,8 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("chat-hangout", Source::Shipped),
+                ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -375,6 +383,8 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("chat-hangout", Source::Shipped),
+                ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -438,7 +448,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 10);
         assert_eq!(
             problems,
             vec![
@@ -463,7 +473,7 @@ mod tests {
             );
         save(&dir, &specific).unwrap();
         let (all, _) = load(&dir);
-        let id = |i, d, o| pick(&all, i, d, o).map(|p| p.id.clone());
+        let id = |i, d, o| pick(&all, i, d, o, "calm").map(|p| p.id.clone());
         assert_eq!(
             id("repair", "system", "linux").as_deref(),
             Some("repair-linux")
@@ -487,7 +497,10 @@ mod tests {
         assert_eq!(id("research", "code", "linux").as_deref(), Some("research"));
         assert_eq!(id("task", "desktop", "linux").as_deref(), Some("desktop"));
         assert_eq!(id("task", "general", "linux").as_deref(), Some(SHIPPED));
-        assert_eq!(id("chat", "general", "linux"), None);
+        assert_eq!(
+            id("chat", "general", "linux").as_deref(),
+            Some("chat-hangout")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -507,8 +520,17 @@ mod tests {
             .replacen("[applies_when]", "[applies_when]\nintent = [\"chat\"]", 1)
             .replace("any-work", "hangout-test");
         let (all, _) = load(&dir);
-        let id = |all: &[Loaded], i, d| pick(all, i, d, "linux").map(|p| p.id.clone());
-        assert_eq!(id(&all, "chat", "general"), None);
+        let id = |all: &[Loaded], i, d| pick(all, i, d, "linux", "calm").map(|p| p.id.clone());
+        // Chat gets the hangout playbook, a low mood the wind-down one.
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("chat-hangout"));
+        assert_eq!(
+            pick(&all, "chat", "general", "linux", "low").map(|p| p.id.as_str()),
+            Some("wind-down")
+        );
+        assert_eq!(
+            pick(&all, "task", "general", "linux", "low").map(|p| p.id.as_str()),
+            Some(SHIPPED)
+        );
         assert_eq!(id(&all, "question", "general").as_deref(), Some("any-work"));
         // The default for its kind beats the generic fallback.
         assert_eq!(id(&all, "task", "general").as_deref(), Some(SHIPPED));
@@ -521,7 +543,20 @@ mod tests {
         save(&dir, &shut).unwrap();
         let (all, _) = load(&dir);
         assert_eq!(id(&all, "question", "general"), None);
+        // A talk playbook of the user's that names chat ties with the
+        // shipped one, so its priority decides.
         save(&dir, &talk).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("chat-hangout"));
+        save(
+            &dir,
+            &talk.replacen(
+                "intent = [\"chat\"]",
+                "intent = [\"chat\"]\npriority = 1",
+                1,
+            ),
+        )
+        .unwrap();
         let (all, _) = load(&dir);
         assert_eq!(id(&all, "chat", "general").as_deref(), Some("hangout-test"));
         // Two that fit equally: the higher priority wins over the first listed.

@@ -545,7 +545,8 @@ mod tests {
             "kept: the tweak stays"
         );
         let (books, _) = crate::brain::playbook::load(&root);
-        let picked = crate::brain::playbook::pick(&books, "repair", "system", "linux").unwrap();
+        let picked =
+            crate::brain::playbook::pick(&books, "repair", "system", "linux", "calm").unwrap();
         assert_eq!(
             picked.phases[0].steps[0].name,
             "List listening ports (ss -tuln) and name what owns each"

@@ -43,10 +43,10 @@ fn source_chip(source: Source) -> Option<(&'static str, crate::cards::ChipTone)>
     }
 }
 
-/// "Fits repair · linux" for a card, or "Fits any task" when it names nothing.
+/// "Fits repair · linux" or "Fits chat · low" for a card, or "Fits any task" when it names nothing.
 fn fits_line(l: &Loaded) -> String {
     let a = &l.playbook.applies_when;
-    let parts: Vec<String> = [&a.intent, &a.domain, &a.os]
+    let parts: Vec<String> = [&a.intent, &a.domain, &a.os, &a.mood]
         .into_iter()
         .filter(|v| !v.is_empty())
         .map(|v| v.join(", "))
@@ -288,7 +288,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 7);
+        assert_eq!(cabin.playbooks.all.len(), 9);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -304,6 +304,8 @@ mod tests {
         );
         assert_eq!(fits_line(&cabin.playbooks.all[6]), "Fits task · desktop");
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
+        assert_eq!(fits_line(&cabin.playbooks.all[7]), "Fits chat");
+        assert_eq!(fits_line(&cabin.playbooks.all[8]), "Fits chat · low");
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
         let good = draft
@@ -354,6 +356,8 @@ mod tests {
                 ("files", "Files", Source::Shipped),
                 ("research", "Research", Source::Shipped),
                 ("desktop", "Desktop apps", Source::Shipped),
+                ("chat-hangout", "Hanging out", Source::Shipped),
+                ("wind-down", "Winding down", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );

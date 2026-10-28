@@ -261,13 +261,14 @@ impl NativeEngine {
             &self.conversation_id,
             policy.as_ref().map(crate::brain::PolicyPick::style),
         );
-        // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
+        // Brain 3: the Brief's intent, domain, mood and this computer's OS pick the playbook.
         let (books, _) = crate::brain::playbook::load(&dir);
         let picked = crate::brain::playbook::pick(
             &books,
             brief.intent.as_str(),
             &brief.domain,
             crate::brain::playbook::host_os(),
+            &brief.mood,
         );
         // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
         crate::checkpoint::set_turn_playbook(

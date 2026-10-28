@@ -17,7 +17,12 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/chat-hangout.toml"),
+    include_str!("../assets/playbooks/wind-down.toml"),
 ];
+
+/// The moods a Brief can carry.
+pub const MOODS: &[&str] = &["calm", "urgent", "frustrated", "low"];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
 /// later turn can swap or drop it in place.
@@ -98,6 +103,9 @@ pub struct AppliesWhen {
     /// `linux`, `windows`, `macos`; empty matches any.
     #[serde(default)]
     pub os: Vec<String>,
+    /// Brief moods (`calm`, `urgent`, `frustrated`, `low`); empty matches any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mood: Vec<String>,
     /// Brief intents that never get this playbook, even when `intent` is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
@@ -207,10 +215,10 @@ impl Playbook {
         out.join("\n").replace("\n\n", "\n")
     }
 
-    /// How closely it fits: one point per named intent, domain and OS that
-    /// matches; `None` when any named one doesn't, when it excludes the
+    /// How closely it fits: one point per named intent, domain, OS and mood
+    /// that matches; `None` when any named one doesn't, when it excludes the
     /// intent, or when the intent is talk and the playbook doesn't name it.
-    pub fn fit(&self, intent: &str, domain: &str, os: &str) -> Option<usize> {
+    pub fn fit(&self, intent: &str, domain: &str, os: &str, mood: &str) -> Option<usize> {
         let a = &self.applies_when;
         if a.exclude.iter().any(|x| x == intent)
             || (TALK_INTENTS.contains(&intent) && !a.intent.iter().any(|x| x == intent))
@@ -218,7 +226,12 @@ impl Playbook {
             return None;
         }
         let mut score = 0;
-        for (list, v) in [(&a.intent, intent), (&a.domain, domain), (&a.os, os)] {
+        for (list, v) in [
+            (&a.intent, intent),
+            (&a.domain, domain),
+            (&a.os, os),
+            (&a.mood, mood),
+        ] {
             if list.is_empty() {
                 continue;
             }
@@ -287,6 +300,7 @@ pub fn check(p: &Playbook) -> Result<(), String> {
         ("intent", &a.intent, crate::brain_policy::INTENTS),
         ("domain", &a.domain, DOMAINS),
         ("os", &a.os, OSES),
+        ("mood", &a.mood, MOODS),
         ("exclude", &a.exclude, crate::brain_policy::INTENTS),
     ] {
         if let Some(bad) = list.iter().find(|v| !known.contains(&v.as_str())) {
@@ -400,7 +414,9 @@ mod tests {
                 "code-dev",
                 "files",
                 "research",
-                "desktop"
+                "desktop",
+                "chat-hangout",
+                "wind-down"
             ]
         );
         let p = parse(BUILTIN[0]).unwrap();
@@ -416,8 +432,8 @@ mod tests {
         );
         assert_eq!(
             (
-                p.fit("repair", "system", "linux"),
-                p.fit("chat", "general", "linux")
+                p.fit("repair", "system", "linux", "calm"),
+                p.fit("chat", "general", "linux", "calm")
             ),
             (Some(1), None)
         );

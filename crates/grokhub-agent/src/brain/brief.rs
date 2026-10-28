@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|general\"}";
+\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|code|files|desktop|web|media|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -94,7 +94,7 @@ impl Care {
 pub struct Brief {
     pub intent: Intent,
     pub care: Care,
-    /// `calm`, `urgent` or `frustrated`.
+    /// `calm`, `urgent`, `frustrated` or `low` (tired, stressed, venting).
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
@@ -326,6 +326,29 @@ const DESKTOP_WORDS: &[&str] = &[
 ];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
+/// Tired, stressed or venting: the person needs company, not a fix.
+const LOW_WORDS: &[&str] = &[
+    "tired",
+    "exhausted",
+    "stressed",
+    "drained",
+    "overwhelmed",
+    "burnt",
+    "burned",
+    "sad",
+    "lonely",
+    "vent",
+    "venting",
+];
+const LOW_PHRASES: &[&str] = &[
+    "crashing out",
+    "crash out",
+    "crashed out",
+    "rough day",
+    "long day",
+    "bad day",
+    "fed up",
+];
 
 fn words(t: &str) -> Vec<&str> {
     t.split(|c: char| !(c.is_alphanumeric() || c == '\''))
@@ -368,7 +391,10 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
 fn mood_of(raw: &str, ws: &[&str]) -> &'static str {
     let letters: Vec<char> = raw.chars().filter(|c| c.is_alphabetic()).collect();
     let shouting = letters.len() >= 8 && letters.iter().all(|c| c.is_uppercase());
-    if shouting || raw.contains("!!") || any_word(ws, FRUSTRATED_WORDS) {
+    let t = raw.to_lowercase();
+    if any_word(ws, LOW_WORDS) || any_phrase(&t, LOW_PHRASES) {
+        "low"
+    } else if shouting || raw.contains("!!") || any_word(ws, FRUSTRATED_WORDS) {
         "frustrated"
     } else if any_word(ws, URGENT_WORDS) {
         "urgent"
@@ -490,7 +516,10 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     // Hanging out, a plain line about nothing in particular stays chat.
     let chatting = !input.background && hanging_out(input.recent);
     let generic = domain_of(&t, &ws, input, Intent::Chat, system) == "general";
-    let casual = small_talk(&t, &rest_words)
+    // "I'm crashing out" is a mood; "my game is crashing" is a repair.
+    let venting = mood_of(input.text, &ws) == "low" && generic;
+    let casual = venting
+        || small_talk(&t, &rest_words)
         || (ws.len() <= 6 && any_word(&ws, BANTER_WORDS))
         || (chatting && generic && ws.len() <= 8);
     let task_verb = TASK_VERBS.contains(&first) && acted_on;
@@ -500,7 +529,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         .enumerate()
         .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"));
     let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
-    let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
+    let broken = !venting && (any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES));
     let repair = broken || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
@@ -555,7 +584,7 @@ fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
     let intent = Intent::parse(&word("intent")?)?;
     let care = Care::parse(&word("care")?)?;
     let mood = word("mood")
-        .filter(|m| ["calm", "urgent", "frustrated"].contains(&m.as_str()))
+        .filter(|m| grokhub_core::playbook::MOODS.contains(&m.as_str()))
         .unwrap_or_else(|| "calm".into());
     let domain = word("domain")
         .filter(|d| grokhub_core::playbook::DOMAINS.contains(&d.as_str()))
@@ -983,6 +1012,34 @@ mod tests {
         assert_eq!(
             short(&rules(&after).unwrap()),
             (Intent::Task, Care::Critical, "files", "calm")
+        );
+    }
+
+    #[test]
+    fn tired_or_venting_lines_are_low_chat_and_a_real_crash_is_still_a_repair() {
+        for text in [
+            "i'm so tired today",
+            "ugh long day",
+            "honestly i'm crashing out rn",
+            "just need to vent for a sec",
+            "feeling kinda overwhelmed",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!(
+                (b.intent, b.care, b.mood.as_str()),
+                (Intent::Chat, Care::Casual, "low"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            short(&rules(&input("my game keeps crashing on launch")).unwrap()),
+            (Intent::Repair, Care::Critical, "general", "calm")
+        );
+        // Tired of a broken machine is still that machine's repair.
+        let pc = rules(&input("so tired of my pc crashing")).unwrap();
+        assert_eq!(
+            (pc.intent, pc.domain.as_str(), pc.mood.as_str()),
+            (Intent::Repair, "system", "low")
         );
     }
 
