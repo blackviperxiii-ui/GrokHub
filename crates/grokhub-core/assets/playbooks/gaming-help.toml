@@ -1,0 +1,50 @@
+# GrokHub playbook: tips, settings and mods for a game, dated to its patch.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "gaming-help"
+name = "Gaming help"
+summary = "Give tips, settings and mod advice dated to the game's current patch. No spoilers unless the user asks for them."
+
+checklist = [
+  "patch or version named",
+  "tips fit that patch",
+  "no spoilers unless asked",
+]
+backup = "Nothing is changed: gaming help only advises. Note the patch or build the tip was checked against."
+verify = "Every tip names the patch or build it fits; spoilers stay out unless the user asked for them."
+rollback = "If a tip was for the wrong patch or spoiled something, correct it in one short follow-up and stop."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["question", "task"]
+domain = ["game-help"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Name the game and the patch, build or season the advice is for"
+
+[[phase.step]]
+name = "Ask whether spoilers are ok when the tip would reveal plot, drops or unlocks"
+
+[[phase]]
+name = "Advise"
+tier = "safe"
+
+[[phase.step]]
+name = "Give tips, settings or mod advice that fits that patch; skip spoilers unless asked"
+
+[[phase.step]]
+name = "Cite the patch notes or an official source when the tip depends on a recent change"

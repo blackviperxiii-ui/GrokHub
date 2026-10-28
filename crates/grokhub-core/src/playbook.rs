@@ -18,6 +18,9 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
+    include_str!("../assets/playbooks/gaming-help.toml"),
+    include_str!("../assets/playbooks/build-loadout.toml"),
+    include_str!("../assets/playbooks/game-news-library.toml"),
 ];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
@@ -28,7 +31,17 @@ pub const PLAYBOOK_LINE: &str =
     "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
-    "system", "code", "files", "desktop", "web", "media", "gaming", "general",
+    "system",
+    "code",
+    "files",
+    "desktop",
+    "web",
+    "media",
+    "gaming",
+    "game-help",
+    "loadout",
+    "library",
+    "general",
 ];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
@@ -381,7 +394,10 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
-                "game-tuning"
+                "game-tuning",
+                "gaming-help",
+                "build-loadout",
+                "game-news-library",
             ]
         );
         let game = parse(BUILTIN[7]).unwrap();
@@ -392,6 +408,31 @@ mod tests {
                 game.fit("question", "gaming", "linux")
             ),
             (Some(2), None, Some(2))
+        );
+        let help = parse(BUILTIN[8]).unwrap();
+        assert_eq!(
+            (
+                help.fit("question", "game-help", "windows"),
+                help.fit("task", "gaming", "windows"),
+                help.fit("question", "gaming", "linux")
+            ),
+            (Some(2), None, None)
+        );
+        let loadout = parse(BUILTIN[9]).unwrap();
+        assert_eq!(
+            (
+                loadout.fit("research", "loadout", "linux"),
+                loadout.fit("task", "gaming", "windows")
+            ),
+            (Some(2), None)
+        );
+        let library = parse(BUILTIN[10]).unwrap();
+        assert_eq!(
+            (
+                library.fit("question", "library", "windows"),
+                library.fit("research", "web", "linux")
+            ),
+            (Some(2), None)
         );
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(

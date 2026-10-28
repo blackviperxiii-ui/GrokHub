@@ -316,7 +316,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (8, Source::Shipped, 0)
+            (11, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -351,6 +351,9 @@ mod tests {
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("gaming-help", Source::Shipped),
+                ("build-loadout", Source::Shipped),
+                ("game-news-library", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -373,6 +376,9 @@ mod tests {
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("gaming-help", Source::Shipped),
+                ("build-loadout", Source::Shipped),
+                ("game-news-library", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -436,7 +442,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 9);
+        assert_eq!(all.len(), 12);
         assert_eq!(
             problems,
             vec![
@@ -497,9 +503,73 @@ mod tests {
             id("question", "gaming", "linux").as_deref(),
             Some("game-tuning")
         );
+        assert_eq!(
+            id("question", "game-help", "windows").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            id("task", "loadout", "linux").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("research", "loadout", "windows").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("question", "library", "linux").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            id("research", "library", "windows").as_deref(),
+            Some("game-news-library")
+        );
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gaming_specialists_are_picked_for_tips_builds_and_library() {
+        let (all, _) = load(&crate::harness::test_dir(
+            "playbook-gaming-specialists-pick",
+        ));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("tips for Minecraft mods this patch, no spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("how do I unlock the new Fortnite mythic without spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("build a PC for 1440p gaming under 1500").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("best loadout for Warzone this season").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("what's on sale in my Steam library").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("show patch notes for Cyberpunk").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(pick_id("hi there"), None);
     }
 
     #[test]
