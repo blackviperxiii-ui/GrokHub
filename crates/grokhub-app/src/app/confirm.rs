@@ -182,7 +182,8 @@ pub(super) fn disconnect_spec() -> ConfirmSpec {
 pub(super) fn sleep_pc_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Sleep the PC",
-        consequence: "Open windows stay as they are, but save your work first in case the power goes.",
+        consequence:
+            "Open windows stay as they are, but save your work first in case the power goes.",
         primary: "Sleep",
         danger: false,
     }

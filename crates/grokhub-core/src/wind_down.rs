@@ -291,7 +291,10 @@ mod tests {
         // 10 PM, wind-down at 11 PM: not late, and 45 min is not a long idle.
         assert_eq!(on().decide(&at(22, 0), Some(23), Some(45 * 60), None), None);
         // The first hour after wind-down is not "well past" yet.
-        assert_eq!(on().decide(&at(23, 30), Some(23), Some(45 * 60), None), None);
+        assert_eq!(
+            on().decide(&at(23, 30), Some(23), Some(45 * 60), None),
+            None
+        );
         // Late but only 10 min idle: the user is still here.
         assert_eq!(on().decide(&at(1, 0), Some(23), Some(10 * 60), None), None);
     }
@@ -311,7 +314,13 @@ mod tests {
 
     #[test]
     fn anything_running_holds_the_card_back() {
-        for busy in [Busy::Game, Busy::Fullscreen, Busy::Render, Busy::Download, Busy::Task] {
+        for busy in [
+            Busy::Game,
+            Busy::Fullscreen,
+            Busy::Render,
+            Busy::Download,
+            Busy::Task,
+        ] {
             assert_eq!(
                 on().decide(&at(2, 0), Some(23), Some(3 * 3600), Some(busy)),
                 None,
@@ -370,17 +379,26 @@ mod tests {
         let mut t = on();
         t.turn_off();
         assert_eq!(t.decide(&at(2, 0), Some(23), Some(5 * 3600), None), None);
-        assert_eq!(Tracker::default().decide(&at(2, 0), Some(23), Some(5 * 3600), None), None);
+        assert_eq!(
+            Tracker::default().decide(&at(2, 0), Some(23), Some(5 * 3600), None),
+            None
+        );
     }
 
     #[test]
     fn the_card_links_the_confirm_sheet_and_speaks_in_the_personality() {
         let card = Offer::Late { idle_min: 45 }.card(&at(2, 0), Voice::for_personality("Viper"));
         assert!(is_wind_down_card(&card));
-        assert!(crate::update_feed::names_its_item(&card), "the feed takes it");
+        assert!(
+            crate::update_feed::names_its_item(&card),
+            "the feed takes it"
+        );
         let idle = Offer::Idle { idle_min: 70 }.card(&at(15, 0), Voice::Plain);
         assert!(crate::update_feed::names_its_item(&idle));
-        assert_eq!(card.title, "2 AM and you've been idle 45 min. Sleep the PC?");
+        assert_eq!(
+            card.title,
+            "2 AM and you've been idle 45 min. Sleep the PC?"
+        );
         assert_eq!(
             card.action,
             Some(crate::UpdateAction::DeepLink {
@@ -388,8 +406,14 @@ mod tests {
             })
         );
         let body = card.body.as_deref().unwrap_or_default();
-        assert!(body.starts_with("Long day. Let the rig rest too."), "{body}");
-        assert!(body.ends_with("Nothing happens until you confirm."), "{body}");
+        assert!(
+            body.starts_with("Long day. Let the rig rest too."),
+            "{body}"
+        );
+        assert!(
+            body.ends_with("Nothing happens until you confirm."),
+            "{body}"
+        );
         assert_eq!(
             Offer::Idle { idle_min: 60 }.body(Voice::for_personality("default")),
             "Nothing is running. Save anything open first: sleep keeps your windows, but a power cut won't. Nothing happens until you confirm."

@@ -300,7 +300,10 @@ mod tests {
         assert!(!cabin.open_wind_down_link("https://example.com"));
         assert_eq!(cabin.confirm, None);
         assert!(cabin.open_wind_down_link("grokhub://wind-down/sleep"));
-        assert_eq!(cabin.confirm, Some(super::super::confirm::ConfirmKind::SleepPc));
+        assert_eq!(
+            cabin.confirm,
+            Some(super::super::confirm::ConfirmKind::SleepPc)
+        );
     }
 
     #[test]
