@@ -159,8 +159,8 @@ function Seed-Pulse([string]$cfg) {
 # $dock the config is seeded first (Seed-Dock) and the shot waits for the
 # hardware read behind PC loadout; $wheel scrolls the dock down that many
 # notches first, for the cards below the fold of a short window. With $pulse
-# the config holds Pulse cards and the shot clicks Pulse in the rail; $clickAt
-# (x, y in the window) clicks once more after that. $library seeds the dock
+# the config holds Pulse cards and the shot clicks Pulse in the rail; each
+# x, y pair in $clickAt (in the window) is one more click after that. $library seeds the dock
 # and a Steam library; the shot clicks Library on the rail with $clickAt.
 # $mood pins the companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
 function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst) {
@@ -223,8 +223,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 420)
         Start-Sleep -Seconds 4
     }
-    if ($clickAt.Count -eq 2) {
-        [void][DeckWin]::SetCursorPos($r.L + $clickAt[0], $r.T + $clickAt[1])
+    # Each x, y pair in $clickAt is one click, in order.
+    for ($i = 0; $i + 1 -lt $clickAt.Count; $i += 2) {
+        [void][DeckWin]::SetForegroundWindow($hwnd)
+        [void][DeckWin]::SetCursorPos($r.L + $clickAt[$i], $r.T + $clickAt[$i + 1])
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         # Let the click land before the cursor moves: a queued click that lands
@@ -294,7 +296,7 @@ Shot 1600 900 '1600x900-slide20' 'ops-dark' '20'
 Shot 1100 720 '1100x720-slide20' 'ops-dark' '20'
 Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
 Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
-Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'
+Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -clickAt 20, 695
 Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
@@ -322,8 +324,10 @@ Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -keys '^,' -clickAt 410, 246
-Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -keys '^,' -clickAt 160, 156
+# The gear at the foot of the rail opens Settings; Ctrl+, from SendKeys
+# missed the 1100x720 window.
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 410, 246
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 160, 156
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
