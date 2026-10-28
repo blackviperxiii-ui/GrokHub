@@ -19,7 +19,7 @@ export const PERSONALITY_NOTE =
   "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality.";
 export const TONE_RULES_MAX = 600;
 export const ADULTS_ONLY =
-  "Adults-only personalities: show explicit presets like Viper. Off hides them, and a chat set to one uses Default.";
+  "Adults-only personalities: show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
 
 const EMOJI: { value: Emoji; label: string }[] = [
   { value: "none", label: "None" },
