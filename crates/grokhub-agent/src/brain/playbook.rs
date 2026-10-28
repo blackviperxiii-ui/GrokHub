@@ -316,7 +316,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (7, Source::Shipped, 0)
+            (8, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -350,6 +350,7 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-tuning", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -371,6 +372,7 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-tuning", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -434,7 +436,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 9);
         assert_eq!(
             problems,
             vec![
@@ -483,8 +485,44 @@ mod tests {
         assert_eq!(id("research", "code", "linux").as_deref(), Some("research"));
         assert_eq!(id("task", "desktop", "linux").as_deref(), Some("desktop"));
         assert_eq!(id("task", "general", "linux").as_deref(), Some(SHIPPED));
+        assert_eq!(
+            id("task", "gaming", "windows").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            id("repair", "gaming", "windows").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            id("question", "gaming", "linux").as_deref(),
+            Some("game-tuning")
+        );
         assert_eq!(id("chat", "general", "linux"), None);
+        assert_eq!(id("chat", "gaming", "windows"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn game_tuning_is_picked_for_fps_asks_and_not_for_casual_chat() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-game-tuning-pick"));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            pick_id("boost FPS in Fortnite, aim for 144").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(pick_id("hi there"), None);
+        assert_eq!(pick_id("thanks!"), None);
     }
 
     fn shipped_one(id: &str) -> Playbook {

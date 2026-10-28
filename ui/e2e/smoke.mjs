@@ -372,7 +372,7 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// Ideas. Love on the post writes the ledger line to the global MEMORY.md.
+// For You. Love on the post writes the ledger line to the global MEMORY.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
 // opens in the lightbox. Delete takes the first post away. After the post
