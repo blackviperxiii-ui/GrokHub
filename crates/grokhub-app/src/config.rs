@@ -514,6 +514,9 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(default, skip_serializing_if = "grokhub_core::PcHealthSettings::is_default")]
+    pub pc_health: grokhub_core::PcHealthSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -736,6 +739,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
             memory_writes: true,
@@ -1130,6 +1134,24 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
     }
 
     #[test]

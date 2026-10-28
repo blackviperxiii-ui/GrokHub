@@ -84,6 +84,7 @@ pub mod openclaw;
 pub mod organs;
 pub mod outcome;
 pub mod pair;
+pub mod pc_health;
 pub mod panel_spec;
 pub mod paths;
 pub mod personality;
@@ -411,6 +412,10 @@ pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
+};
+pub use pc_health::{
+    game_running, is_pc_health_card, observe, summary_card, BoundGuess, GameSession, ObserveOut,
+    PcHealthLedger, PcHealthSettings, SensorSample, SessionSummary, SAMPLE_EVERY_MS,
 };
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
