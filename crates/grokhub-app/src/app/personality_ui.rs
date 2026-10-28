@@ -1439,9 +1439,17 @@ mod tests {
         assert!(src.contains("GROKHUB_DECK_SETTINGS_SEC"));
         assert!(src.contains("pinned_settings_sec"));
         assert!(src.contains("settings_modal_size"));
+        assert!(
+            src.contains("Some(\"behavior\")"),
+            "Behavior pin for Screenshot explain deck shots"
+        );
         let shots = include_str!("../../../../scripts/deck-shots.ps1");
         assert!(shots.contains("-personality"));
         assert!(shots.contains("personality-1600x900"));
         assert!(shots.contains("slide-19") || shots.contains("'19'"));
+        assert!(shots.contains("screenshot-chip-1600x900"));
+        assert!(shots.contains("screenshot-settings-1600x900"));
+        assert!(shots.contains("-pinBehavior") || shots.contains("pinBehavior"));
+        assert!(shots.contains("-screenshotOffer") || shots.contains("screenshotOffer"));
     }
 }

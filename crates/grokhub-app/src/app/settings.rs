@@ -46,7 +46,8 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
 }
 
 /// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
-/// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality without a fragile click.
+/// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality / Behavior /
+/// Privacy without a fragile click.
 pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
     static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
     *PIN.get_or_init(|| {
@@ -59,6 +60,7 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
         {
             Some("personality") => Some(SettingsSec::Personality),
             Some("privacy") => Some(SettingsSec::Privacy),
+            Some("behavior") => Some(SettingsSec::Behavior),
             _ => None,
         }
     })

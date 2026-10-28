@@ -169,8 +169,10 @@ function Seed-Pulse([string]$cfg) {
 # builds shipped). $pinPersonality opens Settings → Personality
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+# (GROKHUB_DECK_MOOD), since no turn runs here. $pinBehavior opens Settings →
+# Behavior for the Screenshot explain toggle. $screenshotOffer seeds a live
+# Explain-this chip (path+mtime ledger only; no image bytes).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -187,12 +189,27 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($library) {
         Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday' $false
         Seed-Library $root
-    } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
+    } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($screenshotOffer -or $pinBehavior) {
+        $app.screenshotExplain = @{ enabled = $true }
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
     Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
+    if ($screenshotOffer) {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $ledger = @{
+            lastSeenModifiedMs = $now
+            lastTickMs = $now
+            pending = @{
+                path = 'C:\Users\user\Pictures\Screenshots\ExplainMe.png'
+                offeredAtMs = $now
+            }
+        }
+        Write-Utf8 (Join-Path $cfg 'screenshot-offer.json') ($ledger | ConvertTo-Json -Depth 4 -Compress)
+    }
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
     $env:USERPROFILE = $root
@@ -203,9 +220,15 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
-    if ($dock -and -not $mood) { $mood = 'hanging-out' }
+    if (($dock -or $screenshotOffer) -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    if ($pinPersonality) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'personality'
+    } elseif ($pinBehavior) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'behavior'
+    } else {
+        Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue
+    }
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -370,4 +393,9 @@ foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
 }
+# Card 49: Screenshot explain — composer chip (Hangout) and Settings → Behavior.
+Shot 1600 900 'screenshot-chip-1600x900' 'ops-dark' '02' -screenshotOffer
+Shot 1100 720 'screenshot-chip-1100x720' 'ops-dark' '02' -screenshotOffer
+Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior -clickAt 20, 875
+Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior -clickAt 20, 695
 Get-ChildItem $Out | Format-Table Name, Length
