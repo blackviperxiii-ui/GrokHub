@@ -671,7 +671,12 @@ mod tests {
         assert_eq!(mesh_for("bracket.step", b"ISO-10303-21;"), (None, None));
         let rgba = render(&stl, 64).unwrap();
         assert_eq!(rgba.len(), 64 * 64 * 4);
-        let drawn = rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 255).count();
+        let drawn = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] == 255)
+            .count();
         assert!(drawn > 200 && drawn < 64 * 64, "drawn {drawn}");
         assert_eq!(render(&Mesh::default(), 64), None);
     }
