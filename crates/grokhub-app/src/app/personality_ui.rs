@@ -466,9 +466,13 @@ impl Cabin {
                 }
             };
         let paint_detail = |ui: &mut egui::Ui, act_on: &mut Option<CardAct>| {
-            if let Some(act) =
-                paint_detail_panel(ui, &showcased, showcased.id == current, tried.as_ref(), detail_w)
-            {
+            if let Some(act) = paint_detail_panel(
+                ui,
+                &showcased,
+                showcased.id == current,
+                tried.as_ref(),
+                detail_w,
+            ) {
                 *act_on = Some(act);
             }
         };
@@ -1555,10 +1559,7 @@ mod tests {
         ] {
             assert!(src.contains(want), "missing {want}");
         }
-        assert!(
-            src.contains("CardAct::Talk"),
-            "Talk as stays reachable"
-        );
+        assert!(src.contains("CardAct::Talk"), "Talk as stays reachable");
         assert!(
             src.contains("CardAct::Try")
                 && src.contains("CardAct::Duplicate")
@@ -1578,8 +1579,7 @@ mod tests {
             "grid cards must force top-down so descriptions do not crush"
         );
         assert!(
-            src.contains("only the selected card gets the red rim")
-                || src.contains("signal_red"),
+            src.contains("only the selected card gets the red rim") || src.contains("signal_red"),
             "Selected panel / selected grid card use signal red"
         );
         assert!(
