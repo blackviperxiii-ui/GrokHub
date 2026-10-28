@@ -197,7 +197,7 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
     let title = src
         .split("fn ui_titlebar(")
         .nth(1)
-        .and_then(|s| s.split("fn nav_row(").next())
+        .and_then(|s| s.split("fn ui_sidebar(").next())
         .expect("titlebar");
     assert!(
         title.contains("quiet_until_chip") && title.contains("SettingsSec::Behavior"),

@@ -44,7 +44,7 @@ use grokhub_core::{
     compose_imagine_prompt, composer_enter, composer_go, composer_go_tip, computer_cmd_line,
     context_fingerprint, context_percent, create_folder, create_project, daily_units_blocked,
     decode_tool_rows, dedicated_imagine_model, dedupe_hits, dedupe_suggestions,
-    default_openclaw_paths, delete_thread, devices_shows_pair_code, diagnostics_bundle,
+    default_openclaw_paths, devices_shows_pair_code, diagnostics_bundle,
     digest_line_from, dismiss_accepted_auto, drop_node, drop_selected, drop_trailing_assistant,
     due_automations, due_loops, encode_turn, ensure_automation_schedule, estimate_messages,
     estimate_messages_from, extract_imagine_prompt, extract_insights, fact_candidates,
@@ -107,7 +107,7 @@ use grokhub_core::{
     voice_state_after_ptt_stt, voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict,
     wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
     BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
-    ChipThread, ComposerEnter, ComposerGo, DeleteOutcome, DeviceCodeStart, DigestLine,
+    ChipThread, ComposerEnter, ComposerGo, DeviceCodeStart, DigestLine,
     GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
     HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
     ImagineWall, InhabitBundle, KanbanColumn, LearningState, LiveBlock, LiveKind, LocalClock,
@@ -151,6 +151,7 @@ mod budget_ui;
 mod canary_ui;
 mod change_history_ui;
 mod change_undo;
+mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
 mod code_resume_ui;
@@ -343,7 +344,7 @@ fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
     }
 }
 
-enum TabAct {
+pub(super) enum TabAct {
     Switch(usize),
     Pin(usize),
     Archive(usize),
@@ -644,7 +645,6 @@ pub struct Cabin {
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
     hotkey_halt: u32,
-    sidebar_q: String,
     rename_idx: Option<usize>,
     rename_buf: String,
     rename_focus: bool,
@@ -687,7 +687,7 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
-    rail_chat_drawer_open: bool,
+    sidebar_q: String,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -1254,7 +1254,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
             rename_focus: false,
@@ -1294,7 +1293,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            rail_chat_drawer_open: false,
+            sidebar_q: String::new(),
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1717,7 +1716,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
             rename_focus: false,
@@ -1757,7 +1755,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            rail_chat_drawer_open: false,
+            sidebar_q: String::new(),
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
@@ -5376,6 +5374,9 @@ impl eframe::App for Cabin {
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
+            if self.page_nav() == Nav::Chat {
+                self.ui_chat_tabs(ui);
+            }
             self.ui_sidebar(ui);
             self.ui_settings_menu(&ctx);
 

@@ -680,6 +680,9 @@ impl Cabin {
                 self.delete_all_history();
             }
             ui.add_space(8.0);
+            // Projects + History list (moved off the Chat rail drawer).
+            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
                 ui.horizontal_wrapped(|ui| {

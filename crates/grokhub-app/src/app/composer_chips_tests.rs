@@ -229,7 +229,7 @@ fn composer_stack_drops_approve_slots() {
     let title = src
         .split("fn ui_titlebar(")
         .nth(1)
-        .and_then(|s| s.split("fn nav_row(").next())
+        .and_then(|s| s.split("fn ui_sidebar(").next())
         .expect("titlebar");
     let min = title.find("ChromeBtn::Minimize").expect("minimize");
     let ham = title.find("paint_session_actions_menu").expect("menu");
