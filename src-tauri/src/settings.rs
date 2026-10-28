@@ -33,9 +33,13 @@ impl Approvals {
 
 /// Settings → Appearance. A value this build does not know reads as System.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Theme {
+    /// Legacy id; same tokens as Ops Dark.
     Dark,
+    OpsDark,
+    OledBlack,
+    SoftCharcoal,
     Light,
     /// Follows the OS (serde wants the fallback last).
     #[default]
@@ -86,7 +90,7 @@ pub fn path(config_dir: &Path) -> PathBuf {
 pub fn load(config_dir: &Path) -> ShellSettings {
     if !path(config_dir).exists() && !config_dir.join("app.json").exists() {
         return ShellSettings {
-            personality: grokhub_core::personality::NEW_INSTALL_ID.to_string(),
+            personality: grokhub_core::personality::DEFAULT_ID.to_string(),
             ..ShellSettings::default()
         };
     }

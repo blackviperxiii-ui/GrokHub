@@ -633,7 +633,7 @@ async function usePersonality(s, config, name) {
     return t === "In use" ? t : null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
-  const id = name === "Default" ? "" : name.toLowerCase();
+  const id = name === "Nyx" ? "" : name.toLowerCase();
   if (saved.personality !== id) throw new Error(`shell.json holds personality ${JSON.stringify(saved.personality)}`);
   await shot(s, `settings-personality-${name.toLowerCase()}`);
   console.log(`personality: ${name} in use`);
@@ -874,7 +874,7 @@ async function permissions(s, config) {
   console.log("permissions: rule removed");
 }
 
-// Settings → Appearance: Dark pins the dark colors on the page right away
+// Settings → Appearance: Ops Dark pins Loadout colors on the page right away
 // and saves in shell.json; System hands them back to the OS.
 async function appearance(s, config) {
   await tab(s, "Settings");
@@ -895,17 +895,17 @@ async function appearance(s, config) {
         "return [document.documentElement.dataset.theme || '', getComputedStyle(document.body).backgroundColor];",
       args: [],
     });
-  await pick("Dark");
-  const [theme, bg] = await waitFor("the dark page", async () => {
+  await pick("Ops Dark");
+  const [theme, bg] = await waitFor("the ops-dark page", async () => {
     const seen = await look();
-    return seen[0] === "dark" ? seen : null;
+    return seen[0] === "ops-dark" ? seen : null;
   });
-  if (bg !== "rgb(20, 20, 19)") throw new Error(`dark theme painted ${bg}`);
+  if (bg !== "rgb(11, 11, 13)") throw new Error(`ops-dark theme painted ${bg}`);
   const saved = await waitFor("the saved theme", async () => {
     const t = JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).theme;
-    return t === "dark" ? t : null;
+    return t === "ops-dark" ? t : null;
   });
-  await shot(s, "settings-appearance-dark");
+  await shot(s, "settings-appearance-ops-dark");
   console.log(`appearance: ${theme} on the page (${bg}), ${saved} in shell.json`);
   await pick("System");
   await waitFor("the system theme", async () => ((await look())[0] === "" ? true : null));
@@ -1022,7 +1022,7 @@ async function main() {
     await palette(s);
     await usePersonality(s, config, "Pirate");
     await plan(s, workspace);
-    await usePersonality(s, config, "Default");
+    await usePersonality(s, config, "Nyx");
     await localAi(s, config);
     await labs(s, config);
     await playbooks(s, config);

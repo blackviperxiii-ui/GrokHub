@@ -1224,7 +1224,7 @@ mod tests {
         );
         let plain = cabin.chat_rules();
         assert!(
-            plain.starts_with("Personality: Default."),
+            plain.starts_with("Personality: Nyx."),
             "default voice is layered: {plain}"
         );
         assert!(

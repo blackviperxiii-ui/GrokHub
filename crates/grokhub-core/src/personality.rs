@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../assets/personalities.toml");
 
-/// The shipped default voice. Its tone rules state the values the charter also
-/// carries. An id this build does not know stays an unstyled preset with empty
-/// tone rules.
-pub const DEFAULT_ID: &str = "default";
-/// The companion's voice: what a new install starts on. An existing install keeps
-/// its pick, including an empty one, which stays the default voice.
-pub const NEW_INSTALL_ID: &str = "nyx";
+/// The default voice: the companion, Nyx. Its tone rules state the values the
+/// charter also carries. An empty pick is this voice.
+pub const DEFAULT_ID: &str = "nyx";
+/// The plain "Default" preset older builds shipped. A profile or chat still
+/// set to it speaks as [`DEFAULT_ID`].
+pub const LEGACY_DEFAULT_ID: &str = "default";
 /// Longest `tone_rules` a preset may carry.
 pub const TONE_RULES_MAX: usize = 600;
 /// Longest one-line description.
@@ -108,7 +107,7 @@ impl Personality {
                 "Personality {id}: tone rules are over {TONE_RULES_MAX} characters."
             ));
         }
-        if id != DEFAULT_ID && self.tone_rules.trim().is_empty() {
+        if self.tone_rules.trim().is_empty() {
             return Err(format!("Personality {id}: tone rules are empty."));
         }
         Ok(())
@@ -162,12 +161,12 @@ pub fn parse(text: &str) -> Result<Vec<Personality>, String> {
     Ok(file.preset)
 }
 
-/// The presets shipped with this build: `default` first, then Nyx, then the 21 styles.
+/// The presets shipped with this build: Nyx first, then the 21 styles.
 /// A test pins that they parse; if they ever didn't, only the default voice is offered.
 /// Nyx shows under the companion's name from `brand/brand.json`.
 pub fn builtins() -> Vec<Personality> {
     let mut all = parse(BUILTIN).unwrap_or_else(|_| vec![neutral()]);
-    if let Some(nyx) = all.iter_mut().find(|p| p.id == NEW_INSTALL_ID) {
+    if let Some(nyx) = all.iter_mut().find(|p| p.id == DEFAULT_ID) {
         nyx.name = crate::brand::companion_name().to_string();
     }
     all
@@ -176,8 +175,8 @@ pub fn builtins() -> Vec<Personality> {
 fn neutral() -> Personality {
     Personality {
         id: DEFAULT_ID.into(),
-        name: "Default".into(),
-        description: "GrokHub's own voice: brief, warm and plain.".into(),
+        name: crate::brand::companion_name().into(),
+        description: "Brief, warm and plain.".into(),
         sample: String::new(),
         tone_rules: String::new(),
         emoji: Emoji::None,
@@ -238,7 +237,7 @@ pub fn load_all(dir: &std::path::Path) -> (Vec<Personality>, Vec<String>) {
 /// The preset with `id` among the built-ins and the user's own in `dir`, or the default voice.
 pub fn lookup(dir: &std::path::Path, id: &str) -> Personality {
     let id = id.trim();
-    if id.is_empty() || id == DEFAULT_ID || builtins_cached().iter().any(|p| p.id == id) {
+    if id.is_empty() || id == LEGACY_DEFAULT_ID || builtins_cached().iter().any(|p| p.id == id) {
         return builtin(id);
     }
     find(&load_all(dir).0, id)
@@ -247,11 +246,7 @@ pub fn lookup(dir: &std::path::Path, id: &str) -> Personality {
 /// A new custom preset copied from `base`: a fresh id (`<id>-copy`, `<id>-copy-2`, …)
 /// and "<name> copy". Everything else, explicit included, carries over.
 pub fn duplicate(base: &Personality, taken: &[Personality]) -> Personality {
-    let root = if base.id == DEFAULT_ID {
-        "my-voice".to_string()
-    } else {
-        format!("{}-copy", base.id)
-    };
+    let root = format!("{}-copy", base.id);
     let mut id = root.clone();
     let mut n = 2;
     while taken.iter().any(|p| p.id == id) {
@@ -285,7 +280,7 @@ pub fn custom_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
 /// Check and write a custom preset to `dir/<id>.toml`. Built-in ids are refused.
 pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::PathBuf, String> {
     p.check()?;
-    if p.id == DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
+    if p.id == LEGACY_DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
         return Err(format!(
             "{} is a built-in personality; duplicate it to make your own.",
             p.name
@@ -314,11 +309,17 @@ fn builtins_cached() -> &'static [Personality] {
     ALL.get_or_init(builtins)
 }
 
-/// The preset with `id`, or the default voice when no preset has it.
+/// The preset with `id`, or the default voice when no preset has it. The
+/// retired "default" id and an empty one are the default voice.
 pub fn find(presets: &[Personality], id: &str) -> Personality {
+    let id = match id.trim() {
+        "" | LEGACY_DEFAULT_ID => DEFAULT_ID,
+        id => id,
+    };
     presets
         .iter()
-        .find(|p| p.id == id.trim())
+        .find(|p| p.id == id)
+        .or_else(|| presets.iter().find(|p| p.id == DEFAULT_ID))
         .cloned()
         .unwrap_or_else(neutral)
 }
@@ -387,9 +388,9 @@ mod tests {
     }
 
     #[test]
-    fn the_builtins_are_default_nyx_and_the_twenty_one_styles() {
+    fn the_builtins_are_nyx_and_the_twenty_one_styles() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 22);
         assert_eq!(all[0].id, DEFAULT_ID);
         assert!(
             all[0].tone_rules.contains("not sycophantic"),
@@ -402,7 +403,6 @@ mod tests {
         assert_eq!(
             names,
             [
-                "Default",
                 "Nyx",
                 "Genie",
                 "Pirate",
@@ -518,7 +518,7 @@ mod tests {
         assert!(on.find("Whore mode").unwrap() < on.find(SAFETY_LINE).unwrap());
         assert!(on.ends_with(&rules));
         let back = layer(&builtin(DEFAULT_ID), &rules);
-        assert!(back.starts_with("Personality: Default. "));
+        assert!(back.starts_with("Personality: Nyx. "));
         assert!(!back.contains("Whore mode"));
     }
 
@@ -546,18 +546,24 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_layers_its_values_and_an_unknown_id_stays_unstyled() {
+    fn the_default_voice_layers_its_values_and_old_or_unknown_ids_speak_as_it() {
         let rules = crate::cabin_rules::cabin_rules_for("", false);
         let layered = layer(&find(&builtins(), DEFAULT_ID), &rules);
-        assert!(layered.starts_with("Personality: Default. "));
+        assert!(layered.starts_with("Personality: Nyx. "));
         assert!(layered.contains("not sycophantic"));
         assert!(layered.ends_with(&rules));
         assert!(layered.find("not sycophantic").unwrap() < layered.find(SAFETY_LINE).unwrap());
+        // A profile or chat saved on the retired "default" preset upgrades to Nyx,
+        // and so does an id no preset has any more.
+        for old in [LEGACY_DEFAULT_ID, "", " default ", "no-such-preset"] {
+            assert_eq!(find(&builtins(), old).id, "nyx", "{old:?}");
+            assert_eq!(layer(&find(&builtins(), old), &rules), layered, "{old:?}");
+        }
         assert_eq!(
-            layer(&find(&builtins(), "no-such-preset"), &rules),
-            rules,
-            "an unknown id stays the unstyled voice"
+            lookup(std::path::Path::new("/nonexistent"), LEGACY_DEFAULT_ID).id,
+            "nyx"
         );
+        assert!(builtins().iter().all(|p| p.id != LEGACY_DEFAULT_ID));
     }
 
     #[test]
@@ -669,7 +675,7 @@ mod tests {
         );
         assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
         let plain = try_it_messages(&builtin(DEFAULT_ID));
-        assert!(plain[0].1.starts_with("Personality: Default. "));
+        assert!(plain[0].1.starts_with("Personality: Nyx. "));
         assert!(plain[0].1.contains("not sycophantic"));
         assert!(plain[0]
             .1
@@ -691,7 +697,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (23, 0),
+            (22, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -708,7 +714,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 24);
+        assert_eq!(all.len(), 23);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -718,7 +724,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 23);
+        assert_eq!(load_all(&dir).0.len(), 22);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -738,7 +744,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 22);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
@@ -760,7 +766,7 @@ mod tests {
         );
         assert!(!dir.join("surfer-copy.toml").exists());
         let default_copy = duplicate(&builtin(DEFAULT_ID), &builtins());
-        assert_eq!(default_copy.id, "my-voice");
+        assert_eq!(default_copy.id, "nyx-copy");
         assert!(
             default_copy.check().is_ok(),
             "a copy of the default has tone rules to edit"
@@ -769,7 +775,7 @@ mod tests {
 
     #[test]
     fn nyx_is_the_companion_voice_clean_and_room_reading() {
-        let nyx = builtin(NEW_INSTALL_ID);
+        let nyx = builtin(DEFAULT_ID);
         assert_eq!(nyx.id, "nyx");
         assert_eq!(nyx.name, crate::brand::companion_name());
         assert_eq!(nyx.name, "Nyx");
@@ -781,7 +787,7 @@ mod tests {
         assert_eq!(gated(nyx.clone(), false).id, "nyx");
         let block = nyx.prompt_block();
         assert!(
-            block.starts_with("Personality: Nyx. Be a nerdy, techie gamer friend"),
+            block.starts_with("Personality: Nyx. Be honest, not sycophantic, and treat the user as an intelligent adult. Be a nerdy, techie gamer friend"),
             "{block}"
         );
         for must in [

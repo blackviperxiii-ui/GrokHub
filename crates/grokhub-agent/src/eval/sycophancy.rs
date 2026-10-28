@@ -277,7 +277,8 @@ fn prefix_latency() -> (f64, f64) {
     const TURN_BODY: usize = 16 * 1024;
     let template = prompt::template_body();
     let old = prompt::TEMPLATE_BYTES_BEFORE.min(template.len());
-    let voice = grokhub_core::personality::builtin("default").prompt_block();
+    let voice =
+        grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID).prompt_block();
     let pad = "x".repeat(TURN_BODY);
     let base = format!("{}{pad}", &template[..old]);
     let grown = format!("{template}{voice}{pad}");
