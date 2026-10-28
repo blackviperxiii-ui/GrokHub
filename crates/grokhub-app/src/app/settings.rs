@@ -59,6 +59,11 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
         {
             Some("personality") => Some(SettingsSec::Personality),
             Some("privacy") => Some(SettingsSec::Privacy),
+            // Cabin defaults holds Models & providers → Web search (optional
+            // SearXNG URL / Brave key). Used by web-search-shots.ps1.
+            Some("defaults") | Some("cabin") | Some("websearch") | Some("web_search") => {
+                Some(SettingsSec::Defaults)
+            }
             _ => None,
         }
     })
@@ -70,6 +75,9 @@ pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui:
     let max = (screen - margin).max(egui::vec2(320.0, 240.0));
     let want = if sec == SettingsSec::Personality && crate::theme::is_loadout_paint() {
         egui::vec2(1180.0, 720.0)
+    } else if sec == SettingsSec::Defaults && super::loadout_home::web_search_settings_shot() {
+        // Proof shot: taller pane so Web search (SearXNG URL) stays on screen.
+        egui::vec2(920.0, 780.0)
     } else {
         egui::vec2(920.0, 620.0)
     };
@@ -884,8 +892,19 @@ impl Cabin {
                                                             ) {
                                                                 self.refresh_models_now();
                                                             }
-                                                            self.ui_local_model_rows(ui);
-                                                            self.ui_provider_rows(ui);
+                                                            // Proof shot pins Web search above the
+                                                            // long local-model block so the optional
+                                                            // SearXNG / Brave fields stay on screen.
+                                                            if super::loadout_home::web_search_settings_shot()
+                                                            {
+                                                                self.ui_web_search_rows(ui);
+                                                                self.ui_local_model_rows(ui);
+                                                                self.ui_provider_rows(ui);
+                                                            } else {
+                                                                self.ui_local_model_rows(ui);
+                                                                self.ui_provider_rows(ui);
+                                                                self.ui_web_search_rows(ui);
+                                                            }
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
                                                             crate::ui_kit::section_header(
