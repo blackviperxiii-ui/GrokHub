@@ -168,6 +168,7 @@ mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
+mod hobby_paths_ui;
 mod home;
 mod ideas_ui;
 mod imagine;
@@ -233,7 +234,6 @@ mod voice;
 mod web_search_ui;
 mod week_recap_ui;
 mod wishlist_ui;
-
 use background::BgWork;
 use chat_ui::*;
 
