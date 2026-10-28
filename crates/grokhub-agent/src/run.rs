@@ -331,12 +331,42 @@ pub fn run_loop(
     let intention_block = (input.depth == 0)
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
+    // Plan→skill wiring: ship/QA, verify-before-done, multi-step follow-through.
+    let plan_skill_block = (input.depth == 0)
+        .then(|| {
+            let todos = crate::session_tools::todos_for(input.conversation_id);
+            let plan_text: String = todos
+                .iter()
+                .map(|t| t.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let pending = todos
+                .iter()
+                .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
+                .count();
+            let ctx = crate::plan_skills::PlanSkillCtx {
+                plan_text: &plan_text,
+                change_text: user_text,
+                pending_steps: pending,
+                // Close-check owns the marking-done gate; the standing reminder
+                // covers verify-before-done for open turns.
+                marking_done: false,
+            };
+            crate::plan_skills::prompt_block(&ctx)
+        })
+        .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
         }
         let already = crate::memory::injected_lines(history);
+        let volatile_intentions = match (intention_block.clone(), plan_skill_block.clone()) {
+            (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
         let volatile = crate::prefix_cache::TurnVolatile::assemble(
             input.workspace,
             user_text,
@@ -345,7 +375,7 @@ pub fn run_loop(
             soft_caps,
             playbook.as_deref(),
             &already,
-            intention_block.clone(),
+            volatile_intentions,
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
@@ -387,6 +417,9 @@ pub fn run_loop(
         }
         if let Some(block) = intention_block {
             push_intention_block(history, &block);
+        }
+        if let Some(block) = plan_skill_block.as_deref() {
+            push_intention_block(history, block);
         }
         history.push(user_message(user_text, image));
     }
