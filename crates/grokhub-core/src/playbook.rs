@@ -34,7 +34,18 @@ pub const PLAYBOOK_LINE: &str =
     "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
-    "system", "code", "files", "desktop", "web", "media", "gaming", "planning", "general",
+    "system",
+    "code",
+    "files",
+    "desktop",
+    "web",
+    "media",
+    "gaming",
+    "game-help",
+    "loadout",
+    "library",
+    "planning",
+    "general",
 ];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
@@ -404,6 +415,31 @@ mod tests {
                 game.fit("question", "gaming", "linux")
             ),
             (Some(2), None, Some(2))
+        );
+        let help = parse(BUILTIN[8]).unwrap();
+        assert_eq!(
+            (
+                help.fit("question", "game-help", "windows"),
+                help.fit("task", "gaming", "windows"),
+                help.fit("question", "gaming", "linux")
+            ),
+            (Some(2), None, None)
+        );
+        let loadout = parse(BUILTIN[10]).unwrap();
+        assert_eq!(
+            (
+                loadout.fit("research", "loadout", "linux"),
+                loadout.fit("task", "gaming", "windows")
+            ),
+            (Some(2), None)
+        );
+        let library = parse(BUILTIN[7]).unwrap();
+        assert_eq!(
+            (
+                library.fit("question", "library", "windows"),
+                library.fit("research", "web", "linux")
+            ),
+            (Some(2), None)
         );
         let quick = parse(BUILTIN[11]).unwrap();
         let plan = parse(BUILTIN[12]).unwrap();
