@@ -24,13 +24,13 @@ fn send_home_to_chat_leaves_home_for_chat() {
 #[test]
 fn home_deck_mc_uses_slide_nine_layout() {
     let src = include_str!("home/page.rs");
-    let body = src
-        .split("home-mission-body")
-        .nth(1)
-        .expect("home mission scroll body");
     assert!(
-        body.contains("deck_home_mc_shot") && body.contains("paint_mission_control_body"),
+        src.contains("deck_home_mc_shot") && src.contains("paint_mission_control_body"),
         "deck home-mc must paint slide 09 layout A, not the modular grid"
+    );
+    assert!(
+        src.contains("paint_mission_control_body(ui, w, body_h)"),
+        "deck home-mc must stretch the module row to the compose bar"
     );
 }
 

@@ -11,8 +11,8 @@ use grokhub_core::steam::SteamGame;
 
 use super::library_ui::paint_cover_at;
 use super::loadout_home::{
-    caption, card, diamond, grouped, header, level_xp, objective_progress, pc_profile, pc_score,
-    pc_tile_grid, pc_tile_list, XP_PER_LEVEL,
+    caption, card, diamond, grouped, header, level_xp, objective_progress, pc_mission_loadout_tiles,
+    pc_mission_tile_grid, pc_profile, pc_score, deck_home_mc_shot, XP_PER_LEVEL,
 };
 use super::*;
 
@@ -28,6 +28,10 @@ const UP_NEXT_GAMES: usize = 3;
 const COMPOSE_H: f32 = 112.0;
 const STREAK_REFRESH: Duration = Duration::from_secs(30);
 const DRAFT_ID: &str = "mission-control-draft";
+const MISSION_COACH_LINE: &str =
+    "Coach: warm up 10 min before ranked — your first-match win rate is +12%.";
+/// Deck home-mc keeps Up next in the third column down to ~780 px content.
+const DECK_THREE_COL_MIN_W: f32 = 780.0;
 /// Starters for the composer. Picking one fills it; Enter sends.
 pub(super) const STARTERS: [&str; 4] = [
     "Plan my week",
@@ -140,7 +144,14 @@ impl Cabin {
                             .id_salt("mission-control-body")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                self.mission_body(ui, w, mission.as_ref(), &next, now)
+                                self.mission_body(
+                                    ui,
+                                    w,
+                                    body_h,
+                                    mission.as_ref(),
+                                    &next,
+                                    now,
+                                )
                             });
                     },
                 );
@@ -149,12 +160,70 @@ impl Cabin {
     }
 
     /// Slide 09 layout (objectives · PC loadout · Up next) for deck home-mc shots.
-    pub(in crate::app) fn paint_mission_control_body(&mut self, ui: &mut egui::Ui, w: f32) {
+    pub(in crate::app) fn paint_mission_control_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        w: f32,
+        body_h: f32,
+    ) {
         let now = now_ms();
         let mission = self.dock_mission(ui.ctx());
         let (_, games) = self.steam_library(now);
         let next = up_next(games);
-        self.mission_body(ui, w, mission.as_ref(), &next, now);
+        self.mission_body(ui, w, body_h, mission.as_ref(), &next, now);
+    }
+
+    fn mission_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        w: f32,
+        body_h: f32,
+        mission: Option<&MissionView>,
+        next: &[SteamGame],
+        now: u64,
+    ) {
+        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+        if body_h > 0.0 {
+            ui.set_min_height(body_h);
+        }
+        let three_min = if deck_home_mc_shot() {
+            DECK_THREE_COL_MIN_W
+        } else {
+            THREE_COL_MIN_W
+        };
+        if w >= three_min {
+            let side = UP_NEXT_W;
+            let col = (w - side - GAP * 2.0) / 2.0;
+            ui.horizontal_top(|ui| {
+                if body_h > 0.0 {
+                    ui.set_min_height(body_h);
+                }
+                column(ui, col, body_h, |ui| self.mission_objectives(ui, mission, now));
+                column(ui, col, body_h, |ui| self.mission_pc(ui));
+                column(ui, side, body_h, |ui| {
+                    self.mission_up_next_column(ui, next, body_h)
+                });
+            });
+        } else if w >= TWO_COL_MIN_W {
+            let col = (w - GAP) / 2.0;
+            let top_h = if body_h > 0.0 {
+                ((body_h - 120.0 - GAP) * 0.62).max(180.0)
+            } else {
+                0.0
+            };
+            ui.horizontal_top(|ui| {
+                if top_h > 0.0 {
+                    ui.set_min_height(top_h);
+                }
+                column(ui, col, top_h, |ui| self.mission_objectives(ui, mission, now));
+                column(ui, col, top_h, |ui| self.mission_pc(ui));
+            });
+            self.mission_up_next(ui, next, true, body_h);
+        } else {
+            self.mission_objectives(ui, mission, now);
+            self.mission_pc(ui);
+            self.mission_up_next(ui, next, true, body_h);
+        }
     }
 
     fn mission_header(&mut self, ui: &mut egui::Ui, done: usize) {
@@ -228,40 +297,9 @@ impl Cabin {
         });
     }
 
-    fn mission_body(
-        &mut self,
-        ui: &mut egui::Ui,
-        w: f32,
-        mission: Option<&MissionView>,
-        next: &[SteamGame],
-        now: u64,
-    ) {
-        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
-        if w >= THREE_COL_MIN_W {
-            let side = UP_NEXT_W;
-            let col = (w - side - GAP * 2.0) / 2.0;
-            ui.horizontal_top(|ui| {
-                column(ui, col, |ui| self.mission_objectives(ui, mission, now));
-                column(ui, col, |ui| self.mission_pc(ui));
-                column(ui, side, |ui| self.mission_up_next(ui, next, false));
-            });
-        } else if w >= TWO_COL_MIN_W {
-            let col = (w - GAP) / 2.0;
-            ui.horizontal_top(|ui| {
-                column(ui, col, |ui| self.mission_objectives(ui, mission, now));
-                column(ui, col, |ui| self.mission_pc(ui));
-            });
-            self.mission_up_next(ui, next, true);
-        } else {
-            self.mission_objectives(ui, mission, now);
-            self.mission_pc(ui);
-            self.mission_up_next(ui, next, true);
-        }
-    }
-
     fn mission_objectives(&mut self, ui: &mut egui::Ui, mission: Option<&MissionView>, now: u64) {
         let streak = self.mission_streak(ui.ctx(), now);
-        card(ui, |ui| {
+        mission_card_fill(ui, |ui| {
             let items = mission.map_or(&[][..], |m| &m.checklist[..]);
             let (done, total) = objective_progress(items);
             let right = if total > 0 {
@@ -308,7 +346,7 @@ impl Cabin {
             });
             paint_streak(ui, &streak);
             ui.label(
-                RichText::new("A day counts when it finishes a task.")
+                RichText::new(MISSION_COACH_LINE)
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );
@@ -336,7 +374,7 @@ impl Cabin {
 
     fn mission_pc(&mut self, ui: &mut egui::Ui) {
         let profile = pc_profile();
-        card(ui, |ui| {
+        mission_card_fill(ui, |ui| {
             let score = profile
                 .as_ref()
                 .and_then(pc_score)
@@ -351,7 +389,7 @@ impl Cabin {
                             .color(crate::theme::muted()),
                     );
                 }
-                Some(p) => pc_tile_grid(ui, &pc_tile_list(&p)),
+                Some(p) => pc_mission_tile_grid(ui, &pc_mission_loadout_tiles(&p)),
             }
             ui.add_space(8.0);
             let size = egui::vec2(140.0, 40.0);
@@ -367,7 +405,38 @@ impl Cabin {
         });
     }
 
-    fn mission_up_next(&mut self, ui: &mut egui::Ui, next: &[SteamGame], row: bool) {
+    fn mission_up_next_column(&mut self, ui: &mut egui::Ui, next: &[SteamGame], body_h: f32) {
+        ui.set_min_height(body_h.max(0.0));
+        ui.vertical(|ui| {
+            ui.label(caption("Up next"));
+            if next.is_empty() {
+                ui.label(
+                    RichText::new("Games you play with Steam show up here.")
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::muted()),
+                );
+                return;
+            }
+            let n = next.len().max(1) as f32;
+            let tile_h = if body_h > 0.0 {
+                ((body_h - 28.0 - GAP * (n - 1.0)) / n).clamp(72.0, 150.0)
+            } else {
+                150.0
+            };
+            let w = ui.available_width();
+            let mut open = None;
+            for g in next {
+                if up_next_tile(ui, g, egui::vec2(w, tile_h)) {
+                    open = Some(g.app_id);
+                }
+            }
+            if let Some(id) = open {
+                self.show_in_library(ui.ctx(), id);
+            }
+        });
+    }
+
+    fn mission_up_next(&mut self, ui: &mut egui::Ui, next: &[SteamGame], row: bool, body_h: f32) {
         ui.label(caption("Up next"));
         if next.is_empty() {
             ui.label(
@@ -379,11 +448,16 @@ impl Cabin {
         }
         let mut open = None;
         let w = ui.available_width();
+        let row_h = if row && body_h > 0.0 {
+            96.0_f32.min(body_h - 8.0).max(72.0)
+        } else {
+            120.0
+        };
         if row {
             let tile_w = (w - GAP * (UP_NEXT_GAMES as f32 - 1.0)) / UP_NEXT_GAMES as f32;
             ui.horizontal_top(|ui| {
                 for g in next {
-                    if up_next_tile(ui, g, egui::vec2(tile_w, 120.0)) {
+                    if up_next_tile(ui, g, egui::vec2(tile_w, row_h)) {
                         open = Some(g.app_id);
                     }
                 }
@@ -456,16 +530,29 @@ impl Cabin {
     }
 }
 
-fn column(ui: &mut egui::Ui, w: f32, add: impl FnOnce(&mut egui::Ui)) {
+fn column(ui: &mut egui::Ui, w: f32, h: f32, add: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(
-        egui::vec2(w, ui.available_height()),
+        egui::vec2(w, h.max(0.0)),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             ui.set_width(w);
+            if h > 0.0 {
+                ui.set_min_height(h);
+            }
             ui.spacing_mut().item_spacing.y = GAP;
             add(ui);
         },
     );
+}
+
+fn mission_card_fill(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let h = ui.available_height();
+    card(ui, |ui| {
+        if h.is_finite() && h > 0.0 {
+            ui.set_min_height(h);
+        }
+        add(ui);
+    });
 }
 
 /// One row per open step; the first one not done is the highlighted one.

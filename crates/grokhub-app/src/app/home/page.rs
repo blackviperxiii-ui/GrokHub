@@ -63,15 +63,15 @@ impl Cabin {
                     egui::vec2(w, body_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("home-mission-body")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                if crate::app::loadout_home::deck_home_mc_shot() {
-                                    self.paint_mission_control_body(ui, w);
-                                    return;
-                                }
-                                let base = ui.cursor().min;
+                        if crate::app::loadout_home::deck_home_mc_shot() {
+                            ui.set_min_height(body_h);
+                            self.paint_mission_control_body(ui, w, body_h);
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .id_salt("home-mission-body")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let base = ui.cursor().min;
                                 for slot in &placed {
                                     let rect = egui::Rect::from_min_size(
                                         egui::pos2(base.x + slot.x, base.y + slot.y),
@@ -90,7 +90,8 @@ impl Cabin {
                                 let bottom =
                                     placed.iter().map(|p| p.y + p.h).fold(body_h, f32::max);
                                 ui.allocate_exact_size(egui::vec2(w, bottom), egui::Sense::hover());
-                            });
+                                });
+                        }
                     },
                 );
                 self.home_compose(ui, &mut actions);

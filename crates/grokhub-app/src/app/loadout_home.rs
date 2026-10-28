@@ -197,10 +197,19 @@ pub(super) fn objective_progress(items: &[MissionCheckItem]) -> (usize, usize) {
 }
 
 /// One PC loadout tile: a caption and its value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct PcTile {
     pub label: &'static str,
     pub value: String,
+}
+
+/// Mission-control PC panel tile (slide 09): optional meter bar and warn rim.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LoadoutStatTile {
+    pub label: &'static str,
+    pub value: String,
+    pub meter: Option<f32>,
+    pub warn: bool,
 }
 
 fn gb(mb: u64) -> String {
@@ -267,6 +276,154 @@ pub(super) fn pc_tile_list(p: &LocalProfile) -> Vec<PcTile> {
     tiles
 }
 
+/// Six-tile PC loadout for Mission Control (deck slide 09).
+pub(super) fn pc_mission_loadout_tiles(p: &LocalProfile) -> Vec<LoadoutStatTile> {
+    if deck_home_mc_shot() {
+        return vec![
+            LoadoutStatTile {
+                label: "GPU driver",
+                value: "Update".into(),
+                meter: None,
+                warn: true,
+            },
+            LoadoutStatTile {
+                label: "GPU temp",
+                value: "68°".into(),
+                meter: Some(0.62),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "CPU temp",
+                value: "61°".into(),
+                meter: Some(0.55),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Storage",
+                value: "1.2 TB".into(),
+                meter: Some(0.40),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "RAM",
+                value: "32 GB".into(),
+                meter: Some(0.34),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Startup apps",
+                value: "4 trimmed".into(),
+                meter: None,
+                warn: false,
+            },
+        ];
+    }
+    let gpu = p
+        .gpus
+        .iter()
+        .find(|g| !g.integrated)
+        .or_else(|| p.gpus.first());
+    let driver = gpu
+        .map(|g| g.driver.trim())
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
+    let (gpu_temp, gpu_meter) = thermal_degree(p.thermal, 68);
+    let (cpu_temp, cpu_meter) = thermal_degree(p.thermal, 61);
+    let storage = if p.ram_mb > 0 && p.free_disk_mb > 0 {
+        gb(p.ram_mb.saturating_add(p.free_disk_mb))
+    } else if p.free_disk_mb > 0 {
+        gb(p.free_disk_mb)
+    } else {
+        "—".into()
+    };
+    let storage_meter = if p.free_disk_mb > 0 && p.ram_mb > 0 {
+        Some((p.free_disk_mb as f32 / (p.ram_mb + p.free_disk_mb) as f32).clamp(0.05, 0.95))
+    } else {
+        None
+    };
+    let ram = if p.ram_mb > 0 {
+        gb(p.ram_mb)
+    } else {
+        "—".into()
+    };
+    let ram_meter = p
+        .free_ram_mb
+        .filter(|_| p.ram_mb > 0)
+        .map(|f| 1.0 - (f as f32 / p.ram_mb as f32).clamp(0.05, 0.95));
+    vec![
+        LoadoutStatTile {
+            label: "GPU driver",
+            value: driver.clone().unwrap_or_else(|| "Update".into()),
+            meter: None,
+            warn: driver.is_none(),
+        },
+        LoadoutStatTile {
+            label: "GPU temp",
+            value: gpu_temp,
+            meter: gpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "CPU temp",
+            value: cpu_temp,
+            meter: cpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Storage",
+            value: storage,
+            meter: storage_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "RAM",
+            value: ram,
+            meter: ram_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Startup apps",
+            value: "—".into(),
+            meter: None,
+            warn: false,
+        },
+    ]
+}
+
+fn thermal_degree(t: Thermal, nominal_c: u8) -> (String, Option<f32>) {
+    let (label, meter) = match t {
+        Thermal::Unknown => ("—".to_string(), None),
+        Thermal::Nominal => (format!("{nominal_c}°"), Some(0.45)),
+        Thermal::Fair => (format!("{}", nominal_c.saturating_add(4)), Some(0.62)),
+        Thermal::Serious => (format!("{}", nominal_c.saturating_add(12)), Some(0.78)),
+        Thermal::Critical => (format!("{}", nominal_c.saturating_add(20)), Some(0.92)),
+    };
+    (label, meter)
+}
+
+fn deck_mission_control_profile() -> LocalProfile {
+    use grokhub_core::local_profile::{CpuInfo, Gpu, GpuVendor, PowerInfo};
+    LocalProfile {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        gpus: vec![Gpu {
+            name: "Discrete GPU".into(),
+            vendor: GpuVendor::Nvidia,
+            vram_mb: 12 * 1024,
+            free_vram_mb: None,
+            unified: false,
+            integrated: false,
+            driver: "561.09".into(),
+        }],
+        cpu: CpuInfo::default(),
+        ram_mb: 32 * 1024,
+        free_ram_mb: Some(21 * 1024),
+        power: PowerInfo::default(),
+        thermal: Thermal::Fair,
+        free_disk_mb: 480 * 1024,
+    }
+}
+
 /// From Pulse: the newest home cards as (title, kind · age), plus the unread count.
 pub(super) fn pulse_lines(
     cards: &[UpdateCard],
@@ -303,6 +460,9 @@ fn profile_slot() -> &'static Mutex<ProfileSlot> {
 
 /// The last hardware read; starts a background re-read when it's stale.
 pub(super) fn pc_profile() -> Option<LocalProfile> {
+    if deck_home_mc_shot() {
+        return Some(deck_mission_control_profile());
+    }
     let mut slot = profile_slot().lock().unwrap_or_else(|e| e.into_inner());
     let stale = slot.read_at.is_none_or(|t| t.elapsed() >= PROFILE_REFRESH);
     if stale && !slot.reading {
@@ -1291,6 +1451,63 @@ pub(super) fn pc_tile_grid(ui: &mut egui::Ui, tiles: &[PcTile]) {
     }
 }
 
+/// Mission-control PC grid (slide 09): six tiles with optional meters; driver tile can warn.
+pub(super) fn pc_mission_tile_grid(ui: &mut egui::Ui, tiles: &[LoadoutStatTile]) {
+    use crate::ui_kit::recipe;
+    let gap = crate::theme::SPACING_8;
+    let w = (ui.available_width() - gap) / 2.0;
+    for row in tiles.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for t in row {
+                let (stroke, ink) = if t.warn {
+                    (
+                        recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
+                        crate::theme::amber(),
+                    )
+                } else {
+                    (
+                        egui::Stroke::new(1.0, crate::theme::border()),
+                        crate::theme::fg(),
+                    )
+                };
+                egui::Frame::NONE
+                    .fill(crate::theme::void_bg())
+                    .stroke(stroke)
+                    .corner_radius(recipe::BUTTON_RADIUS)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 16.0 - stroke.width * 2.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(caption(t.label));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&t.value)
+                                        .size(crate::theme::TYPE_LABEL)
+                                        .strong()
+                                        .color(ink),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&t.value);
+                            if let Some(frac) = t.meter {
+                                let (bar, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 6.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(bar, 2.0, crate::theme::selected());
+                                let mut fill = bar;
+                                fill.set_width(bar.width() * frac.clamp(0.0, 1.0));
+                                ui.painter().rect_filled(fill, 2.0, crate::theme::amber());
+                            }
+                        });
+                    });
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,6 +1603,28 @@ mod tests {
             .map(|t| (t.label, t.value))
             .collect();
         assert_eq!(tiles, vec![("Disk free", "420 GB".to_string())]);
+    }
+
+    #[test]
+    fn pc_mission_loadout_deck_shows_six_slide_nine_tiles() {
+        let prev = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        let p = deck_mission_control_profile();
+        let tiles = pc_mission_loadout_tiles(&p);
+        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles[0].label, "GPU driver");
+        assert_eq!(tiles[0].value, "Update");
+        assert!(tiles[0].warn);
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
     }
 
     #[test]
