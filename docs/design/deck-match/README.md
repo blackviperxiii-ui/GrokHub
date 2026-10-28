@@ -8,6 +8,12 @@ Side-by-side captures of the running Windows cabin (`grokhub.exe`) next to the l
 | `dm2-1100-vs-slide02.png` | 1100×720 | 02 |
 | `dm2-1600-vs-slide20.png` | 1600×900 | 20 Recommended combo |
 | `dm2-1100-vs-slide20.png` | 1100×720 | 20 |
+| `dm4-win-hangout-1600x900-slide02.png` | 1600×900 | 02 Hangout (seeded chat) |
+| `dm4-win-hangout-1100x720-slide02.png` | 1100×720 | 02 |
+| `dm6-win-pulse-1600x900-slide13.png` | 1600×900 | 13 Pulse header |
+| `dm6-win-pulse-1100x720-slide13.png` | 1100×720 | 13 |
+| `dm6-win-pulse-1600x900-slide15.png` | 1600×900 | 15 Pulse cards |
+| `dm6-win-pulse-1100x720-slide15.png` | 1100×720 | 15 |
 
 
 | `dm12-cabin-unaffected-1600x900-slide02.png` | 1600×900 | 02 cabin unchanged (Tauri tokens PR) |
