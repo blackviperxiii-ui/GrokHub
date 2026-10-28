@@ -598,7 +598,7 @@ pub(super) fn paint_change_rows(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     if inset {
-                        ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                        ui.add_space(super::chat_ui::result_text_inset());
                     }
                     ui.label(
                         RichText::new(&row.label)
