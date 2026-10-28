@@ -912,11 +912,27 @@ mod tests {
     }
 
     #[test]
+    fn a_hangout_chat_talks_naturally_with_no_word_cap() {
+        let shipped = grokhub_core::brain_policy::builtin_policy();
+        for text in ["hey", "just chilling tonight", "😉", "nah just chill"] {
+            let b = classify(&input(text), None);
+            assert_eq!((b.intent, b.care), (Intent::Chat, Care::Casual), "{text}");
+            let row =
+                grokhub_core::brain_policy::pick_row(&shipped, b.intent.as_str(), b.care.as_str())
+                    .unwrap();
+            let style = grokhub_core::talk::TalkStyle::of(&row.talk);
+            assert_eq!(style, grokhub_core::talk::TalkStyle::Natural, "{text}");
+            assert_eq!(style.reply_cap_words(), None);
+            assert_eq!(row.stop, "need met");
+        }
+    }
+
+    #[test]
     fn care_first_effort_comes_from_the_brief_and_classify_stays_low() {
         let hi = rules(&input("hey")).unwrap();
         assert_eq!((hi.intent, hi.care), (Intent::Chat, Care::Casual));
         let shipped = grokhub_core::brain_policy::builtin_policy();
-        assert_eq!(effort_word(&hi, &shipped), "speed");
+        assert_eq!(effort_word(&hi, &shipped), "care");
         let on = grokhub_core::brain_policy::apply_care_first(shipped);
         assert_eq!(effort_word(&hi, &on), "care");
         let question = rules(&input("what time is it?")).unwrap();
