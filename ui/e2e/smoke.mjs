@@ -633,7 +633,7 @@ async function usePersonality(s, config, name) {
     return t === "In use" ? t : null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
-  const id = name === "Default" ? "" : name.toLowerCase();
+  const id = name === "Nyx" ? "" : name.toLowerCase();
   if (saved.personality !== id) throw new Error(`shell.json holds personality ${JSON.stringify(saved.personality)}`);
   await shot(s, `settings-personality-${name.toLowerCase()}`);
   console.log(`personality: ${name} in use`);
@@ -1022,7 +1022,7 @@ async function main() {
     await palette(s);
     await usePersonality(s, config, "Pirate");
     await plan(s, workspace);
-    await usePersonality(s, config, "Default");
+    await usePersonality(s, config, "Nyx");
     await localAi(s, config);
     await labs(s, config);
     await playbooks(s, config);

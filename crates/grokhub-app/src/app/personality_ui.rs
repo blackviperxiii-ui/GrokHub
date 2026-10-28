@@ -8,7 +8,7 @@ use grokhub_core::personality::{self, Personality};
 
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
-    "Show explicit presets like Viper. Off hides them, and a chat set to one uses Default.";
+    "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,17 +54,17 @@ pub(super) fn presets_dir() -> std::path::PathBuf {
 /// How a preset id is stored: the default voice is an empty field.
 pub(super) fn stored_id(id: &str) -> String {
     let id = id.trim();
-    if id == personality::DEFAULT_ID {
+    if id == personality::DEFAULT_ID || id == personality::LEGACY_DEFAULT_ID {
         String::new()
     } else {
         id.to_string()
     }
 }
 
-/// The id a stored field stands for.
+/// The id a stored field stands for. The retired "default" preset is Nyx.
 fn shown_id(stored: &str) -> &str {
     match stored.trim() {
-        "" => personality::DEFAULT_ID,
+        "" | personality::LEGACY_DEFAULT_ID => personality::DEFAULT_ID,
         id => id,
     }
 }
@@ -753,7 +753,7 @@ mod tests {
         // Picking an explicit preset while off picks the default voice instead.
         cabin.set_chat_personality("whore");
         assert_eq!(cabin.threads[0].personality, "");
-        assert_eq!(cabin.chat_personality().id, "default");
+        assert_eq!(cabin.chat_personality().id, "nyx");
 
         cabin.set_explicit_personalities(true);
         assert!(cabin.cfg.explicit_personalities);
@@ -771,19 +771,22 @@ mod tests {
             .prompt_block()
             .starts_with("Personality: Whore. Whore mode:"));
 
-        // Off again: the pick stays stored but the chat speaks as Default.
+        // Off again: the pick stays stored but the chat speaks as the default voice.
         cabin.set_explicit_personalities(false);
         assert_eq!(cabin.threads[0].personality, "whore");
-        assert_eq!(cabin.personality_id(), "default");
-        assert_eq!(cabin.chat_personality().id, "default");
-        assert_eq!(cabin.open_chat_personality(), "default");
+        assert_eq!(cabin.personality_id(), "nyx");
+        assert_eq!(cabin.chat_personality().id, "nyx");
+        assert_eq!(cabin.open_chat_personality(), "nyx");
     }
 
     #[test]
     fn the_default_voice_is_stored_as_an_empty_field() {
+        assert_eq!(stored_id("nyx"), "");
+        // The retired "default" preset stores as the default voice too.
         assert_eq!(stored_id("default"), "");
+        assert_eq!(shown_id("default"), "nyx");
         assert_eq!(stored_id(" pirate "), "pirate");
-        assert_eq!(shown_id(""), "default");
+        assert_eq!(shown_id(""), "nyx");
         assert_eq!(shown_id("butler"), "butler");
     }
 
@@ -818,7 +821,7 @@ mod tests {
         assert_eq!(cabin.personality_id(), "noir-detective");
         cabin.set_default_personality("default");
         assert_eq!(cabin.cfg.personality, "");
-        assert_eq!(cabin.personality_id(), "default");
+        assert_eq!(cabin.personality_id(), "nyx");
     }
 
     #[test]
@@ -870,7 +873,7 @@ mod tests {
             "default voice keeps the same stable prefix"
         );
         assert!(
-            plain_volatile.contains("Personality: Default."),
+            plain_volatile.contains("Personality: Nyx."),
             "the default voice carries its values: {plain_volatile}"
         );
         assert!(
@@ -1027,7 +1030,7 @@ mod tests {
         assert!(cabin.picker.draft.is_none());
         assert_eq!(cabin.cfg.personality, "");
         assert_eq!(cabin.threads[1].personality, "");
-        assert_eq!(cabin.personality_id(), "default");
+        assert_eq!(cabin.personality_id(), "nyx");
         assert_eq!(cabin.speech_voice(), grokhub_core::DEFAULT_VOICE);
     }
 
