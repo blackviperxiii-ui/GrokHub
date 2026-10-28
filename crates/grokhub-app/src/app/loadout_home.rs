@@ -683,6 +683,15 @@ impl Cabin {
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
+        // `GROKHUB_DECK_SETTINGS_SEC` opens Settings on that section at boot so
+        // slide 19 shots do not depend on a fragile rail click (missed → Hangout).
+        if let Some(sec) = super::settings::pinned_settings_sec() {
+            if self.nav != Nav::Settings {
+                self.settings_back = self.nav;
+            }
+            self.nav = Nav::Settings;
+            self.settings_sec = sec;
+        }
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
@@ -1361,6 +1370,11 @@ mod tests {
             cabin.titlebar_personality_label().to_ascii_uppercase(),
             "VIPER"
         );
+        assert_ne!(
+            cabin.nav,
+            Nav::Settings,
+            "without GROKHUB_DECK_SETTINGS_SEC the seed stays on Hangout"
+        );
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
             None => std::env::remove_var("GROKHUB_DECK_SHOT"),
@@ -1368,6 +1382,26 @@ mod tests {
         match prev_mood {
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+    }
+
+    #[test]
+    fn deck_settings_sec_opens_personality_without_a_click() {
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "personality");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Settings);
+        assert!(matches!(cabin.settings_sec, SettingsSec::Personality));
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_sec {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
+            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
         }
     }
 

@@ -1694,5 +1694,12 @@ mod tests {
         assert!(shots.contains("personality-1600x900"));
         assert!(shots.contains("personality-1920x1080"));
         assert!(shots.contains("slide-19") || shots.contains("'19'"));
+        // Slide 19 must not rely on a rail click (missed → Hangout in #958).
+        assert!(
+            shots.contains("GROKHUB_DECK_SETTINGS_SEC opens Settings at")
+                || !shots
+                    .contains("personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt"),
+            "personality slide 19 shots open Settings via env, not clickAt"
+        );
     }
 }

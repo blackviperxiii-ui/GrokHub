@@ -350,10 +350,11 @@ Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -clickAt 20, 875, 410
 Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 160, 244
 Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -clickAt 20, 875, 410, 334
 Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 160, 244
-# Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
-Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
-Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
-Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality -clickAt 20, 1040
+# Personality picker beside slide 19. GROKHUB_DECK_SETTINGS_SEC opens Settings at
+# boot (no rail click — a miss left Hangout on screen in #958).
+Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
+Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
+Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
