@@ -72,24 +72,31 @@ impl Cabin {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     let base = ui.cursor().min;
-                                for slot in &placed {
-                                    let rect = egui::Rect::from_min_size(
-                                        egui::pos2(base.x + slot.x, base.y + slot.y),
-                                        egui::vec2(slot.w, slot.h),
+                                    for slot in &placed {
+                                        let rect = egui::Rect::from_min_size(
+                                            egui::pos2(base.x + slot.x, base.y + slot.y),
+                                            egui::vec2(slot.w, slot.h),
+                                        );
+                                        let Some(id) = slot.module_id.as_deref() else {
+                                            continue;
+                                        };
+                                        ui.scope_builder(
+                                            egui::UiBuilder::new().max_rect(rect),
+                                            |ui| {
+                                                ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                                                ui.set_min_size(rect.size());
+                                                actions
+                                                    .extend(paint_module(self, ui, id, slot.size));
+                                            },
+                                        );
+                                    }
+                                    // Reserve scroll height for absolute placements.
+                                    let bottom =
+                                        placed.iter().map(|p| p.y + p.h).fold(body_h, f32::max);
+                                    ui.allocate_exact_size(
+                                        egui::vec2(w, bottom),
+                                        egui::Sense::hover(),
                                     );
-                                    let Some(id) = slot.module_id.as_deref() else {
-                                        continue;
-                                    };
-                                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                        ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-                                        ui.set_min_size(rect.size());
-                                        actions.extend(paint_module(self, ui, id, slot.size));
-                                    });
-                                }
-                                // Reserve scroll height for absolute placements.
-                                let bottom =
-                                    placed.iter().map(|p| p.y + p.h).fold(body_h, f32::max);
-                                ui.allocate_exact_size(egui::vec2(w, bottom), egui::Sense::hover());
                                 });
                         }
                     },

@@ -11,8 +11,8 @@ use grokhub_core::steam::SteamGame;
 
 use super::library_ui::paint_cover_at;
 use super::loadout_home::{
-    caption, card, diamond, grouped, header, level_xp, objective_progress, pc_mission_loadout_tiles,
-    pc_mission_tile_grid, pc_profile, pc_score, deck_home_mc_shot, XP_PER_LEVEL,
+    caption, card, deck_home_mc_shot, diamond, grouped, header, level_xp, objective_progress,
+    pc_mission_loadout_tiles, pc_mission_tile_grid, pc_profile, pc_score, XP_PER_LEVEL,
 };
 use super::*;
 
@@ -144,14 +144,7 @@ impl Cabin {
                             .id_salt("mission-control-body")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                self.mission_body(
-                                    ui,
-                                    w,
-                                    body_h,
-                                    mission.as_ref(),
-                                    &next,
-                                    now,
-                                )
+                                self.mission_body(ui, w, body_h, mission.as_ref(), &next, now)
                             });
                     },
                 );
@@ -198,7 +191,9 @@ impl Cabin {
                 if body_h > 0.0 {
                     ui.set_min_height(body_h);
                 }
-                column(ui, col, body_h, |ui| self.mission_objectives(ui, mission, now));
+                column(ui, col, body_h, |ui| {
+                    self.mission_objectives(ui, mission, now)
+                });
                 column(ui, col, body_h, |ui| self.mission_pc(ui));
                 column(ui, side, body_h, |ui| {
                     self.mission_up_next_column(ui, next, body_h)
@@ -215,7 +210,9 @@ impl Cabin {
                 if top_h > 0.0 {
                     ui.set_min_height(top_h);
                 }
-                column(ui, col, top_h, |ui| self.mission_objectives(ui, mission, now));
+                column(ui, col, top_h, |ui| {
+                    self.mission_objectives(ui, mission, now)
+                });
                 column(ui, col, top_h, |ui| self.mission_pc(ui));
             });
             self.mission_up_next(ui, next, true, body_h);
@@ -394,7 +391,9 @@ impl Cabin {
             ui.add_space(8.0);
             let size = egui::vec2(140.0, 40.0);
             ui.horizontal(|ui| {
-                if crate::ui_kit::recipe::button(ui, None, "RUN TUNE-UP", true, size, true).clicked() {
+                if crate::ui_kit::recipe::button(ui, None, "RUN TUNE-UP", true, size, true)
+                    .clicked()
+                {
                     self.open_fresh_home();
                     self.composer = "Check this PC and suggest a tune-up.".into();
                 }
