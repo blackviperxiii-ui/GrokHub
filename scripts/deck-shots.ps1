@@ -155,6 +155,22 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Internet drop log: on, with three drops between 1 and 3 AM UTC last night
+# and no daily card yet, so the first probe after launch posts the pattern
+# card through the real path. Runners keep UTC, so the hours read as local.
+function Seed-NetLog([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow
+    $night = [DateTimeOffset]::new($now.UtcDateTime.Date, [TimeSpan]::Zero)
+    if ($now.Hour -lt 3) { $night = $night.AddDays(-1) }
+    $outages = @()
+    foreach ($d in @(@(108, 4), @(124, 11), @(151, 6))) {
+        $start = $night.AddMinutes($d[0]).ToUnixTimeMilliseconds()
+        $outages += @{ startMs = $start; endMs = $start + $d[1] * 60000; offsetMin = 0 }
+    }
+    $log = @{ on = $true; outages = $outages; slow = @(); speed = @(); lastInsightMs = 0 }
+    Write-Utf8 (Join-Path $cfg 'net-log.json') ($log | ConvertTo-Json -Depth 4)
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -170,7 +186,9 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
+# Pulse rail click, and closes the seeded Activity list over the page.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [switch]$netLog, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -189,6 +207,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($netLog) {
+        Seed-NetLog $cfg
+        $app.netLog = $true
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -203,6 +225,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
@@ -229,7 +252,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
-    if ($pulse) {
+    if ($pulse -and -not $nav) {
         # Pulse is the fourth icon on the 40 px rail, at every window size.
         [void][DeckWin]::SetForegroundWindow($hwnd)
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
@@ -346,6 +369,9 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Internet drop log: last night's pattern card on top of Pulse.
+Shot 1600 900 'net-log-1600x900' 'ops-dark' '14' -netLog -nav 'pulse'
+Shot 1100 720 'net-log-1100x720' 'ops-dark' '14' -netLog -nav 'pulse'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
