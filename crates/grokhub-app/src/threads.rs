@@ -213,6 +213,26 @@ pub fn last_used_live_chat_index(threads: &[ChatThread]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// Fill or repair `last_chat_tab` at startup (older configs omit it).
+pub fn seed_last_chat_tab(last: &mut String, threads: &[ChatThread], thread_idx: usize) {
+    if last.is_empty() {
+        if let Some(t) = threads.get(thread_idx) {
+            if is_live_chat_tab(t) {
+                *last = t.id.clone();
+            }
+        }
+        return;
+    }
+    if threads
+        .iter()
+        .all(|t| t.id != *last || !is_live_chat_tab(t))
+    {
+        if let Some(idx) = last_used_live_chat_index(threads) {
+            *last = threads[idx].id.clone();
+        }
+    }
+}
+
 /// Quiet MidThought line for a last-accessed titled thread. Empty for scratch or default names.
 pub fn continue_thread_hint(threads: &[ChatThread]) -> String {
     let Some(idx) = most_recently_accessed_index(threads) else {

@@ -1010,21 +1010,7 @@ impl Cabin {
                 cfg.current_thread = id;
             }
         }
-        // Seed Chat-rail restore from the open tab when older configs omit lastChatTab.
-        if cfg.last_chat_tab.is_empty() {
-            if let Some(t) = threads.get(thread_idx) {
-                if threads::is_live_chat_tab(t) {
-                    cfg.last_chat_tab = t.id.clone();
-                }
-            }
-        } else if threads
-            .iter()
-            .all(|t| t.id != cfg.last_chat_tab || !threads::is_live_chat_tab(t))
-        {
-            if let Some(idx) = threads::last_used_live_chat_index(&threads) {
-                cfg.last_chat_tab = threads[idx].id.clone();
-            }
-        }
+        threads::seed_last_chat_tab(&mut cfg.last_chat_tab, &threads, thread_idx);
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
