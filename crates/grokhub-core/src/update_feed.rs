@@ -5144,6 +5144,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Test GPU",
             ),
             (
+                "build_offer_card",
+                crate::ask_offers::build_offer_card(
+                    &crate::ask_offers::AskCluster {
+                        key: "patch-note@h19".into(),
+                        example: "check patch notes".into(),
+                        count: 3,
+                        peak_hour: 19,
+                        weekday_share_pct: 40,
+                        kind: crate::ask_offers::OfferKind::Automation,
+                    },
+                    at,
+                ),
+                "patch notes",
+            ),
+            (
                 "hobby_path_card",
                 crate::hobby_paths::hobby_path_card(
                     crate::hobby_paths::HobbyId::Rust,
@@ -5289,6 +5304,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let companion = crate::game_companion::Companion {
+            game: crate::steam::SteamGame {
+                app_id: 548430,
+                name: "Deep Rock Galactic".into(),
+                last_played: 1,
+                playtime_min: 600,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        };
+        rows.push((
+            "companion_card",
+            companion.companion_card(at),
+            "Deep Rock Galactic",
+        ));
         rows
     }
 

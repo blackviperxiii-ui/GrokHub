@@ -546,11 +546,20 @@ fn sanitize_ps(s: &str) -> String {
 
 /// Registry AppsUseLightTheme: 0 = dark, 1 = light. None if unset/unreadable.
 pub fn apps_use_light_theme() -> Option<bool> {
+    hkcu_dword(
+        r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        "AppsUseLightTheme",
+    )
+    .map(|v| v != 0)
+}
+
+/// A DWORD value under HKEY_CURRENT_USER. None if unset/unreadable.
+pub fn hkcu_dword(sub: &str, name: &str) -> Option<u32> {
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
     };
-    let sub = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-    let name = wide("AppsUseLightTheme");
+    let sub = wide(sub);
+    let name = wide(name);
     unsafe {
         let mut key = std::ptr::null_mut();
         if RegOpenKeyExW(HKEY_CURRENT_USER, sub.as_ptr(), 0, KEY_READ, &mut key) != 0 {
@@ -571,7 +580,7 @@ pub fn apps_use_light_theme() -> Option<bool> {
         if status != 0 || ty != REG_DWORD {
             return None;
         }
-        Some(data != 0)
+        Some(data)
     }
 }
 
