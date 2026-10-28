@@ -13,7 +13,10 @@ pub enum DeleteOutcome {
     ResetLast,
 }
 
-pub const AUTO_TITLE_MAX: usize = 16;
+/// Hard cap for a tab label (~2–4 short words). Full title stays in the tooltip.
+pub const AUTO_TITLE_MAX: usize = 28;
+/// How many content words a context tab title keeps.
+pub const AUTO_TITLE_WORDS: usize = 4;
 
 pub fn clean_tab_title(name: &str) -> Option<String> {
     let t: String = name.trim().chars().take(80).collect();
@@ -24,32 +27,53 @@ pub fn clean_tab_title(name: &str) -> Option<String> {
     }
 }
 
-/// One short name for the rail. "chowder and food interest and cho" → "chowder".
+/// Short context title for a tab. "chowder and food interest and cho" →
+/// "chowder food interest cho" (up to [`AUTO_TITLE_WORDS`] words, clipped).
 pub fn short_auto_title(name: &str) -> Option<String> {
     let t = name.trim();
     if t.is_empty() {
         return None;
     }
-    let first = t
-        .split(" and ")
-        .next()
-        .unwrap_or(t)
-        .split(',')
-        .next()
-        .unwrap_or(t)
-        .trim();
-    if first.is_empty() {
+    let mut words: Vec<&str> = Vec::new();
+    for part in t.split(" and ") {
+        for chunk in part.split(',') {
+            for w in chunk.split_whitespace() {
+                let w = w
+                    .trim()
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
+                if w.is_empty() {
+                    continue;
+                }
+                words.push(w);
+                if words.len() == AUTO_TITLE_WORDS {
+                    break;
+                }
+            }
+            if words.len() == AUTO_TITLE_WORDS {
+                break;
+            }
+        }
+        if words.len() == AUTO_TITLE_WORDS {
+            break;
+        }
+    }
+    if words.is_empty() {
         return None;
     }
-    Some(clip_title(first, AUTO_TITLE_MAX))
+    Some(clip_title(&words.join(" "), AUTO_TITLE_MAX))
 }
 
-/// What the sidebar paints. Topic lists collapse; a manual name stays until it is too long.
+/// What the tab strip and sidebar paint. Topic lists collapse to a few words;
+/// a manual name stays until it is too long.
 pub fn display_tab_title(name: &str) -> String {
     if name.contains(" and ") || name.contains(',') {
         short_auto_title(name).unwrap_or_else(|| name.trim().to_string())
     } else {
-        clip_title(name.trim(), AUTO_TITLE_MAX)
+        let words: Vec<&str> = name.split_whitespace().take(AUTO_TITLE_WORDS).collect();
+        if words.is_empty() {
+            return String::new();
+        }
+        clip_title(&words.join(" "), AUTO_TITLE_MAX)
     }
 }
 
@@ -273,21 +297,25 @@ mod tests {
         assert_eq!(tab.title, "porn");
         assert!(!tab.title_locked);
         assert!(apply_auto_title(&mut tab, "porn and comics"));
-        assert_eq!(tab.title, "porn");
+        assert_eq!(tab.title, "porn comics");
     }
 
     #[test]
-    fn auto_title_is_one_short_name() {
+    fn auto_title_keeps_a_few_context_words() {
         assert_eq!(
             short_auto_title("chowder and food interest and cho").as_deref(),
-            Some("chowder")
+            Some("chowder food interest cho")
         );
         assert_eq!(
             display_tab_title("chowder and food interest and cho"),
-            "chowder"
+            "chowder food interest cho"
         );
         assert_eq!(display_tab_title("food interest"), "food interest");
-        let long = display_tab_title("supercalifragilistic");
+        assert_eq!(
+            display_tab_title("weekend plan diamond climb tonight"),
+            "weekend plan diamond climb"
+        );
+        let long = display_tab_title("supercalifragilisticexpialidocious");
         assert!(long.chars().count() <= AUTO_TITLE_MAX, "{long}");
         assert!(long.ends_with('…'), "{long}");
     }

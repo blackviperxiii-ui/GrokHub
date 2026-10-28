@@ -1013,6 +1013,7 @@ impl Cabin {
                 cfg.current_thread = id;
             }
         }
+        threads::seed_last_chat_tab(&mut cfg.last_chat_tab, &threads, thread_idx);
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
@@ -5390,7 +5391,7 @@ impl eframe::App for Cabin {
             } else {
                 match self.page_nav() {
                     Nav::Chat => {
-                        self.paint_native_badge(ui);
+                        self.sync_native_usage(ui);
                         self.ui_loadout_dock(ui);
                         self.ui_chat(ui);
                     }
