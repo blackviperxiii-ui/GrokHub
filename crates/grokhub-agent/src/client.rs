@@ -400,6 +400,10 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
     let (input, has_image) = input_wire(&req.input);
     let mut tools = req.tools.clone();
     if req.hosted_search {
+        // xAI hosted search: drop the cabin function tool of the same name so
+        // OpenRouter / local keep `web_search` as a function while Grok does not
+        // see both hosted and cabin search at once.
+        tools.retain(|t| !crate::tools::web_search::is_function_web_search(t));
         tools.push(json!({"type": "web_search"}));
         tools.push(json!({"type": "x_search"}));
     }
@@ -877,7 +881,55 @@ mod tests {
             .any(|t| t["type"] == "function" && t["name"] == "read_file"));
         assert!(tools.iter().any(|t| t["type"] == "web_search"));
         assert!(tools.iter().any(|t| t["type"] == "x_search"));
+        assert!(
+            !tools
+                .iter()
+                .any(|t| t["type"] == "function" && t["name"] == "web_search"),
+            "hosted search must drop cabin function web_search: {tools:?}"
+        );
         assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+
+        let with_cabin = ResponsesRequest {
+            model: "grok-4.7".into(),
+            effort: Some("high".into()),
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hi".into())],
+            }],
+            conversation_id: "c".into(),
+            tools: vec![json!({
+                "type": "function",
+                "name": "web_search",
+                "description": "cabin",
+                "parameters": {"type": "object", "properties": {}}
+            })],
+            hosted_search: true,
+            call_timeout: None,
+        };
+        let body = responses_body(&with_cabin);
+        let tools = body["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|t| t["type"] == "web_search"));
+        assert!(
+            !tools
+                .iter()
+                .any(|t| t["type"] == "function" && t["name"] == "web_search"),
+            "{tools:?}"
+        );
+        let openrouter_style = ResponsesRequest {
+            hosted_search: false,
+            ..with_cabin.clone()
+        };
+        let body = responses_body(&openrouter_style);
+        let tools = body["tools"].as_array().unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|t| t["type"] == "function" && t["name"] == "web_search"),
+            "{tools:?}"
+        );
+        assert!(!tools
+            .iter()
+            .any(|t| t["type"] == "web_search" && t.get("name").is_none()));
 
         let with_image = ResponsesRequest {
             model: "grok-4.7".into(),
