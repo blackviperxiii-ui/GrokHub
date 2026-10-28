@@ -185,7 +185,7 @@ pub fn is_parking_chat_draft(thread: &ChatThread) -> bool {
         && thread
             .grok_session
             .as_deref()
-            .map_or(true, |s| s.trim().is_empty())
+            .is_none_or(|s| s.trim().is_empty())
         && thread.title.eq_ignore_ascii_case("Chat")
 }
 
