@@ -11,6 +11,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
 
+use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
 use grokhub_core::model_download::{self as md, Control, Fetch, Installed, Outcome, Progress};
@@ -54,7 +55,7 @@ pub(super) fn drafter_offer_line(d: &LocalModel) -> String {
 /// The status line for a finished draft model download.
 pub(super) fn drafter_done_status(m: &LocalModel) -> String {
     format!(
-        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does.",
+        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On).",
         m.name
     )
 }
@@ -258,7 +259,12 @@ impl Cabin {
         let mut status = outcome_status(m, &out, &dl.dir);
         self.setup.dl = None;
         match out {
-            Outcome::Done(_) if drafter => status = drafter_done_status(m),
+            Outcome::Done(_) if drafter => {
+                status = drafter_done_status(m);
+                // Next request reloads with the new drafter on disk (NeedsTest
+                // until Test speed keeps it, or Manual draft On forces it).
+                local_sidecar::stop_global();
+            }
             Outcome::Done(rec) => self.adopt_local_model(rec),
             _ => {}
         }
@@ -327,12 +333,12 @@ impl Cabin {
         true
     }
 
-    /// The installed model's draft model, offered as its own download.
-    fn ui_drafter_offer(&mut self, ui: &mut egui::Ui, rec: &Installed) {
+    /// The draft model for `target_file`, offered as its own download.
+    pub(super) fn ui_drafter_offer_for(&mut self, ui: &mut egui::Ui, target_file: &str) {
         if self.ui_download_progress(ui) {
             return;
         }
-        let Some(d) = ld::offer(&rec.file, &drafters_dir()) else {
+        let Some(d) = ld::offer(target_file, &drafters_dir()) else {
             return;
         };
         crate::cards::settings_note(ui, &drafter_offer_line(d));
@@ -342,11 +348,19 @@ impl Cabin {
                 d.name,
                 md::progress_line(b, Some(d.download_mb * MIB))
             ),
-            None => format!("Download draft model ({})", ls::size_label(d.download_mb)),
+            None => format!(
+                "Install and run draft model ({})",
+                ls::size_label(d.download_mb)
+            ),
         };
         if crate::cards::ghost_pill(ui, &label) {
             self.start_model_download_with(d, drafters_dir(), Box::new(HfFetch));
         }
+    }
+
+    /// The installed model's draft model, offered as its own download.
+    fn ui_drafter_offer(&mut self, ui: &mut egui::Ui, rec: &Installed) {
+        self.ui_drafter_offer_for(ui, &rec.file);
     }
 
     fn ui_installed_note(&self, ui: &mut egui::Ui, rec: &Installed) {
@@ -495,7 +509,7 @@ mod tests {
         assert!(app.setup.dl.is_none(), "the download never finished");
         assert_eq!(
             app.status,
-            "Downloaded Gemma 4 E2B as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does."
+            "Downloaded Gemma 4 E2B as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On)."
         );
         assert_eq!(
             app.setup.installed,

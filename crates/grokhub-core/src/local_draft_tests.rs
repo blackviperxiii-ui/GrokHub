@@ -301,3 +301,17 @@ fn a_drafter_is_offered_until_it_is_downloaded() {
     assert_eq!(offer("gemma-4-26B-A4B-it-Q4_K_M.gguf", &dir), None);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn muse_offers_its_dflash_drafter_until_that_file_is_on_disk() {
+    let dir = std::env::temp_dir().join(format!("grokhub-muse-drafters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let muse = crate::local_setup::model_by_id("muse-glimmer-30b-q4_k_m").expect("muse");
+    let dflash = crate::local_setup::model_by_id("muse-glimmer-30b-dflash-q4_k_m").expect("dflash");
+    assert_eq!(offer(muse.file, &dir).map(|m| m.id), Some(dflash.id));
+    assert_eq!(offer(dflash.file, &dir), None);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(dflash.file), b"x").unwrap();
+    assert_eq!(offer(muse.file, &dir), None);
+    let _ = std::fs::remove_dir_all(dir);
+}
