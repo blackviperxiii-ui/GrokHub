@@ -663,6 +663,8 @@ impl Cabin {
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
+        self.cfg.personality = "viper".into();
+        self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
     }

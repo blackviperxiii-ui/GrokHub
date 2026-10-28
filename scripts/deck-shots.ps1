@@ -101,6 +101,7 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
     }
     Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
     $app.currentThread = $id
+    if (-not $app.personality) { $app.personality = 'viper' }
 }
 
 # Pulse with real cards: four ideas (Up next) and three feed cards, so the
@@ -177,6 +178,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if (-not $app.personality) { $app.personality = 'viper' }
     Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root

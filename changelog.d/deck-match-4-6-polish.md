@@ -1,0 +1,1 @@
+- Deck shots hide the signed-out auth strip, pin Personality to Viper in throwaway config, and refresh Hangout/Pulse proof pairs after CI.
