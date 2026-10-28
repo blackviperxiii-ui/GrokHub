@@ -182,6 +182,21 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
+# after launch, since the first scan only marks what is already there.
+function Write-ModelDrop([string]$root) {
+    $v = @(@(0,0,0), @(60,0,0), @(60,20,0), @(0,20,0), @(0,0,40), @(60,0,40), @(60,20,40), @(0,20,40))
+    $faces = @(@(0,2,1), @(0,3,2), @(4,5,6), @(4,6,7), @(0,1,5), @(0,5,4), @(2,3,7), @(2,7,6), @(1,2,6), @(1,6,5), @(0,4,7), @(0,7,3))
+    $lines = @('solid bracket')
+    foreach ($f in $faces) {
+        $lines += '  facet normal 0 0 0', '    outer loop'
+        foreach ($i in $f) { $lines += "      vertex $($v[$i][0]) $($v[$i][1]) $($v[$i][2])" }
+        $lines += '    endloop', '  endfacet'
+    }
+    $lines += 'endsolid bracket'
+    Write-Utf8 (Join-Path $root 'Downloads\bracket.stl') ($lines -join "`n")
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -201,7 +216,7 @@ function Seed-Pulse([string]$cfg) {
 # $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
 # home, pulse or library) instead of a rail click; the cabin closes the
 # seeded Activity list over every pinned page.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -220,6 +235,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($modelDrop) {
+        $app.modelDrop = $true
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -262,6 +281,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($modelDrop) {
+        # Downloads is listed every 20 s; the next scan finds the new file.
+        Write-ModelDrop $root
+        Start-Sleep -Seconds 28
+    }
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
