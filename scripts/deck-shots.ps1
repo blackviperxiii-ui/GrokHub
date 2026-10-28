@@ -170,7 +170,7 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -200,6 +200,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:LOCALAPPDATA = Join-Path $root 'LocalAppData'
     $env:GROKHUB_RENDERER = 'wgpu'
     $env:GROKHUB_DECK_SHOT = '1'
+    if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
+    if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
@@ -316,6 +318,11 @@ Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -clickAt 20, 695
 Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
+# Chat tabs HARD DONE: 3 tabs (readable) and 18 tabs with overflow menu open.
+Shot 1600 900 'chattabs-3-1600x900' 'ops-dark' '02' -dock -tabs 3
+Shot 1100 720 'chattabs-3-1100x720' 'ops-dark' '02' -dock -tabs 3
+Shot 1600 900 'chattabs-overflow-1600x900' 'ops-dark' '02' -dock -tabs 18 -overflow
+Shot 1100 720 'chattabs-overflow-1100x720' 'ops-dark' '02' -dock -tabs 18 -overflow
 Shot 1600 900 'pulse-1600x900' 'ops-dark' '14' -pulse
 Shot 1100 720 'pulse-1100x720' 'ops-dark' '14' -pulse
 # Deck-match 6 proof: same Pulse page beside slides 13 (loadout style) and 15

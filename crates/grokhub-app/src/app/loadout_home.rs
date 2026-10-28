@@ -531,6 +531,21 @@ fn deck_shot_env() -> bool {
     })
 }
 
+/// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
+pub(super) fn deck_tab_count() -> Option<usize> {
+    std::env::var("GROKHUB_DECK_TABS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 3)
+}
+
+/// When set, the tab strip paints the overflow menu open for HARD DONE shots.
+pub(super) fn deck_overflow_open() -> bool {
+    std::env::var("GROKHUB_DECK_OVERFLOW")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Slide 02 Hangout: quick replies above the composer (not Connect / Start here).
 pub(super) fn hangout_quick_chips() -> Vec<QuickChip> {
     [
@@ -673,6 +688,38 @@ impl Cabin {
             false,
             now.saturating_sub(30_000),
         );
+        // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
+        let want = deck_tab_count().unwrap_or(3).max(3);
+        let extras = [
+            ("deck-duo", "Duo finder"),
+            ("deck-stutter", "Fix stutter"),
+            ("deck-fans", "Fan curve"),
+            ("deck-shaders", "Shader cache"),
+            ("deck-rank", "Rank climb"),
+            ("deck-patch", "Season patch"),
+            ("deck-aim", "Aim routine"),
+            ("deck-warmup", "Warm up range"),
+            ("deck-build", "Roast build"),
+            ("deck-backlog", "Backlog sort"),
+            ("deck-gpu", "GPU drivers"),
+            ("deck-queue", "Queue night"),
+            ("deck-voip", "Voip check"),
+            ("deck-map", "Map pool"),
+            ("deck-scrim", "Scrim notes"),
+            ("deck-perk", "Perk loadout"),
+        ];
+        for (n, (id, title)) in extras.iter().enumerate() {
+            // Hangout + Weekend + Driver already planted → total so far is 3.
+            if 3 + n >= want {
+                break;
+            }
+            self.ensure_deck_extra_tab(
+                id,
+                title,
+                false,
+                now.saturating_sub(90_000 + n as u64 * 1_000),
+            );
+        }
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();

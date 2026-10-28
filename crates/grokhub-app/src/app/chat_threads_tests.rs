@@ -179,15 +179,18 @@ fn rail_footer_is_reserved() {
 fn rail_chat_title_stays_short() {
     assert_eq!(
         grokhub_core::display_tab_title("chowder and food interest and cho"),
-        "chowder"
+        "chowder food interest cho"
     );
     with_fonts_ui(|ui| {
         let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
         assert!(
-            painted.chars().count() < 20,
-            "rail label must not run off the pill: {painted}"
+            painted.chars().count() <= grokhub_core::AUTO_TITLE_MAX,
+            "rail label must not run past the tab title cap: {painted}"
         );
-        assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+        assert!(
+            painted.contains('…') || painted.starts_with("chowder"),
+            "{painted}"
+        );
     });
 }
 

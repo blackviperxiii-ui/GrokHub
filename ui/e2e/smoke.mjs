@@ -480,7 +480,7 @@ async function pulse(s, config) {
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
+    value: "//div[@aria-label='Pulse view']/button[normalize-space()='For You']",
   });
   await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
   // The idea writer ran after the feed post: its idea leads, with no header.

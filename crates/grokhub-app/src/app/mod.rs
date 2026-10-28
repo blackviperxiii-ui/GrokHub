@@ -5385,7 +5385,7 @@ impl eframe::App for Cabin {
             } else {
                 match self.page_nav() {
                     Nav::Chat => {
-                        self.paint_native_badge(ui);
+                        self.sync_native_usage(ui);
                         self.ui_loadout_dock(ui);
                         self.ui_chat(ui);
                     }

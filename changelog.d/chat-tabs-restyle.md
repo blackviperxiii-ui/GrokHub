@@ -1,0 +1,1 @@
+- Restyle chat tabs to even-fit widths with an overflow menu (no scroll bar), short context titles, close-on-hover, and remove the native usage/pool status bar.
