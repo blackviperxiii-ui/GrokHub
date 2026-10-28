@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use grokhub_core::local_profile::{LocalProfile, Thermal};
 use grokhub_core::mission::{MissionCheckItem, MissionCheckStatus, MissionView};
-use grokhub_core::{UpdateCard, UpdateStatus};
+use grokhub_core::{ChipKind, QuickChip, UpdateCard, UpdateStatus};
 
 use super::*;
 
@@ -513,7 +513,159 @@ fn paint_wave(ui: &mut egui::Ui, live: bool) {
     }
 }
 
+/// Cabin thread id for Windows deck shots (`scripts/deck-shots.ps1`).
+pub(crate) const DECK_THREAD_ID: &str = "deck-hangout";
+
+/// Windows deck screenshots (`scripts/deck-shots.ps1`) set `GROKHUB_DECK_SHOT=1`;
+/// mood shots may also set `GROKHUB_DECK_MOOD`.
+pub(super) fn deck_shot_requested() -> bool {
+    deck_shot_env() || pinned_mood().is_some()
+}
+
+fn deck_shot_env() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("GROKHUB_DECK_SHOT")
+            .ok()
+            .is_some_and(|v| v.trim() == "1")
+    })
+}
+
+/// Slide 02 Hangout: quick replies above the composer (not Connect / Start here).
+pub(super) fn hangout_quick_chips() -> Vec<QuickChip> {
+    [
+        "Plan my weekend",
+        "Roast my build",
+        "Find a duo",
+        "Fix my stutter",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, label)| QuickChip {
+        id: format!("hangout-deck-{i}"),
+        label: label.to_string(),
+        value: label.to_string(),
+        kind: ChipKind::Chat,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    })
+    .collect()
+}
+
+/// Loadout Hangout with a transcript: slide 02 composer stack (chips above the pill, no mode row).
+pub(super) fn hangout_composer_layout(messages_empty: bool) -> bool {
+    crate::theme::is_loadout_paint() && !messages_empty
+}
+
+fn deck_transcript() -> Vec<(String, String)> {
+    vec![
+        (
+            "user".into(),
+            "yo, what are we running tonight?".into(),
+        ),
+        (
+            "assistant".into(),
+            "Diamond climb. You're 3 wins off — want a warm-up in the range, or I queue the duo finder?"
+                .into(),
+        ),
+        (
+            "user".into(),
+            "queue the duo and fix my stutter first".into(),
+        ),
+        (
+            "assistant".into(),
+            "On it. I'll clear the shader cache, then find you a Diamond duo for tonight.".into(),
+        ),
+    ]
+}
+
+fn ensure_deck_session_file() {
+    let path = crate::config::config_dir()
+        .join("sessions")
+        .join(format!("{DECK_THREAD_ID}.jsonl"));
+    if path.exists() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = now_ms();
+    let steps = [
+        "Diamond, 3 wins left",
+        "Aim routine 12/20",
+        "Warm up in the range",
+        "Review last match",
+        "Pick a duo for tonight",
+    ];
+    let todos: Vec<serde_json::Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, content)| {
+            serde_json::json!({
+                "id": (i + 1).to_string(),
+                "content": content,
+                "status": if i == 0 { "in_progress" } else { "pending" }
+            })
+        })
+        .collect();
+    let header = serde_json::json!({
+        "id": DECK_THREAD_ID,
+        "title": "Hangout",
+        "created": now,
+        "cwd": ".",
+        "model": "grok",
+        "engine": "native",
+        "renamed": false
+    });
+    let call = serde_json::json!({
+        "type": "function_call",
+        "call_id": "c1",
+        "name": "todo_write",
+        "arguments": serde_json::json!({ "todos": todos }).to_string()
+    });
+    let body = format!(
+        "{}\n{}\n",
+        serde_json::to_string(&header).unwrap_or_default(),
+        serde_json::to_string(&call).unwrap_or_default()
+    );
+    let _ = crate::config::atomic_write(&path, body.as_bytes());
+}
+
 impl Cabin {
+    /// After `open_fresh_home`, put the Hangout demo transcript back for deck shots only.
+    pub(super) fn apply_deck_shot_seed(&mut self) {
+        if !deck_shot_requested() {
+            return;
+        }
+        ensure_deck_session_file();
+        let transcript = Arc::new(deck_transcript());
+        let now = now_ms();
+        if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
+            self.thread_idx = i;
+        } else {
+            let mut t = ChatThread::new("Hangout", false);
+            t.id = DECK_THREAD_ID.to_string();
+            t.native = true;
+            t.grok_session = Some(DECK_THREAD_ID.to_string());
+            self.threads.push(t);
+            self.thread_idx = self.threads.len() - 1;
+        }
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.title = "Hangout".into();
+            t.native = true;
+            t.grok_session = Some(DECK_THREAD_ID.to_string());
+            t.grok_show_pending = false;
+            t.messages = transcript.clone();
+            t.accessed_ms = now;
+            t.last_active_ms = now;
+        }
+        self.messages = transcript;
+        self.cfg.current_thread = DECK_THREAD_ID.to_string();
+        self.visible_chips = hangout_quick_chips();
+        self.pin_chat_tail();
+    }
+
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
     /// and its composer take the space that's left.
     pub(super) fn ui_loadout_dock(&mut self, ui: &mut egui::Ui) {
@@ -1112,6 +1264,52 @@ mod tests {
         assert_eq!(grouped(2350), "2,350");
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1_000_000), "1,000,000");
+    }
+
+    #[test]
+    fn deck_shot_seed_restores_hangout_after_fresh_home() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::remove_var("GROKHUB_DECK_MOOD");
+        let transcript = deck_transcript();
+        let mut seeded = ChatThread::new("Hangout", false);
+        seeded.id = DECK_THREAD_ID.to_string();
+        seeded.messages = Arc::new(transcript.clone());
+        let mut cabin = Cabin::quiet_cabin(vec![seeded], 0);
+        cabin.messages = Arc::new(transcript);
+        cabin.open_fresh_home();
+        assert!(
+            cabin.messages.is_empty(),
+            "fresh home clears a transcript before the deck seed runs"
+        );
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.messages.len(), 4);
+        assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        assert_eq!(
+            cabin
+                .composer_chips()
+                .iter()
+                .map(|c| c.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Plan my weekend",
+                "Roast my build",
+                "Find a duo",
+                "Fix my stutter"
+            ]
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_mood {
+            Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
+            None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
     }
 
     #[test]

@@ -527,6 +527,9 @@ impl Cabin {
     /// (habit / static / stage pool when the LLM row is not ready). A thread
     /// with messages must not clear that pool.
     pub(super) fn composer_chips(&self) -> Vec<QuickChip> {
+        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
+            return super::loadout_home::hangout_quick_chips();
+        }
         let mut chips = self.visible_chips.clone();
         if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
             let gone = grokhub_core::chip_dismissed_for_good(&self.chip_memory, &c)
