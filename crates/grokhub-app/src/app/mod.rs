@@ -158,6 +158,7 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
 mod diagnostics_ui;
 mod dock_ui;
 mod episode_ui;
@@ -3512,7 +3513,10 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => self.tick_housekeep(),
+                HeartbeatAct::Housekeep => {
+                    self.tick_housekeep();
+                    self.tick_day_brief();
+                }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),

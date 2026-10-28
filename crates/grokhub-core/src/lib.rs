@@ -64,6 +64,7 @@ pub mod imagine;
 pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
 pub mod ask_offers;
+pub mod day_brief;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
