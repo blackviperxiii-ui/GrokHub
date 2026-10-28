@@ -66,4 +66,7 @@ tier = "risky"
 name = "Delete files or folders the change no longer needs"
 
 [[phase.step]]
+name = "Before ship or release: load qa-walkthrough (and av-qa-walkthrough when audio, video, capture or streaming changed); before done run a verification step; multi-step work keeps follow-through"
+
+[[phase.step]]
 name = "Push, publish or deploy the change"
