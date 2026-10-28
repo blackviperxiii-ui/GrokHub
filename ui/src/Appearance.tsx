@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { setTheme, type Theme } from "./api";
+import { PRODUCT_NAME } from "./brand";
 import { applyTheme } from "./theme";
 
-export const APPEARANCE_NOTE = "System follows your computer. Ops Dark, OLED Black and Soft Charcoal match the Loadout cabin.";
+export const APPEARANCE_NOTE = `System follows your computer. Ops Dark, OLED Black and Soft Charcoal match the ${PRODUCT_NAME} cabin.`;
 
 const CHOICES: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
