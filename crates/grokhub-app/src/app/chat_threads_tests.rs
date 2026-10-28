@@ -723,12 +723,13 @@ fn delete_thread_at_removes_that_row() {
     );
     let listed = crate::threads::chat_section_indices(&cabin.threads, None, false);
     assert!(
-        listed
-            .iter()
-            .all(|&i| cabin.threads[i].title != "Harbor"),
+        listed.iter().all(|&i| cabin.threads[i].title != "Harbor"),
         "Harbor must leave the tab strip / History list"
     );
-    assert!(cabin.threads.iter().any(|t| t.title == keep && !crate::threads::is_deleted(t)));
+    assert!(cabin
+        .threads
+        .iter()
+        .any(|t| t.title == keep && !crate::threads::is_deleted(t)));
     assert_eq!(cabin.status, "Deleted Harbor");
     quiet.settle();
 }

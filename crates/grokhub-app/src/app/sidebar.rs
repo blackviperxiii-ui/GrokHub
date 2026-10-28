@@ -17,7 +17,6 @@ fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
     );
 }
 
-
 /// Palette shortcut hint shared by the chat tab strip Search row.
 pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
 
@@ -664,14 +663,8 @@ impl Cabin {
         ui.horizontal(|ui| {
             rail_section_caption(ui, RichText::new("Projects"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let plus = crate::theme::felt_icon_hit(
-                    ui,
-                    "+",
-                    22.0,
-                    crate::theme::muted(),
-                    16.0,
-                )
-                .on_hover_text("New folder");
+                let plus = crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
+                    .on_hover_text("New folder");
                 if plus.clicked() {
                     self.stage_new_folder();
                 }

@@ -70,14 +70,9 @@ impl Cabin {
                             });
                         });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let tools = RichText::new("⋯")
-                            .size(16.0)
-                            .color(crate::theme::muted());
+                        let tools = RichText::new("⋯").size(16.0).color(crate::theme::muted());
                         ui.menu_button(tools, |ui| {
-                            if ui
-                                .button(format!("Search ({SEARCH_KEY_HINT})"))
-                                .clicked()
-                            {
+                            if ui.button(format!("Search ({SEARCH_KEY_HINT})")).clicked() {
                                 open_search = true;
                                 ui.close();
                             }
@@ -243,9 +238,7 @@ impl Cabin {
         };
         resp.context_menu(|ui| fill_menu(ui, &mut act));
         ui.menu_button(
-            RichText::new("⋯")
-                .size(14.0)
-                .color(crate::theme::muted()),
+            RichText::new("⋯").size(14.0).color(crate::theme::muted()),
             |ui| fill_menu(ui, &mut act),
         )
         .response

@@ -351,11 +351,8 @@ impl Cabin {
     /// After soft-delete of the open chat: switch to another live tab or open a draft.
     fn land_after_soft_delete(&mut self) {
         let live_empty = self.messages.is_empty();
-        let listed = threads::chat_section_indices(
-            &self.threads,
-            Some(self.thread_idx),
-            live_empty,
-        );
+        let listed =
+            threads::chat_section_indices(&self.threads, Some(self.thread_idx), live_empty);
         let next = {
             let keys: Vec<threads::SessionSortKey> = listed
                 .iter()

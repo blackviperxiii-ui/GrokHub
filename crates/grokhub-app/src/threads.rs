@@ -2340,10 +2340,7 @@ mod tests {
         assert_eq!(purged.len(), 1);
         assert_eq!(purged[0].title, "Old trash");
         assert_eq!(
-            threads
-                .iter()
-                .map(|t| t.title.as_str())
-                .collect::<Vec<_>>(),
+            threads.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
             ["Live", "Fresh trash"]
         );
         assert!(is_deleted(&threads[1]));

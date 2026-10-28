@@ -1245,7 +1245,6 @@ pub fn glide_candidate(
     });
 }
 
-
 /// True when `rect` is the row the glide treats as selected this frame (the
 /// first selected candidate in `group`).
 pub fn glide_selected_is(ui: &egui::Ui, group: &str, rect: egui::Rect) -> bool {

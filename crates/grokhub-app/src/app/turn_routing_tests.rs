@@ -535,7 +535,8 @@ fn chat_side_effects_keep_the_origin_thread() {
     );
     let deleted = fn_src(&src, "delete_thread_at");
     assert!(
-        deleted.contains("land_after_soft_delete") || deleted.contains("drop_leaving_thread_chrome"),
+        deleted.contains("land_after_soft_delete")
+            || deleted.contains("drop_leaving_thread_chrome"),
         "deleting the visible tab must drop plus-attach and followup budget: {deleted}"
     );
     let land = fn_src(&src, "land_after_soft_delete");
