@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail-closed regression tests for scripts/ci-guards.sh.
+# Fail-closed regression tests for scripts/ci-guards.sh and scripts/ci-guards.d/.
 # Builds a throwaway origin + clone, runs the guard script in PR mode against
 # crafted bad inputs, and asserts it exits non-zero (never skip-passes).
 set -euo pipefail
@@ -23,6 +23,7 @@ chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 W="$TMP/work"
 mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
+cp -r "$SRC/scripts/ci-guards.d" "$W/scripts/ci-guards.d"
 for f in crates/grokhub-app/src/app/mod.rs crates/grokhub-app/src/cards.rs \
   crates/grokhub-core/src/slash/mod.rs crates/grokhub-app/src/app/tests.rs \
   crates/grokhub-app/src/app/persist.rs crates/grokhub-app/src/app/projects.rs \
@@ -123,6 +124,12 @@ fresh_pr
 rm "$W/crates/grokhub-app/src/app/persist.rs"
 commit_pr
 run_guard fail "missing raw-io guarded file fails"
+
+# A missing guard directory must fail, never pass with zero guards.
+fresh_pr
+mv "$W/scripts/ci-guards.d" "$TMP/guards.bak"
+run_guard fail "empty guard directory fails"
+mv "$TMP/guards.bak" "$W/scripts/ci-guards.d"
 
 fresh_pr
 "$REAL_GIT" -C "$W" remote remove origin
