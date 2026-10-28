@@ -54,10 +54,15 @@ pub(super) struct PickerState {
 /// showing, since a click inside Settings is too fragile on the runner.
 const DECK_AGE_CHECK_ENV: &str = "GROKHUB_DECK_AGE_CHECK";
 
+/// The 18+ check deck shot is running.
+pub(super) fn deck_age_check() -> bool {
+    std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1")
+}
+
 /// The picker a window starts with: the 18+ row only for that deck shot.
 pub(super) fn first_picker() -> PickerState {
     PickerState {
-        age_check: std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1"),
+        age_check: deck_age_check(),
         ..Default::default()
     }
 }

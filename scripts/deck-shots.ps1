@@ -170,7 +170,9 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$chat = '', [switch]$ageCheck) {
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
+# Pulse rail click, and closes the seeded Activity list over the page.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$chat = '', [switch]$ageCheck, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -203,6 +205,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     $env:GROKHUB_DECK_CHAT = $chat
@@ -231,7 +234,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
-    if ($pulse) {
+    if ($pulse -and -not $nav) {
         # Pulse is the fourth icon on the 40 px rail, at every window size.
         [void][DeckWin]::SetForegroundWindow($hwnd)
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
@@ -372,9 +375,9 @@ Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'defau
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
 # Playbooks 8: the one-time 18+ check, opened on Settings -> Personality with
-# adults-only still off.
-Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -clickAt 20, 875
-Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -clickAt 20, 695
+# adults-only still off. -nav opens Settings at launch; the gear click missed.
+Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
+Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m

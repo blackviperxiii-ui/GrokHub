@@ -546,6 +546,15 @@ pub(super) fn deck_overflow_open() -> bool {
         .unwrap_or(false)
 }
 
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
+/// so the shot never depends on a synthetic click landing on the rail.
+fn deck_nav() -> Option<String> {
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
 /// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
 pub(super) fn deck_last_chat_mode() -> Option<String> {
     std::env::var("GROKHUB_DECK_LAST_CHAT")
@@ -763,10 +772,13 @@ impl Cabin {
         self.cfg.last_chat_tab = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         // Viper is an adults-only preset; without this gate the titlebar falls
-        // back to Nyx and HARD DONE shots look wrong.
-        self.cfg.explicit_personalities = true;
-        self.cfg.adult_confirmed = true;
-        self.cfg.personality = "viper".into();
+        // back to Nyx and HARD DONE shots look wrong. The 18+ check shot keeps
+        // adults-only off and Nyx on, as app.json seeds them.
+        if !super::personality_ui::deck_age_check() {
+            self.cfg.explicit_personalities = true;
+            self.cfg.adult_confirmed = true;
+            self.cfg.personality = "viper".into();
+        }
         self.persist_cfg();
         self.pin_chat_tail();
         // The joke chat shows the whole exchange, with no popover or Ask over it.
@@ -782,6 +794,11 @@ impl Cabin {
                 self.nav = Nav::Chat;
             }
             _ => {}
+        }
+        if let Some(id) = deck_nav() {
+            // The seeded Activity list would cover the page's top right.
+            self.activity.open = false;
+            self.set_nav_id(&id);
         }
     }
 
@@ -1506,6 +1523,60 @@ mod tests {
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn a_deck_shot_opens_the_pinned_rail_page_with_activity_closed() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", " Pulse ");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Pulse);
+        assert_eq!(cabin.nav_id(), "pulse");
+        assert!(!cabin.activity.open);
+        std::env::remove_var("GROKHUB_DECK_NAV");
+        cabin.apply_deck_shot_seed();
+        assert!(
+            cabin.activity.open,
+            "without a pinned page the list stays open"
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        if let Some(v) = prev_nav {
+            std::env::set_var("GROKHUB_DECK_NAV", v);
+        }
+    }
+
+    #[test]
+    fn the_age_check_deck_shot_opens_settings_with_adults_only_still_off() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "settings");
+        std::env::set_var("GROKHUB_DECK_AGE_CHECK", "1");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.personality = "nyx".into();
+        cabin.cfg.explicit_personalities = false;
+        cabin.cfg.adult_confirmed = false;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Settings);
+        assert_eq!(cabin.cfg.personality, "nyx");
+        assert!(!cabin.cfg.explicit_personalities);
+        assert!(!cabin.cfg.adult_confirmed);
+        std::env::remove_var("GROKHUB_DECK_AGE_CHECK");
+        std::env::remove_var("GROKHUB_DECK_NAV");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.cfg.personality, "viper", "other shots still pin Viper");
+        assert!(cabin.cfg.explicit_personalities);
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
     }
 
