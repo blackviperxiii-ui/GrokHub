@@ -45,10 +45,11 @@ fn periodic_persist_leaves_the_ui_thread() {
     let house = include_str!("heartbeat_gate.rs");
     assert!(
         house.contains("fn tick_housekeep(")
+            && house.contains("housekeep_rhythm_and_recap(")
             && house.contains("persist_bg(")
             && house.contains("tick_print_alerts(")
             && !house.contains("self.persist()"),
-        "tick_housekeep must persist off-thread and poll print alerts: {house}"
+        "tick_housekeep must retain rhythm/recap, persist off-thread and poll print alerts: {house}"
     );
     let paint = src
         .split("self.flush_window(ctx)")

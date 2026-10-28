@@ -123,11 +123,9 @@ impl Cabin {
         self.write_pace_span(act.as_str(), if acted { "allow" } else { "hold" }, reason);
     }
 
-    /// Local upkeep on the Housekeep slot: rhythm, print alerts, persist.
+    /// Local upkeep on the Housekeep slot: rhythm, recap, print alerts, persist.
     pub(super) fn tick_housekeep(&mut self) {
-        self.roll_today();
-        self.release_situation_ping();
-        self.note_rhythm();
+        self.housekeep_rhythm_and_recap();
         self.tick_print_alerts();
         if self.last_persist.elapsed() > std::time::Duration::from_secs(2) {
             self.persist_bg();

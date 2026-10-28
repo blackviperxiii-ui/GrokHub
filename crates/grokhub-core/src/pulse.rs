@@ -53,6 +53,9 @@ pub struct PulseMeta {
     /// LAN 3D printer alert (Command Centre card 60).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print_alert: Option<crate::print_alerts::PrintAlertMeta>,
+    /// Bite-sized hobby learning-path tip (Know me opt-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hobby_path: Option<crate::hobby_paths::HobbyPathMeta>,
 }
 
 fn is_zero(n: &u64) -> bool {
