@@ -1889,7 +1889,7 @@ mod tests {
         assert!(src.contains("pinned_settings_sec"));
         assert!(src.contains("settings_modal_size"));
         assert!(src.contains("settings_page_rect"));
-        let shots = include_str!("../../../../scripts/deck-shots.ps1");
+        let shots = include_str!("../../../../scripts/deck-shots.list.ps1");
         assert!(shots.contains("-pinPersonality") || shots.contains("-personality"));
         assert!(shots.contains("personality-1600x900"));
         assert!(shots.contains("personality-1100x720"));
