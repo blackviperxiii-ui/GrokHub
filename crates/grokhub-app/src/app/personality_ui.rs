@@ -29,7 +29,9 @@ const DETAIL_W: f32 = 320.0;
 /// Below this the detail panel stacks under the grid.
 const TWO_COL_MIN_W: f32 = 640.0;
 const GRID_GAP: f32 = 10.0;
-const CARD_MIN_W: f32 = 140.0;
+/// Wide enough that no word in a built-in name ("Lawyer-precise",
+/// "Shakespearean") breaks mid-word beside the letter tile.
+const CARD_MIN_W: f32 = 170.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
 /// Kept for optional photo embed rebuilds when real art lands.
@@ -973,8 +975,8 @@ fn paint_grid_card(
             egui::Stroke::new(1.0, crate::theme::border()),
         )
     };
-    // 24 px of margin and the 1 px stroke on each side.
-    let inner_w = (width - 26.0).max(64.0);
+    // 24 px of margin and the stroke on each side.
+    let inner_w = (width - 24.0 - 2.0 * stroke.width).max(64.0);
     // Allocate a fixed-width top-down child: the grid row is horizontal_top, and
     // a plain scope/Frame inherits that so a wrapped description sits in a
     // 1-char leftover beside the title.
@@ -1055,7 +1057,8 @@ fn paint_detail_panel(
             egui::Stroke::new(1.5, crate::theme::fg()),
         )
     };
-    let inner_w = (width - 32.0).max(140.0);
+    // 32 px of margin and the stroke on each side, or the right rim is clipped.
+    let inner_w = (width - 32.0 - 2.0 * stroke.width).max(140.0);
     egui::Frame::NONE
         .fill(fill)
         .corner_radius(if loadout {
@@ -1608,6 +1611,40 @@ mod tests {
     }
 
     #[test]
+    fn no_built_in_name_breaks_mid_word_on_the_narrowest_card() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        // Name column: card minus margins, a 2 px stroke each side, the tile and its gap.
+        let room = CARD_MIN_W - 24.0 - 4.0 - 36.0;
+        let mut widest = (String::new(), 0.0_f32);
+        let raw = egui::RawInput::default();
+        crate::theme::test_pass(&ctx, raw, |ui| {
+            for p in personality::builtins() {
+                for word in p.name.split_whitespace() {
+                    let w = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(
+                            word.to_string(),
+                            egui::FontId::proportional(crate::theme::FONT_BODY),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                    });
+                    if w > widest.1 {
+                        widest = (word.to_string(), w);
+                    }
+                }
+            }
+        });
+        assert!(
+            widest.1 <= room,
+            "\"{}\" is {} px; the name column has {room}",
+            widest.0,
+            widest.1
+        );
+    }
+
+    #[test]
     fn a_grid_card_wraps_its_line_inside_its_width() {
         // In a grid row the card used to lay its line out beside the name, unwrapped,
         // and push the row past the Settings panel at 1100x720.
@@ -1642,8 +1679,9 @@ mod tests {
     #[test]
     fn grid_cols_cap_at_four_and_need_room_for_each() {
         assert_eq!(grid_cols(100.0), 1);
-        assert_eq!(grid_cols(300.0), 2);
-        assert_eq!(grid_cols(460.0), 3);
+        assert_eq!(grid_cols(349.0), 1);
+        assert_eq!(grid_cols(350.0), 2);
+        assert_eq!(grid_cols(530.0), 3);
         assert_eq!(grid_cols(900.0), 4);
         assert_eq!(grid_cols(2000.0), 4);
     }
