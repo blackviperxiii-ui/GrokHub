@@ -1461,6 +1461,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest: Frontier",
     ));
     rows.push((
+        "post_companion",
+        grokhub_core::game_companion::Companion {
+            game: grokhub_core::steam::SteamGame {
+                app_id: 7,
+                name: "Fake Quest".into(),
+                last_played: 1,
+                playtime_min: 60,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        }
+        .companion_card(now),
+        "Fake Quest",
+    ));
+    rows.push((
         "finish_local_models",
         grokhub_core::local_model_news::Suggestion::Release {
             repo: "ggml-org/Qwen3-14B-GGUF".into(),

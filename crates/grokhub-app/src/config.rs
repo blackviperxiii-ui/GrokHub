@@ -428,6 +428,12 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: the game launch companion card. Off by default.
+    #[serde(default)]
+    pub game_companion: bool,
+    /// Also a quiet desktop notification when the companion card posts.
+    #[serde(default)]
+    pub game_companion_ping: bool,
     /// Settings → Behavior: offer next steps for new 3D models in Downloads.
     /// Off by default.
     #[serde(default)]
@@ -773,6 +779,8 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            game_companion: false,
+            game_companion_ping: false,
             model_drop: false,
             models_folder: String::new(),
             dock_panels: false,

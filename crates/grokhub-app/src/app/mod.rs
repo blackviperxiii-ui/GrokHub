@@ -158,6 +158,7 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
 mod diagnostics_ui;
 mod dock_ui;
 mod episode_ui;
@@ -166,6 +167,7 @@ mod feed_ui;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
+mod game_companion_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -3513,7 +3515,10 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => self.tick_housekeep(),
+                HeartbeatAct::Housekeep => {
+                    self.tick_housekeep();
+                    self.tick_day_brief();
+                }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),
@@ -5420,6 +5425,7 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.paint_focus_overlays(&ctx);
         self.tick_setup_wizard();
         self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);

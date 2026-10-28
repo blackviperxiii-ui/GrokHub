@@ -5326,6 +5326,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::release_radar::out_today_card(9, &reminder, at),
             "Fake Quest: Frontier",
         ));
+        let companion = crate::game_companion::Companion {
+            game: crate::steam::SteamGame {
+                app_id: 548430,
+                name: "Deep Rock Galactic".into(),
+                last_played: 1,
+                playtime_min: 600,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        };
+        rows.push((
+            "companion_card",
+            companion.companion_card(at),
+            "Deep Rock Galactic",
+        ));
         rows
     }
 

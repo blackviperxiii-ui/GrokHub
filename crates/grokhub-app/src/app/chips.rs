@@ -546,6 +546,7 @@ impl Cabin {
         let mut resume = self.model_chips();
         resume.extend(self.resume_chips());
         resume.extend(self.radar_chips());
+        resume.extend(self.game_chips());
         // A clicked resume chip is remembered and can come back as a plain chip.
         chips.retain(|x| {
             resume
@@ -578,7 +579,7 @@ impl Cabin {
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
         // One-shot chips act here and are not learned: replayed later they would mean nothing.
-        if self.take_radar_chip(&chip) {
+        if self.take_radar_chip(&chip) || self.take_game_chip(&chip) {
             return;
         }
         let hour = Self::chip_hour();
