@@ -16,7 +16,10 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-news-library.toml"),
+    include_str!("../assets/playbooks/gaming-help.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
+    include_str!("../assets/playbooks/build-loadout.toml"),
     include_str!("../assets/playbooks/chat-hangout.toml"),
     include_str!("../assets/playbooks/wind-down.toml"),
 ];
@@ -445,12 +448,15 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
+                "game-news-library",
+                "gaming-help",
                 "game-tuning",
+                "build-loadout",
                 "chat-hangout",
                 "wind-down"
             ]
         );
-        let game = parse(BUILTIN[6]).unwrap();
+        let game = parse(BUILTIN[8]).unwrap();
         assert_eq!(
             (
                 game.fit("task", "gaming", "windows", "calm"),

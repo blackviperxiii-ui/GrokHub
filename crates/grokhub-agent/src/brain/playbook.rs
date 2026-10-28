@@ -331,7 +331,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (9, Source::Shipped, 0)
+            (12, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -364,7 +364,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours),
@@ -387,7 +390,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours)
@@ -453,7 +459,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 10);
+        assert_eq!(all.len(), 13);
         assert_eq!(
             problems,
             vec![
@@ -507,7 +513,7 @@ mod tests {
         );
         assert_eq!(
             id("question", "gaming", "linux").as_deref(),
-            Some("game-tuning")
+            Some("gaming-help")
         );
         // Chat talking about games still gets the hangout playbook.
         assert_eq!(
