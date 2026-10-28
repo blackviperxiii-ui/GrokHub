@@ -55,7 +55,7 @@ pub(super) fn health_settings_sec() -> SettingsSec {
 /// Personality / Behavior / Privacy / Cabin defaults without a fragile click.
 pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
     static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
-    *PIN.get_or_init(|| {
+    super::loadout_home::launch_pin(&PIN, || {
         match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
             .ok()
             .as_deref()

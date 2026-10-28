@@ -274,6 +274,7 @@ impl Cabin {
         }
         self.tick_nudge_watchers();
         self.tick_screenshot_offer();
+        self.tick_hobby_paths();
     }
 
     fn digest_taste(&self) -> Vec<TasteNote> {
