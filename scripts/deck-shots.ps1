@@ -114,15 +114,35 @@ function Seed-Library([string]$root) {
     $steam = Join-Path $root '.steam/steam'
     $secs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $games = @(
-        @(1001, 'Rift Circuit', 5160, 1), @(1006, 'Hollow Peak', 1800, 3), @(1011, 'Starfall Ops', 900, 6),
-        @(1015, 'Iron Tide', 600, 9), @(1020, 'Glass Orbit', 300, 14), @(1025, 'Dustline', 120, 20),
-        @(1030, 'Night Vault', 0, 0), @(1035, 'Echo Front', 0, 0), @(1036, 'Emberfall', 45, 40), @(1041, 'Null Sector', 0, 0)
+        # Real store ids, so the covers are each game's real art from Steam's
+        # CDN. Rift Circuit has no store page and keeps the painted cover.
+        @(1001, 'Rift Circuit', 5160, 1), @(1086940, "Baldur's Gate 3", 1800, 3), @(1245620, 'ELDEN RING', 900, 6),
+        @(730, 'Counter-Strike 2', 600, 9), @(1091500, 'Cyberpunk 2077', 300, 14), @(413150, 'Stardew Valley', 120, 20),
+        @(367520, 'Hollow Knight', 0, 0), @(1145360, 'Hades', 0, 0), @(292030, 'The Witcher 3: Wild Hunt', 45, 40), @(105600, 'Terraria', 0, 0)
     )
     $apps = ''
     foreach ($g in $games) {
         $last = if ($g[3] -gt 0) { $secs - $g[3] * 86400 } else { 0 }
         Write-Utf8 (Join-Path $steam "steamapps/appmanifest_$($g[0]).acf") "`"AppState`"`n{`n`"appid`" `"$($g[0])`"`n`"name`" `"$($g[1])`"`n`"LastPlayed`" `"$last`"`n}`n"
         $apps += "`"$($g[0])`"`n{`n`"LastPlayed`" `"$last`"`n`"Playtime`" `"$($g[2])`"`n}`n"
+    }
+    # Steam keeps each game's art in appcache/librarycache, and Library reads
+    # that first. Fill it from Steam's CDN the way the client does, so the shot
+    # shows real covers even when the CDN is slow for the app on the runner.
+    # A cover that fails here is left to the app's own CDN fetch.
+    $cache = Join-Path $steam 'appcache/librarycache'
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    foreach ($g in $games) {
+        if ($g[0] -eq 1001) { continue }
+        foreach ($file in @('library_600x900.jpg', 'header.jpg')) {
+            $out = Join-Path $cache "$($g[0])_$file"
+            $url = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$($g[0])/$file"
+            $ok = $false
+            for ($try = 0; $try -lt 3 -and -not $ok; $try++) {
+                try { Invoke-WebRequest -Uri $url -OutFile $out -TimeoutSec 20 -UseBasicParsing; $ok = $true } catch { Start-Sleep -Seconds 2 }
+            }
+            Write-Host "cover $($g[0]) ${file}: $(if ($ok) { (Get-Item $out).Length } else { 'failed' })"
+        }
     }
     Write-Utf8 (Join-Path $steam 'userdata/1/config/localconfig.vdf') "`"UserLocalConfigStore`"`n{`n`"Software`"`n{`n`"Valve`"`n{`n`"Steam`"`n{`n`"apps`"`n{`n$apps}`n}`n}`n}`n}`n"
 }
@@ -168,9 +188,11 @@ function Seed-Pulse([string]$cfg) {
 # $personality is the stored pick in app.json ('default' is the preset older
 # builds shipped; load rewrites it to Nyx). $pinPersonality opens Settings →
 # Personality (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit
-# preset selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD); $action pins an ACTION photo set (GROKHUB_DECK_ACTION).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$action = '') {
+# preset selected, for slide 19 shots. $openSettings opens Settings on that
+# section at launch (GROKHUB_DECK_OPEN_SETTINGS), with no click. $mood pins the
+# companion's pose (GROKHUB_DECK_MOOD); $action pins an ACTION photo set
+# (GROKHUB_DECK_ACTION). $libraryPick seeds a Library detail pick.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$action = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -203,10 +225,17 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood -and -not $action) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($action) { $env:GROKHUB_DECK_ACTION = $action } else { Remove-Item Env:GROKHUB_DECK_ACTION -ErrorAction SilentlyContinue }
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
+    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
+    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    # $openSettings opens Settings on that section at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings) { '1' } else { '' })
+    # The Activity popover would cover the Library tiles and the Settings page.
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings) { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -231,9 +260,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
     if ($pulse) {
-        # Pulse is the fourth icon on the 40 px rail, at every window size.
+        # Pulse is the fourth icon on the 40 px rail, at every window size. The chat
+        # tab strip under the titlebar pushes the rail down 37 px.
         [void][DeckWin]::SetForegroundWindow($hwnd)
-        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 218)
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         # Let the click land before the cursor moves: a queued click that lands
@@ -344,29 +374,32 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
-# Library is the fifth icon on the 40 px rail.
-Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
-Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Library is the fifth icon on the 40 px rail, below the chat tab strip.
+Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
+Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
+# Baldur's Gate 3 picked, so the detail header shows its store art too. A
+# synthetic tile click didn't register on the runner, so the seed picks it.
+Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
+Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # Objectives (mission control) is the third icon on the rail.
-Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
-Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
-# Privacy & data is the second entry in the Settings list; the dialog is centred.
-# The gear at the foot of the rail opens Settings; Ctrl+, from SendKeys
-# missed the 1100x720 window.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 410, 246
-Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 160, 156
-# Nyx is the default personality: Settings -> Personality pinned via
-# GROKHUB_DECK_SETTINGS_SEC. Fresh installs pass nyx; upgrades pass the
-# retired 'default' id (cabin load rewrites it to Nyx and keeps it).
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -pinPersonality
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -pinPersonality
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -pinPersonality
-Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -pinPersonality
+Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
+Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
+# Privacy & data is the second entry in the Settings list; open at launch so a
+# click or Ctrl+, never has to land (1600x900 gear can sit below the runner).
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -openSettings 'privacy'
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -openSettings 'privacy'
+# Nyx is the default personality: Settings -> Personality at launch. Fresh
+# installs pass nyx; upgrades pass the retired 'default' id (cabin load
+# rewrites it to Nyx and keeps it).
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -openSettings 'personality'
+Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -openSettings 'personality'
+Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -openSettings 'personality'
+Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -openSettings 'personality'
 # Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
-Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
+Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -keys '^,'
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
 # Companion corner-box: DEFAULT rotation (Nyx deck poses) and an ACTION photo.
 Shot 1600 900 'companion-default-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
