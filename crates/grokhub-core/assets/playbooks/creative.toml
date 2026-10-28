@@ -1,0 +1,38 @@
+# GrokHub playbook: deliver a creative draft, then one short line.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "creative"
+name = "Creative draft"
+summary = "Deliver the draft the user asked for, then one short line about it. No extras."
+
+checklist = ["draft delivered", "one line after"]
+backup = "Nothing is changed on disk unless asked: keep the draft in the reply so it can be revised."
+verify = "The reply is the draft plus one short line after it, and nothing else."
+rollback = "If the draft missed the ask, replace it with a corrected draft and one short line."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["creative"]
+
+[[phase]]
+name = "Draft"
+tier = "read_only"
+
+[[phase.step]]
+name = "Read the ask and any constraints"
+
+[[phase.step]]
+name = "Write the draft the user asked for"
+
+[[phase.step]]
+name = "End with one short line about the draft — nothing else"
