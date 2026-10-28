@@ -394,7 +394,7 @@ impl Cabin {
             ui.add_space(8.0);
             let size = egui::vec2(140.0, 40.0);
             ui.horizontal(|ui| {
-                if crate::ui_kit::recipe::button(ui, None, "TUNE-UP", true, size, true).clicked() {
+                if crate::ui_kit::recipe::button(ui, None, "RUN TUNE-UP", true, size, true).clicked() {
                     self.open_fresh_home();
                     self.composer = "Check this PC and suggest a tune-up.".into();
                 }
