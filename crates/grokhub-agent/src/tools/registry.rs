@@ -490,6 +490,8 @@ mod tests {
     /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask. The deferred
     /// `pulse_steam` index line added 53 to Chat/Agent and background, and the
     /// eager read `know_me_tags` (the agent's only view of Know me) 184.
+    /// Eager `web_search` (OpenRouter / local always see the schema) added 472
+    /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -499,20 +501,20 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_503,
+                10_975,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_503,
+                10_975,
             ),
             ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_323,
+                9_795,
             ),
         ];
         for (label, gate, set, budget) in cases {
@@ -545,6 +547,7 @@ mod tests {
                 "write",
                 "search_replace",
                 "run_terminal_command",
+                "web_search",
                 "todo_write",
                 "ask_user_question",
                 "report_findings",

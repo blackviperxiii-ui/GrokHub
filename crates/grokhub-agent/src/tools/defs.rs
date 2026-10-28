@@ -6,7 +6,7 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, list_dir, local_ai, media, read_file,
-    search_replace, shell, show_panel, web_fetch, write,
+    search_replace, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -119,7 +119,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 20] = [
+    static DEFS: [ToolDef; 21] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -153,6 +153,15 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Fetch a public URL",
             defer: true,
             schema: web_fetch::schema,
+            visible: not_readonly,
+        },
+        ToolDef {
+            // Eager so OpenRouter / local always see the schema (research playbook
+            // names web_search; deferred would need load_tool_schema first).
+            name: "web_search",
+            blurb: "Search the public web (free by default)",
+            defer: false,
+            schema: web_search::schema,
             visible: not_readonly,
         },
         ToolDef {
