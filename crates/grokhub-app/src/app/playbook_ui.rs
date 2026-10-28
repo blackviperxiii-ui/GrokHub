@@ -288,7 +288,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 8);
+        assert_eq!(cabin.playbooks.all.len(), 11);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -305,11 +305,11 @@ mod tests {
         assert_eq!(fits_line(&cabin.playbooks.all[6]), "Fits task · desktop");
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
         assert_eq!(
-            fits_line(&cabin.playbooks.all[7]),
+            fits_line(&cabin.playbooks.all[9]),
             "Fits task, repair, question · gaming"
         );
         assert_eq!(
-            steps_line(&cabin.playbooks.all[7]),
+            steps_line(&cabin.playbooks.all[9]),
             "8 steps, up to Risky, asks first"
         );
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
@@ -362,7 +362,10 @@ mod tests {
                 ("files", "Files", Source::Shipped),
                 ("research", "Research", Source::Shipped),
                 ("desktop", "Desktop apps", Source::Shipped),
+                ("game-news-library", "Game news & library", Source::Shipped),
+                ("gaming-help", "Gaming help", Source::Shipped),
                 ("game-tuning", "Game tuning", Source::Shipped),
+                ("build-loadout", "Build & loadout", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );
