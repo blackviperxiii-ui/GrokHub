@@ -141,6 +141,8 @@ impl Cabin {
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
                         let _ = self.paint_session_actions_menu(ui);
+                        // Activity Dock left of the session menu (every view).
+                        self.ui_activity_dock(ui);
                         if !loadout {
                             self.paint_personality_switch(ui);
                         }
