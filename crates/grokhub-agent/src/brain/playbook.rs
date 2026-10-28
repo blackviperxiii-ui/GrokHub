@@ -316,7 +316,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (8, Source::Shipped, 0)
+            (14, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -350,7 +350,13 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -372,7 +378,13 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -436,7 +448,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 9);
+        assert_eq!(all.len(), 15);
         assert_eq!(
             problems,
             vec![
@@ -497,9 +509,151 @@ mod tests {
             id("question", "gaming", "linux").as_deref(),
             Some("game-tuning")
         );
+        assert_eq!(
+            id("question", "game-help", "windows").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            id("task", "loadout", "linux").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("research", "loadout", "windows").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("question", "library", "linux").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            id("research", "library", "windows").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            id("question", "general", "linux").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(id("task", "planning", "linux").as_deref(), Some("plan-day"));
+        assert_eq!(
+            id("question", "planning", "windows").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            id("creative", "media", "linux").as_deref(),
+            Some("creative")
+        );
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gaming_specialists_are_picked_for_tips_builds_and_library() {
+        let (all, _) = load(&crate::harness::test_dir(
+            "playbook-gaming-specialists-pick",
+        ));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("tips for Minecraft mods this patch, no spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("how do I unlock the new Fortnite mythic without spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("build a PC for 1440p gaming under 1500").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("best loadout for Warzone this season").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("what's on sale in my Steam library").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("show patch notes for Cyberpunk").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
+            Some("game-tuning")
+        );
+        // Cabin app name "Loadout" and bare Steam repairs must not steal specialists.
+        assert_ne!(
+            pick_id("open Loadout settings").as_deref(),
+            Some("build-loadout")
+        );
+        assert_ne!(
+            pick_id("Loadout won't start").as_deref(),
+            Some("build-loadout")
+        );
+        let loadout_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Loadout won't start",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(loadout_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(loadout_wont.domain.as_str(), "loadout");
+        assert_ne!(
+            pick_id("Steam won't launch").as_deref(),
+            Some("game-news-library")
+        );
+        let steam_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Steam won't launch",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(steam_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(steam_wont.domain.as_str(), "library");
+        assert_eq!(pick_id("hi there"), None);
+    }
+
+    #[test]
+    fn work_specialists_are_picked_for_questions_plans_and_drafts() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-work-specialists-pick"));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "linux").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("what is the capital of France?").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(
+            pick_id("plan my day around standup and a 3pm call").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            pick_id("write a poem about autumn").as_deref(),
+            Some("creative")
+        );
+        assert_eq!(
+            pick_id("add a retry to fetch() in src/net.rs").as_deref(),
+            Some("code-dev")
+        );
+        assert_eq!(
+            pick_id("compare the latest mid-range laptops").as_deref(),
+            Some("research")
+        );
+        assert_eq!(
+            pick_id("organize the downloads folder by date").as_deref(),
+            Some("files")
+        );
+        assert_eq!(pick_id("hi there"), None);
     }
 
     #[test]

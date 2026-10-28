@@ -15,9 +15,12 @@ use super::*;
 const DAY_MS: u64 = 86_400_000;
 /// How long a read of the egress log stays fresh on screen.
 const LEDGER_TTL: Duration = Duration::from_secs(30);
-/// Below this the story and the switches stack.
-const TWO_COL_MIN_W: f32 = 820.0;
+/// Below this the story and the switches stack. The Settings page at
+/// 1100x720 leaves about 800 px, which still fits both columns.
+const TWO_COL_MIN_W: f32 = 760.0;
 const DIAGRAM_H: f32 = 240.0;
+/// Space kept between the story column's text and the switches.
+const STORY_GUTTER: f32 = 24.0;
 const BARS_H: f32 = 56.0;
 
 pub(super) const HERO_LOCAL: &str = "Your data stays on this PC.";
@@ -297,7 +300,18 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
 
 /// The tag, the hero, the week's count and the diagram.
 pub(super) fn paint_privacy_story(ui: &mut egui::Ui, week: &Week) {
-    mode_chip(ui, mode_tag(week));
+    // Ragged right with a gutter: a justified column stretched the hero's
+    // letters at 1100x720 and ran it up to the switches.
+    let w = (ui.available_width() - STORY_GUTTER).max(0.0);
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_max_width(w);
+        paint_story_body(ui, week);
+    });
+}
+
+fn paint_story_body(ui: &mut egui::Ui, week: &Week) {
+    // A row, so the tag hugs its text.
+    ui.horizontal(|ui| mode_chip(ui, mode_tag(week)));
     ui.add_space(14.0);
     ui.label(
         RichText::new(hero(week))
@@ -431,13 +445,10 @@ impl Cabin {
             None => "Personal memory and the logs are sealed with your keyring",
             Some(why) => super::privacy_ui::lock_hover(why),
         };
+        // The same row as the switches above, read-only: its hint wraps ragged
+        // right instead of stretching across the column.
         ui.add_enabled_ui(false, |ui| {
-            crate::ui_kit::setting_row(
-                ui,
-                "Encrypted memory",
-                sealed_hint,
-                crate::ui_kit::SettingRowControl::Switch(&mut sealed),
-            );
+            crate::cards::settings_toggle(ui, "Encrypted memory", sealed_hint, &mut sealed);
         });
         ui.add_space(14.0);
         let armed_id = egui::Id::new(WIPE_ARMED_ID);
@@ -588,6 +599,81 @@ mod tests {
         cabin.set_asks_first(true);
         assert_eq!(cabin.permission_mode, PermissionMode::Ask);
         assert_eq!(cabin.cfg.permission_mode, "ask");
+    }
+
+    #[test]
+    fn loadout_settings_is_a_page_wide_enough_for_both_columns() {
+        use super::super::settings::settings_page_rect;
+        for (w, h) in [(1600.0, 900.0), (1100.0, 720.0)] {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
+            let page = settings_page_rect(screen, true, SettingsSec::Privacy);
+            assert_eq!(page.min, egui::pos2(40.0, 40.0));
+            assert_eq!(page.max, egui::pos2(w, h));
+            // The nav column is 220 px and the body keeps a 40 px gutter.
+            assert!(page.width() - 260.0 >= TWO_COL_MIN_W, "{w}x{h}");
+        }
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let sheet = settings_page_rect(screen, false, SettingsSec::Privacy);
+        assert_eq!(sheet.size(), egui::vec2(920.0, 620.0));
+        assert_eq!(sheet.center(), egui::pos2(800.0, 450.0));
+    }
+
+    #[test]
+    fn at_1100x720_the_hero_stays_ragged_right_and_clear_of_the_switches() {
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        // The Settings body is a justified column, as on the page.
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    cabin.ui_settings_privacy(ui);
+                });
+            });
+        });
+        let mut texts: Vec<(String, egui::Rect, bool)> = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect, bool)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((
+                    t.galley.text().to_string(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                    t.galley.job.justify,
+                )),
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, out)),
+                _ => {}
+            }
+        }
+        for c in &out.shapes {
+            walk(&c.shape, &mut texts);
+        }
+        let find = |want: &str| {
+            texts
+                .iter()
+                .find(|t| t.0.starts_with(want))
+                .unwrap_or_else(|| panic!("{want} not painted: {texts:?}"))
+                .clone()
+        };
+        let (_, hero_rect, hero_justified) = find(HERO_SENT);
+        let (_, switch_rect, _) = find("On-device model");
+        assert!(!hero_justified, "the hero is ragged right");
+        assert!(
+            hero_rect.right() + STORY_GUTTER - 1.0 <= switch_rect.left(),
+            "hero {hero_rect:?} runs into the switches at {switch_rect:?}"
+        );
+        // The hint under Encrypted memory says sealed or why not, by keyring.
+        let at = texts
+            .iter()
+            .position(|t| t.0 == "Encrypted memory")
+            .expect("Encrypted memory row");
+        let (hint, _, hint_justified) = &texts[at + 1];
+        assert!(!hint_justified, "{hint} is ragged right");
     }
 
     #[test]

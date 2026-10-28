@@ -17,7 +17,13 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-news-library.toml"),
+    include_str!("../assets/playbooks/gaming-help.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
+    include_str!("../assets/playbooks/build-loadout.toml"),
+    include_str!("../assets/playbooks/quick-answer.toml"),
+    include_str!("../assets/playbooks/plan-day.toml"),
+    include_str!("../assets/playbooks/creative.toml"),
 ];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
@@ -28,7 +34,18 @@ pub const PLAYBOOK_LINE: &str =
     "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
-    "system", "code", "files", "desktop", "web", "media", "gaming", "general",
+    "system",
+    "code",
+    "files",
+    "desktop",
+    "web",
+    "media",
+    "gaming",
+    "game-help",
+    "loadout",
+    "library",
+    "planning",
+    "general",
 ];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
@@ -381,10 +398,16 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
-                "game-tuning"
+                "game-news-library",
+                "gaming-help",
+                "game-tuning",
+                "build-loadout",
+                "quick-answer",
+                "plan-day",
+                "creative",
             ]
         );
-        let game = parse(BUILTIN[7]).unwrap();
+        let game = parse(BUILTIN[9]).unwrap();
         assert_eq!(
             (
                 game.fit("task", "gaming", "windows"),
@@ -392,6 +415,45 @@ mod tests {
                 game.fit("question", "gaming", "linux")
             ),
             (Some(2), None, Some(2))
+        );
+        let help = parse(BUILTIN[8]).unwrap();
+        assert_eq!(
+            (
+                help.fit("question", "game-help", "windows"),
+                help.fit("task", "gaming", "windows"),
+                help.fit("question", "gaming", "linux")
+            ),
+            (Some(2), None, None)
+        );
+        let loadout = parse(BUILTIN[10]).unwrap();
+        assert_eq!(
+            (
+                loadout.fit("research", "loadout", "linux"),
+                loadout.fit("task", "gaming", "windows")
+            ),
+            (Some(2), None)
+        );
+        let library = parse(BUILTIN[7]).unwrap();
+        assert_eq!(
+            (
+                library.fit("question", "library", "windows"),
+                library.fit("research", "web", "linux")
+            ),
+            (Some(2), None)
+        );
+        let quick = parse(BUILTIN[11]).unwrap();
+        let plan = parse(BUILTIN[12]).unwrap();
+        let creative = parse(BUILTIN[13]).unwrap();
+        assert_eq!(
+            (
+                quick.fit("question", "general", "linux"),
+                quick.fit("task", "general", "linux"),
+                plan.fit("task", "planning", "linux"),
+                plan.fit("task", "general", "linux"),
+                creative.fit("creative", "media", "linux"),
+                creative.fit("task", "media", "linux"),
+            ),
+            (Some(1), None, Some(2), None, Some(1), None)
         );
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(
@@ -418,13 +480,13 @@ mod tests {
         let p = parse(BUILTIN[3]).unwrap();
         assert_eq!(
             p.prompt_block(),
-            "Playbook for this turn: Code changes. Read the code and run the tests before editing, change one thing at a time, and run the build and tests after each change.\n\
-             Cover: read before edit, it builds, tests pass.\n\
-             Look (look only): See what is already changed (`git status`); Read the files and the tests around the change; Run the tests once first to know what already fails.\n\
-             Change (safe, reversible): Make one small edit at a time; Add or update a test for the change; Build and run the tests after each edit.\n\
-             Bigger changes (risky, asks first): Delete files or folders the change no longer needs; Push, publish or deploy the change.\n\
+            "Playbook for this turn: Code changes. Reproduce first, make the smallest change, prove it with tests, then give a short summary.\n\
+             Cover: reproduced, smallest change, tests pass, summary given.\n\
+             Reproduce (look only): See what is already changed (`git status`); Reproduce the failure or the ask before editing anything; Read the files and the tests around the change; Run the tests once first to know what already fails.\n\
+             Change (safe, reversible): Make the smallest edit that fixes it; Add or update a test for the change; Build and run the tests after each edit; Give a short summary of the change and how it was checked.\n\
+             Bigger changes (risky, asks first): Delete files or folders the change no longer needs; Before ship or release: load qa-walkthrough (and av-qa-walkthrough when audio, video, capture or streaming changed); before done run a verification step; multi-step work keeps follow-through; Push, publish or deploy the change.\n\
              Back up: Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own.\n\
-             Check: After each change, build and run the tests that cover it; a change is done only when they pass.\n\
+             Check: After each change, build and run the tests that cover it; a change is done only when they pass and a short summary is ready.\n\
              Undo: Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed.\n\
              Stop only when a hard approval was refused, or hardware, access or a sign-in is missing, or every approach in the playbook failed and was checked.\n\
              The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win."

@@ -49,7 +49,11 @@ budget() {
   fi
 }
 
+<<<<<<< HEAD
 budget "crates/grokhub-app/src/app/mod.rs" 5915 # Labs Diagnostics last-zip field + inits (#973)
+=======
+budget "crates/grokhub-app/src/app/mod.rs" 5913 # web_search_ui + shot seed; #968 merge (#974)
+>>>>>>> origin/beta
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2800

@@ -522,6 +522,16 @@ pub(super) fn deck_shot_requested() -> bool {
     deck_shot_env() || pinned_mood().is_some()
 }
 
+/// Windows web_search proof shots (`scripts/web-search-shots.ps1`).
+pub(super) fn web_search_shot_requested() -> bool {
+    web_search_shot_env()
+}
+
+/// Hide the signed-out auth banner for any proof-shot launch.
+pub(super) fn proof_shot_requested() -> bool {
+    deck_shot_requested() || web_search_shot_requested()
+}
+
 fn deck_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
@@ -529,6 +539,45 @@ fn deck_shot_env() -> bool {
             .ok()
             .is_some_and(|v| v.trim() == "1")
     })
+}
+
+fn web_search_shot_env() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("GROKHUB_WEB_SEARCH_SHOT")
+            .ok()
+            .is_some_and(|v| v.trim() == "1")
+    })
+}
+
+/// Open Settings → Cabin defaults (Web search fields) for proof shots.
+pub(super) fn web_search_settings_shot() -> bool {
+    std::env::var("GROKHUB_WEB_SEARCH_SETTINGS")
+        .ok()
+        .is_some_and(|v| v.trim() == "1")
+}
+
+/// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
+pub(super) fn deck_tab_count() -> Option<usize> {
+    std::env::var("GROKHUB_DECK_TABS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 3)
+}
+
+/// When set, the tab strip paints the overflow menu open for HARD DONE shots.
+pub(super) fn deck_overflow_open() -> bool {
+    std::env::var("GROKHUB_DECK_OVERFLOW")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
+pub(super) fn deck_last_chat_mode() -> Option<String> {
+    std::env::var("GROKHUB_DECK_LAST_CHAT")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == "home" || v == "chat")
 }
 
 /// Slide 02 Hangout: quick replies above the composer (not Connect / Start here).
@@ -673,8 +722,41 @@ impl Cabin {
             false,
             now.saturating_sub(30_000),
         );
+        // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
+        let want = deck_tab_count().unwrap_or(3).max(3);
+        let extras = [
+            ("deck-duo", "Duo finder"),
+            ("deck-stutter", "Fix stutter"),
+            ("deck-fans", "Fan curve"),
+            ("deck-shaders", "Shader cache"),
+            ("deck-rank", "Rank climb"),
+            ("deck-patch", "Season patch"),
+            ("deck-aim", "Aim routine"),
+            ("deck-warmup", "Warm up range"),
+            ("deck-build", "Roast build"),
+            ("deck-backlog", "Backlog sort"),
+            ("deck-gpu", "GPU drivers"),
+            ("deck-queue", "Queue night"),
+            ("deck-voip", "Voip check"),
+            ("deck-map", "Map pool"),
+            ("deck-scrim", "Scrim notes"),
+            ("deck-perk", "Perk loadout"),
+        ];
+        for (n, (id, title)) in extras.iter().enumerate() {
+            // Hangout + Weekend + Driver already planted → total so far is 3.
+            if 3 + n >= want {
+                break;
+            }
+            self.ensure_deck_extra_tab(
+                id,
+                title,
+                false,
+                now.saturating_sub(90_000 + n as u64 * 1_000),
+            );
+        }
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
+        self.cfg.last_chat_tab = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         // Viper is an adults-only preset; without this gate the titlebar falls
         // back to Nyx and HARD DONE shots look wrong.
@@ -682,7 +764,111 @@ impl Cabin {
         self.cfg.personality = "viper".into();
         self.persist_cfg();
         self.pin_chat_tail();
-        self.seed_activity_dock_for_deck();
+        // Slide 10's chat-first layout has no Activity popover or pending Ask
+        // over the snapshot column.
+        // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
+        let activity_off = std::env::var("GROKHUB_DECK_ACTIVITY").is_ok_and(|v| v.trim() == "0");
+        if !self.cfg.chat_objectives && !activity_off {
+            self.seed_activity_dock_for_deck();
+        }
+        // Windows proof: Home parks empty; Chat rail restores Hangout.
+        match deck_last_chat_mode().as_deref() {
+            Some("home") => self.open_fresh_home(),
+            Some("chat") => {
+                self.open_fresh_home();
+                self.open_last_chat_tab();
+                self.nav = Nav::Chat;
+            }
+            _ => {}
+        }
+        // `GROKHUB_DECK_OPEN_SETTINGS=1` opens Settings on the pinned section, so a
+        // shot never depends on a click or Ctrl+, landing.
+        if std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1") {
+            self.set_nav_id("settings");
+        }
+    }
+
+    /// After `open_fresh_home`, restore a citation transcript for web_search
+    /// Windows proof shots. Seed file: `{config}/web-search-shot-seed.json`
+    /// written by `scripts/web-search-shots.ps1` (title + messages). Launch
+    /// clears a loaded transcript, so this must run after home open — same
+    /// pattern as [`Self::apply_deck_shot_seed`].
+    ///
+    /// `GROKHUB_WEB_SEARCH_SETTINGS=1` opens Settings → Cabin defaults so the
+    /// optional SearXNG / Brave fields are visible (no fragile click).
+    pub(super) fn apply_web_search_shot_seed(&mut self) {
+        if !web_search_shot_requested() {
+            return;
+        }
+        if web_search_settings_shot() {
+            if self.nav != Nav::Settings {
+                self.settings_back = self.nav;
+            }
+            self.nav = Nav::Settings;
+            self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Defaults);
+            return;
+        }
+        let path = crate::config::config_dir().join("web-search-shot-seed.json");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("ws-proof")
+            .to_string();
+        let title = v
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("web search")
+            .to_string();
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        if let Some(arr) = v.get("messages").and_then(|m| m.as_array()) {
+            for row in arr {
+                let Some(pair) = row.as_array() else {
+                    continue;
+                };
+                if pair.len() < 2 {
+                    continue;
+                }
+                let role = pair[0].as_str().unwrap_or("").to_string();
+                let text = pair[1].as_str().unwrap_or("").to_string();
+                if role.is_empty() || text.is_empty() {
+                    continue;
+                }
+                pairs.push((role, text));
+            }
+        }
+        if pairs.is_empty() {
+            return;
+        }
+        let transcript = Arc::new(pairs);
+        let now = now_ms();
+        if let Some(i) = self.threads.iter().position(|t| t.id == id) {
+            self.thread_idx = i;
+        } else {
+            let mut t = ChatThread::new(&title, false);
+            t.id = id.clone();
+            t.native = true;
+            t.grok_session = Some(id.clone());
+            self.threads.push(t);
+            self.thread_idx = self.threads.len() - 1;
+        }
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.title = title;
+            t.native = true;
+            t.grok_session = Some(id.clone());
+            t.grok_show_pending = false;
+            t.messages = transcript.clone();
+            t.accessed_ms = now;
+            t.last_active_ms = now;
+        }
+        self.messages = transcript;
+        self.cfg.current_thread = id;
+        self.pin_chat_tail();
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
@@ -1309,8 +1495,10 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var("GROKHUB_DECK_MOOD");
+        std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
         let transcript = deck_transcript();
         let mut seeded = ChatThread::new("Hangout", false);
         seeded.id = DECK_THREAD_ID.to_string();
@@ -1325,6 +1513,7 @@ mod tests {
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.messages.len(), 4);
         assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        assert_eq!(cabin.cfg.last_chat_tab, DECK_THREAD_ID);
         let titles: Vec<&str> = cabin.threads.iter().map(|t| t.title.as_str()).collect();
         assert!(
             titles.contains(&"Hangout")
@@ -1361,6 +1550,26 @@ mod tests {
             cabin.titlebar_personality_label().to_ascii_uppercase(),
             "VIPER"
         );
+        assert!(cabin.activity.open);
+        assert!(cabin.perm_ask.is_some());
+
+        let mut chat_first = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
+        chat_first.cfg.chat_objectives = true;
+        chat_first.apply_deck_shot_seed();
+        assert_eq!(chat_first.messages.len(), 4);
+        assert!(!chat_first.activity.open);
+        assert!(chat_first.perm_ask.is_none());
+        assert_ne!(chat_first.nav, Nav::Settings);
+
+        std::env::set_var("GROKHUB_DECK_OPEN_SETTINGS", "1");
+        std::env::set_var("GROKHUB_DECK_ACTIVITY", "0");
+        let mut settings = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
+        settings.apply_deck_shot_seed();
+        std::env::remove_var("GROKHUB_DECK_OPEN_SETTINGS");
+        std::env::remove_var("GROKHUB_DECK_ACTIVITY");
+        assert_eq!(settings.nav, Nav::Settings);
+        assert!(!settings.activity.open);
+        assert!(settings.perm_ask.is_none());
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
             None => std::env::remove_var("GROKHUB_DECK_SHOT"),
@@ -1368,6 +1577,114 @@ mod tests {
         match prev_mood {
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+        match prev_last {
+            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
+            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn deck_last_chat_home_then_chat_restores_hangout() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "home");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert!(
+            cabin.messages.is_empty(),
+            "home mode parks on an empty draft"
+        );
+        assert_eq!(cabin.cfg.last_chat_tab, DECK_THREAD_ID);
+        assert_ne!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "chat");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        assert_eq!(cabin.messages.len(), 4);
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_last {
+            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
+            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn web_search_shot_seed_restores_citation_transcript() {
+        let _g = crate::config::hold_test_config();
+        let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
+        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS");
+        let cite = "https://doc.rust-lang.org/stable/releases.html";
+        let seed = serde_json::json!({
+            "id": "ws-openrouter",
+            "title": "OpenRouter · web search",
+            "messages": [
+                ["user", "Search the web and cite real links."],
+                ["assistant", format!("Found it: {cite}")]
+            ]
+        });
+        let path = crate::config::config_dir().join("web-search-shot-seed.json");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, seed.to_string()).expect("seed");
+        let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
+        cabin.open_fresh_home();
+        cabin.apply_web_search_shot_seed();
+        assert_eq!(
+            cabin.threads[cabin.thread_idx].title,
+            "OpenRouter · web search"
+        );
+        assert_eq!(cabin.messages.len(), 2);
+        assert!(
+            cabin.messages[1].1.contains(cite),
+            "assistant must cite the live URL: {}",
+            cabin.messages[1].1
+        );
+        assert!(proof_shot_requested());
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+    }
+
+    #[test]
+    fn web_search_settings_shot_opens_cabin_defaults() {
+        let _g = crate::config::hold_test_config();
+        let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
+        let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
+        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", "1");
+        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "defaults");
+        let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
+        cabin.open_fresh_home();
+        cabin.apply_web_search_shot_seed();
+        assert!(matches!(cabin.nav, Nav::Settings));
+        assert!(matches!(cabin.settings_sec, SettingsSec::Defaults));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+        match prev_sec {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
+            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
         }
     }
 

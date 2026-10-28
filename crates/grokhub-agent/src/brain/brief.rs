@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|general\"}";
+\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -98,7 +98,8 @@ pub struct Brief {
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
-    /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming` or `general`.
+    /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
+    /// `game-help`, `loadout`, `library`, `planning` or `general`.
     pub domain: String,
     /// `rules`, `model`, or `default` (unclear and no model call).
     pub by: String,
@@ -324,11 +325,110 @@ const GAMING_PHRASES: &[&str] = &[
 const GAMING_TASK_WORDS: &[&str] = &[
     "tune", "tuning", "optimize", "optimise", "boost", "cap", "uncap",
 ];
+/// Tips, mods, spoilers — gaming help, not FPS tuning on this PC.
+const GAME_HELP_WORDS: &[&str] = &[
+    "tips",
+    "tip",
+    "mods",
+    "mod",
+    "modding",
+    "spoiler",
+    "spoilers",
+    "walkthrough",
+    "guide",
+    "guides",
+];
+const GAME_HELP_PHRASES: &[&str] = &[
+    "how do i",
+    "how do you",
+    "how to",
+    "best settings for",
+    "settings tip",
+    "settings tips",
+    "game tip",
+    "game tips",
+    "no spoilers",
+    "without spoilers",
+    "patch version",
+    "this patch",
+    "current patch",
+    "current season",
+];
+/// PC parts or in-game loadout compare — dated prices, 2–3 options.
+/// Phrases only: bare "loadout" is the cabin app name, not this playbook.
+const LOADOUT_PHRASES: &[&str] = &[
+    "pc build",
+    "pc parts",
+    "parts list",
+    "build a pc",
+    "build my pc",
+    "upgrade my pc",
+    "compare gpus",
+    "compare cpus",
+    "compare gpu",
+    "which gpu",
+    "which cpu",
+    "in-game loadout",
+    "best loadout",
+    "weapon loadout",
+    "class loadout",
+    "motherboard and",
+];
+/// Steam library, sales, patch notes — read-only; buys still ask.
+/// Phrases only: bare "steam" is a launcher repair, not the library playbook.
+const LIBRARY_PHRASES: &[&str] = &[
+    "steam library",
+    "my library",
+    "game library",
+    "patch notes",
+    "patch note",
+    "what's on sale",
+    "whats on sale",
+    "steam sale",
+    "store page",
+    "in my library",
+];
+/// One day plan: "plan my day", schedule today. Not a calendar booking.
+const PLAN_DAY_PHRASES: &[&str] = &[
+    "plan my day",
+    "plan the day",
+    "plan today",
+    "plan for today",
+    "plan my today",
+    "schedule my day",
+    "organize my day",
+    "organise my day",
+    "what should i do today",
+    "what should i do for today",
+    "day plan",
+    "today's plan",
+    "todays plan",
+];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
 
 fn is_gaming(t: &str, ws: &[&str]) -> bool {
     any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES)
+}
+
+fn is_game_help(t: &str, ws: &[&str]) -> bool {
+    any_word(ws, GAME_HELP_WORDS) || any_phrase(t, GAME_HELP_PHRASES)
+}
+
+fn is_loadout(t: &str) -> bool {
+    any_phrase(t, LOADOUT_PHRASES)
+}
+
+fn is_library(t: &str, ws: &[&str]) -> bool {
+    // Skip when the ask is a repair ("Steam won't launch") so library never steals it.
+    if any_word(ws, REPAIR_WORDS) || any_phrase(t, REPAIR_PHRASES) {
+        return false;
+    }
+    any_phrase(t, LIBRARY_PHRASES)
+}
+
+fn is_plan_day(t: &str) -> bool {
+    any_phrase(t, PLAN_DAY_PHRASES)
 }
 
 fn words(t: &str) -> Vec<&str> {
@@ -366,15 +466,43 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
         (Intent::Task, "desktop") => &["the asked change is made", "result checked on screen"],
+        (Intent::Task, "planning") | (Intent::Question, "planning") => {
+            &["one plan drafted", "nothing booked automatically"]
+        }
         (Intent::Question, "gaming") => &[
             "hardware read from this PC",
             "recommendation fits this GPU",
             "answered",
         ],
+        (Intent::Question, "game-help") | (Intent::Task, "game-help") => &[
+            "patch or version named",
+            "tips fit that patch",
+            "no spoilers unless asked",
+        ],
+        (Intent::Task, "loadout")
+        | (Intent::Question, "loadout")
+        | (Intent::Research, "loadout") => &[
+            "goal and budget clear",
+            "two or three options compared",
+            "prices dated",
+            "one pick recommended",
+        ],
+        (Intent::Question, "library")
+        | (Intent::Research, "library")
+        | (Intent::Task, "library") => &[
+            "library or store source named",
+            "dates on sales and patch notes",
+            "no purchase on its own",
+        ],
         (Intent::Task, _) => &["the asked change is made", "result checked"],
-        (Intent::Question, _) => &["answered"],
-        (Intent::Research, _) => &["sources named", "answer summarized"],
-        (Intent::Creative, _) => &["draft delivered"],
+        (Intent::Question, _) => &["answered first", "no task offered"],
+        (Intent::Research, _) => &[
+            "enough sources",
+            "sources named",
+            "answer summarized",
+            "claims cited",
+        ],
+        (Intent::Creative, _) => &["draft delivered", "one line after"],
         (Intent::Background, _) => &["job finished"],
         (Intent::Chat, _) => &["answered"],
     };
@@ -421,8 +549,24 @@ fn domain_of(
                 "documents",
             ],
         );
-    if is_gaming(t, ws) {
+    // Gaming specialists first: library / loadout / tips before FPS tuning.
+    // Feature asks ("use my steam library for pulse") stay out of library so
+    // they don't steal the game-news playbook from a cabin feature job.
+    let feature_ask = any_phrase(t, FEATURE_PHRASES) || {
+        ws.iter()
+            .enumerate()
+            .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"))
+    };
+    if is_library(t, ws) && !feature_ask {
+        "library"
+    } else if is_loadout(t) {
+        "loadout"
+    } else if is_gaming(t, ws) && is_game_help(t, ws) && !any_word(ws, GAMING_TASK_WORDS) {
+        "game-help"
+    } else if is_gaming(t, ws) {
         "gaming"
+    } else if is_plan_day(t) {
+        "planning"
     } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
@@ -472,6 +616,9 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
     let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
     let gaming = is_gaming(&t, &ws);
+    let game_help = gaming && is_game_help(&t, &ws);
+    let loadout = is_loadout(&t);
+    let library = is_library(&t, &ws);
     let gaming_lag = gaming
         && (any_phrase(&t, &["low fps", "dropping frames", "stutter", "stuttering"])
             || any_word(&ws, &["lag", "laggy", "stutter", "choppy"]));
@@ -486,14 +633,19 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
         Intent::Research
+    } else if is_plan_day(&t) {
+        // "plan my day" / "what should I do today" → one plan, not a task dump.
+        Intent::Task
     } else if TASK_VERBS.contains(&first)
         || input.files > 0
         || !input.tools.is_empty()
         || system
         || (gaming && (any_word(&ws, GAMING_TASK_WORDS) || any_phrase(&t, GAMING_PHRASES)))
+        || loadout
     {
         Intent::Task
-    } else if QUESTION_WORDS.contains(&first) || t.ends_with('?') {
+    } else if QUESTION_WORDS.contains(&first) || t.ends_with('?') || library || game_help {
+        // Library / tips asks with no verb still need a specialist, not None.
         Intent::Question
     } else if gaming {
         // "Cyberpunk settings on this PC" with no verb still needs the
@@ -875,6 +1027,92 @@ mod tests {
                 Intent::Question,
                 Care::Casual,
                 "gaming",
+                "calm",
+            ),
+            (
+                "tips for Minecraft mods this patch, no spoilers",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
+                "how do I unlock the new Fortnite mythic without spoilers",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
+                "build a PC for 1440p gaming under 1500",
+                Intent::Task,
+                Care::Careful,
+                "loadout",
+                "calm",
+            ),
+            (
+                "best loadout for Warzone this season",
+                Intent::Task,
+                Care::Careful,
+                "loadout",
+                "calm",
+            ),
+            (
+                "what's on sale in my Steam library",
+                Intent::Question,
+                Care::Casual,
+                "library",
+                "calm",
+            ),
+            (
+                "show patch notes for Cyberpunk",
+                Intent::Question,
+                Care::Casual,
+                "library",
+                "calm",
+            ),
+            // Cabin app name "Loadout" must not steal the PC/parts playbook.
+            (
+                "open Loadout settings",
+                Intent::Task,
+                Care::Careful,
+                "general",
+                "calm",
+            ),
+            (
+                "Loadout won't start",
+                Intent::Repair,
+                Care::Critical,
+                "general",
+                "calm",
+            ),
+            // Bare Steam is a launcher repair, not the library playbook.
+            (
+                "Steam won't launch",
+                Intent::Repair,
+                Care::Critical,
+                "general",
+                "calm",
+            ),
+            (
+                "plan my day around standup and a 3pm call",
+                Intent::Task,
+                Care::Careful,
+                "planning",
+                "calm",
+            ),
+            (
+                "what should I do today?",
+                Intent::Task,
+                Care::Careful,
+                "planning",
+                "calm",
+            ),
+            (
+                "schedule my day with deep work first",
+                Intent::Task,
+                Care::Careful,
+                "planning",
                 "calm",
             ),
         ];

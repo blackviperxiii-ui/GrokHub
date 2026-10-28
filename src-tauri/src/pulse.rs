@@ -730,8 +730,13 @@ mod tests {
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
-        // Liked then dismissed is used/done, not a bury.
-        assert!(memory().ends_with("pulse: used \"Board\" reason=used\n"));
+        // Liked then dismissed is used/done, not a bury (#969 / #972).
+        // Compare on LF: Windows checkouts may leave CRLF in MEMORY.md.
+        let mem = memory().replace("\r\n", "\n");
+        assert!(
+            mem.ends_with("pulse: used \"Board\" reason=used\n"),
+            "{mem:?}"
+        );
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
             Err("That card is gone. The page now shows what is left.".to_string())

@@ -216,6 +216,13 @@ fn set_force(f: Option<bool>) {
     }
 }
 
+/// Manual draft preference from Settings: `Some(true)` forces drafting on,
+/// `Some(false)` forces it off, `None` uses the stored speed-test verdict
+/// (or NeedsTest until one exists).
+pub fn prefer_draft(force: Option<bool>) {
+    set_force(force);
+}
+
 /// What [`plan`] reads about one launch.
 pub struct Launch<'a> {
     pub flags: &'a DraftFlags,
