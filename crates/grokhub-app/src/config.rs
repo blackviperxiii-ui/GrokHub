@@ -324,6 +324,10 @@ pub struct AppConfig {
     pub host_hour_cap: u32,
     #[serde(default)]
     pub current_thread: String,
+    /// Last Chat-rail tab the user was on. Survives Home parking and restarts;
+    /// Home's empty draft must not overwrite this (`open_fresh_home` keeps it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_chat_tab: String,
     #[serde(default)]
     pub connector_hosts: Vec<String>,
     #[serde(default = "default_close_to_tray")]
@@ -675,6 +679,7 @@ impl Default for AppConfig {
             host_on: default_host_on(),
             host_hour_cap: default_host_cap(),
             current_thread: String::new(),
+            last_chat_tab: String::new(),
             connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,

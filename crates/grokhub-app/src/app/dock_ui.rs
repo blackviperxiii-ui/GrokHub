@@ -171,7 +171,7 @@ impl TabViewer for CabinTabViewer<'_> {
         // split leaf each frame, so last-leaf-wins would steal sidebar / Settings.
         match *tab {
             DockTab::Chat => {
-                self.cabin.paint_native_badge(ui);
+                self.cabin.sync_native_usage(ui);
                 self.cabin.ui_chat(ui);
             }
             DockTab::Imagine => self.cabin.ui_imagine(ui),
