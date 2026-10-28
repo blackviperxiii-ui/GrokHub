@@ -12,10 +12,6 @@ use grokhub_core::personality::{self, Personality};
 
 include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 
-/// Keep the build.rs embed referenced until the Selected photo strip ships.
-const _: fn(&str, u8) -> Option<&'static [u8]> = personality_photo_png;
-const _: u32 = PERSONALITY_PHOTO_COUNT;
-
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
