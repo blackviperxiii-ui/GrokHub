@@ -155,6 +155,37 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Downloads tidy: an installer for an app with a Start Menu shortcut, a big
+# old ISO (a sized empty file), an archive already extracted, and two copies
+# of one PDF, all dated back so they count as old.
+function Seed-Tidy([string]$root) {
+    $dl = Join-Path $root 'Downloads'
+    $menu = Join-Path $root 'AppData\Microsoft\Windows\Start Menu\Programs'
+    New-Item -ItemType Directory -Force -Path $dl, $menu, (Join-Path $dl 'photos') | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $menu 'Discord.lnk'), [byte[]]@())
+    $pdf = New-Object byte[] (3MB)
+    (New-Object Random 7).NextBytes($pdf)
+    $files = @(
+        @('DiscordSetup.exe', 90MB, 20),
+        @('ubuntu-24.04-desktop-amd64.iso', 600MB, 45),
+        @('photos.zip', 40MB, 2),
+        @('report.pdf', 0, 10),
+        @('report (1).pdf', 0, 9),
+        @('notes.txt', 1KB, 1)
+    )
+    foreach ($f in $files) {
+        $path = Join-Path $dl $f[0]
+        if ($f[0] -like 'report*') {
+            [IO.File]::WriteAllBytes($path, $pdf)
+        } else {
+            $fs = [IO.File]::Create($path)
+            $fs.SetLength($f[1])
+            $fs.Close()
+        }
+        (Get-Item $path).LastWriteTime = (Get-Date).AddDays(-$f[2])
+    }
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -170,7 +201,9 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
+# Pulse rail click, and closes the seeded Activity list over the page.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$tidy = '', [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -189,6 +222,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($tidy) {
+        Seed-Tidy $root
+        $app.downloadsTidy = $true
+        $env:GROKHUB_DECK_TIDY = $tidy
+    } else { Remove-Item Env:GROKHUB_DECK_TIDY -ErrorAction SilentlyContinue }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -203,6 +241,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
@@ -229,7 +268,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
-    if ($pulse) {
+    if ($pulse -and -not $nav) {
         # Pulse is the fourth icon on the 40 px rail, at every window size.
         [void][DeckWin]::SetForegroundWindow($hwnd)
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
@@ -346,6 +385,11 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Downloads tidy: the suggestion card on Pulse, then the review with its approval.
+Shot 1600 900 'tidy-1600x900' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
+Shot 1100 720 'tidy-1100x720' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
+Shot 1600 900 'tidy-approve-1600x900' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
+Shot 1100 720 'tidy-approve-1100x720' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
