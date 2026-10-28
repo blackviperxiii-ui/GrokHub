@@ -204,14 +204,22 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-        [void][DeckWin]::SetCursorPos($r.L + 200, $r.T + 10)
+        # Let the click land before the cursor moves: a queued click that lands
+        # after the move hits the parked spot. Park on the rail's empty stretch,
+        # never the titlebar, whose Quiet chip opens Settings.
+        Start-Sleep -Milliseconds 400
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 420)
         Start-Sleep -Seconds 4
     }
     if ($clickAt.Count -eq 2) {
         [void][DeckWin]::SetCursorPos($r.L + $clickAt[0], $r.T + $clickAt[1])
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-        [void][DeckWin]::SetCursorPos($r.L + 200, $r.T + 10)
+        # Let the click land before the cursor moves: a queued click that lands
+        # after the move hits the parked spot. Park on the rail's empty stretch,
+        # never the titlebar, whose Quiet chip opens Settings.
+        Start-Sleep -Milliseconds 400
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 420)
         Start-Sleep -Seconds 3
     }
     if ($wheel -gt 0) {
