@@ -1950,6 +1950,7 @@ fn quiet_cabin() -> Cabin {
         messages_rev: 0,
         messages_body_rev: 0,
         status: String::new(),
+        web_search_key_draft: String::new(),
         running: false,
         turn_retried: false,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
