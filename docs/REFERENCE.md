@@ -72,7 +72,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 
 ## Channels: stable and beta
 
-There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. Every push to `beta` publishes a pre-release named `beta-v<version>-<sha>` with the same Linux and Windows files and `SHA256SUMS` as a release.
+There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. A nightly build of `beta` (about 3 AM Central, skipped when nothing new landed) publishes a pre-release named `v<version>-beta.<N>` with the same Linux and Windows files and `SHA256SUMS` as a release.
 
 **Without a source clone** (every Windows Setup install, and a Linux install from the release tarball), turn Settings → Labs → **Beta channel** on or off. GrokHub downloads the newest beta pre-release (or the latest stable release), checks it against its `SHA256SUMS`, swaps `grokhub` and `grokhub-hub` in (keeping the old ones as `.old`), and only then saves the new channel. A download that doesn't check out leaves you on the channel you had. Update on a channel works the same way: Beta takes the newest pre-release by build time.
 
