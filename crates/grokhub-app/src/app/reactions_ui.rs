@@ -102,12 +102,16 @@ impl Cabin {
             PulseAct::Run(id)
             | PulseAct::Always(id)
             | PulseAct::Accept(id)
-            | PulseAct::Like(id) => (id, Outcome::Accepted, None),
+            | PulseAct::Like(id)
+            | PulseAct::HobbyDone(id)
+            | PulseAct::HobbyTooEasy(id) => (id, Outcome::Accepted, None),
             PulseAct::Open(id) | PulseAct::Discuss(id) => (id, Outcome::Tapped, None),
             PulseAct::Snooze(id) => (id, Outcome::Snoozed, None),
             PulseAct::Dismiss(id) => (id, Outcome::Dismissed, None),
             PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
-            PulseAct::NotThis(id) => (id, Outcome::Dismissed, Some(false)),
+            PulseAct::NotThis(id)
+            | PulseAct::HobbySkip(id)
+            | PulseAct::HobbyTooHard(id) => (id, Outcome::Dismissed, Some(false)),
             PulseAct::Source(id, SourceAct::Save) => (id, Outcome::Accepted, None),
             PulseAct::Source(id, SourceAct::MoreLike) => (id, Outcome::Accepted, Some(true)),
             PulseAct::Source(id, SourceAct::NotInterested) => (id, Outcome::Dismissed, Some(false)),

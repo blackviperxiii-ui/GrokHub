@@ -52,6 +52,7 @@ pub mod health;
 pub mod heartbeat;
 pub mod heartbeat_throttle;
 pub mod history;
+pub mod hobby_paths;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
@@ -407,6 +408,14 @@ pub use mission::{
     MissionStatus, MissionView,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
+pub use hobby_paths::{
+    apply_feedback, feedback_on_card, hobbies_from_tags, hobby_for_process, hobby_path_card,
+    is_hobby_path_card, next_step, tick as tick_hobby_paths, HobbyId, HobbyPathMeta,
+    HobbyPathSettings, HobbyPathsLedger, HobbyProgress, PathFeedback, PathStep, StepKind,
+    COOLDOWN_MS as HOBBY_PATH_COOLDOWN_MS, DEFAULT_DAILY_MAX as HOBBY_PATH_DAILY_MAX,
+    FILE_NAME as HOBBY_PATHS_FILE, SOURCE_PREFIX as HOBBY_PATH_SOURCE_PREFIX,
+    TICK_EVERY_MS as HOBBY_PATH_TICK_EVERY_MS,
+};
 pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,

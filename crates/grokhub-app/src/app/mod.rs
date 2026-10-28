@@ -175,6 +175,7 @@ mod indexer_ui;
 mod interests_ui;
 mod jobs;
 mod journal_ui;
+mod hobby_paths_ui;
 mod knowme_ui;
 mod library_ui;
 mod loadout_home;
@@ -231,7 +232,6 @@ mod threads_nav;
 mod voice;
 mod web_search_ui;
 mod wishlist_ui;
-
 use background::BgWork;
 use chat_ui::*;
 
