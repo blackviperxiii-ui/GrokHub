@@ -33,9 +33,13 @@ impl Approvals {
 
 /// Settings → Appearance. A value this build does not know reads as System.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Theme {
+    /// Legacy id; same tokens as Ops Dark.
     Dark,
+    OpsDark,
+    OledBlack,
+    SoftCharcoal,
     Light,
     /// Follows the OS (serde wants the fallback last).
     #[default]
