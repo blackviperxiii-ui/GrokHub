@@ -92,15 +92,10 @@ impl Cabin {
         } else {
             thread.messages.as_ref().clone()
         };
-        let personality = self.effective_personality_id_for(&thread);
-        let personality_explicit = self
-            .picker
-            .presets
-            .iter()
-            .find(|p| p.id == personality)
-            .is_some_and(|p| p.explicit);
-        let content_level =
-            content_level_label(self.cfg.explicit_personalities, personality_explicit);
+        // Use the chat-rules helper for active id/explicit (no direct field reads).
+        let active = self.chat_personality();
+        let personality = active.id.clone();
+        let content_level = content_level_label(self.cfg.explicit_personalities, active.explicit);
         let model = if self.cfg.model.trim().is_empty() {
             "default".into()
         } else {
@@ -289,19 +284,6 @@ impl Cabin {
                 self.status = diagnostics_saved_status(&path);
             }
             Err(e) => self.status = format!("Couldn't save diagnostics: {e}"),
-        }
-    }
-
-    fn effective_personality_id_for(&self, thread: &crate::threads::ChatThread) -> String {
-        let id = if thread.personality.trim().is_empty() {
-            self.cfg.personality.clone()
-        } else {
-            thread.personality.clone()
-        };
-        if id.trim().is_empty() {
-            grokhub_core::personality::DEFAULT_ID.into()
-        } else {
-            id
         }
     }
 
