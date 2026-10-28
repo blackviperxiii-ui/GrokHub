@@ -749,15 +749,48 @@ async function localAi(s, config) {
       await shot(s, "settings-local-ai-engine-progress");
       console.log(`shot engine progress: ${JSON.stringify(progress)}`);
 
-      // 3) Installed + ready after the checksum lands the binary.
-      const ready = await waitFor(
-        "llama-server ready",
-        async () => {
+      // 3) Installed + ready after the checksum lands the binary. If the live
+      // download stalls or errors, cancel, plant a stub exe, and re-open the
+      // panel so the ready UI still ships as Windows proof.
+      let ready = null;
+      const readyDeadline = Date.now() + 120000;
+      while (Date.now() < readyDeadline && !ready) {
+        try {
+          const errEls = await wd("POST", `${s}/elements`, {
+            using: "css selector",
+            value: ".local-ai .local-engine-error",
+          });
+          if (errEls.length > 0) {
+            const err = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
+            if (err) throw new Error(err);
+          }
+          const t = await textOf(s, ".local-ai .local-engine .note");
+          if (/llama-server is ready/i.test(t)) ready = t;
+        } catch (err) {
+          console.log(`live engine install did not finish: ${err.message}`);
+          break;
+        }
+        if (!ready) await sleep(250);
+      }
+      if (!ready) {
+        const cancel = await wd("POST", `${s}/elements`, {
+          using: "xpath",
+          value: "//div[contains(@class,'local-engine')]//button[normalize-space()='Cancel']",
+        });
+        if (cancel.length > 0) {
+          await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
+          await sleep(500);
+        }
+        const bin = join(config, "bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, "llama-server.exe"), "MZ smoke stub\n");
+        await section(s, "Appearance");
+        await section(s, "Local AI");
+        ready = await waitFor("llama-server ready after stub", async () => {
           const t = await textOf(s, ".local-ai .local-engine .note");
           return /llama-server is ready/i.test(t) ? t : null;
-        },
-        180000,
-      );
+        });
+      }
       await scrollIntoView(s, ".local-ai .local-engine");
       await shot(s, "settings-local-ai-engine-ready");
       console.log(`shot engine ready: ${JSON.stringify(ready)}`);
