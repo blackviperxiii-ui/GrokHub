@@ -298,12 +298,19 @@ fn discover_uncached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathB
 }
 
 pub fn reminder(skills: &[Skill]) -> String {
-    if skills.is_empty() {
+    // Built-ins stay discoverable via the skill tool and plan_skills wiring.
+    // Listing them on every empty-workspace prompt tipped the R6 prefix-cache
+    // ratio below baseline; moment / close-check / playbook name them when needed.
+    let listed: Vec<&Skill> = skills
+        .iter()
+        .filter(|s| s.source != SkillSource::Builtin)
+        .collect();
+    if listed.is_empty() {
         return String::new();
     }
     let mut out =
         String::from("<skills>\nLoad one with the skill tool when it matches the task.\n");
-    for skill in skills.iter().take(40) {
+    for skill in listed.into_iter().take(40) {
         let desc = clip_chars(&skill.description, 160);
         let line = format!("- {} ({}): {}\n", skill.name, skill.source.as_str(), desc);
         if out.len().saturating_add(line.len()) + 10 > REMINDER_CAP {
@@ -313,12 +320,6 @@ pub fn reminder(skills: &[Skill]) -> String {
         out.push_str(&line);
     }
     out.push_str("</skills>");
-    // Standing plan→skill wiring (ship / verify / follow-through).
-    let plan = crate::plan_skills::standing_reminder();
-    if out.len().saturating_add(plan.len()).saturating_add(2) <= REMINDER_CAP {
-        out.push_str("\n\n");
-        out.push_str(plan);
-    }
     out
 }
 
@@ -1016,8 +1017,11 @@ mod tests {
                 loaded.text
             );
         }
-        assert!(reminder(&skills).contains("qa-walkthrough"));
-        assert!(reminder(&skills).contains("<plan-skills>"));
+        assert!(skills
+            .iter()
+            .any(|s| s.name == "qa-walkthrough" && s.source == SkillSource::Builtin));
+        // Reminder skips built-ins so empty-workspace prompts stay R6-stable.
+        assert!(!reminder(&skills).contains("qa-walkthrough"));
         // Project skill with the same name wins over the builtin.
         skill_md(
             &repo.join(".grok/skills/qa-walkthrough"),
