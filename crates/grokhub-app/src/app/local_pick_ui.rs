@@ -80,14 +80,18 @@ impl Cabin {
     /// Download, Use or the running note for `m`, then the other downloaded models.
     pub(super) fn ui_model_pick_rows(&mut self, ui: &mut egui::Ui, m: &'static LocalModel) {
         let running = self.setup.installed.as_ref().is_some_and(|r| r.id == m.id);
+        let on_disk = md::final_path(&models_dir(), m).is_file();
         if running {
             self.ui_model_download(ui, m);
         } else if self.setup.dl.is_some() {
             self.ui_download_progress(ui);
-        } else if md::final_path(&models_dir(), m).is_file() {
+        } else if on_disk {
             if crate::cards::white_pill(ui, &format!("Use {}", m.name)) {
                 self.switch_local_model(m);
             }
+            // Picking Muse/Gemma with its GGUF already on disk still offers
+            // the paired draft model, even before this row is the active one.
+            self.ui_drafter_offer_for(ui, m.file);
         } else {
             self.ui_download_button(ui, m);
         }

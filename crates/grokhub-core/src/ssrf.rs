@@ -10,7 +10,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 pub const MCP_REGISTRY_HOST: &str = "registry.modelcontextprotocol.io";
 
 /// Hosts allowed for the pinned on-device engine download (llama.cpp releases).
-pub const RUNTIME_DOWNLOAD_HOSTS: &[&str] = &["github.com", "objects.githubusercontent.com"];
+/// GitHub serves the asset from `github.com/.../releases/download/...` then
+/// redirects to `release-assets.githubusercontent.com` (or the older
+/// `objects.githubusercontent.com` CDN).
+pub const RUNTIME_DOWNLOAD_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
 
 /// `true` when `host` may serve a runtime engine download.
 pub fn runtime_download_host_ok(host: &str) -> bool {
@@ -235,6 +242,8 @@ mod tests {
         assert_eq!(runtime_download_url_ok(ok), Ok(()));
         let cdn = "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/456?X-Amz=1";
         assert_eq!(runtime_download_url_ok(cdn), Ok(()));
+        let assets = "https://release-assets.githubusercontent.com/github-production-release-asset-2e65be/123/456?sp=r&sv=2026";
+        assert_eq!(runtime_download_url_ok(assets), Ok(()));
         assert!(runtime_download_url_ok("http://github.com/x").is_err());
         assert!(runtime_download_url_ok("https://evil.com/x").is_err());
         assert!(runtime_download_url_ok("https://localhost/x").is_err());
