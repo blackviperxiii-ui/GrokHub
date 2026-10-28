@@ -543,7 +543,9 @@ impl Cabin {
         }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
-        let resume = self.resume_chips();
+        let mut resume = self.model_chips();
+        resume.extend(self.resume_chips());
+        resume.extend(self.game_chips());
         // A clicked resume chip is remembered and can come back as a plain chip.
         chips.retain(|x| {
             resume
@@ -575,6 +577,10 @@ impl Cabin {
     }
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
+        // One-shot chips act here and are not learned: replayed later they would mean nothing.
+        if self.take_game_chip(&chip) {
+            return;
+        }
         let hour = Self::chip_hour();
         let mode = if self.cfg.mode.trim().is_empty() {
             "auto"

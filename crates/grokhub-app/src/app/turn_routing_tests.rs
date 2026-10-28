@@ -1894,7 +1894,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let snap = src
         .split("fn snapshot_project")
         .nth(1)
-        .and_then(|s| s.split("fn doctor_text").next())
+        .and_then(|s| s.split("fn health_input").next())
         .expect("snapshot_project");
     assert!(
         snap.contains("rewind_blocked_reason")

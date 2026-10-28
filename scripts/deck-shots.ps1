@@ -182,6 +182,21 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
+# after launch, since the first scan only marks what is already there.
+function Write-ModelDrop([string]$root) {
+    $v = @(@(0,0,0), @(60,0,0), @(60,20,0), @(0,20,0), @(0,0,40), @(60,0,40), @(60,20,40), @(0,20,40))
+    $faces = @(@(0,2,1), @(0,3,2), @(4,5,6), @(4,6,7), @(0,1,5), @(0,5,4), @(2,3,7), @(2,7,6), @(1,2,6), @(1,6,5), @(0,4,7), @(0,7,3))
+    $lines = @('solid bracket')
+    foreach ($f in $faces) {
+        $lines += '  facet normal 0 0 0', '    outer loop'
+        foreach ($i in $f) { $lines += "      vertex $($v[$i][0]) $($v[$i][1]) $($v[$i][2])" }
+        $lines += '    endloop', '  endfacet'
+    }
+    $lines += 'endsolid bracket'
+    Write-Utf8 (Join-Path $root 'Downloads\bracket.stl') ($lines -join "`n")
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -203,7 +218,9 @@ function Seed-Pulse([string]$cfg) {
 # seeded Activity list over every pinned page.
 # $windDown turns the wind-down reminder on with a fixed 2 AM idle machine
 # (GROKHUB_DECK_WIND_DOWN); 'confirm' also opens the Sleep the PC sheet.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$windDown = '', [string]$nav = '') {
+# $localModels turns the local model suggestions on and runs the weekly check
+# on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$modelDrop, [string]$windDown = '', [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -222,6 +239,19 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($gameLaunch) {
+        # Game launch companion: a real Steam game last played 30 days ago, so
+        # the card has its news since then; Steam's RunningAppID marks the launch.
+        $app.gameCompanion = $true
+        # A game already running at start is not a launch: clear it first.
+        if (Test-Path 'HKCU:\Software\Valve\Steam') { Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord }
+        $last = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 30 * 86400
+        Write-Utf8 (Join-Path $root '.steam/steam/steamapps/appmanifest_1086940.acf') "`"AppState`"`n{`n`"appid`" `"1086940`"`n`"name`" `"Baldur's Gate 3`"`n`"LastPlayed`" `"$last`"`n}`n"
+    }
+    if ($modelDrop) {
+        $app.modelDrop = $true
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -240,7 +270,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Write-Utf8 (Join-Path $cfg 'wind-down.json') '{"on":true}'
         $env:GROKHUB_DECK_WIND_DOWN = $windDown
     } else { Remove-Item Env:GROKHUB_DECK_WIND_DOWN -ErrorAction SilentlyContinue }
-    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
+    if ($localModels) {
+        Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
+        $env:GROKHUB_DECK_LOCAL_MODELS = '1'
+    } else { Remove-Item Env:GROKHUB_DECK_LOCAL_MODELS -ErrorAction SilentlyContinue }
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
@@ -250,7 +283,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    # A pinned $nav page keeps it off too (the cabin closes it on every GROKHUB_DECK_NAV).
+    # Home is never seeded. Other pinned $nav pages keep the seeded list (its
+    # titlebar count) and the cabin closes the popover over them.
     $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -267,6 +301,17 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($gameLaunch) {
+        if (-not (Test-Path 'HKCU:\Software\Valve\Steam')) { New-Item -Path 'HKCU:\Software\Valve\Steam' -Force | Out-Null }
+        Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 1086940 -Type DWord
+        # Sampled every 5 s; the news comes back from Steam on a worker.
+        Start-Sleep -Seconds 20
+    }
+    if ($modelDrop) {
+        # Downloads is listed every 20 s; the next scan finds the new file.
+        Write-ModelDrop $root
+        Start-Sleep -Seconds 28
+    }
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -356,91 +401,6 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $bmp.Dispose()
 }
 
-Shot 1600 900 '1600x900' 'ops-dark' $Slide
-Shot 1100 720 '1100x720' 'ops-dark' $Slide
-Shot 1600 900 '1600x900-slide20' 'ops-dark' '20'
-Shot 1100 720 '1100x720-slide20' 'ops-dark' '20'
-Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
-Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
-Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -clickAt 20, 695
-Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
-Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
-Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
-# Chat tabs HARD DONE: 3 tabs (readable) and 18 tabs with overflow menu open.
-Shot 1600 900 'chattabs-3-1600x900' 'ops-dark' '02' -dock -tabs 3
-Shot 1100 720 'chattabs-3-1100x720' 'ops-dark' '02' -dock -tabs 3
-Shot 1600 900 'chattabs-overflow-1600x900' 'ops-dark' '02' -dock -tabs 18 -overflow
-Shot 1100 720 'chattabs-overflow-1100x720' 'ops-dark' '02' -dock -tabs 18 -overflow
-# Chat rail last-used: Home (empty) then Chat restores Hangout.
-Shot 1600 900 'lastchat-home-1600x900' 'ops-dark' '02' -dock -tabs 3 -lastChat 'home'
-Shot 1100 720 'lastchat-home-1100x720' 'ops-dark' '02' -dock -tabs 3 -lastChat 'home'
-Shot 1600 900 'lastchat-chat-1600x900' 'ops-dark' '02' -dock -tabs 3 -lastChat 'chat'
-Shot 1100 720 'lastchat-chat-1100x720' 'ops-dark' '02' -dock -tabs 3 -lastChat 'chat'
-Shot 1600 900 'pulse-1600x900' 'ops-dark' '14' -pulse
-Shot 1100 720 'pulse-1100x720' 'ops-dark' '14' -pulse
-# Deck-match 6 proof: same Pulse page beside slides 13 (loadout style) and 15
-# (card close-up), at the HARD DONE sizes.
-Shot 1600 900 'pulse-1600x900-slide13' 'ops-dark' '13' -pulse
-Shot 1100 720 'pulse-1100x720-slide13' 'ops-dark' '13' -pulse
-Shot 1600 900 'pulse-1600x900-slide15' 'ops-dark' '15' -pulse
-Shot 1100 720 'pulse-1100x720-slide15' 'ops-dark' '15' -pulse
-Shot 2560 1440 'pulse-2560x1440' 'ops-dark' '14' -pulse
-Shot 1440 900 'pulse-1440x900' 'ops-dark' '14' -pulse
-Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
-Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
-Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
-Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
-# Wind-down: the 2 AM post on Pulse (scrolled to the feed at 1100x720), then
-# its Sleep the PC confirm sheet. The runner never sleeps: nothing clicks Sleep.
-Shot 1600 900 'wind-down-1600x900' 'ops-dark' '14' -pulse -windDown '1' -nav 'pulse'
-Shot 1100 720 'wind-down-1100x720-scrolled' 'ops-dark' '14' -pulse -windDown '1' -nav 'pulse' -wheel 12
-Shot 1600 900 'wind-down-confirm-1600x900' 'ops-dark' '14' -pulse -windDown 'confirm' -nav 'pulse'
-Shot 1100 720 'wind-down-confirm-1100x720' 'ops-dark' '14' -pulse -windDown 'confirm' -nav 'pulse'
-# Library is the fifth icon on the 40 px rail, below the chat tab strip.
-Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
-Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
-# Baldur's Gate 3 picked, so the detail header shows its store art too. A
-# synthetic tile click didn't register on the runner, so the seed picks it.
-Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
-Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
-# Layout B: the chat with objectives and recent chats left, snapshot right.
-Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
-Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
-# Home Mission Control (slide 09): Objectives+streak | PC Loadout | Up Next covers.
-# Pin via GROKHUB_DECK_NAV=home (cabin apply_deck_shot_seed) — a first-icon click
-# missed on windows-latest and captured Hangout instead. -library seeds Steam
-# covers + dock outcomes (multi-day streak) and waits for PC sensors; Activity
-# stays closed on Home. HARD DONE sizes plus narrow for the three-breakpoint proof.
-Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
-Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
-Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
-# Objectives (mission control) is the third icon on the rail.
-Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
-Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
-# Privacy & data is the second entry in the Settings list; the dialog is centred.
-# The gear at the foot of the rail opens Settings at 1100x720, where Ctrl+, from
-# SendKeys missed the window; at 1600x900 the gear sits below the runner's
-# screen, so Ctrl+, opens it there.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -openSettings 'privacy'
-Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -openSettings 'privacy'
-
-# Nyx is the default personality: Settings -> Personality on a profile with no
-# pick, and on one still saved on the retired 'default' preset.
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -keys '^,' -clickAt 110, 234
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 110, 234
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -keys '^,' -clickAt 110, 234
-Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 110, 234
-# Personality picker beside slide 19. GROKHUB_DECK_SETTINGS_SEC opens Settings at
-# boot (no rail click / Ctrl+, — a miss left Hangout on screen in #958).
-Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
-Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
-Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
-# Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
-Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
-# Nyx's corner box in each mode, beside the approved pictures in
-# docs/design/loadout-baseline-v1/nyx-modes/.
-foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
-    Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
-    Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
-}
+# The shot list is its own file so changes that add shots don't conflict.
+. (Join-Path $PSScriptRoot 'deck-shots.list.ps1')
 Get-ChildItem $Out | Format-Table Name, Length

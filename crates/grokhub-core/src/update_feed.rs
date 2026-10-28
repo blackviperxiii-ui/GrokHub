@@ -5001,6 +5001,28 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Keys file",
             ),
             (
+                "alert_card",
+                crate::print_alerts::alert_card(
+                    &crate::print_alerts::AlertResult {
+                        kind: crate::print_alerts::AlertKind::Finished,
+                        printer_key: "k1".into(),
+                        status: crate::print_alerts::PrinterStatus {
+                            name: "Shop K2".into(),
+                            kind: crate::print_alerts::PrinterKind::Moonraker,
+                            state: crate::print_alerts::PrintState::Complete,
+                            progress_pct: Some(100.0),
+                            eta_secs: None,
+                            filename: Some("bracket.gcode".into()),
+                            message: None,
+                            camera_path: None,
+                        },
+                        camera_enabled: false,
+                    },
+                    at,
+                ),
+                "Shop K2",
+            ),
+            (
                 "automation_failed_card",
                 automation_failed_card("a1", "Nightly backup", "The disk is full.", at),
                 "Nightly backup",
@@ -5120,6 +5142,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                     at,
                 ),
                 "Test GPU",
+            ),
+            (
+                "build_offer_card",
+                crate::ask_offers::build_offer_card(
+                    &crate::ask_offers::AskCluster {
+                        key: "patch-note@h19".into(),
+                        example: "check patch notes".into(),
+                        count: 3,
+                        peak_hour: 19,
+                        weekday_share_pct: 40,
+                        kind: crate::ask_offers::OfferKind::Automation,
+                    },
+                    at,
+                ),
+                "patch notes",
             ),
             (
                 "hobby_path_card",
@@ -5267,6 +5304,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let companion = crate::game_companion::Companion {
+            game: crate::steam::SteamGame {
+                app_id: 548430,
+                name: "Deep Rock Galactic".into(),
+                last_played: 1,
+                playtime_min: 600,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        };
+        rows.push((
+            "companion_card",
+            companion.companion_card(at),
+            "Deep Rock Galactic",
+        ));
         rows
     }
 
