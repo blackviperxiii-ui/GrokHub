@@ -11,8 +11,12 @@ const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
 /// Playbooks 8: the one-time 18+ check, the first time adults-only turns on.
-const AGE_CHECK: &str =
-    "Adults-only personalities are for people 18 or older. Confirm once and GrokHub remembers it.";
+fn age_check_line() -> String {
+    format!(
+        "Adults-only personalities are for people 18 or older. Confirm once and {} remembers it.",
+        grokhub_core::brand::product_name()
+    )
+}
 const AGE_YES: &str = "I'm 18 or older";
 const AGE_NO: &str = "Not now";
 /// Width of the selected detail panel beside the grid (slide 19).
@@ -429,7 +433,7 @@ impl Cabin {
         }
         if self.picker.age_check {
             ui.add_space(6.0);
-            crate::cards::settings_note(ui, AGE_CHECK);
+            crate::cards::settings_note(ui, &age_check_line());
             let mut answer = None;
             ui.horizontal(|ui| {
                 if crate::cards::white_pill(ui, AGE_YES) {
@@ -898,27 +902,34 @@ fn paint_grid_card(
         .stroke(stroke)
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
-            ui.set_width((width - 24.0).max(80.0));
+            // 24 px of margin and the 1 px stroke on each side.
+            ui.set_width((width - 26.0).max(80.0));
             ui.set_min_height(88.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(&p.name)
-                            .size(crate::theme::FONT_BODY)
-                            .strong()
-                            .color(crate::theme::fg()),
-                    );
-                    paint_preset_tags(ui, p, false);
+            // The grid row is horizontal; stack the card's own parts.
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(&p.name)
+                                .size(crate::theme::FONT_BODY)
+                                .strong()
+                                .color(crate::theme::fg()),
+                        );
+                        paint_preset_tags(ui, p, false);
+                    });
                 });
+                ui.add_space(8.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&p.description)
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::muted()),
+                    )
+                    .wrap(),
+                );
             });
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(&p.description)
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
         })
         .response
         .interact(egui::Sense::click());
@@ -1482,6 +1493,46 @@ mod tests {
             talk_label(" Sarcastic Sidekick "),
             "TALK AS SARCASTIC SIDEKICK"
         );
+    }
+
+    #[test]
+    fn the_18_plus_line_names_the_app_from_brand_json() {
+        assert_eq!(
+            age_check_line(),
+            "Adults-only personalities are for people 18 or older. Confirm once and Loadout remembers it."
+        );
+    }
+
+    #[test]
+    fn a_grid_card_wraps_its_line_inside_its_width() {
+        // In a grid row the card used to lay its line out beside the name, unwrapped,
+        // and push the row past the Settings panel at 1100x720.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let p = personality::builtins()
+            .into_iter()
+            .max_by_key(|p| p.description.len())
+            .unwrap();
+        let mut card = egui::Rect::NOTHING;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        crate::theme::test_pass(&ctx, raw, |ui| {
+            ui.horizontal_top(|ui| {
+                card = ui
+                    .scope(|ui| {
+                        paint_grid_card(ui, &p, false, 200.0);
+                    })
+                    .response
+                    .rect;
+            });
+        });
+        assert!(card.width() <= 200.5, "card is {} wide", card.width());
+        assert!(card.height() >= 108.0, "card is {} tall", card.height());
     }
 
     #[test]
