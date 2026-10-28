@@ -5121,6 +5121,19 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 ),
                 "Test GPU",
             ),
+            (
+                "hobby_path_card",
+                crate::hobby_paths::hobby_path_card(
+                    crate::hobby_paths::HobbyId::Rust,
+                    crate::hobby_paths::next_step(
+                        crate::hobby_paths::HobbyId::Rust,
+                        &crate::hobby_paths::HobbyProgress::default(),
+                    )
+                    .expect("rust step"),
+                    at,
+                ),
+                "Rust",
+            ),
         ];
         let links = [CitedLink {
             url: "https://blog.rust-lang.org/1.99".into(),
