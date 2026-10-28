@@ -749,7 +749,8 @@ fn permission_slashes_arm_always_and_set_auto() {
         cabin.permission_mode,
         PermissionMode::AlwaysApprove
     ));
-    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.cfg.permission_mode, "always-approve");
+    assert!(cabin.cfg.always_confirmed);
     assert_eq!(cabin.status, "Permission always-approve");
     assert!(cabin.confirm.is_none());
     cabin.run_slash_line("/always-approve");

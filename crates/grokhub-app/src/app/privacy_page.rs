@@ -597,14 +597,14 @@ mod tests {
         use super::super::settings::settings_page_rect;
         for (w, h) in [(1600.0, 900.0), (1100.0, 720.0)] {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
-            let page = settings_page_rect(screen, true);
+            let page = settings_page_rect(screen, true, SettingsSec::Privacy);
             assert_eq!(page.min, egui::pos2(40.0, 40.0));
             assert_eq!(page.max, egui::pos2(w, h));
             // The nav column is 220 px and the body keeps a 40 px gutter.
             assert!(page.width() - 260.0 >= TWO_COL_MIN_W, "{w}x{h}");
         }
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
-        let sheet = settings_page_rect(screen, false);
+        let sheet = settings_page_rect(screen, false, SettingsSec::Privacy);
         assert_eq!(sheet.size(), egui::vec2(920.0, 620.0));
         assert_eq!(sheet.center(), egui::pos2(800.0, 450.0));
     }

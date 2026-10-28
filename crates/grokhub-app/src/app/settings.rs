@@ -45,6 +45,35 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     }
 }
 
+/// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
+/// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality without a fragile click.
+pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
+    static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
+    *PIN.get_or_init(|| {
+        match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("personality") => Some(SettingsSec::Personality),
+            Some("privacy") => Some(SettingsSec::Privacy),
+            _ => None,
+        }
+    })
+}
+
+/// Settings modal size: Personality needs room for the slide 19 grid + detail panel.
+pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui::Vec2 {
+    let want = if sec == SettingsSec::Personality && crate::theme::is_loadout_paint() {
+        egui::vec2(1180.0, 720.0)
+    } else {
+        egui::vec2(920.0, 620.0)
+    };
+    want.min(screen - egui::vec2(48.0, 48.0))
+}
+
 /// Chat catalog ids plus Auto. Auto persists an empty model pin.
 pub(super) fn cabin_default_models() -> Vec<(&'static str, &'static str)> {
     let mut out = vec![("", "Auto")];
@@ -103,9 +132,12 @@ pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static s
     &[("ask", "Ask"), ("auto", "Auto")]
 }
 
-/// Ask or Auto only. Always collapses to Ask.
+/// Settings dropdown is Ask or Auto. Always stays on the composer pill.
 pub(super) fn cabin_default_permission_id(raw: &str) -> String {
-    crate::config::persistable_permission_mode(raw)
+    match grokhub_core::wire::PermissionMode::parse(raw) {
+        Some(grokhub_core::wire::PermissionMode::Auto) => "auto".into(),
+        _ => "ask".into(),
+    }
 }
 
 pub(super) fn cabin_default_sessions() -> &'static [(&'static str, &'static str)] {
@@ -169,17 +201,14 @@ fn settings_dropdown(
 
 /// Where Settings sits. Loadout fills the window right of the rail and under
 /// the titlebar, as a page (deck slide 12); other themes keep the centred sheet.
-pub(super) fn settings_page_rect(screen: egui::Rect, page: bool) -> egui::Rect {
+pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSec) -> egui::Rect {
     if page {
         return egui::Rect::from_min_max(
             screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
             screen.max,
         );
     }
-    egui::Rect::from_center_size(
-        screen.center(),
-        egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
-    )
+    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
 }
 
 impl Cabin {
@@ -412,7 +441,7 @@ impl Cabin {
         let sec = self.settings_sec;
         let screen = ctx.content_rect();
         let page = crate::theme::is_loadout_paint();
-        let modal = settings_page_rect(screen, page);
+        let modal = settings_page_rect(screen, page, sec);
         // A page leaves the rail and titlebar live; the sheet dims them.
         let cover = if page { modal } else { screen };
         egui::Area::new(egui::Id::new("settings-overlay"))
@@ -859,7 +888,7 @@ impl Cabin {
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_PERMISSION,
-                                                                "Ask or Auto. Always stays on the composer for this launch.",
+                                                                "Ask or Auto. Always is on the composer and sticks until you change it.",
                                                                 &perm_selected,
                                                                 &perm_labels,
                                                             ) {

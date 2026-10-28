@@ -3252,8 +3252,7 @@ impl Cabin {
         });
     }
 
-    /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
-    /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
+    /// The composer pills survive a restart: Chat/Plan and Ask/Auto/Always are preferences.
     pub(super) fn set_session_mode(&mut self, mode: SessionMode) {
         self.session_mode = mode;
         self.cfg.session_mode = mode.as_str().to_string();
@@ -3290,6 +3289,9 @@ impl Cabin {
     fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
         self.cfg.permission_mode = crate::config::persistable_permission_mode(mode.as_str());
+        if mode == PermissionMode::AlwaysApprove {
+            self.cfg.always_confirmed = true;
+        }
         self.persist_cfg();
     }
 
@@ -4976,7 +4978,7 @@ impl Cabin {
             .input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma) && !i.modifiers.shift)
         {
             self.palette_open = false;
-            self.nav = Nav::Settings;
+            self.set_nav_id("settings");
         }
         if ctx.input(|i| {
             i.modifiers.command
