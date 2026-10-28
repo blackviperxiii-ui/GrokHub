@@ -214,8 +214,9 @@ fn spawn(
     if command.trim().is_empty() {
         return Err(format!("MCP server `{server}` has no command"));
     }
+    let args = super::browser::launch_args(command, args, env, cwd)?;
     let mut cmd = Command::new(command);
-    cmd.args(args)
+    cmd.args(&args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

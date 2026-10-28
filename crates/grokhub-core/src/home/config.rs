@@ -78,17 +78,13 @@ impl Default for HomeLayout {
 impl HomeLayout {
     pub fn preset(kind: HomePreset) -> Self {
         match kind {
+            // Deck slide 09: Objectives (+ streak) | PC Loadout | Up Next covers.
             HomePreset::MissionControl => Self {
                 version: HOME_LAYOUT_VERSION,
                 preset: kind.id().into(),
                 large: "objectives".into(),
-                medium: vec!["up_next".into(), "pulse".into()],
-                small: [
-                    Some("pc_loadout".into()),
-                    Some("speeds".into()),
-                    Some("usage".into()),
-                    Some("streak".into()),
-                ],
+                medium: vec!["pc_loadout".into()],
+                small: [Some("up_next".into()), None, None, None],
                 xp_bar: true,
                 module_cfg: BTreeMap::new(),
             },
@@ -197,16 +193,8 @@ mod tests {
         let d = HomeLayout::default();
         assert_eq!(d.version, 2);
         assert_eq!(d.large, "objectives");
-        assert_eq!(d.medium, vec!["up_next".to_string(), "pulse".to_string()]);
-        assert_eq!(
-            d.small,
-            [
-                Some("pc_loadout".into()),
-                Some("speeds".into()),
-                Some("usage".into()),
-                Some("streak".into()),
-            ]
-        );
+        assert_eq!(d.medium, vec!["pc_loadout".to_string()]);
+        assert_eq!(d.small, [Some("up_next".into()), None, None, None,]);
         assert!(d.xp_bar);
         assert_eq!(d.preset, "mission_control");
         assert_eq!(HomePreset::MissionControl.label(), "Mission Control");
@@ -239,7 +227,8 @@ mod tests {
         };
         let fixed = bad.sanitize();
         assert_eq!(fixed.large, "objectives");
-        assert_eq!(fixed.small[2].as_deref(), Some("usage"));
+        // Mission Control hides S3; unknown ids fall back to the preset slot (None).
+        assert_eq!(fixed.small[2], None);
     }
 
     #[test]

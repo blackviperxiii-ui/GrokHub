@@ -293,7 +293,7 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
                 size,
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    ui.add_space(super::chat_ui::result_text_inset());
                     ui.label(
                         RichText::new(&row.label)
                             .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
