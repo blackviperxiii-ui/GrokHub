@@ -64,7 +64,7 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Home => ph::regular::HOUSE,
         RailIcon::Objectives => ph::regular::TARGET,
         RailIcon::Pulse => ph::regular::PULSE,
-        RailIcon::Library => ph::regular::BOOKS,
+        RailIcon::Library => ph::regular::SQUARES_FOUR,
         RailIcon::Pc => ph::regular::DESKTOP,
         RailIcon::Profile => ph::regular::USER,
         RailIcon::Settings => ph::regular::GEAR,

@@ -176,6 +176,7 @@ mod interests_ui;
 mod jobs;
 mod journal_ui;
 mod knowme_ui;
+mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
 mod local_pick_ui;
@@ -271,6 +272,7 @@ enum Nav {
     Pulse,
     Imagine,
     Skills,
+    Library,
     Night,
     History,
     Journal,
@@ -5381,6 +5383,7 @@ impl eframe::App for Cabin {
                     Nav::Pulse => self.ui_pulse(ui),
                     Nav::Imagine => self.ui_imagine(ui),
                     Nav::Skills => self.ui_skills(ui),
+                    Nav::Library => self.ui_library(ui),
                     Nav::Night => self.ui_night(ui),
                     Nav::History => self.ui_history(ui),
                     Nav::Journal => self.ui_journal(ui),
