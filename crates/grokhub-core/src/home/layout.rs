@@ -343,7 +343,11 @@ fn place_narrow(
     let as_m = w < NARROW_L_AS_M;
     let mut out = Vec::with_capacity(7);
     let mut y = oy;
-    let l_h = if as_m { MEDIUM_SLOT_H } else { MIN_BODY_H.min(440.0) };
+    let l_h = if as_m {
+        MEDIUM_SLOT_H
+    } else {
+        MIN_BODY_H.min(440.0)
+    };
     push_large(&mut out, large, ox, y, w, l_h, as_m);
     if large.filter(|s| !s.is_empty()).is_some() {
         y += l_h + GAP;
@@ -389,8 +393,8 @@ fn place_narrow(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::config::{HomeLayout, HomePreset};
+    use super::*;
 
     fn default_layout() -> HomeLayout {
         HomeLayout::default()
@@ -423,10 +427,12 @@ mod tests {
         assert!((m1.h + GAP + m2.h - body_h).abs() < 0.5);
         let smalls: Vec<_> = placed
             .iter()
-            .filter(|p| matches!(
-                p.slot,
-                SlotId::Small1 | SlotId::Small2 | SlotId::Small3 | SlotId::Small4
-            ))
+            .filter(|p| {
+                matches!(
+                    p.slot,
+                    SlotId::Small1 | SlotId::Small2 | SlotId::Small3 | SlotId::Small4
+                )
+            })
             .collect();
         assert_eq!(smalls.len(), 4);
         let s_h: f32 = smalls.iter().map(|p| p.h).sum::<f32>() + GAP * 3.0;

@@ -49,7 +49,7 @@ budget() {
   fi
 }
 
-budget "crates/grokhub-app/src/app/mod.rs" 5910 # Activity Dock field + mod + init (#929 cabin)
+budget "crates/grokhub-app/src/app/mod.rs" 5920 # home_layout field + mod home (Order -38 Mission Control)
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2800
