@@ -408,7 +408,7 @@ pub fn brave_key_present() -> bool {
 }
 
 fn format_hits(query: &str, hits: &[Hit]) -> String {
-    let hits = dedupe_hits_by_host(hits);
+    let hits = filter_relevant(query, &dedupe_hits_by_host(hits));
     if hits.is_empty() {
         return format!("No results for {query:?}.");
     }
@@ -444,6 +444,122 @@ fn hit_host(url: &str) -> String {
         .unwrap_or(url);
     let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
     host.strip_prefix("www.").unwrap_or(&host).to_string()
+}
+
+/// Drop obvious off-topic hits (e.g. the Rust video game for a programming
+/// release-notes query) by token overlap and a small wrong-sense host list.
+fn filter_relevant(query: &str, hits: &[Hit]) -> Vec<Hit> {
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    let tokens = query_tokens(query);
+    let prog = looks_programming(query);
+    let rust_q = query_has_token(query, "rust");
+    let mut scored: Vec<(usize, &Hit)> = Vec::with_capacity(hits.len());
+    for h in hits {
+        let host = hit_host(&h.url);
+        if prog && rust_q && is_rust_game_host(&host) {
+            continue;
+        }
+        let s = if tokens.is_empty() {
+            1
+        } else {
+            token_score(&tokens, &hit_blob(h))
+        };
+        scored.push((s, h));
+    }
+    if scored.is_empty() {
+        // Everything was a known collision — keep the original list rather than
+        // returning silence for a live search.
+        return hits.to_vec();
+    }
+    let best = scored.iter().map(|(s, _)| *s).max().unwrap_or(0);
+    let min_keep = if best == 0 { 0 } else { best.div_ceil(2) };
+    let out: Vec<Hit> = scored
+        .into_iter()
+        .filter(|(s, _)| *s >= min_keep)
+        .map(|(_, h)| h.clone())
+        .collect();
+    if out.is_empty() {
+        hits.to_vec()
+    } else {
+        out
+    }
+}
+
+const QUERY_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "is", "are", "was", "be",
+    "with", "from", "by", "as", "it", "this", "that", "these", "those", "current", "latest", "new",
+    "how", "what", "where", "when", "why", "which", "who", "web", "search", "find", "look",
+    "about", "please", "show", "get", "cite", "real", "links", "link", "today", "now",
+];
+
+const PROGRAMMING_SIGNALS: &[&str] = &[
+    "release",
+    "notes",
+    "changelog",
+    "cargo",
+    "crate",
+    "crates",
+    "compiler",
+    "language",
+    "lang",
+    "docs",
+    "documentation",
+    "rfc",
+    "stable",
+    "nightly",
+    "edition",
+    "npm",
+    "pip",
+    "pypi",
+    "maven",
+    "sdk",
+    "api",
+    "programming",
+    "stdlib",
+    "toolchain",
+];
+
+fn query_tokens(query: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+    {
+        if raw.len() < 3 || QUERY_STOPWORDS.contains(&raw) {
+            continue;
+        }
+        if seen.insert(raw.to_string()) {
+            out.push(raw.to_string());
+        }
+    }
+    out
+}
+
+fn query_has_token(query: &str, want: &str) -> bool {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|t| t == want)
+}
+
+fn looks_programming(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    PROGRAMMING_SIGNALS.iter().any(|s| lower.contains(s))
+}
+
+fn is_rust_game_host(host: &str) -> bool {
+    host == "facepunch.com" || host.ends_with(".facepunch.com")
+}
+
+fn hit_blob(h: &Hit) -> String {
+    format!("{} {} {}", h.title, h.url, h.snippet).to_ascii_lowercase()
+}
+
+fn token_score(tokens: &[String], blob: &str) -> usize {
+    tokens.iter().filter(|t| blob.contains(t.as_str())).count()
 }
 
 /// True when the function tool named `web_search` should be stripped because
@@ -614,5 +730,64 @@ mod tests {
         );
         assert!(text.contains("Official notes."), "{text}");
         assert!(!text.contains("Index."), "{text}");
+    }
+
+    #[test]
+    fn drops_rust_game_hit_for_programming_release_notes() {
+        let hits = [
+            Hit {
+                title: "Releases".into(),
+                url: "https://doc.rust-lang.org/releases.html".into(),
+                snippet: "Rust release notes for each stable.".into(),
+            },
+            Hit {
+                title: "1.91.0".into(),
+                url: "https://releases.rs/docs/1.91.0/".into(),
+                snippet: "Changelog for the Rust language.".into(),
+            },
+            Hit {
+                title: "Rust".into(),
+                url: "https://rust.facepunch.com/".into(),
+                snippet: "The only surviving multiplayer survival game.".into(),
+            },
+            Hit {
+                title: "Blog".into(),
+                url: "https://blog.rust-lang.org/releases/".into(),
+                snippet: "Official Rust release announcements.".into(),
+            },
+        ];
+        let kept = filter_relevant("current Rust release notes", &hits);
+        assert!(
+            !kept.iter().any(|h| h.url.contains("facepunch")),
+            "game host must drop: {kept:?}"
+        );
+        assert!(
+            kept.iter().any(|h| h.url.contains("rust-lang.org")),
+            "programming hits must stay: {kept:?}"
+        );
+        let text = format_hits("current Rust release notes", &hits);
+        assert!(!text.contains("facepunch"), "{text}");
+        assert!(text.contains("doc.rust-lang.org"), "{text}");
+    }
+
+    #[test]
+    fn keeps_rust_game_hit_when_query_asks_for_the_game() {
+        let hits = [
+            Hit {
+                title: "Rust".into(),
+                url: "https://rust.facepunch.com/".into(),
+                snippet: "The Facepunch multiplayer survival game.".into(),
+            },
+            Hit {
+                title: "Steam".into(),
+                url: "https://store.steampowered.com/app/252490/Rust/".into(),
+                snippet: "Buy Rust on Steam.".into(),
+            },
+        ];
+        let kept = filter_relevant("Rust game Facepunch", &hits);
+        assert!(
+            kept.iter().any(|h| h.url.contains("facepunch")),
+            "game query must keep Facepunch: {kept:?}"
+        );
     }
 }
