@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_core::playbook::{self as core_pb, Playbook, Tier};
+use grokhub_core::playbook::{self as core_pb, Playbook, Step, Tier};
 
 use crate::harness::{record_change, ChangeTarget, HardHit, Origin, PlaybookTarget};
 use crate::repair::{repair_hit, Os, ProbeId};
@@ -48,7 +48,7 @@ fn file_for(config_dir: &Path, id: &str) -> PathBuf {
 pub fn lock_check(p: &Playbook) -> Result<(), String> {
     for (phase, step) in p.steps() {
         if !step.probe.is_empty() {
-            probe_check(p, &step.name, &step.probe)?;
+            probe_check(p, step)?;
         }
         if step.run.trim().is_empty() {
             continue;
@@ -79,10 +79,15 @@ pub fn lock_check(p: &Playbook) -> Result<(), String> {
     Ok(())
 }
 
-fn probe_check(p: &Playbook, step: &str, probe: &str) -> Result<(), String> {
-    let oses: Vec<Os> = p
-        .applies_when
-        .os
+fn probe_check(p: &Playbook, s: &Step) -> Result<(), String> {
+    let (step, probe) = (s.name.as_str(), s.probe.as_str());
+    // A family playbook names the OS on the step; a single-OS one on the playbook.
+    let named = if s.os.is_empty() {
+        &p.applies_when.os
+    } else {
+        &s.os
+    };
+    let oses: Vec<Os> = named
         .iter()
         .filter_map(|o| match o.as_str() {
             "linux" => Some(Os::Linux),
@@ -90,9 +95,9 @@ fn probe_check(p: &Playbook, step: &str, probe: &str) -> Result<(), String> {
             _ => None,
         })
         .collect();
-    if oses.is_empty() || oses.len() != p.applies_when.os.len() {
+    if oses.is_empty() || oses.len() != named.len() {
         return Err(format!(
-            "step \"{step}\" names a probe, so applies_when.os must list only linux or windows"
+            "step \"{step}\" names a probe, so its os (or applies_when.os) must list only linux or windows"
         ));
     }
     for os in oses {
@@ -326,7 +331,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (10, Source::Shipped, 0)
+            (9, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -354,8 +359,7 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Edited),
-                ("repair-linux", Source::Shipped),
-                ("repair-windows", Source::Shipped),
+                ("pc-fix", Source::Shipped),
                 ("code-dev", Source::Shipped),
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
@@ -378,8 +382,7 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Shipped),
-                ("repair-linux", Source::Shipped),
-                ("repair-windows", Source::Shipped),
+                ("pc-fix", Source::Shipped),
                 ("code-dev", Source::Shipped),
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
@@ -450,7 +453,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 10);
         assert_eq!(
             problems,
             vec![
@@ -476,19 +479,14 @@ mod tests {
         save(&dir, &specific).unwrap();
         let (all, _) = load(&dir);
         let id = |i, d, o| pick(&all, i, d, o, "calm").map(|p| p.id.clone());
-        assert_eq!(
-            id("repair", "system", "linux").as_deref(),
-            Some("repair-linux")
-        );
-        assert_eq!(
-            id("repair", "system", "windows").as_deref(),
-            Some("repair-windows")
-        );
+        assert_eq!(id("repair", "system", "linux").as_deref(), Some("pc-fix"));
+        assert_eq!(id("repair", "system", "windows").as_deref(), Some("pc-fix"));
         assert_eq!(
             id("repair", "code", "linux").as_deref(),
             Some("repair-code-test")
         );
-        assert_eq!(id("repair", "system", "macos").as_deref(), Some(SHIPPED));
+        // One PC-fix family covers macOS too; the any-task playbook no longer does.
+        assert_eq!(id("repair", "system", "macos").as_deref(), Some("pc-fix"));
         assert_eq!(id("task", "code", "linux").as_deref(), Some("code-dev"));
         assert_eq!(id("repair", "code", "windows").as_deref(), Some("code-dev"));
         assert_eq!(id("task", "files", "linux").as_deref(), Some("files"));
@@ -626,19 +624,20 @@ mod tests {
             .unwrap()
     }
 
-    /// The repair playbooks sit on the repair module: every look step is one of
-    /// its probes for that OS (fixed argv, read-only), and the risky steps are
-    /// exactly the ones its rules call hard.
+    /// The PC-fix family sits on the repair module: on each OS, every look
+    /// step is one of its probes for that OS (fixed argv, read-only), and the
+    /// risky steps are exactly the ones its rules call hard.
     #[test]
     fn repair_playbooks_look_first_with_repair_probes_and_ask_before_hard_steps() {
-        for (id, os) in [("repair-linux", Os::Linux), ("repair-windows", Os::Windows)] {
-            let p = shipped_one(id);
+        let family = shipped_one("pc-fix");
+        for (name, os) in [("linux", Os::Linux), ("windows", Os::Windows)] {
+            let p = family.for_os(name);
             assert!(
                 !p.backup.is_empty() && !p.verify.is_empty() && !p.rollback.is_empty(),
-                "{id}"
+                "{name}"
             );
             let tiers: Vec<Tier> = p.steps().map(|(ph, s)| s.tier_in(ph)).collect();
-            assert!(tiers.windows(2).all(|w| w[0] <= w[1]), "{id}: {tiers:?}");
+            assert!(tiers.windows(2).all(|w| w[0] <= w[1]), "{name}: {tiers:?}");
             let mut probes: Vec<&str> = p
                 .steps()
                 .filter(|(_, s)| !s.probe.is_empty())
@@ -647,7 +646,7 @@ mod tests {
             let mut all: Vec<&str> = ProbeId::all(os).iter().map(|p| p.key()).collect();
             probes.sort_unstable();
             all.sort_unstable();
-            assert_eq!(probes, all, "{id} looks with every repair probe");
+            assert_eq!(probes, all, "{name} looks with every repair probe");
             for key in probes {
                 let spec = crate::repair::probe_spec_with(
                     ProbeId::parse(key, os).unwrap(),
@@ -657,12 +656,20 @@ mod tests {
                 assert_eq!(
                     spec.as_ref().and_then(crate::repair::read_only_violation),
                     None,
-                    "{id} {key}"
+                    "{name} {key}"
                 );
             }
         }
-        let risky = |id: &str| -> Vec<(String, String)> {
-            shipped_one(id)
+        assert!(
+            family
+                .for_os("macos")
+                .steps()
+                .all(|(_, s)| s.probe.is_empty()),
+            "macOS has no repair probes yet, so its look steps are plain"
+        );
+        let risky = |os: &str| -> Vec<(String, String)> {
+            family
+                .for_os(os)
                 .steps()
                 .filter(|(ph, s)| s.tier_in(ph) == Tier::Risky)
                 .map(|(_, s)| (s.name.clone(), hit_label(&s.run)))
@@ -674,20 +681,43 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            risky("repair-linux"),
+            risky("linux"),
             pairs(&[
-                ("Reinstall packages with missing files", "none"),
-                ("Install pending updates", "none"),
-                ("Delete old installer copies to free space", "Delete"),
+                ("On Arch: reinstall packages with missing files", "none"),
+                ("On Arch: install pending updates", "none"),
+                (
+                    "On Arch: delete old installer copies to free space",
+                    "Delete"
+                ),
+                ("On Debian or Ubuntu: reinstall a broken package", "none"),
+                ("On Debian or Ubuntu: install pending updates", "none"),
+                // apt's autoclean only drops outdated copies; it is risky by tier.
+                (
+                    "On Debian or Ubuntu: delete old installer copies to free space",
+                    "none"
+                ),
+                ("On Fedora: reinstall a broken package", "none"),
+                ("On Fedora: install pending updates", "none"),
+                (
+                    "On Fedora: delete old installer copies to free space",
+                    "Delete"
+                ),
             ])
         );
         assert_eq!(
-            risky("repair-windows"),
+            risky("windows"),
             pairs(&[
                 ("Repair system files", "none"),
                 ("Repair the Windows image", "none"),
                 ("Install app updates", "none"),
                 ("Delete temporary files to free space", "Delete"),
+            ])
+        );
+        assert_eq!(
+            risky("macos"),
+            pairs(&[
+                ("Install macOS updates", "none"),
+                ("Run First Aid on the startup disk", "none"),
             ])
         );
     }
@@ -715,7 +745,7 @@ mod tests {
         );
         assert_eq!(
             parse(&mkfs).unwrap_err(),
-            "step \"Install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
+            "step \"On Arch: install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
         );
         let wrong = linux.replacen("probe = \"memory\"", "probe = \"volumes\"", 1);
         assert_eq!(
@@ -725,7 +755,13 @@ mod tests {
         let any_os = linux.replacen("os = [\"linux\"]", "", 1);
         assert_eq!(
             parse(&any_os).unwrap_err(),
-            "step \"List failed services\" names a probe, so applies_when.os must list only linux or windows"
+            "step \"List failed services\" names a probe, so its os (or applies_when.os) must list only linux or windows"
+        );
+        // macOS has no repair probes yet.
+        let mac_probe = linux.replacen("os = [\"linux\"]", "os = [\"macos\"]", 1);
+        assert_eq!(
+            parse(&mac_probe).unwrap_err(),
+            "step \"List failed services\" names a probe, so its os (or applies_when.os) must list only linux or windows"
         );
     }
 }

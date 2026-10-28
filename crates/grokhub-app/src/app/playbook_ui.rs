@@ -58,13 +58,11 @@ fn fits_line(l: &Loaded) -> String {
     }
 }
 
-/// "3 steps, up to Safe, reversible"
+/// "3 steps, up to Safe, reversible": this computer's steps, so a family
+/// playbook counts only the ones for this OS.
 fn steps_line(l: &Loaded) -> String {
-    let tiers: Vec<_> = l
-        .playbook
-        .steps()
-        .map(|(phase, s)| s.tier_in(phase))
-        .collect();
+    let here = l.playbook.for_os(grokhub_agent::brain::playbook::host_os());
+    let tiers: Vec<_> = here.steps().map(|(phase, s)| s.tier_in(phase)).collect();
     let top = tiers.iter().max();
     let n = tiers.len();
     let noun = if n == 1 { "step" } else { "steps" };
@@ -288,7 +286,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 10);
+        assert_eq!(cabin.playbooks.all.len(), 9);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -296,24 +294,29 @@ mod tests {
         assert_eq!(fits_line(&cabin.playbooks.all[0]), "Fits task, repair");
         assert_eq!(
             fits_line(&cabin.playbooks.all[1]),
-            "Fits repair · system · linux"
+            "Fits repair · system · linux, windows, macos"
         );
+        // The PC-fix family counts this computer's steps (CI runs Linux and Windows).
         assert_eq!(
             steps_line(&cabin.playbooks.all[1]),
-            "19 steps, up to Risky, asks first"
+            if cfg!(windows) {
+                "16 steps, up to Risky, asks first"
+            } else {
+                "26 steps, up to Risky, asks first"
+            }
         );
-        assert_eq!(fits_line(&cabin.playbooks.all[6]), "Fits task · desktop");
-        assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
+        assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits task · desktop");
+        assert_eq!(fits_line(&cabin.playbooks.all[4]), "Fits research");
         assert_eq!(
-            fits_line(&cabin.playbooks.all[7]),
+            fits_line(&cabin.playbooks.all[6]),
             "Fits task, repair, question · gaming"
         );
         assert_eq!(
-            steps_line(&cabin.playbooks.all[7]),
+            steps_line(&cabin.playbooks.all[6]),
             "8 steps, up to Risky, asks first"
         );
-        assert_eq!(fits_line(&cabin.playbooks.all[8]), "Fits chat");
-        assert_eq!(fits_line(&cabin.playbooks.all[9]), "Fits chat · low");
+        assert_eq!(fits_line(&cabin.playbooks.all[7]), "Fits chat");
+        assert_eq!(fits_line(&cabin.playbooks.all[8]), "Fits chat · low");
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
         let good = draft
@@ -358,8 +361,7 @@ mod tests {
             rows,
             vec![
                 ("task-general", "Any task", Source::Shipped),
-                ("repair-linux", "Repair Linux", Source::Shipped),
-                ("repair-windows", "Repair Windows", Source::Shipped),
+                ("pc-fix", "Fix this PC", Source::Shipped),
                 ("code-dev", "Code changes", Source::Shipped),
                 ("files", "Files", Source::Shipped),
                 ("research", "Research", Source::Shipped),

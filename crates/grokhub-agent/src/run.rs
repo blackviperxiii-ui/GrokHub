@@ -4278,8 +4278,8 @@ mod tests {
             "CABIN RULES\n\n{}",
             grokhub_core::talk::VOLATILE_SAFETY_CLOSER
         );
-        let code = parse(BUILTIN[3]).unwrap().prompt_block();
-        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let code = parse(BUILTIN[2]).unwrap().prompt_block();
+        let files = parse(BUILTIN[3]).unwrap().prompt_block();
         let allow = Answer {
             answer: PermAnswer::Allow,
             asks: AtomicUsize::new(0),

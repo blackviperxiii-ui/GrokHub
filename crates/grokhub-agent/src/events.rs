@@ -273,7 +273,7 @@ impl NativeEngine {
         // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
         crate::checkpoint::set_turn_playbook(
             &self.conversation_id,
-            picked.map(|p| p.prompt_block()),
+            picked.map(|p| p.for_os(crate::brain::playbook::host_os()).prompt_block()),
         );
         let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
         // Brain 6: the id goes on the line too, so the turn's run metrics can name it.
@@ -1170,12 +1170,8 @@ mod tests {
                         "Policy: repair × critical, goal quality (mistakes can break the system)"
                             .into(),
                         "Talk: findings card, reply under 80 words".into(),
-                        // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
-                        if cfg!(windows) {
-                            "Playbook: Repair Windows".into()
-                        } else {
-                            "Playbook: Repair Linux".into()
-                        },
+                        // One repair family for every OS (CI runs Linux and Windows).
+                        "Playbook: Fix this PC".into(),
                     ],
                     "rules".into()
                 ),
@@ -1200,11 +1196,7 @@ mod tests {
                 care: "critical".into(),
                 domain: "system".into(),
                 policy: "repair × critical".into(),
-                playbook: if cfg!(windows) {
-                    "repair-windows".into()
-                } else {
-                    "repair-linux".into()
-                },
+                playbook: "pc-fix".into(),
             }
         );
         assert_eq!(stored[1].run_brain().playbook, "files");

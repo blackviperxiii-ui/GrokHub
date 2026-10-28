@@ -410,7 +410,7 @@ impl BrainStats {
         }
     }
 
-    /// "the repair × critical row" / "the repair-linux playbook".
+    /// "the repair × critical row" / "the pc-fix playbook".
     pub fn name(&self) -> String {
         match self.kind {
             BrainKind::Policy => format!("the {} row", self.key),
@@ -431,7 +431,7 @@ impl BrainStats {
         self.runs >= BRAIN_MIN_RUNS && (self.fails_often() || self.checks_rarely())
     }
 
-    /// "3 of 6 runs on the repair-linux playbook needed a fix".
+    /// "3 of 6 runs on the pc-fix playbook needed a fix".
     pub fn numbers(&self) -> String {
         let name = self.name();
         if self.checks_rarely() && !self.fails_often() {

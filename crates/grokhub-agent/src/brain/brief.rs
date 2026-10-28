@@ -1283,8 +1283,8 @@ mod tests {
             turn: 2,
             brief: b.clone(),
             policy,
-            playbook: "Repair Linux".into(),
-            playbook_id: "repair-linux".into(),
+            playbook: "Fix this PC".into(),
+            playbook_id: "pc-fix".into(),
         };
         record_brief(&dir, &line).unwrap();
         let other = rules(&input("hi")).unwrap();
@@ -1315,7 +1315,7 @@ mod tests {
                 "critical",
                 "system",
                 "repair × critical",
-                "repair-linux"
+                "pc-fix"
             )
         );
         assert_eq!(

@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 /// The playbooks GrokHub ships, as TOML text.
 pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/task-general.toml"),
-    include_str!("../assets/playbooks/repair-linux.toml"),
-    include_str!("../assets/playbooks/repair-windows.toml"),
+    include_str!("../assets/playbooks/pc-fix.toml"),
     include_str!("../assets/playbooks/code-dev.toml"),
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
@@ -138,6 +137,9 @@ pub struct Step {
     /// Defaults to the phase's tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
+    /// `linux`, `windows`, `macos`: the step is for these only; empty is every OS.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub os: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +182,19 @@ impl Playbook {
         self.phases
             .iter()
             .flat_map(|p| p.steps.iter().map(move |s| (p, s)))
+    }
+
+    /// Only the steps for `os` (and those for every OS); a phase left with
+    /// none is dropped. One family file covers Linux, Windows and macOS.
+    pub fn for_os(&self, os: &str) -> Playbook {
+        let mut p = self.clone();
+        for phase in &mut p.phases {
+            phase
+                .steps
+                .retain(|s| s.os.is_empty() || s.os.iter().any(|o| o == os));
+        }
+        p.phases.retain(|ph| !ph.steps.is_empty());
+        p
     }
 
     /// The playbook as one paragraph for the turn's prompt: phases in order
@@ -326,6 +341,21 @@ pub fn check(p: &Playbook) -> Result<(), String> {
                     s.name
                 ));
             }
+            if let Some(bad) = s
+                .os
+                .iter()
+                .find(|o| !OSES.contains(&o.as_str()) || (!a.os.is_empty() && !a.os.contains(o)))
+            {
+                return Err(format!(
+                    "step \"{}\": os `{bad}` must be one of {}",
+                    s.name,
+                    if a.os.is_empty() {
+                        OSES.join(", ")
+                    } else {
+                        a.os.join(", ")
+                    }
+                ));
+            }
             let tier = s.tier_in(phase);
             if !s.probe.is_empty() && (!s.run.is_empty() || tier != Tier::ReadOnly) {
                 return Err(format!(
@@ -410,8 +440,7 @@ mod tests {
             ids,
             vec![
                 "task-general",
-                "repair-linux",
-                "repair-windows",
+                "pc-fix",
                 "code-dev",
                 "files",
                 "research",
@@ -421,7 +450,7 @@ mod tests {
                 "wind-down"
             ]
         );
-        let game = parse(BUILTIN[7]).unwrap();
+        let game = parse(BUILTIN[6]).unwrap();
         assert_eq!(
             (
                 game.fit("task", "gaming", "windows", "calm"),
@@ -448,26 +477,72 @@ mod tests {
             ),
             (Some(1), None)
         );
-        // A repair that restarts the computer checks the fix again after it.
-        for text in &BUILTIN[1..3] {
-            let p = parse(text).unwrap();
-            assert!(
-                p.verify.ends_with(
-                    "After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
-                ),
-                "{}",
-                p.id
-            );
-        }
-        // Fix the real setting before linking around it.
-        assert!(parse(BUILTIN[1]).unwrap().prompt_block().contains(
-            "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap"
+        // The PC-fix family carries the repair lessons on every OS.
+        let fix = parse(BUILTIN[1]).unwrap();
+        assert!(fix.verify.ends_with(
+            "After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
         ));
+        assert!(fix
+            .verify
+            .contains("Say a fix is approved only after the user said yes, and done only after the check passed."));
+        for os in OSES {
+            let block = fix.for_os(os).prompt_block();
+            for lesson in [
+                "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap",
+                "A permission-denied answer means the check needs admin rights, not that something is missing",
+                "Take a restore point before the first change",
+            ] {
+                assert!(block.contains(lesson), "{os}: {lesson}");
+            }
+        }
+        assert_eq!(
+            (
+                fix.fit("repair", "system", "macos", "calm"),
+                fix.fit("repair", "system", "windows", "calm"),
+                fix.fit("task", "system", "linux", "calm")
+            ),
+            (Some(3), Some(3), None)
+        );
+    }
+
+    #[test]
+    fn a_family_playbook_keeps_only_this_computers_steps() {
+        let fix = parse(BUILTIN[1]).unwrap();
+        let names = |os: &str| -> Vec<String> {
+            fix.for_os(os)
+                .steps()
+                .map(|(_, s)| s.name.clone())
+                .collect()
+        };
+        let mac = names("macos");
+        assert!(mac.contains(&"Install macOS updates".to_string()));
+        assert!(!mac
+            .iter()
+            .any(|n| n.starts_with("On Arch") || n == "Repair system files"));
+        let win = names("windows");
+        assert!(win.contains(&"Repair system files".to_string()));
+        assert!(!win
+            .iter()
+            .any(|n| n.starts_with("On Fedora") || n == "Install macOS updates"));
+        // Windows has nothing in the copy-a-config step's OS list, and keeps the shared ones.
+        assert!(!win.contains(&"Copy a config file before editing it".to_string()));
+        assert!(win.contains(&"Take a restore point before the first change".to_string()));
+        let linux = fix.for_os("linux").prompt_block();
+        assert!(linux
+            .contains("On Debian or Ubuntu: install pending updates (`sudo apt-get upgrade -y`)"));
+        assert!(linux.contains("On Fedora: install pending updates (`sudo dnf upgrade -y`)"));
+        assert!(!linux.contains("winget"));
+        // A step can only name an OS the playbook applies to.
+        let bad = BUILTIN[1].replacen("os = [\"macos\"]", "os = [\"bsd\"]", 1);
+        assert_eq!(
+            parse(&bad).unwrap_err(),
+            "step \"Check disk space (df -h)\": os `bsd` must be one of linux, windows, macos"
+        );
     }
 
     #[test]
     fn the_prompt_block_lists_phases_in_order_and_when_to_stop() {
-        let p = parse(BUILTIN[3]).unwrap();
+        let p = parse(BUILTIN[2]).unwrap();
         assert_eq!(
             p.prompt_block(),
             "Playbook for this turn: Code changes. Read the code and run the tests before editing, change one thing at a time, and run the build and tests after each change.\n\
@@ -496,8 +571,8 @@ mod tests {
         let closer = crate::talk::VOLATILE_SAFETY_CLOSER;
         let style = "Talk style for this turn: short.";
         let system = format!("Rules.\n\nNotes.\n\n{style}\n\n{closer}");
-        let code = parse(BUILTIN[3]).unwrap().prompt_block();
-        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let code = parse(BUILTIN[2]).unwrap().prompt_block();
+        let files = parse(BUILTIN[3]).unwrap().prompt_block();
         let one = with_playbook(&system, Some(&code));
         assert_eq!(
             one,
