@@ -524,7 +524,7 @@ pub use thread_tab::{
     clean_tab_title, default_thread_title, delete_thread, display_tab_title, empty_chat_draft,
     history_order, history_row_visible, keep_loaded_thread, leftover_empty_thread,
     reuse_empty_thread_idx, short_auto_title, toggle_pin, DeleteOutcome, ThreadReuseView,
-    ThreadTab, AUTO_TITLE_MAX,
+    ThreadTab, AUTO_TITLE_MAX, AUTO_TITLE_WORDS,
 };
 pub use trajectory::{
     clip_excerpt, parse_trajectory_jsonl, rotate_trajectory, summarize_trajectory,
