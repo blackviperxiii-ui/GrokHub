@@ -261,7 +261,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         throw "no $($brand.productName) window at ${w}x${h}"
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
-    Start-Sleep -Seconds $(if ($diagSave -and $wheel -eq 0) { 2 } elseif ($dock -or $library) { 40 } else { 12 })
+    Start-Sleep -Seconds $(if ($diagSave) { 8 } elseif ($dock -or $library) { 40 } else { 12 })
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -321,6 +321,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $g.Dispose()
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    if ($diagSave) { Get-Content (Join-Path $root 'err.txt') -ErrorAction SilentlyContinue | Select-String 'deck diag' | ForEach-Object { Write-Host $_ } }
     $saved = Get-Content (Join-Path $cfg 'app.json') -Raw | ConvertFrom-Json
     Write-Host "app.json after ${name}: theme=$($saved.theme) themeMigrated=$($saved.themeMigrated)"
     $png = Join-Path $Out "app-$name.png"
@@ -361,14 +362,10 @@ Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -clickAt 20, 695
 Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
-# Labs Diagnostics proof (scratch): toggle off, toggle on with Save, and the
-# toast plus Open folder after a launch-time save.
-foreach ($sz in @(@(1600, 900), @(1100, 720))) {
-    $sw = $sz[0]; $sh = $sz[1]
-    Shot $sw $sh "diag-off-${sw}x${sh}" 'ops-dark' '12' -openSettings 'labs'
-    Shot $sw $sh "diag-off-${sw}x${sh}-scrolled" 'ops-dark' '12' -openSettings 'labs' -wheel 12 -wheelCenter
-    Shot $sw $sh "diag-on-${sw}x${sh}-scrolled" 'ops-dark' '12' -openSettings 'labs' -diag -wheel 12 -wheelCenter
-    Shot $sw $sh "diag-saved-${sw}x${sh}" 'ops-dark' '12' -openSettings 'labs' -diag -diagSave
-    Shot $sw $sh "diag-saved-${sw}x${sh}-scrolled" 'ops-dark' '12' -openSettings 'labs' -diag -diagSave -wheel 12 -wheelCenter
-}
+# Labs Diagnostics proof (scratch): tall windows so the Diagnostics section is
+# on screen without scrolling. Off, on with Save, and the toast after a Save.
+Shot 1100 1500 'diag-off-1100x1500' 'ops-dark' '12' -openSettings 'labs'
+Shot 1100 1500 'diag-on-1100x1500' 'ops-dark' '12' -openSettings 'labs' -diag
+Shot 1100 1500 'diag-saved-1100x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave
+Shot 1600 1500 'diag-saved-1600x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave
 Get-ChildItem $Out | Format-Table Name, Length

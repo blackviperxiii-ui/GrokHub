@@ -5447,6 +5447,20 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        // Scratch proof hook: one Save six seconds after launch, so the toast shows in the shot.
+        if std::env::var("GROKHUB_DECK_DIAG_SAVE").is_ok_and(|v| v.trim() == "1") {
+            static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            let t0 = *T0.get_or_init(std::time::Instant::now);
+            if t0.elapsed() >= std::time::Duration::from_secs(6) {
+                if !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    self.save_chat_diagnostics(None);
+                    eprintln!("deck diag save: {}", self.status);
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
         status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
         self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs

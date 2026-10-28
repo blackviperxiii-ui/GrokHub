@@ -1089,9 +1089,6 @@ impl Cabin {
         {
             self.set_nav_id("settings");
         }
-        if std::env::var("GROKHUB_DECK_DIAG_SAVE").is_ok_and(|v| v.trim() == "1") {
-            self.save_chat_diagnostics(None);
-        }
     }
 
     /// After `open_fresh_home`, restore a citation transcript for web_search
