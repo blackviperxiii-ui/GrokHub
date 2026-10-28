@@ -752,10 +752,16 @@ impl Cabin {
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.cfg.last_chat_tab = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
-        // Viper is an adults-only preset; without this gate the titlebar falls
-        // back to Nyx and HARD DONE shots look wrong.
-        self.cfg.explicit_personalities = true;
-        self.cfg.personality = "viper".into();
+        // Slide-19 showcase seeds Viper when the shot left the pick empty.
+        // An explicit app.json pick (Nyx fresh install, or legacy "default"
+        // rewritten to Nyx) must win so HARD DONE Nyx-default shots stay true.
+        let pick = self.cfg.personality.trim();
+        if pick.is_empty() {
+            self.cfg.explicit_personalities = true;
+            self.cfg.personality = "viper".into();
+        } else if pick == "viper" {
+            self.cfg.explicit_personalities = true;
+        }
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
@@ -1505,14 +1511,28 @@ mod tests {
                 "Fix my stutter"
             ]
         );
+        // Empty pick → seed plants Viper for slide-19 showcase shots.
+        cabin.cfg.personality.clear();
+        cabin.cfg.explicit_personalities = false;
+        cabin.apply_deck_shot_seed();
         assert!(
             cabin.cfg.explicit_personalities,
-            "Viper is adults-only; deck seed must turn the gate on"
+            "Viper is adults-only; empty deck seed must turn the gate on"
         );
         assert_eq!(cabin.cfg.personality, "viper");
         assert_eq!(
             cabin.titlebar_personality_label().to_ascii_uppercase(),
             "VIPER"
+        );
+        // An explicit Nyx pick (fresh-install / upgraded-from-default proofs)
+        // must survive the seed so HARD DONE shots stay on Nyx.
+        cabin.cfg.personality = "nyx".into();
+        cabin.cfg.explicit_personalities = false;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.cfg.personality, "nyx");
+        assert!(
+            !cabin.cfg.explicit_personalities,
+            "Nyx is not adults-only; seed must not force the gate on"
         );
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),

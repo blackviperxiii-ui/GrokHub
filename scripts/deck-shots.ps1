@@ -358,12 +358,13 @@ Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # missed the 1100x720 window.
 Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 410, 246
 Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 160, 156
-# Nyx is the default personality: Settings -> Personality on a fresh Nyx
-# profile, and on one still saved on the retired 'default' preset (rewritten).
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -clickAt 20, 875, 410, 334
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -clickAt 20, 695, 160, 244
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -clickAt 20, 875, 410, 334
-Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 160, 244
+# Nyx is the default personality: Settings -> Personality pinned via
+# GROKHUB_DECK_SETTINGS_SEC. Fresh installs pass nyx; upgrades pass the
+# retired 'default' id (cabin load rewrites it to Nyx and keeps it).
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -pinPersonality
+Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -pinPersonality
+Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -pinPersonality
+Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -pinPersonality
 # Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
