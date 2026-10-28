@@ -9,7 +9,7 @@ SignPath signs GrokHub-owned Windows release binaries built by GitHub Actions fr
 - `GrokHub-Setup-*.exe` (Inno Setup installer)
 - `grokhub.exe` and `grokhub-hub.exe` inside `grokhub-windows-v*.zip`
 
-Signing runs only on `v*` tags when SignPath GitHub secrets/variables are configured. Branch pushes to `beta` publish unsigned Windows pre-release assets (checksums / minisign on `SHA256SUMS` still apply when configured).
+Signing runs only on `v*` tags when SignPath GitHub secrets/variables are configured. Nightly (and manual) beta pre-releases publish unsigned Windows assets (checksums / minisign on `SHA256SUMS` still apply when configured).
 
 Artifact layout and SignPath XML: [`.signpath/windows-release.xml`](../.signpath/windows-release.xml). Owner application checklist: see the Project store doc `docs/signpath-oss-signing.md` (not in this repo).
 
