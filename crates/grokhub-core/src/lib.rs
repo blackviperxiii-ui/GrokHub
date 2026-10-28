@@ -68,6 +68,7 @@ pub mod learning;
 pub mod local_discover;
 pub mod local_draft;
 pub mod local_governor;
+pub mod local_model_news;
 pub mod local_picker;
 pub mod local_profile;
 pub mod local_setup;

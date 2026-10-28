@@ -1000,6 +1000,9 @@ impl Cabin {
             Some(UpdateAction::OpenWorkboard) => self.nav = Nav::Workboard,
             Some(UpdateAction::OpenAutomations) => self.nav = Nav::Night,
             Some(UpdateAction::DeepLink { href }) => {
+                if self.open_local_model_link(&href) {
+                    return;
+                }
                 let href = href.trim();
                 if !href.is_empty() {
                     self.status = href.to_string();
