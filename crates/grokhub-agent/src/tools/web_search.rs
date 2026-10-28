@@ -408,6 +408,7 @@ pub fn brave_key_present() -> bool {
 }
 
 fn format_hits(query: &str, hits: &[Hit]) -> String {
+    let hits = dedupe_hits_by_host(hits);
     if hits.is_empty() {
         return format!("No results for {query:?}.");
     }
@@ -420,6 +421,29 @@ fn format_hits(query: &str, hits: &[Hit]) -> String {
     }
     out.push_str("Open pages you rely on with web_fetch.\n");
     out
+}
+
+/// Keep the first hit per host so Sources does not list releases.rs twice.
+fn dedupe_hits_by_host(hits: &[Hit]) -> Vec<Hit> {
+    let mut out = Vec::with_capacity(hits.len());
+    let mut seen = std::collections::HashSet::new();
+    for h in hits {
+        let host = hit_host(&h.url);
+        if host.is_empty() || !seen.insert(host) {
+            continue;
+        }
+        out.push(h.clone());
+    }
+    out
+}
+
+fn hit_host(url: &str) -> String {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    host.strip_prefix("www.").unwrap_or(&host).to_string()
 }
 
 /// True when the function tool named `web_search` should be stripped because
@@ -553,5 +577,42 @@ mod tests {
         assert!(!is_function_web_search(
             &json!({"type":"function","name":"web_fetch"})
         ));
+    }
+
+    #[test]
+    fn format_hits_numbers_up_and_collapses_duplicate_hosts() {
+        let hits = [
+            Hit {
+                title: "Doc".into(),
+                url: "https://doc.rust-lang.org/stable/releases.html".into(),
+                snippet: "Official notes.".into(),
+            },
+            Hit {
+                title: "1.99".into(),
+                url: "https://releases.rs/docs/1.99.0/".into(),
+                snippet: "Changelog.".into(),
+            },
+            Hit {
+                title: "All".into(),
+                url: "https://releases.rs/".into(),
+                snippet: "Index.".into(),
+            },
+            Hit {
+                title: "Blog".into(),
+                url: "https://www.rust.dev/updates".into(),
+                snippet: "Updates.".into(),
+            },
+        ];
+        let text = format_hits("rust release", &hits);
+        assert!(text.contains("1. Doc\n"), "{text}");
+        assert!(text.contains("2. 1.99\n"), "{text}");
+        assert!(text.contains("3. Blog\n"), "{text}");
+        assert!(!text.contains("4."), "{text}");
+        assert!(
+            text.matches("releases.rs").count() == 1,
+            "duplicate host must collapse: {text}"
+        );
+        assert!(text.contains("Official notes."), "{text}");
+        assert!(!text.contains("Index."), "{text}");
     }
 }

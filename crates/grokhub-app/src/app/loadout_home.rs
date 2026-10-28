@@ -550,6 +550,13 @@ fn web_search_shot_env() -> bool {
     })
 }
 
+/// Open Settings → Cabin defaults (Web search fields) for proof shots.
+fn web_search_settings_shot() -> bool {
+    std::env::var("GROKHUB_WEB_SEARCH_SETTINGS")
+        .ok()
+        .is_some_and(|v| v.trim() == "1")
+}
+
 /// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
 pub(super) fn deck_tab_count() -> Option<usize> {
     std::env::var("GROKHUB_DECK_TABS")
@@ -775,8 +782,20 @@ impl Cabin {
     /// written by `scripts/web-search-shots.ps1` (title + messages). Launch
     /// clears a loaded transcript, so this must run after home open — same
     /// pattern as [`Self::apply_deck_shot_seed`].
+    ///
+    /// `GROKHUB_WEB_SEARCH_SETTINGS=1` opens Settings → Cabin defaults so the
+    /// optional SearXNG / Brave fields are visible (no fragile click).
     pub(super) fn apply_web_search_shot_seed(&mut self) {
         if !web_search_shot_requested() {
+            return;
+        }
+        if web_search_settings_shot() {
+            if self.nav != Nav::Settings {
+                self.settings_back = self.nav;
+            }
+            self.nav = Nav::Settings;
+            self.settings_sec = settings::pinned_settings_sec()
+                .unwrap_or(SettingsSec::Defaults);
             return;
         }
         let path = crate::config::config_dir().join("web-search-shot-seed.json");
@@ -1570,7 +1589,9 @@ mod tests {
     fn web_search_shot_seed_restores_citation_transcript() {
         let _g = crate::config::hold_test_config();
         let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
         std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS");
         let cite = "https://doc.rust-lang.org/stable/releases.html";
         let seed = serde_json::json!({
             "id": "ws-openrouter",
@@ -1602,6 +1623,38 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
             None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+    }
+
+    #[test]
+    fn web_search_settings_shot_opens_cabin_defaults() {
+        let _g = crate::config::hold_test_config();
+        let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+        let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
+        let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
+        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+        std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", "1");
+        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "defaults");
+        let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
+        cabin.open_fresh_home();
+        cabin.apply_web_search_shot_seed();
+        assert!(matches!(cabin.nav, Nav::Settings));
+        assert!(matches!(cabin.settings_sec, SettingsSec::Defaults));
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        }
+        match prev_set {
+            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
+            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+        }
+        match prev_sec {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
+            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
         }
     }
 

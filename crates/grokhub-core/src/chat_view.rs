@@ -714,6 +714,9 @@ fn visible_assistant(text: &str) -> String {
         .strip_prefix("SLASH_RESULT:\n")
         .or_else(|| text.strip_prefix("SLASH_RESULT:"))
         .unwrap_or(text);
+    // Model-only untrusted fences (web_search / web_fetch / …) must never paint
+    // in the user-facing bubble — drop open→close blocks and stray markers.
+    let text = strip_untrusted_fences(text);
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_until: Option<String> = None;
     for line in text.lines() {
@@ -736,6 +739,36 @@ fn visible_assistant(text: &str) -> String {
         lines.pop();
     }
     lines.join("\n").trim().to_string()
+}
+
+/// Drop `<<<UNTRUSTED …>>>` / `<<<END_UNTRUSTED …>>>` fence blocks from text
+/// shown to the user. Tool results stay fenced for the model only.
+fn strip_untrusted_fences(text: &str) -> String {
+    const OPEN: &str = "<<<UNTRUSTED";
+    const CLOSE: &str = "<<<END_UNTRUSTED";
+    if !text.contains(OPEN) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open_at) = rest.find(OPEN) {
+        out.push_str(&rest[..open_at]);
+        let after_open = &rest[open_at..];
+        let Some(close_at) = after_open.find(CLOSE) else {
+            // Unclosed fence: drop from the open marker to the end.
+            return out;
+        };
+        let after_close = &after_open[close_at..];
+        let Some(end) = after_close.find(">>>") else {
+            return out;
+        };
+        rest = &after_close[end + 3..];
+        if rest.starts_with('\n') {
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `HOST_CMD: cat <<'EOF'` hides the script until `EOF`.
@@ -973,6 +1006,44 @@ mod tests {
 
     fn kinds(v: &[ChatView]) -> Vec<ChatKind> {
         v.iter().map(|x| x.kind).collect()
+    }
+
+    #[test]
+    fn user_facing_reply_hides_untrusted_web_search_fence() {
+        let body = "Here are the hits.\n\n\
+            Sources:\n\
+            1. https://doc.rust-lang.org/stable/releases.html\n\n\
+            <<<UNTRUSTED source=web_search nonce=deadbeef>>>\n\
+            1. Doc\n   https://doc.rust-lang.org/stable/releases.html\n\
+            <<<END_UNTRUSTED nonce=deadbeef>>>";
+        let v = visible_chat(&[
+            ("user".into(), "search rust".into()),
+            ("assistant".into(), body.into()),
+        ]);
+        let reply = v
+            .iter()
+            .find(|x| x.kind == ChatKind::Assistant)
+            .expect("assistant bubble");
+        assert!(
+            reply.body.contains("Sources:"),
+            "answer + Sources stay: {}",
+            reply.body
+        );
+        assert!(
+            reply.body.contains("https://doc.rust-lang.org/stable/releases.html"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            !reply.body.contains("<<<UNTRUSTED"),
+            "fence must not paint: {}",
+            reply.body
+        );
+        assert!(
+            !reply.body.contains("END_UNTRUSTED"),
+            "close marker must not paint: {}",
+            reply.body
+        );
     }
 
     #[test]
