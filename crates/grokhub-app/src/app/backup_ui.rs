@@ -115,6 +115,41 @@ impl Cabin {
         true
     }
 
+    /// The reminder's one-taps as pills under its own Pulse post, so they sit
+    /// with the card and not only in the chat's chip row.
+    pub(super) fn paint_backup_one_taps(
+        &self,
+        ui: &mut egui::Ui,
+        card: &grokhub_core::UpdateCard,
+    ) -> Option<String> {
+        if !card.source_id.starts_with(bn::CARD_SOURCE) {
+            return None;
+        }
+        let chips = self.backup_chips();
+        let mut tapped = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+            for chip in &chips {
+                if super::change_undo::click_pill(ui, &chip.label) {
+                    tapped = Some(chip.id.clone());
+                }
+            }
+        });
+        tapped
+    }
+
+    /// A one-tap from the post. Snooze stays on Pulse; push and open go to
+    /// Chat, where the agent asks before pushing or the tool's line runs.
+    pub(super) fn tap_backup_chip(&mut self, id: &str) {
+        let Some(chip) = self.backup_chips().into_iter().find(|c| c.id == id) else {
+            return;
+        };
+        if chip.id != bn::SNOOZE_ID {
+            self.nav = Nav::Chat;
+        }
+        self.apply_chip(chip);
+    }
+
     pub(super) fn ui_backup_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.backup_nudge;
         if crate::cards::settings_toggle(
@@ -203,6 +238,32 @@ mod tests {
         next.cfg.backup_nudge = true;
         next.tick_backup();
         assert!(next.focus.backup.rx.is_none());
+    }
+
+    #[test]
+    fn the_posts_one_taps_snooze_in_place_and_push_from_chat() {
+        let root = crate::config::test_config_root("backup-nudge-post");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.backup_nudge = true;
+        cabin.nav = Nav::Pulse;
+        cabin.show_backup_reminder(reminder(), 5_000);
+        let card = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Some work isn't backed up")
+            .cloned()
+            .expect("posted");
+        assert_eq!(card.source_id, "backup-nudge:0");
+        cabin.tap_backup_chip("backup:push:my-app");
+        assert_eq!(cabin.nav, Nav::Chat);
+        cabin.nav = Nav::Pulse;
+        cabin.tap_backup_chip(bn::SNOOZE_ID);
+        assert_eq!(cabin.nav, Nav::Pulse, "snooze stays on Pulse");
+        assert!(cabin.backup_chips().is_empty());
+        assert!(bn::load(&root).snoozed_until_ms > now_ms());
     }
 
     #[test]

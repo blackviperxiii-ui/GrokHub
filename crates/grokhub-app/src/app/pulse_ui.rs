@@ -242,6 +242,8 @@ pub(super) enum PulseAct {
     /// More or fewer cards of this one's kind, from the ··· menu.
     MoreKind(String),
     LessKind(String),
+    /// A backup reminder's one-tap, by chip id.
+    BackupChip(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1615,6 +1617,9 @@ impl Cabin {
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
                         });
                     }
+                    if let Some(id) = self.paint_backup_one_taps(ui, card) {
+                        act = Some(PulseAct::BackupChip(id));
+                    }
                 });
             });
         });
@@ -1897,6 +1902,7 @@ impl Cabin {
             PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::BackupChip(id) => self.tap_backup_chip(&id),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
             // Recorded by react_to_act; nothing else to do.
             PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}

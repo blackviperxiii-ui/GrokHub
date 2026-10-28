@@ -258,6 +258,8 @@ pub fn reminder(
 }
 
 pub const SNOOZE_ID: &str = "backup:snooze";
+/// `source_id` prefix of the reminder's Pulse post.
+pub const CARD_SOURCE: &str = "backup-nudge:";
 
 impl Reminder {
     pub fn title(&self) -> String {
@@ -275,7 +277,7 @@ impl Reminder {
     pub fn card(&self, now_ms: u64) -> crate::UpdateCard {
         let day = now_ms / DAY_MS;
         let mut card = crate::update_feed::digest_card(
-            &format!("backup-nudge:{day}"),
+            &format!("{CARD_SOURCE}{day}"),
             &self.title(),
             &self.body(),
             now_ms,
