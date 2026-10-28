@@ -941,8 +941,7 @@ impl Cabin {
         let mood = self.companion_mood();
         let (tex, rotate) = self.companion_dock_texture(ui.ctx(), mood);
         if rotate {
-            ui.ctx()
-                .request_repaint_after(companion_photos::PHOTO_HOLD);
+            ui.ctx().request_repaint_after(companion_photos::PHOTO_HOLD);
         }
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
