@@ -111,9 +111,11 @@ function Seed-Library([string]$root) {
     $steam = Join-Path $root '.steam/steam'
     $secs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $games = @(
-        @(1001, 'Rift Circuit', 5160, 1), @(1006, 'Hollow Peak', 1800, 3), @(1011, 'Starfall Ops', 900, 6),
-        @(1015, 'Iron Tide', 600, 9), @(1020, 'Glass Orbit', 300, 14), @(1025, 'Dustline', 120, 20),
-        @(1030, 'Night Vault', 0, 0), @(1035, 'Echo Front', 0, 0), @(1036, 'Emberfall', 45, 40), @(1041, 'Null Sector', 0, 0)
+        # Real store ids, so the covers are each game's real art from Steam's
+        # CDN. Rift Circuit has no store page and keeps the painted cover.
+        @(1001, 'Rift Circuit', 5160, 1), @(1086940, "Baldur's Gate 3", 1800, 3), @(1245620, 'ELDEN RING', 900, 6),
+        @(730, 'Counter-Strike 2', 600, 9), @(1091500, 'Cyberpunk 2077', 300, 14), @(413150, 'Stardew Valley', 120, 20),
+        @(367520, 'Hollow Knight', 0, 0), @(1145360, 'Hades', 0, 0), @(292030, 'The Witcher 3: Wild Hunt', 45, 40), @(105600, 'Terraria', 0, 0)
     )
     $apps = ''
     foreach ($g in $games) {
