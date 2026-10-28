@@ -5,7 +5,7 @@ The four layout PNGs (`layout-default.png`, `edit-home-dialog.png`, `layout-perf
 ## layout-default — Mission Control (default preset)
 - Left rail: Home active. **No chat tab bar** on Home.
 - Header: LOADOUT · LOCAL · 0 B SENT · "TUESDAY · SEASON 4" · "Ready up, user." · LVL 14 · GRINDER XP bar.
-- Columns (equal height): **L** Today's Objectives (3/5) + Weekly Streak 5 DAYS + coach tip · **M** Up Next (3 QUEUED game cards) over Pulse · For You · **S** GPU TEMP / PING / AI USAGE / STREAK with ✎ tucked top-right of the module area.
+- Columns (equal height, slide 09): **L** Today's Objectives + Weekly Streak (~5 DAYS) + coach tip · **M** PC Loadout (temps / storage / tune-up) · **S** Up Next cover cards (QUEUED) with ✎ tucked top-right of the module area.
 - Chips + chat bar pinned: "Assign an objective or ask anything..." + yellow send.
 
 ## edit-home-dialog
