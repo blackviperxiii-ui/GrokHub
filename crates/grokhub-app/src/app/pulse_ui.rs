@@ -63,7 +63,7 @@ impl PulseTab {
     pub fn label(self) -> &'static str {
         match self {
             PulseTab::Feed => "Feed",
-            PulseTab::Ideas => "Ideas",
+            PulseTab::Ideas => grokhub_core::pulse::FOR_YOU_LABEL,
         }
     }
 }
@@ -165,7 +165,7 @@ pub(super) fn suggest_label(busy: bool, fit: PulseFit) -> &'static str {
     match (busy, fit) {
         (true, _) => "Suggesting…",
         (false, PulseFit::Stacked) => "Suggest",
-        (false, _) => "Suggest ideas",
+        (false, _) => "Suggest for you",
     }
 }
 
@@ -1962,22 +1962,36 @@ impl Cabin {
     }
 
     pub(super) fn pulse_remove(&mut self, card: &UpdateCard) {
-        if card.kind == UpdateKind::Idea {
-            self.delete_idea(&card.id);
-        } else {
-            self.dismiss_feed_card(&card.id);
-        }
+        // Not-this / wrong: treat as turned down.
+        self.pulse_remove_dismiss(card, true);
     }
 
     pub(super) fn pulse_dismiss(&mut self, id: &str, day: &str) {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
-        self.pulse_note(&card.title, LedgerReason::Dismiss, day);
-        self.nudge_watcher_dismissed(&card);
-        self.pulse_remove(&card);
-        self.heartbeat_card_dismissed();
-        self.proactive_dismissed(&card);
+        let used_depth = grokhub_core::used_depth(&self.card_prefs, &card);
+        let kind = pc::dismiss_kind(&card, used_depth);
+        self.pulse_note(&card.title, kind.ledger_reason(), day);
+        if kind.counts_negative() {
+            self.nudge_watcher_dismissed(&card);
+            self.heartbeat_card_dismissed();
+            self.proactive_dismissed(&card);
+            self.pulse_remove_dismiss(&card, true);
+        } else {
+            self.pulse_remove_dismiss(&card, false);
+            self.status = "Done.".into();
+        }
+    }
+
+    /// Remove a Pulse card after dismiss. `turned_down` writes negative topic
+    /// memory; used-then-dismissed cards skip that.
+    pub(super) fn pulse_remove_dismiss(&mut self, card: &UpdateCard, turned_down: bool) {
+        if card.kind == UpdateKind::Idea {
+            self.delete_idea_with_feedback(&card.id, turned_down);
+        } else {
+            self.dismiss_feed_card(&card.id);
+        }
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the

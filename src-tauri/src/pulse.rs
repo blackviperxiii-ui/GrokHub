@@ -350,14 +350,25 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     let Some(card) = cards.iter().find(|c| c.id == id).cloned() else {
         return Err("That card is gone. The page now shows what is left.".into());
     };
-    let (outcome, shift) = match act {
-        Act::Dismiss | Act::Delete => (Outcome::Dismissed, None),
-        Act::NotThis | Act::NotInterested => (Outcome::Dismissed, Some(false)),
-        Act::Love | Act::Accept => (Outcome::Accepted, None),
-        Act::MoreLike => (Outcome::Accepted, Some(true)),
-        Act::Snooze => (Outcome::Snoozed, None),
+    let dismiss = if matches!(act, Act::Dismiss) {
+        Some(pc::dismiss_kind(&card, 0))
+    } else {
+        None
     };
-    react(config_dir, &card, outcome, shift, now_ms);
+    let (outcome, shift) = match act {
+        Act::Dismiss if dismiss == Some(pc::DismissKind::UsedDone) => {
+            // Used / liked / discussed then dismissed: no negative reaction.
+            (None, None)
+        }
+        Act::Dismiss | Act::Delete => (Some(Outcome::Dismissed), None),
+        Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
+        Act::Love | Act::Accept => (Some(Outcome::Accepted), None),
+        Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
+        Act::Snooze => (Some(Outcome::Snoozed), None),
+    };
+    if let Some(outcome) = outcome {
+        react(config_dir, &card, outcome, shift, now_ms);
+    }
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
             grokhub_core::dismiss_idea(cards, id)
@@ -367,7 +378,10 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     };
     let changed = match act {
         Act::Dismiss => {
-            note(&card.title, LedgerReason::Dismiss, &day.date)?;
+            let reason = dismiss
+                .unwrap_or(pc::DismissKind::NotInterested)
+                .ledger_reason();
+            note(&card.title, reason, &day.date)?;
             remove(&mut cards)
         }
         Act::NotThis => {

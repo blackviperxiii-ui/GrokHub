@@ -105,7 +105,8 @@ impl Cabin {
             | PulseAct::Like(id) => (id, Outcome::Accepted, None),
             PulseAct::Open(id) | PulseAct::Discuss(id) => (id, Outcome::Tapped, None),
             PulseAct::Snooze(id) => (id, Outcome::Snoozed, None),
-            PulseAct::Dismiss(id) | PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
+            PulseAct::Dismiss(id) => (id, Outcome::Dismissed, None),
+            PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
             PulseAct::NotThis(id) => (id, Outcome::Dismissed, Some(false)),
             PulseAct::Source(id, SourceAct::Save) => (id, Outcome::Accepted, None),
             PulseAct::Source(id, SourceAct::MoreLike) => (id, Outcome::Accepted, Some(true)),
@@ -117,6 +118,13 @@ impl Cabin {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
+        // Used / liked / discussed then dismissed: never a negative reaction.
+        if matches!(act, PulseAct::Dismiss(_)) {
+            let depth = grokhub_core::used_depth(&self.card_prefs, &card);
+            if !grokhub_core::pulse::dismiss_kind(&card, depth).counts_negative() {
+                return;
+            }
+        }
         if !matches!(act, PulseAct::MoreKind(_) | PulseAct::LessKind(_)) {
             self.react(&card, outcome);
         }
