@@ -46,8 +46,8 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
 }
 
 /// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
-/// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality / Behavior /
-/// Privacy without a fragile click.
+/// (`scripts/deck-shots.ps1` / `web-search-shots.ps1`), so Ctrl+, lands on
+/// Personality / Behavior / Privacy / Cabin defaults without a fragile click.
 pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
     static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
     *PIN.get_or_init(|| {
@@ -60,15 +60,12 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
         {
             Some("personality") => Some(SettingsSec::Personality),
             Some("privacy") => Some(SettingsSec::Privacy),
-<<<<<<< HEAD
             Some("behavior") => Some(SettingsSec::Behavior),
-=======
             // Cabin defaults holds Models & providers → Web search (optional
             // SearXNG URL / Brave key). Used by web-search-shots.ps1.
             Some("defaults") | Some("cabin") | Some("websearch") | Some("web_search") => {
                 Some(SettingsSec::Defaults)
             }
->>>>>>> origin/beta
             _ => None,
         }
     })
