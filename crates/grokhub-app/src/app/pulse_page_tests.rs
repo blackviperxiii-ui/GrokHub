@@ -64,7 +64,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert!(crate::theme::GROK_NAV.contains(&("pulse", "Pulse")));
     assert!(crate::theme::GROK_NAV
         .iter()
-        .all(|(id, label)| *id != "ideas" && *label != "Ideas"));
+        .all(|(id, label)| *id != "ideas" && *label != "For You"));
     assert_eq!(super::Cabin::nav_from_id("pulse"), super::Nav::Pulse);
     assert_eq!(
         super::Cabin::nav_from_id("ideas"),
@@ -104,7 +104,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
         "{texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
+        texts.iter().any(|t| t == "For You") && texts.iter().any(|t| t == "Feed"),
         "{texts:?}"
     );
     // Pulse opens on Feed; its empty line says how to steer it (link is separate).
@@ -191,7 +191,7 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             (Some("Productivity"), vec!["idea-auto".to_string()]),
             (Some("Shopping"), vec!["idea-stand".to_string()]),
             (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
-            (Some("More ideas"), vec!["idea-photos".to_string()]),
+            (Some("More for you"), vec!["idea-photos".to_string()]),
         ],
         "the three strongest lead, then the categories in their fixed order"
     );
@@ -212,7 +212,7 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
         at("I can summarize the workboard automatically"),
         at("SHOPPING"),
         at("HEALTH & FITNESS"),
-        at("MORE IDEAS"),
+        at("MORE FOR YOU"),
         at("I can sort the vacation photos"),
     ];
     assert!(
@@ -345,7 +345,7 @@ fn pulse_snooze_dismiss_and_not_this_change_the_page_and_the_ledger() {
     );
     assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 1);
 
-    // Dismiss: the card is removed and the ledger says so.
+    // Dismiss unused: the card is removed and the ledger says so (negative).
     cabin.pulse_dismiss("idea-c", "2026-10-04");
     assert!(!cabin.updates.iter().any(|c| c.id == "idea-c"));
     assert!(pulse_memory().contains("- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss"));
@@ -358,6 +358,85 @@ fn pulse_snooze_dismiss_and_not_this_change_the_page_and_the_ledger() {
         vec![("idea-b".to_string(), -250, "Quiet")]
     );
     assert!(cabin.pulse_groups(now).is_empty());
+}
+
+#[test]
+fn used_idea_dismiss_and_liked_feed_dismiss_are_not_negative() {
+    let mut quiet = QuietCabin::boot("pulse-used-dismiss");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    cabin.sources.reactions = Some(grokhub_core::reactions::Reactions::default());
+
+    let mut used = pulse_idea("idea-used", "Tidy the workboard", "tidy the workboard", 20);
+    used.status = UpdateStatus::Opened;
+    cabin.updates.push(used);
+    cabin.updates.push(pulse_idea(
+        "idea-fresh",
+        "Draft a packing list",
+        "draft a packing list",
+        21,
+    ));
+    let mut liked = grokhub_core::digest_card("src-liked", "Rust 1.95 ships", "Notes.", 30);
+    liked.id = "feed-liked".into();
+    liked.reaction = Some(grokhub_core::CardReaction::Up);
+    cabin.updates.push(liked);
+    let mut discussed = grokhub_core::digest_card("src-talk", "NFL scores", "Notes.", 31);
+    discussed.id = "feed-talk".into();
+    discussed.discuss_thread = Some("thr-nfl".into());
+    cabin.updates.push(discussed);
+    let mut fresh = grokhub_core::digest_card("src-fresh", "Nightly backup", "Notes.", 32);
+    fresh.id = "feed-fresh".into();
+    cabin.updates.push(fresh);
+
+    // Used For You card: ledger reason=used, no Dismissed reaction.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("idea-used".into()));
+    cabin.pulse_dismiss("idea-used", "2026-10-28");
+    assert!(
+        pulse_memory().contains("- [2026-10-28] pulse: used \"Tidy the workboard\" reason=used"),
+        "{}",
+        pulse_memory()
+    );
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-used"));
+    assert!(
+        cabin.reactions_now().log.is_empty(),
+        "used+dismissed must not record a negative reaction: {:?}",
+        cabin.reactions_now().log
+    );
+
+    // Unused For You dismiss stays negative in the ledger and reactions.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("idea-fresh".into()));
+    cabin.pulse_dismiss("idea-fresh", "2026-10-28");
+    assert!(pulse_memory()
+        .contains("- [2026-10-28] pulse: dismissed \"Draft a packing list\" reason=dismiss"));
+    assert!(
+        cabin
+            .reactions_now()
+            .log
+            .iter()
+            .any(|r| r.outcome == grokhub_core::reactions::Outcome::Dismissed),
+        "unused dismiss records Dismissed: {:?}",
+        cabin.reactions_now().log
+    );
+
+    // Liked / discussed Feed then dismiss: used (never a bury in the ledger).
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-liked".into()));
+    cabin.pulse_dismiss("feed-liked", "2026-10-28");
+    assert!(
+        pulse_memory().contains("- [2026-10-28] pulse: used \"Rust 1.95 ships\" reason=used"),
+        "{}",
+        pulse_memory()
+    );
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-talk".into()));
+    cabin.pulse_dismiss("feed-talk", "2026-10-28");
+    assert!(pulse_memory().contains("- [2026-10-28] pulse: used \"NFL scores\" reason=used"));
+
+    // Untouched Feed dismiss: dismiss.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-fresh".into()));
+    cabin.pulse_dismiss("feed-fresh", "2026-10-28");
+    assert!(pulse_memory()
+        .contains("- [2026-10-28] pulse: dismissed \"Nightly backup\" reason=dismiss"));
 }
 
 #[test]
@@ -653,7 +732,7 @@ fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
     assert_eq!(cabin.pulse_view.tab, super::pulse_ui::PulseTab::Feed);
     assert_eq!(
         super::pulse_ui::PulseTab::ORDER.map(|t| t.label()),
-        ["Feed", "Ideas"]
+        ["Feed", "For You"]
     );
     let x = |texts: &[(String, f32)], needle: &str| {
         texts
@@ -663,18 +742,18 @@ fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
     let feed = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
-    let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "Ideas"));
+    let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "For You"));
     assert!(feed_x < ideas_x, "Feed sits left of Ideas: {feed:?}");
     assert!(feed.iter().any(|(t, _)| t == "Feed instructions"));
     // The switch stays put when the tab's action changes (one fixed slot).
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let ideas = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
     assert_eq!(
-        (x(&ideas, "Feed"), x(&ideas, "Ideas")),
+        (x(&ideas, "Feed"), x(&ideas, "For You")),
         (feed_x, ideas_x),
-        "the Feed | Ideas switch does not move between tabs"
+        "the Feed | For You switch does not move between tabs"
     );
-    assert!(ideas.iter().any(|(t, _)| t == "Suggest ideas"));
+    assert!(ideas.iter().any(|(t, _)| t == "Suggest for you"));
     assert!(!ideas.iter().any(|(t, _)| t == "Feed instructions"));
     assert_eq!(super::pulse_ui::HEADER_SLOT_W, 150.0);
 }
@@ -791,17 +870,17 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     assert!(
         empty
             .iter()
-            .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
+            .any(|t| t == "Nothing for you yet. I'll add one when I spot something worth doing."),
         "{empty:?}"
     );
-    // Empty Ideas keeps one inline Suggest ideas. The header hides its duplicate.
+    // Empty For You keeps one inline Suggest for you. The header hides its duplicate.
     let suggest_n = empty
         .iter()
-        .filter(|t| t.as_str() == "Suggest ideas")
+        .filter(|t| t.as_str() == "Suggest for you")
         .count();
     assert_eq!(
         suggest_n, 1,
-        "expected one Suggest ideas, got {suggest_n}: {empty:?}"
+        "expected one Suggest for you, got {suggest_n}: {empty:?}"
     );
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);
@@ -836,7 +915,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     assert!(
         !loading
             .iter()
-            .any(|t| t.starts_with("No ideas yet") || t.ends_with("Nothing to do.")),
+            .any(|t| t.starts_with("Nothing for you yet") || t.ends_with("Nothing to do.")),
         "{loading:?}"
     );
     cabin.ideas_rx = None;
@@ -965,9 +1044,9 @@ fn the_deck_frames_land_on_their_layouts_beside_the_rail() {
 #[test]
 fn suggest_goes_short_on_the_one_column_page() {
     use super::pulse_ui::{suggest_label, PulseFit};
-    assert_eq!(suggest_label(false, PulseFit::Split), "Suggest ideas");
+    assert_eq!(suggest_label(false, PulseFit::Split), "Suggest for you");
     assert_eq!(suggest_label(false, PulseFit::Stacked), "Suggest");
-    assert_eq!(suggest_label(false, PulseFit::Compact), "Suggest ideas");
+    assert_eq!(suggest_label(false, PulseFit::Compact), "Suggest for you");
     assert_eq!(suggest_label(true, PulseFit::Stacked), "Suggesting…");
 }
 
@@ -1067,7 +1146,7 @@ fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
         ideas.x + 500.0 < feed.x,
         "feed sits right of ideas: {split:?}"
     );
-    assert_eq!(count(&split, "Suggest ideas"), 1, "{split:?}");
+    assert_eq!(count(&split, "Suggest for you"), 1, "{split:?}");
     assert_eq!(
         count(&split, "Feed instructions"),
         2,

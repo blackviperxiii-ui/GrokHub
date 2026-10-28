@@ -1221,17 +1221,6 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
     );
     ui.painter().rect_filled(rect, 8.0, fill);
 }
-
-/// True when `rect` is the row the glide treats as selected this frame (the
-/// first selected candidate in `group`).
-pub fn glide_selected_is(ui: &egui::Ui, group: &str, rect: egui::Rect) -> bool {
-    let id = glide_id(group).with("pick");
-    ui.data(|d| d.get_temp::<GlidePick>(id))
-        .and_then(|p| p.selected)
-        == Some(rect)
-}
-
-/// Remember a row item. Hover wins over the resting selection.
 pub fn glide_candidate(
     ui: &egui::Ui,
     group: &str,
@@ -1256,6 +1245,16 @@ pub fn glide_candidate(
     });
 }
 
+/// True when `rect` is the row the glide treats as selected this frame (the
+/// first selected candidate in `group`).
+pub fn glide_selected_is(ui: &egui::Ui, group: &str, rect: egui::Rect) -> bool {
+    let id = glide_id(group).with("pick");
+    ui.data(|d| d.get_temp::<GlidePick>(id))
+        .and_then(|p| p.selected)
+        == Some(rect)
+}
+
+/// Remember a row item. Hover wins over the resting selection.
 fn rect_gap(rect: egui::Rect, pointer: egui::Pos2) -> f32 {
     let dx = (rect.min.x - pointer.x)
         .max(pointer.x - rect.max.x)

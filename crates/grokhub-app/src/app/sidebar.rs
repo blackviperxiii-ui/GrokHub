@@ -5,9 +5,6 @@ use super::*;
 pub(super) const RAIL_FOOTER_H: f32 = 40.0;
 use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
-/// Shown at the right of the chat flyout Search row: the key that opens the palette.
-pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
-
 fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
     ui.label(
         label
@@ -19,6 +16,9 @@ fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
             )),
     );
 }
+
+/// Palette shortcut hint shared by the chat tab strip Search row.
+pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
 
 pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
@@ -261,7 +261,7 @@ impl Cabin {
         }
     }
 
-    fn chat_rename_act(&mut self, ui: &mut egui::Ui, idx: usize) -> Option<TabAct> {
+    pub(super) fn chat_rename_act(&mut self, ui: &mut egui::Ui, idx: usize) -> Option<TabAct> {
         let edit = ui.add(
             egui::TextEdit::singleline(&mut self.rename_buf)
                 .desired_width(ui.available_width())
@@ -479,8 +479,6 @@ impl Cabin {
     }
 
     pub(super) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let mut chat_icon: Option<egui::Response> = None;
         egui::Panel::left("rail")
             .exact_size(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -514,147 +512,164 @@ impl Cabin {
                     let active = cur == *id;
                     let resp =
                         Self::icon_nav_row(ui, active, crate::icons::rail_icon_for(id), label);
-                    if *id == "chat" {
-                        chat_icon = Some(resp.clone());
-                    }
-                    if resp.secondary_clicked() && *id == "chat" {
-                        self.rail_chat_drawer_open = !self.rail_chat_drawer_open;
-                    } else if resp.clicked() {
+                    if resp.clicked() {
                         match *id {
                             "home" => self.open_fresh_home(),
                             "profile" => {
                                 self.settings_menu_open = !self.settings_menu_open;
                                 self.settings_menu_ignore = true;
                             }
-                            "chat" => {
-                                if self.rail_home_active() {
-                                    self.rail_chat_drawer_open = !self.rail_chat_drawer_open;
-                                } else {
-                                    self.set_nav_id(id);
-                                }
-                            }
+                            // Chat rail goes to Chat (new/reuse draft). Tabs live under the title bar.
+                            "chat" => self.set_nav_id(id),
                             _ => self.set_nav_id(id),
                         }
                     }
                 }
                 crate::theme::glide_aim(ui, "rail");
             });
-        if self.rail_chat_drawer_open {
-            self.ui_rail_chat_drawer(&ctx, chat_icon);
-        }
     }
 
     fn rail_home_active(&self) -> bool {
         self.nav == Nav::Chat && self.messages.is_empty() && !self.running
     }
 
-    fn ui_rail_chat_drawer(&mut self, ctx: &egui::Context, anchor: Option<egui::Response>) {
-        let anchor = anchor.map(|r| r.rect).unwrap_or_else(|| {
-            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1.0, 1.0))
-        });
-        let w = 260.0_f32;
-        egui::Area::new(egui::Id::new("rail-chat-drawer"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(
-                anchor.right(),
-                anchor.top() - crate::theme::RAIL_TILE * 0.5,
-            ))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(crate::theme::bg())
-                    .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        ui.set_width(w);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("Chat")
-                                    .font(crate::theme::title_font(crate::theme::FONT_SECTION))
-                                    .color(crate::theme::fg()),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if crate::theme::felt_icon_hit(
-                                        ui,
-                                        "×",
-                                        22.0,
-                                        crate::theme::muted(),
-                                        16.0,
-                                    )
-                                    .clicked()
-                                    {
-                                        self.rail_chat_drawer_open = false;
-                                    }
-                                },
-                            );
-                        });
-                        let search = Self::nav_row(
-                            ui,
-                            false,
-                            crate::icons::RailIcon::Search,
-                            "Search",
-                            false,
-                        );
-                        {
-                            let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);
-                            let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
-                            let text_c = crate::theme::fg();
-                            let galley = ui.fonts_mut(|f| {
-                                f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c)
-                            });
-                            let size = galley.size() + pad * 2.0;
-                            let rect = egui::Rect::from_center_size(
-                                egui::pos2(
-                                    search.rect.right() - 12.0 - size.x * 0.5,
-                                    search.rect.center().y,
-                                ),
-                                size,
-                            );
-                            ui.painter().rect_filled(
-                                rect,
-                                crate::theme::RADIUS_SM,
-                                crate::theme::surface(),
-                            );
-                            ui.painter().galley(
-                                egui::pos2(
-                                    rect.min.x + pad.x,
-                                    rect.center().y - galley.size().y * 0.5,
-                                ),
-                                galley,
-                                text_c,
-                            );
-                        }
-                        if search.clicked() {
-                            self.open_palette();
-                        }
-                        ui.add_space(crate::theme::SPACING_8);
-                        ui.horizontal(|ui| {
-                            rail_section_caption(ui, RichText::new("Projects"));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let plus = crate::theme::felt_icon_hit(
-                                        ui,
-                                        "+",
-                                        22.0,
-                                        crate::theme::muted(),
-                                        16.0,
-                                    )
-                                    .on_hover_text("New folder");
-                                    if plus.clicked() {
-                                        self.stage_new_folder();
-                                    }
-                                },
-                            );
-                        });
-                        self.ui_rail_projects_and_history(ui, w);
-                    });
-            });
+    pub(super) fn page_nav(&self) -> Nav {
+        if self.nav != Nav::Settings {
+            return self.nav;
+        }
+        if self.settings_back == Nav::Settings {
+            Nav::Chat
+        } else {
+            self.settings_back
+        }
     }
 
-    fn ui_rail_projects_and_history(&mut self, ui: &mut egui::Ui, rail_w: f32) {
+    pub(super) fn nav_id(&self) -> &'static str {
+        if self.settings_menu_open {
+            return "profile";
+        }
+        if self.page_nav() == Nav::Chat && self.rail_home_active() {
+            return "home";
+        }
+        match self.page_nav() {
+            Nav::Chat => "chat",
+            Nav::History => "history",
+            Nav::Journal => "journal",
+            Nav::Imagine => "imagine",
+            Nav::Workboard => "workboard",
+            Nav::Pulse => "pulse",
+            Nav::Settings => "settings",
+            Nav::Skills => "skills",
+            Nav::Library => "library",
+            Nav::Objectives => "objectives",
+            Nav::Night => "automations",
+            Nav::Command => "command",
+            Nav::Agents => "queue",
+            Nav::Devices => "devices",
+            Nav::Memory => "memory",
+        }
+    }
+
+    /// Switch a GROK_NAV page without side effects (Chat does not open a new thread).
+    pub(super) fn select_main_nav(&mut self, id: &str) {
+        self.nav = match id {
+            "imagine" => {
+                self.imagine_want_focus = true;
+                Nav::Imagine
+            }
+            "workboard" => Nav::Workboard,
+            "pulse" | "ideas" => Nav::Pulse,
+            "skills" => Nav::Skills,
+            "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
+            "automations" => Nav::Night,
+            "devices" => Nav::Devices,
+            "chat" | "home" => Nav::Chat,
+            _ => return,
+        };
+    }
+
+    pub(super) fn set_nav_id(&mut self, id: &str) {
+        self.nav = match id {
+            "history" => Nav::History,
+            "journal" => Nav::Journal,
+            "imagine" => {
+                self.imagine_want_focus = true;
+                Nav::Imagine
+            }
+            "workboard" => Nav::Workboard,
+            "pulse" | "ideas" => Nav::Pulse,
+            "settings" => {
+                if self.nav != Nav::Settings {
+                    self.settings_back = self.nav;
+                }
+                self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Account);
+                Nav::Settings
+            }
+            "skills" => Nav::Skills,
+            "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
+            "automations" => Nav::Night,
+            "command" => Nav::Command,
+            "queue" => Nav::Agents,
+            "devices" => Nav::Devices,
+            "memory" => Nav::Memory,
+            "eyes" => {
+                self.open_recent_chat();
+                Nav::Chat
+            }
+            "connectors" => {
+                self.open_connectors();
+                Nav::Settings
+            }
+            "home" => {
+                self.open_fresh_home();
+                return;
+            }
+            "profile" => {
+                self.settings_menu_open = !self.settings_menu_open;
+                self.settings_menu_ignore = true;
+                return;
+            }
+            "chat" => {
+                self.new_thread(false);
+                Nav::Chat
+            }
+            _ => Nav::Chat,
+        };
+    }
+
+    /// Folder click toggles the tree. Project click opens that project's chat.
+    pub(super) fn activate_project_row(&mut self, id: &str) {
+        let kind = self.projects.iter().find(|n| n.id == id).map(|n| n.kind);
+        match kind {
+            Some(ProjectKind::Folder) => {
+                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                    n.open = !n.open;
+                }
+                self.touch_projects();
+                self.flush_projects();
+            }
+            Some(ProjectKind::Project) => {
+                self.bind_project_id(id);
+                self.open_project_chat(id);
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn ui_projects_and_history(&mut self, ui: &mut egui::Ui, rail_w: f32) {
         let _ = rail_w;
+        ui.horizontal(|ui| {
+            rail_section_caption(ui, RichText::new("Projects"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let plus = crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
+                    .on_hover_text("New folder");
+                if plus.clicked() {
+                    self.stage_new_folder();
+                }
+            });
+        });
         let tree = visible_tree(&self.projects);
         let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
         let mut section_act: Option<TabAct> = None;
@@ -814,7 +829,6 @@ impl Cabin {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if chip(ui, "See all", true, true).clicked() {
                     self.nav = Nav::History;
-                    self.rail_chat_drawer_open = false;
                 }
             });
         });
@@ -867,131 +881,6 @@ impl Cabin {
         });
     }
 
-    pub(super) fn page_nav(&self) -> Nav {
-        if self.nav != Nav::Settings {
-            return self.nav;
-        }
-        if self.settings_back == Nav::Settings {
-            Nav::Chat
-        } else {
-            self.settings_back
-        }
-    }
-
-    pub(super) fn nav_id(&self) -> &'static str {
-        if self.settings_menu_open {
-            return "profile";
-        }
-        if self.page_nav() == Nav::Chat && self.rail_home_active() {
-            return "home";
-        }
-        match self.page_nav() {
-            Nav::Chat => "chat",
-            Nav::History => "history",
-            Nav::Journal => "journal",
-            Nav::Imagine => "imagine",
-            Nav::Workboard => "workboard",
-            Nav::Pulse => "pulse",
-            Nav::Settings => "settings",
-            Nav::Skills => "skills",
-            Nav::Library => "library",
-            Nav::Objectives => "objectives",
-            Nav::Night => "automations",
-            Nav::Command => "command",
-            Nav::Agents => "queue",
-            Nav::Devices => "devices",
-            Nav::Memory => "memory",
-        }
-    }
-
-    /// Switch a GROK_NAV page without side effects (Chat does not open a new thread).
-    pub(super) fn select_main_nav(&mut self, id: &str) {
-        self.nav = match id {
-            "imagine" => {
-                self.imagine_want_focus = true;
-                Nav::Imagine
-            }
-            "workboard" => Nav::Workboard,
-            "pulse" | "ideas" => Nav::Pulse,
-            "skills" => Nav::Skills,
-            "library" => Nav::Library,
-            "objectives" | "mission" => Nav::Objectives,
-            "automations" => Nav::Night,
-            "devices" => Nav::Devices,
-            "chat" | "home" => Nav::Chat,
-            _ => return,
-        };
-    }
-
-    pub(super) fn set_nav_id(&mut self, id: &str) {
-        self.nav = match id {
-            "history" => Nav::History,
-            "journal" => Nav::Journal,
-            "imagine" => {
-                self.imagine_want_focus = true;
-                Nav::Imagine
-            }
-            "workboard" => Nav::Workboard,
-            "pulse" | "ideas" => Nav::Pulse,
-            "settings" => {
-                if self.nav != Nav::Settings {
-                    self.settings_back = self.nav;
-                }
-                self.settings_sec = SettingsSec::Account;
-                Nav::Settings
-            }
-            "skills" => Nav::Skills,
-            "library" => Nav::Library,
-            "objectives" | "mission" => Nav::Objectives,
-            "automations" => Nav::Night,
-            "command" => Nav::Command,
-            "queue" => Nav::Agents,
-            "devices" => Nav::Devices,
-            "memory" => Nav::Memory,
-            "eyes" => {
-                self.open_recent_chat();
-                Nav::Chat
-            }
-            "connectors" => {
-                self.open_connectors();
-                Nav::Settings
-            }
-            "home" => {
-                self.open_fresh_home();
-                return;
-            }
-            "profile" => {
-                self.settings_menu_open = !self.settings_menu_open;
-                self.settings_menu_ignore = true;
-                return;
-            }
-            "chat" => {
-                self.new_thread(false);
-                Nav::Chat
-            }
-            _ => Nav::Chat,
-        };
-    }
-
-    /// Folder click toggles the tree. Project click opens that project's chat.
-    pub(super) fn activate_project_row(&mut self, id: &str) {
-        let kind = self.projects.iter().find(|n| n.id == id).map(|n| n.kind);
-        match kind {
-            Some(ProjectKind::Folder) => {
-                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
-                    n.open = !n.open;
-                }
-                self.touch_projects();
-                self.flush_projects();
-            }
-            Some(ProjectKind::Project) => {
-                self.bind_project_id(id);
-                self.open_project_chat(id);
-            }
-            None => {}
-        }
-    }
-
     /// A rail row is `NAV_ROW_H` plus the item spacing a real `horizontal` leaves
     /// under itself. Off-screen rows keep that slot and the one parent auto-id
     /// `horizontal` would burn, and skip the icon, label, and click target.
@@ -1007,7 +896,7 @@ impl Cabin {
     /// One sidebar chat list. The project section and the chat section both use this.
     /// A click switches, pins, renames, or deletes that chat. It does not take a project
     /// selection, so the other list stays as it was.
-    fn paint_section_chats(
+    pub(super) fn paint_section_chats(
         &mut self,
         ui: &mut egui::Ui,
         listed: &[usize],
@@ -1098,7 +987,7 @@ impl Cabin {
         act
     }
 
-    fn apply_tab_act(&mut self, act: TabAct) {
+    pub(super) fn apply_tab_act(&mut self, act: TabAct) {
         match act {
             TabAct::Switch(i) => {
                 self.switch_thread(i);

@@ -209,7 +209,7 @@ impl Cabin {
         ui.add_space(IDEA_GAP);
     }
 
-    /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
+    /// "Suggest for you" in the header: ask the model now, or say how to sign in.
     pub(super) fn suggest_ideas_pressed(&mut self) {
         self.suggest_ideas_with(self.agent_ready());
     }
@@ -674,8 +674,13 @@ impl Cabin {
         Ok("Sent to chat".into())
     }
 
-    /// Delete on the Ideas board. The model hears it was turned down.
+    /// Delete on the For You board. The model hears it was turned down unless
+    /// the card was already used (`turned_down` false).
     pub(super) fn delete_idea(&mut self, id: &str) {
+        self.delete_idea_with_feedback(id, true);
+    }
+
+    pub(super) fn delete_idea_with_feedback(&mut self, id: &str, turned_down: bool) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };
@@ -683,19 +688,26 @@ impl Cabin {
             self.persist_updates();
             // Without these a reworded copy, or the same skill from the nightly review, came back.
             grokhub_core::remember_dismissed_source(&mut self.cfg.feed_pulse, &card.source_id);
-            grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
-            self.persist_cfg();
-            if !card.title.is_empty() {
-                let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
-                self.engine_note("ideas", &key, &card.title);
+            if turned_down {
+                grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
+                if !card.title.is_empty() {
+                    let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
+                    self.engine_note("ideas", &key, &card.title);
+                }
             }
+            self.persist_cfg();
             self.drop_idea_thread(card.discuss_thread.as_deref());
-            self.status = "Idea deleted".into();
+            self.status = if turned_down {
+                "Idea deleted".into()
+            } else {
+                "Done.".into()
+            };
         }
         self.forget_idea_view(id);
     }
 
     /// A card's hidden chat goes with the card, along with its Grok Build session.
+    /// Hard-remove (no Recently deleted) — these are not user History chats.
     fn drop_idea_thread(&mut self, thread_id: Option<&str>) {
         let Some(idx) = thread_id.and_then(|tid| {
             self.threads
@@ -704,7 +716,7 @@ impl Cabin {
         }) else {
             return;
         };
-        self.delete_thread_at(idx);
+        self.hard_drop_thread_at(idx);
     }
 
     fn forget_idea_view(&mut self, id: &str) {

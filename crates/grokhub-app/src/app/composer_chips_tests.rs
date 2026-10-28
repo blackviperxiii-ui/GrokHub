@@ -229,7 +229,7 @@ fn composer_stack_drops_approve_slots() {
     let title = src
         .split("fn ui_titlebar(")
         .nth(1)
-        .and_then(|s| s.split("fn nav_row(").next())
+        .and_then(|s| s.split("fn ui_sidebar(").next())
         .expect("titlebar");
     let min = title.find("ChromeBtn::Minimize").expect("minimize");
     let ham = title.find("paint_session_actions_menu").expect("menu");
@@ -423,8 +423,15 @@ fn voice_mode_has_indicator_and_stop() {
     );
     let perm = fn_src(&src, "set_permission_mode");
     assert!(
-        perm.contains("persistable_permission_mode"),
-        "Always must not persist: {perm}"
+        perm.contains("persistable_permission_mode") && perm.contains("always_confirmed"),
+        "Ask/Auto/Always persist; Always marks the one-time confirm: {perm}"
+    );
+    let arm = include_str!("confirm.rs");
+    assert!(
+        arm.contains("fn arm_session_always")
+            && arm.contains("always_confirmed")
+            && arm.contains("apply_session_always"),
+        "Always confirm runs once, then sticks"
     );
 }
 
