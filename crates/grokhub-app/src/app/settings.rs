@@ -132,9 +132,12 @@ pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static s
     &[("ask", "Ask"), ("auto", "Auto")]
 }
 
-/// Ask or Auto only. Always collapses to Ask.
+/// Settings dropdown is Ask or Auto. Always stays on the composer pill.
 pub(super) fn cabin_default_permission_id(raw: &str) -> String {
-    crate::config::persistable_permission_mode(raw)
+    match grokhub_core::wire::PermissionMode::parse(raw) {
+        Some(grokhub_core::wire::PermissionMode::Auto) => "auto".into(),
+        _ => "ask".into(),
+    }
 }
 
 pub(super) fn cabin_default_sessions() -> &'static [(&'static str, &'static str)] {
@@ -871,7 +874,7 @@ impl Cabin {
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_PERMISSION,
-                                                                "Ask or Auto. Always stays on the composer for this launch.",
+                                                                "Ask or Auto. Always is on the composer and sticks until you change it.",
                                                                 &perm_selected,
                                                                 &perm_labels,
                                                             ) {

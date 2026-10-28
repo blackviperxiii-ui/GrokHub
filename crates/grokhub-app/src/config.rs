@@ -349,9 +349,12 @@ pub struct AppConfig {
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
-    /// Composer permission pill — ask / auto. Always-approve is a per-run choice.
+    /// Composer permission pill — ask / auto / always-approve. Survives restart.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    /// True after the user confirms Always once. Later Always picks skip the sheet.
+    #[serde(default)]
+    pub always_confirmed: bool,
     /// Settings → Cabin defaults. Thoughts start collapsed in every session.
     #[serde(default)]
     pub always_collapse_thoughts: bool,
@@ -649,13 +652,11 @@ fn default_cabin_lane() -> String {
     "coding".into()
 }
 
-/// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
+/// Ask, Auto, and Always all survive disk and relaunch. Unknown values fall to Ask.
 pub fn persistable_permission_mode(raw: &str) -> String {
     match grokhub_core::wire::PermissionMode::parse(raw) {
-        Some(grokhub_core::wire::PermissionMode::Auto) => grokhub_core::wire::PermissionMode::Auto
-            .as_str()
-            .to_string(),
-        _ => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
+        Some(mode) => mode.as_str().to_string(),
+        None => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
     }
 }
 
@@ -683,6 +684,7 @@ impl Default for AppConfig {
             provider_model: String::new(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
+            always_confirmed: false,
             always_collapse_thoughts: false,
             cabin_lane: default_cabin_lane(),
             quiet_start: default_quiet_start(),
@@ -898,8 +900,7 @@ pub fn load() -> AppConfig {
         .unwrap_or(grokhub_core::wire::SessionMode::Chat)
         .as_str()
         .to_string();
-    // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not
-    // boot into blanket approval because one turn needed it last week.
+    // Ask / Auto / Always stick until the user changes them.
     cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
     cfg.cabin_lane = match cfg.cabin_lane.trim().to_ascii_lowercase().as_str() {
         "life" => "life".into(),
@@ -1581,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_pills_survive_a_restart_but_always_approve_does_not() {
+    fn composer_pills_including_always_survive_a_restart() {
         let _g = hold_test_config();
         let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
@@ -1589,6 +1590,7 @@ mod tests {
         let mut cfg = AppConfig::default();
         assert_eq!(cfg.session_mode, "chat");
         assert_eq!(cfg.permission_mode, "ask");
+        assert!(!cfg.always_confirmed);
         cfg.session_mode = "plan".into();
         cfg.permission_mode = "auto".into();
         save(&cfg).expect("save");
@@ -1596,19 +1598,18 @@ mod tests {
         assert_eq!(loaded.session_mode, "plan");
         assert_eq!(loaded.permission_mode, "auto");
         cfg.permission_mode = "always-approve".into();
+        cfg.always_confirmed = true;
         save(&cfg).expect("save");
         assert_eq!(
             persistable_permission_mode("always-approve"),
-            "ask",
-            "Always must not persist"
+            "always-approve",
+            "Always sticks until the user changes it"
         );
         assert_eq!(persistable_permission_mode("auto"), "auto");
         assert_eq!(persistable_permission_mode("ask"), "ask");
-        assert_eq!(
-            load().permission_mode,
-            "ask",
-            "a cabin must not boot into blanket approval because one turn needed it"
-        );
+        let always = load();
+        assert_eq!(always.permission_mode, "always-approve");
+        assert!(always.always_confirmed);
         cfg.session_mode = "nonsense".into();
         cfg.permission_mode = "nonsense".into();
         save(&cfg).expect("save");
@@ -1642,19 +1643,24 @@ mod tests {
         assert!(loaded.close_to_tray_tip_seen);
         cfg.model.clear();
         cfg.permission_mode = persistable_permission_mode("always-approve");
+        cfg.always_confirmed = true;
         cfg.session_mode = "ask".into();
         cfg.always_collapse_thoughts = false;
         cfg.close_to_tray_tip_seen = false;
-        assert_eq!(cfg.permission_mode, "ask");
-        save(&cfg).expect("save always collapsed to ask");
+        assert_eq!(cfg.permission_mode, "always-approve");
+        save(&cfg).expect("save always");
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         assert!(
             body.contains("\"model\": \"\""),
             "Auto persists an empty model pin: {body}"
         );
         assert!(
-            !body.contains("always-approve"),
-            "Always must not be written: {body}"
+            body.contains("always-approve"),
+            "Always must be written: {body}"
+        );
+        assert!(
+            body.contains("\"alwaysConfirmed\": true"),
+            "Always confirm flag round-trips: {body}"
         );
         assert!(
             body.contains("\"alwaysCollapseThoughts\": false"),
@@ -1666,12 +1672,14 @@ mod tests {
         );
         let loaded = load();
         assert_eq!(loaded.model, "");
-        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.permission_mode, "always-approve");
+        assert!(loaded.always_confirmed);
         assert_eq!(loaded.session_mode, "ask");
         assert!(!loaded.always_collapse_thoughts);
         assert!(!loaded.close_to_tray_tip_seen);
         let mut raw: serde_json::Value = serde_json::from_str(&body).unwrap();
         raw["permissionMode"] = serde_json::json!("always");
+        raw["alwaysConfirmed"] = serde_json::json!(true);
         raw["alwaysCollapseThoughts"] = serde_json::json!(true);
         raw["model"] = serde_json::json!("grok-4.7");
         raw["reasoningEffort"] = serde_json::json!("minimal");
@@ -1684,10 +1692,10 @@ mod tests {
         let loaded = load();
         assert_eq!(
             persistable_permission_mode("always"),
-            "ask",
-            "Always input via the helper collapses to Ask"
+            "always-approve",
+            "Always aliases round-trip as always-approve"
         );
-        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.permission_mode, "always-approve");
         assert_eq!(loaded.model, "grok-4.7");
         assert_eq!(
             loaded.legacy_reasoning_effort, None,
