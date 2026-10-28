@@ -199,6 +199,7 @@ pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
@@ -588,6 +589,7 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
+    print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -1212,6 +1214,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1678,6 +1681,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
@@ -3531,12 +3535,7 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => {
-                    self.housekeep_rhythm_and_recap();
-                    if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist_bg();
-                    }
-                }
+                HeartbeatAct::Housekeep => self.tick_housekeep(),
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),
