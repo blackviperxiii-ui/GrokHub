@@ -316,11 +316,8 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-<<<<<<< HEAD
             (11, Source::Shipped, 0)
-=======
-            (8, Source::Shipped, 0)
->>>>>>> origin/beta
+
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -354,14 +351,11 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
-<<<<<<< HEAD
                 ("game-news-library", Source::Shipped),
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
-=======
-                ("game-tuning", Source::Shipped),
->>>>>>> origin/beta
+
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -383,14 +377,11 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
-<<<<<<< HEAD
                 ("game-news-library", Source::Shipped),
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
-=======
-                ("game-tuning", Source::Shipped),
->>>>>>> origin/beta
+
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -454,11 +445,8 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-<<<<<<< HEAD
         assert_eq!(all.len(), 12);
-=======
-        assert_eq!(all.len(), 9);
->>>>>>> origin/beta
+
         assert_eq!(
             problems,
             vec![
@@ -517,11 +505,8 @@ mod tests {
         );
         assert_eq!(
             id("question", "gaming", "linux").as_deref(),
-<<<<<<< HEAD
             Some("gaming-help")
-=======
-            Some("game-tuning")
->>>>>>> origin/beta
+
         );
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
