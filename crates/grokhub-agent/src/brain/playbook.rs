@@ -317,7 +317,6 @@ mod tests {
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
             (11, Source::Shipped, 0)
-
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -355,7 +354,6 @@ mod tests {
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
-
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -381,7 +379,6 @@ mod tests {
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
-
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -506,7 +503,6 @@ mod tests {
         assert_eq!(
             id("question", "gaming", "linux").as_deref(),
             Some("gaming-help")
-
         );
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
