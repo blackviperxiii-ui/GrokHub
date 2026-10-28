@@ -162,7 +162,7 @@ impl Cabin {
         } else {
             self.cfg.display_name.trim().to_string()
         };
-        let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
+        let show_xp = self.home_layout.xp_bar;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.label(caption(&day_caption(&Self::local_day())));
@@ -174,41 +174,44 @@ impl Cabin {
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(UP_NEXT_W.min(ui.available_width()), 48.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.add_space(14.0);
-                        ui.horizontal(|ui| {
-                            ui.label(caption(&format!("Lvl {level}")));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} / {} XP",
-                                            grouped(xp),
-                                            grouped(level * XP_PER_LEVEL)
-                                        ))
-                                        .size(crate::theme::TYPE_CAPTION)
-                                        .extra_letter_spacing(1.0)
-                                        .strong()
-                                        .color(crate::theme::amber()),
-                                    );
-                                },
+                if show_xp {
+                    let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(UP_NEXT_W.min(ui.available_width()), 48.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.add_space(14.0);
+                            ui.horizontal(|ui| {
+                                ui.label(caption(&format!("Lvl {level}")));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} / {} XP",
+                                                grouped(xp),
+                                                grouped(level * XP_PER_LEVEL)
+                                            ))
+                                            .size(crate::theme::TYPE_CAPTION)
+                                            .extra_letter_spacing(1.0)
+                                            .strong()
+                                            .color(crate::theme::amber()),
+                                        );
+                                    },
+                                );
+                            });
+                            let (bar, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 6.0),
+                                egui::Sense::hover(),
                             );
-                        });
-                        let (bar, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 6.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
-                        let mut fill = bar;
-                        fill.set_width(bar.width() * frac);
-                        ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
-                    },
-                );
-                ui.add_space(GAP);
+                            ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
+                            let mut fill = bar;
+                            fill.set_width(bar.width() * frac);
+                            ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+                        },
+                    );
+                    ui.add_space(GAP);
+                }
                 if crate::cards::ghost_pill(ui, "Workboards") {
                     self.set_nav_id("workboard");
                 }

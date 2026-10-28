@@ -49,7 +49,11 @@ budget() {
   fi
 }
 
+<<<<<<< HEAD
 budget "crates/grokhub-app/src/app/mod.rs" 5914 # ask_offers_ui (#999); was 5913 web_search_ui + shot seed
+=======
+budget "crates/grokhub-app/src/app/mod.rs" 5930 # home_layout (Order -38) + web_search_ui (#974)
+>>>>>>> origin/beta
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2800
