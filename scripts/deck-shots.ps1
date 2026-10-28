@@ -126,6 +126,24 @@ function Seed-Library([string]$root) {
         Write-Utf8 (Join-Path $steam "steamapps/appmanifest_$($g[0]).acf") "`"AppState`"`n{`n`"appid`" `"$($g[0])`"`n`"name`" `"$($g[1])`"`n`"LastPlayed`" `"$last`"`n}`n"
         $apps += "`"$($g[0])`"`n{`n`"LastPlayed`" `"$last`"`n`"Playtime`" `"$($g[2])`"`n}`n"
     }
+    # Steam keeps each game's art in appcache/librarycache, and Library reads
+    # that first. Fill it from Steam's CDN the way the client does, so the shot
+    # shows real covers even when the CDN is slow for the app on the runner.
+    # A cover that fails here is left to the app's own CDN fetch.
+    $cache = Join-Path $steam 'appcache/librarycache'
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    foreach ($g in $games) {
+        if ($g[0] -eq 1001) { continue }
+        foreach ($file in @('library_600x900.jpg', 'header.jpg')) {
+            $out = Join-Path $cache "$($g[0])_$file"
+            $url = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$($g[0])/$file"
+            $ok = $false
+            for ($try = 0; $try -lt 3 -and -not $ok; $try++) {
+                try { Invoke-WebRequest -Uri $url -OutFile $out -TimeoutSec 20 -UseBasicParsing; $ok = $true } catch { Start-Sleep -Seconds 2 }
+            }
+            Write-Host "cover $($g[0]) ${file}: $(if ($ok) { (Get-Item $out).Length } else { 'failed' })"
+        }
+    }
     Write-Utf8 (Join-Path $steam 'userdata/1/config/localconfig.vdf') "`"UserLocalConfigStore`"`n{`n`"Software`"`n{`n`"Valve`"`n{`n`"Steam`"`n{`n`"apps`"`n{`n$apps}`n}`n}`n}`n}`n"
 }
 
@@ -342,6 +360,9 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail, below the chat tab strip.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
+# A real game picked, so the detail header shows its store art too.
+Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -clickAt 20, 258, 353, 297
+Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -clickAt 20, 258, 321, 277
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
