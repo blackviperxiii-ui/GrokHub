@@ -2405,6 +2405,18 @@ fn kick_pulse_decode(ctx: egui::Context, name: String, path: std::path::PathBuf)
     });
 }
 
+/// Tests: block until no thumb decode is in flight, so the next pass uploads it.
+#[cfg(test)]
+pub(super) fn wait_pulse_decodes() {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        if pulse_tex_gate().lock().is_ok_and(|g| g.inflight.is_empty()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 fn fetch_agent() -> ureq::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
     // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
