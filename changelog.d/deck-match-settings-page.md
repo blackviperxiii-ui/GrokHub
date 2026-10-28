@@ -1,0 +1,7 @@
+- Deck match: in the Loadout look, Settings opens as a full page beside the rail instead of a centred dialog, so Privacy & data shows its story, switches and off-device ledger side by side like deck slide 12, at 1600x900 and 1100x720.
+- Deck shots of the chat-first layout (slide 10) show the Hangout chat beside the objectives, without the Activity popover over the snapshot.
+- Deck shots: rail clicks allow for the chat tab strip, and Settings opens with Ctrl+, at 1600x900, so the Pulse, Library, Objectives, Privacy and Personality shots land on their pages again.
+- Deck shots: `-openSettings <section>` opens Settings on that section at launch (`GROKHUB_DECK_OPEN_SETTINGS`), and Library and Settings shots leave the Activity popover closed (`GROKHUB_DECK_ACTIVITY=0`) so it doesn't cover the page.
+- Privacy & data at 1100x720: the hero line wraps ragged right with a gutter instead of stretching its letters into the switches column, and the Encrypted memory row matches the other switches.
+- Deck shots: the Library seed fills the throwaway Steam's `appcache/librarycache` from Steam's CDN, as the Steam client does, so slide 11 shows real covers; new `library-detail` shots pick a real game so the detail header shows its art.
+- Deck shots open the Library on a real game (Baldur's Gate 3) so the detail header shows its store art.
