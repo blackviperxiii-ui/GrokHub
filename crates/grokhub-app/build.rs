@@ -158,9 +158,7 @@ fn embed_personality_photos(manifest: &Path) {
     let body = if arms.is_empty() {
         "    let _ = (id, slot);\n    None\n".to_string()
     } else {
-        format!(
-            "    match (id, slot) {{\n{arms}        _ => None,\n    }}\n"
-        )
+        format!("    match (id, slot) {{\n{arms}        _ => None,\n    }}\n")
     };
     let src = format!(
         "/// Built-in Nyx photo slots for the Personality picker showcase.\n\
