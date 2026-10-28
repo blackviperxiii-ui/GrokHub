@@ -103,8 +103,8 @@ fn palette_search_walks_nested_files_off_the_ui_thread() {
         "palette search walks the current place off the UI thread: {kick}"
     );
     assert!(
-        src.contains("RailIcon::Search") && src.contains("self.open_palette()"),
-        "Search stays the palette — no second search page"
+        src.contains("Search ({SEARCH_KEY_HINT})") && src.contains("self.open_palette()"),
+        "Search stays the palette (chat tab tools) — no second search page"
     );
 }
 

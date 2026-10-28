@@ -33,6 +33,11 @@ pub struct ChatThread {
     /// kept in full on disk; Unarchive / reply from the open chat restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<u64>,
+    /// Soft-delete timestamp. Hidden from History and the tab strip; kept on
+    /// disk until purged after [`TRASH_RETAIN_MS`]. Restoring clears this.
+    /// Soft-delete never wipes agent memory or native sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u64>,
     #[serde(default)]
     pub grok_session: Option<String>,
     /// Worktree this Grok session was created in. Resume must load here, not the currently bound tree.
@@ -87,6 +92,7 @@ impl ChatThread {
             accessed_ms: 0,
             last_active_ms: 0,
             archived_at: None,
+            deleted_at: None,
             grok_session: None,
             grok_cwd: None,
             grok_user_home: false,
@@ -517,7 +523,7 @@ fn listed_user_chat(
     live_idx: Option<usize>,
     live_empty: bool,
 ) -> bool {
-    if thread.archived_at.is_some() {
+    if thread.archived_at.is_some() || thread.deleted_at.is_some() {
         return false;
     }
     let empty = if Some(index) == live_idx {
@@ -544,7 +550,7 @@ pub fn is_archived(thread: &ChatThread) -> bool {
 
 /// Archive a chat. Returns false when it was already archived.
 pub fn archive_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
-    if thread.archived_at.is_some() {
+    if thread.archived_at.is_some() || thread.deleted_at.is_some() {
         return false;
     }
     thread.archived_at = Some(now_ms);
@@ -559,13 +565,62 @@ pub fn unarchive_thread(thread: &mut ChatThread) -> bool {
     true
 }
 
+pub fn is_deleted(thread: &ChatThread) -> bool {
+    thread.deleted_at.is_some()
+}
+
+/// Move a chat to trash. Returns false when it was already deleted.
+/// Does not touch agent memory or native sessions.
+pub fn soft_delete_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
+    if thread.deleted_at.is_some() {
+        return false;
+    }
+    thread.deleted_at = Some(now_ms);
+    true
+}
+
+/// Restore a chat from trash. Returns false when it was not deleted.
+pub fn restore_deleted_thread(thread: &mut ChatThread) -> bool {
+    if thread.deleted_at.take().is_none() {
+        return false;
+    }
+    true
+}
+
+/// Drop soft-deleted chats older than `retain_ms`. Returns the purged rows so
+/// the caller can clean native sessions; agent memory stays.
+pub fn purge_expired_deleted(
+    threads: &mut Vec<ChatThread>,
+    now_ms: u64,
+    retain_ms: u64,
+) -> Vec<ChatThread> {
+    let mut purged = Vec::new();
+    threads.retain(|t| match t.deleted_at {
+        Some(at) if now_ms.saturating_sub(at) >= retain_ms => {
+            purged.push(t.clone());
+            false
+        }
+        _ => true,
+    });
+    purged
+}
+
 /// One day in milliseconds for the auto-archive idle window.
 pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Soft-deleted chats stay on disk this long before permanent purge.
+pub const TRASH_RETAIN_MS: u64 = DAY_MS * 30;
 
 /// Whether this chat is idle long enough to auto-archive.
 /// Pinned chats and busy chats (caller passes `busy`) are never auto-archived.
 pub fn should_auto_archive(thread: &ChatThread, now_ms: u64, days: u32, busy: bool) -> bool {
-    if days == 0 || busy || thread.pinned || thread.background || thread.archived_at.is_some() {
+    if days == 0
+        || busy
+        || thread.pinned
+        || thread.background
+        || thread.archived_at.is_some()
+        || thread.deleted_at.is_some()
+    {
         return false;
     }
     let has_session = thread
@@ -2235,5 +2290,60 @@ mod tests {
         assert!(!unarchive_thread(&mut t));
         assert_eq!(search_thread_title(&t.title, false), "Night watch");
         assert_eq!(t.messages[0].1, "keep", "archive never deletes messages");
+    }
+
+    #[test]
+    fn soft_delete_restores_within_30_days_and_stays_listed_out() {
+        let now = 10 * DAY_MS;
+        let mut keep = ChatThread::new("Keep", false);
+        keep.messages_mut().push(("user".into(), "stay".into()));
+        let mut trash = ChatThread::new("Trash me", false);
+        trash.messages_mut().push(("user".into(), "gone".into()));
+        assert!(soft_delete_thread(&mut trash, now - DAY_MS));
+        assert!(is_deleted(&trash));
+        assert_eq!(trash.deleted_at, Some(now - DAY_MS));
+        assert!(!soft_delete_thread(&mut trash, now));
+        let threads = vec![keep, trash];
+        let listed = chat_section_indices(&threads, None, false);
+        assert_eq!(
+            listed
+                .iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
+            ["Keep"]
+        );
+        assert!(!listed.contains(&1));
+        let mut restored = threads[1].clone();
+        assert!(restore_deleted_thread(&mut restored));
+        assert!(!is_deleted(&restored));
+        assert!(restored.deleted_at.is_none());
+        assert_eq!(restored.messages[0].1, "gone");
+        assert!(!restore_deleted_thread(&mut restored));
+        let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert!(legacy.deleted_at.is_none());
+        assert!(!is_deleted(&legacy));
+    }
+
+    #[test]
+    fn purge_expired_deleted_after_30_days() {
+        let now = 40 * DAY_MS;
+        let mut fresh = ChatThread::new("Fresh trash", false);
+        fresh.messages_mut().push(("user".into(), "keep".into()));
+        soft_delete_thread(&mut fresh, now - DAY_MS);
+        let mut old = ChatThread::new("Old trash", false);
+        old.messages_mut().push(("user".into(), "purge".into()));
+        soft_delete_thread(&mut old, now - TRASH_RETAIN_MS);
+        let mut live = ChatThread::new("Live", false);
+        live.messages_mut().push(("user".into(), "stay".into()));
+        let mut threads = vec![live, fresh, old];
+        let purged = purge_expired_deleted(&mut threads, now, TRASH_RETAIN_MS);
+        assert_eq!(purged.len(), 1);
+        assert_eq!(purged[0].title, "Old trash");
+        assert_eq!(
+            threads.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            ["Live", "Fresh trash"]
+        );
+        assert!(is_deleted(&threads[1]));
+        assert!(!is_deleted(&threads[0]));
     }
 }
