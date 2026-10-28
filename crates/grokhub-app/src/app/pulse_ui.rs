@@ -883,11 +883,7 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
 
 /// Done / Skip / Too easy / Too hard on an unanswered hobby learning-path tip.
 fn paint_hobby_path(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    let open = card
-        .pulse
-        .hobby_path
-        .as_ref()
-        .is_some_and(|m| !m.answered);
+    let open = card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered);
     if !open {
         return None;
     }

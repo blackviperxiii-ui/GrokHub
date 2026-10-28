@@ -78,13 +78,7 @@ impl HobbyId {
     /// Foreground app process fragments that prefer this hobby's tip.
     pub fn app_frags(self) -> &'static [&'static str] {
         match self {
-            Self::Printing3d => &[
-                "cura",
-                "prusaslicer",
-                "orcaslicer",
-                "bambu",
-                "creality",
-            ],
+            Self::Printing3d => &["cura", "prusaslicer", "orcaslicer", "bambu", "creality"],
             Self::Modeling3d => &["blender"],
             Self::Rust => &["rustrover", "code", "cursor", "codium", "zed"],
             Self::GameModding => &["steam", "heroic", "lutris"],
@@ -573,10 +567,7 @@ pub fn catalog(hobby: HobbyId) -> &'static [PathStep] {
 }
 
 fn progress_mut(ledger: &mut HobbyPathsLedger, hobby: HobbyId) -> &mut HobbyProgress {
-    ledger
-        .progress
-        .entry(hobby.key().to_string())
-        .or_default()
+    ledger.progress.entry(hobby.key().to_string()).or_default()
 }
 
 fn seen(progress: &HobbyProgress, step_id: &str) -> bool {
@@ -699,11 +690,7 @@ pub fn eligible_hobbies(
         .filter(|id| settings.on(*id))
         .filter(|id| !on_cooldown(ledger, *id, now_ms))
         .filter(|id| {
-            let progress = ledger
-                .progress
-                .get(id.key())
-                .cloned()
-                .unwrap_or_default();
+            let progress = ledger.progress.get(id.key()).cloned().unwrap_or_default();
             next_step(*id, &progress).is_some()
         })
         .collect()
@@ -751,9 +738,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
     let Some(step) = next_step(hobby, &progress) else {
         return TickOutput { cards: Vec::new() };
     };
-    ledger
-        .last_posted
-        .insert(hobby.key().to_string(), now_ms);
+    ledger.last_posted.insert(hobby.key().to_string(), now_ms);
     ledger.posted_today = ledger.posted_today.saturating_add(1);
     TickOutput {
         cards: vec![hobby_path_card(hobby, step, now_ms)],
@@ -766,9 +751,7 @@ pub fn feedback_on_card(
     meta: &HobbyPathMeta,
     feedback: PathFeedback,
 ) -> Option<Difficulty> {
-    let hobby = HobbyId::ALL
-        .into_iter()
-        .find(|id| id.key() == meta.hobby)?;
+    let hobby = HobbyId::ALL.into_iter().find(|id| id.key() == meta.hobby)?;
     let progress = progress_mut(ledger, hobby);
     Some(apply_feedback(progress, &meta.step_id, feedback))
 }

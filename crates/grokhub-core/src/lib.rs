@@ -330,6 +330,14 @@ pub use history::{
     palette_search_is_saved, search_corpus, search_corpus_tagged, search_place, search_text,
     search_thread_body,
 };
+pub use hobby_paths::{
+    apply_feedback, feedback_on_card, hobbies_from_tags, hobby_for_process, hobby_path_card,
+    is_hobby_path_card, next_step, tick as tick_hobby_paths, HobbyId, HobbyPathMeta,
+    HobbyPathSettings, HobbyPathsLedger, HobbyProgress, PathFeedback, PathStep, StepKind,
+    COOLDOWN_MS as HOBBY_PATH_COOLDOWN_MS, DEFAULT_DAILY_MAX as HOBBY_PATH_DAILY_MAX,
+    FILE_NAME as HOBBY_PATHS_FILE, SOURCE_PREFIX as HOBBY_PATH_SOURCE_PREFIX,
+    TICK_EVERY_MS as HOBBY_PATH_TICK_EVERY_MS,
+};
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
@@ -408,14 +416,6 @@ pub use mission::{
     MissionStatus, MissionView,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
-pub use hobby_paths::{
-    apply_feedback, feedback_on_card, hobbies_from_tags, hobby_for_process, hobby_path_card,
-    is_hobby_path_card, next_step, tick as tick_hobby_paths, HobbyId, HobbyPathMeta,
-    HobbyPathSettings, HobbyPathsLedger, HobbyProgress, PathFeedback, PathStep, StepKind,
-    COOLDOWN_MS as HOBBY_PATH_COOLDOWN_MS, DEFAULT_DAILY_MAX as HOBBY_PATH_DAILY_MAX,
-    FILE_NAME as HOBBY_PATHS_FILE, SOURCE_PREFIX as HOBBY_PATH_SOURCE_PREFIX,
-    TICK_EVERY_MS as HOBBY_PATH_TICK_EVERY_MS,
-};
 pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
