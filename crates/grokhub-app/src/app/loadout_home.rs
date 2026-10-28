@@ -683,6 +683,21 @@ impl Cabin {
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
+        // `GROKHUB_DECK_NAV` pins the rail page for Windows deck-shots. Home
+        // Mission Control must not rely on a flaky first-icon click — CI
+        // captures landed on Hangout when the click missed.
+        match std::env::var("GROKHUB_DECK_NAV")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "home" => self.open_mission_home(),
+            "objectives" | "mission" => self.set_nav_id("objectives"),
+            "pulse" => self.set_nav_id("pulse"),
+            "library" => self.set_nav_id("library"),
+            _ => {}
+        }
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
@@ -1309,8 +1324,10 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var("GROKHUB_DECK_MOOD");
+        std::env::remove_var("GROKHUB_DECK_NAV");
         let transcript = deck_transcript();
         let mut seeded = ChatThread::new("Hangout", false);
         seeded.id = DECK_THREAD_ID.to_string();
@@ -1368,6 +1385,35 @@ mod tests {
         match prev_mood {
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
+    }
+
+    #[test]
+    fn deck_shot_nav_home_opens_mission_control() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.nav = Nav::Chat;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(
+            cabin.nav,
+            Nav::Home,
+            "GROKHUB_DECK_NAV=home must leave Mission Control Home, not Hangout"
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
         }
     }
 

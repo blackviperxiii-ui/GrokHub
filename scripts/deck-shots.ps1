@@ -170,7 +170,7 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -202,6 +202,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:GROKHUB_DECK_SHOT = '1'
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -336,11 +337,12 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
-# Home Mission Control (modular 1L+2M+4S grid) is the first icon on the rail.
+# Home Mission Control (modular 1L+2M+4S grid). Pin via GROKHUB_DECK_NAV=home —
+# a first-icon click missed on windows-latest and captured Hangout instead.
 # Beside slide 09 — HARD DONE sizes plus narrow for the three-breakpoint proof.
-Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -clickAt 20, 61
-Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -clickAt 20, 61
-Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -clickAt 20, 61
+Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home'
+Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home'
+Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home'
 # Objectives (legacy Objectives page) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
