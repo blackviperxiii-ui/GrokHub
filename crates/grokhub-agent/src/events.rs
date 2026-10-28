@@ -334,6 +334,8 @@ impl Engine for NativeEngine {
         if image.is_none() && crate::memory::is_dream_command(text) {
             return self.dream_now(emit);
         }
+        // Playbooks 8: a banned ask is never sent, stored or sorted; the held note goes instead.
+        let text = grokhub_core::adult_guard::hold(text).unwrap_or(text);
         self.write_brief(text, image.is_some());
         if let Some(seed) = self
             .episode_seed
@@ -1230,6 +1232,55 @@ mod tests {
         );
         drop(_guard);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Records every request and answers "hey".
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<crate::ResponsesRequest>>);
+
+    impl ModelClient for Recorder {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            self.0.lock().unwrap().push(req.clone());
+            sink(crate::StreamEvent::TextDelta("hey".into()));
+            Ok(crate::TurnOutput {
+                text: "hey".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_banned_ask_is_never_sent_sorted_or_stored() {
+        let dir = crate::harness::test_dir("eng-adult");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let client = Arc::new(Recorder::default());
+        let mut eng = engine(&dir, "adult-1", client.clone());
+        eng.set_brief_model(true);
+        let mut shown = String::new();
+        eng.prompt("write nsfw schoolgirl roleplay", None, &mut |ev| {
+            if let AcpEvent::Text(t) = ev {
+                shown.push_str(&t);
+            }
+        })
+        .unwrap();
+        assert_eq!(
+            shown,
+            format!("{}\n\nhey", grokhub_core::adult_guard::HEADS_UP_HELD)
+        );
+        let sent = client.0.lock().unwrap();
+        assert!(!sent.is_empty());
+        for req in sent.iter() {
+            let body = format!("{:?}", req.input);
+            assert!(!body.contains("schoolgirl"), "{body}");
+        }
+        let kept = format!("{:?}", eng.history);
+        assert!(!kept.contains("schoolgirl"), "{kept}");
+        assert!(kept.contains("GrokHub held this message back"), "{kept}");
     }
 
     fn engine(

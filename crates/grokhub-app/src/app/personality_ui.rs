@@ -10,6 +10,11 @@ use grokhub_core::personality::{self, Personality};
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
+/// Playbooks 8: the one-time 18+ check, the first time adults-only turns on.
+const AGE_CHECK: &str =
+    "Adults-only personalities are for people 18 or older. Confirm once and GrokHub remembers it.";
+const AGE_YES: &str = "I'm 18 or older";
+const AGE_NO: &str = "Not now";
 /// Width of the selected detail panel beside the grid (slide 19).
 const DETAIL_W: f32 = 260.0;
 /// Below this the detail panel stacks under the grid.
@@ -41,6 +46,8 @@ pub(super) struct PickerState {
     pub draft: Option<Draft>,
     /// Which preset the detail panel shows. Empty means the current default.
     pub focus: Option<String>,
+    /// Adults-only was switched on before the 18+ check: the confirm row shows.
+    pub age_check: bool,
 }
 
 /// A custom preset open in the editor.
@@ -205,6 +212,12 @@ impl Cabin {
     /// Settings → Adults-only personalities. Turning it off hides the explicit presets;
     /// the stored picks stay, and speak in the default voice until it is back on.
     pub(super) fn set_explicit_personalities(&mut self, on: bool) {
+        // The first time it turns on, the one-time 18+ check comes first.
+        if on && !self.cfg.adult_confirmed {
+            self.picker.age_check = true;
+            return;
+        }
+        self.picker.age_check = false;
         self.cfg.explicit_personalities = on;
         self.persist_cfg();
         self.status = if on {
@@ -212,6 +225,15 @@ impl Cabin {
         } else {
             "Adults-only personalities off".into()
         };
+    }
+
+    /// The 18+ confirm row: yes is remembered for good and turns adults-only on.
+    pub(super) fn answer_age_check(&mut self, adult: bool) {
+        self.picker.age_check = false;
+        if adult {
+            self.cfg.adult_confirmed = true;
+            self.set_explicit_personalities(true);
+        }
     }
 
     /// Chat header → Make default: the open chat's pick becomes everyone's default.
@@ -386,6 +408,22 @@ impl Cabin {
                         self.picker.focus = None;
                     }
                 }
+            }
+        }
+        if self.picker.age_check {
+            ui.add_space(6.0);
+            crate::cards::settings_note(ui, AGE_CHECK);
+            let mut answer = None;
+            ui.horizontal(|ui| {
+                if crate::cards::white_pill(ui, AGE_YES) {
+                    answer = Some(true);
+                }
+                if crate::cards::ghost_pill(ui, AGE_NO) {
+                    answer = Some(false);
+                }
+            });
+            if let Some(adult) = answer {
+                self.answer_age_check(adult);
             }
         }
         ui.add_space(10.0);
@@ -1072,8 +1110,16 @@ mod tests {
         assert_eq!(cabin.threads[0].personality, "");
         assert_eq!(cabin.chat_personality().id, "nyx");
 
+        // The first time, the one-time 18+ check comes first.
         cabin.set_explicit_personalities(true);
+        assert!(
+            !cabin.cfg.explicit_personalities,
+            "not before the 18+ check"
+        );
+        assert!(cabin.picker.age_check);
+        cabin.answer_age_check(true);
         assert!(cabin.cfg.explicit_personalities);
+        assert!(cabin.cfg.adult_confirmed);
         crate::config::save(&cabin.cfg).unwrap();
         assert!(
             crate::config::load().explicit_personalities,
@@ -1094,6 +1140,32 @@ mod tests {
         assert_eq!(cabin.personality_id(), "nyx");
         assert_eq!(cabin.chat_personality().id, "nyx");
         assert_eq!(cabin.open_chat_personality(), "nyx");
+    }
+
+    #[test]
+    fn the_18_plus_check_is_asked_once_and_remembered() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        assert!(!cabin.cfg.adult_confirmed, "not confirmed on a new install");
+        // Not now: adults-only stays off and nothing is remembered.
+        cabin.set_explicit_personalities(true);
+        cabin.answer_age_check(false);
+        assert!(!cabin.cfg.explicit_personalities && !cabin.cfg.adult_confirmed);
+        assert!(!cabin.picker.age_check);
+        // Yes: on, and remembered across a restart.
+        cabin.set_explicit_personalities(true);
+        cabin.answer_age_check(true);
+        crate::config::save(&cabin.cfg).unwrap();
+        let mut back = crate::config::load();
+        assert!(back.explicit_personalities && back.adult_confirmed);
+        // Off and on again never asks.
+        cabin.set_explicit_personalities(false);
+        cabin.set_explicit_personalities(true);
+        assert!(cabin.cfg.explicit_personalities);
+        assert!(!cabin.picker.age_check, "never re-asked");
+        // A profile that had adults-only on before the check counts as its opt-in.
+        back.adult_confirmed = false;
+        crate::config::save(&back).unwrap();
+        assert!(crate::config::load().adult_confirmed);
     }
 
     #[test]

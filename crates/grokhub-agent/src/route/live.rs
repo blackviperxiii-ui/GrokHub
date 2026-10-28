@@ -1087,7 +1087,10 @@ pub fn stream_routed(
 ) -> Result<TurnOutput, ClientError> {
     let entered = std::time::Instant::now();
     let dir = crate::perm::config_dir();
-    let (text, needs_image) = last_user_text(&req.input);
+    // Playbooks 8: a banned ask never leaves the computer, this turn or a later one.
+    let mut sent = req.clone();
+    super::adult::scrub(&mut sent.input);
+    let (text, needs_image) = last_user_text(&sent.input);
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
         class,
@@ -1108,8 +1111,22 @@ pub fn stream_routed(
         return Err(ClientError::Protocol(decision.pause_text()));
     }
     let effort = decision.send_effort(req.effort.as_deref());
-    let model = decision.send_model(&req.model);
-    let mut sent = req.clone();
+    let on_device = decision.on_device();
+    let dest = if on_device {
+        grokhub_core::adult_guard::Dest::Local
+    } else if decision.on_provider() {
+        super::providers::dest(&dir, &decision.send_model(&req.model))
+    } else {
+        grokhub_core::adult_guard::Dest::Xai
+    };
+    // Explicit turns go only to xAI or this computer's model.
+    let screen = super::adult::screen(&req.conversation_id, &text, dest);
+    let on_provider = decision.on_provider() && !screen.to_xai;
+    let model = if screen.to_xai {
+        super::adult::xai_model(&req.model)
+    } else {
+        decision.send_model(&req.model)
+    };
     sent.effort = effort.clone();
     sent.model = model.clone();
     let started = std::time::Instant::now();
@@ -1129,10 +1146,12 @@ pub fn stream_routed(
         }
         sink(ev)
     };
-    let on_device = decision.on_device();
+    if let Some(note) = &screen.heads_up {
+        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+    }
     let out = if on_device {
         super::local::serve(class, &text, cancel)
-    } else if decision.on_provider() {
+    } else if on_provider {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);
         let out = super::providers::call_model(
@@ -1153,10 +1172,17 @@ pub fn stream_routed(
     } else {
         client.stream(&sent, cancel, sink)
     };
+    let out = match (out, &screen.heads_up) {
+        (Ok(mut turn), Some(note)) => {
+            turn.text = format!("{note}\n\n{}", turn.text);
+            Ok(turn)
+        }
+        (out, _) => out,
+    };
     timing::record("send:model_call", started.elapsed());
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
-    } else if decision.on_provider() {
+    } else if on_provider {
         call.provider = &decision.route.provider;
     }
     call.effort = effort.as_deref();

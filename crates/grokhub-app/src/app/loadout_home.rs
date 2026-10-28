@@ -765,6 +765,7 @@ impl Cabin {
         // Viper is an adults-only preset; without this gate the titlebar falls
         // back to Nyx and HARD DONE shots look wrong.
         self.cfg.explicit_personalities = true;
+        self.cfg.adult_confirmed = true;
         self.cfg.personality = "viper".into();
         self.persist_cfg();
         self.pin_chat_tail();
