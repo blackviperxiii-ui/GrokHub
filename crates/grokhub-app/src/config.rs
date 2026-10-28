@@ -880,7 +880,11 @@ pub fn load() -> AppConfig {
         cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
         cfg.memory_migrated = true;
         // An existing file keeps its pick; a missing field is the default voice.
-        cfg.personality = grokhub_core::personality::NEW_INSTALL_ID.into();
+        cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
+    }
+    // The plain "Default" preset is gone; a profile still on it speaks as Nyx.
+    if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
+        cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -1259,6 +1263,9 @@ mod tests {
         assert_eq!(load().personality, "");
         fs::write(root.join("app.json"), "{\"personality\":\"pirate\"}\n").unwrap();
         assert_eq!(load().personality, "pirate");
+        // An install still on the retired "default" preset upgrades to Nyx.
+        fs::write(root.join("app.json"), "{\"personality\":\"default\"}\n").unwrap();
+        assert_eq!(load().personality, "nyx");
         let _ = fs::remove_dir_all(&root);
     }
 
