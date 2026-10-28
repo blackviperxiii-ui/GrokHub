@@ -35,6 +35,7 @@ pub mod desktop_entry;
 pub mod desktop_mcp;
 pub mod diagnostics;
 pub mod doctor;
+pub mod downloads_tidy;
 pub mod export;
 pub mod feel;
 pub mod file_watch;

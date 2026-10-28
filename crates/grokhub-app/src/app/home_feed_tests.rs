@@ -1396,6 +1396,24 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "take_tidy_scan",
+        grokhub_core::downloads_tidy::card(
+            &[grokhub_core::downloads_tidy::Finding {
+                file: grokhub_core::downloads_tidy::FileInfo {
+                    path: "/home/user/Downloads/old.iso".into(),
+                    name: "old.iso".into(),
+                    bytes: 900 * 1024 * 1024,
+                    modified_ms: 0,
+                },
+                kind: grokhub_core::downloads_tidy::Kind::BigArchive,
+                why: "Not touched in 60 days".into(),
+            }],
+            now,
+        )
+        .expect("tidy card"),
+        "Downloads",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {

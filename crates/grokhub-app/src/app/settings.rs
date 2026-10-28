@@ -666,6 +666,7 @@ impl Cabin {
                                                             }
                                                             self.ui_focus_help_row(ui);
                                                             self.ui_code_resume_row(ui);
+                                                            self.ui_downloads_tidy_row(ui);
                                                             let mut dock_panels = self.cfg.dock_panels;
                                                             if settings_toggle(
                                                                 ui,
