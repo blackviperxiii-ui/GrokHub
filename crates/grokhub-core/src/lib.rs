@@ -42,6 +42,7 @@ pub mod findings;
 pub mod fix_plan;
 pub mod focus_app;
 pub mod frame;
+pub mod game_companion;
 pub mod gguf;
 pub mod goal;
 pub mod governor;

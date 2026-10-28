@@ -5304,6 +5304,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let companion = crate::game_companion::Companion {
+            game: crate::steam::SteamGame {
+                app_id: 548430,
+                name: "Deep Rock Galactic".into(),
+                last_played: 1,
+                playtime_min: 600,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        };
+        rows.push((
+            "companion_card",
+            companion.companion_card(at),
+            "Deep Rock Galactic",
+        ));
         rows
     }
 
