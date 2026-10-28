@@ -272,7 +272,7 @@ fn compositor_hint() -> (Option<bool>, Option<String>) {
 
 /// Every process's name and command line.
 #[cfg(target_os = "linux")]
-fn processes() -> Option<Vec<(String, String)>> {
+pub(super) fn processes() -> Option<Vec<(String, String)>> {
     let entries = std::fs::read_dir("/proc").ok()?;
     Some(
         entries

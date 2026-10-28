@@ -23,9 +23,9 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 140.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
-/// Kept for optional photo embed rebuilds when real art lands.
-#[allow(dead_code)]
+/// Slots build.rs watches under `assets/personalities/<id>/`.
 const PHOTO_SLOTS: u8 = 5;
+const _: u8 = PHOTO_SLOTS;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1702,7 +1702,7 @@ mod tests {
         assert!(src.contains("pinned_settings_sec"));
         assert!(src.contains("settings_modal_size"));
         assert!(src.contains("settings_page_rect"));
-        let shots = include_str!("../../../../scripts/deck-shots.ps1");
+        let shots = include_str!("../../../../scripts/deck-shots.list.ps1");
         assert!(shots.contains("-pinPersonality") || shots.contains("-personality"));
         assert!(shots.contains("personality-1600x900"));
         assert!(shots.contains("personality-1100x720"));

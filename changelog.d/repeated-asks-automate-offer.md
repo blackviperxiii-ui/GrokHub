@@ -1,0 +1,1 @@
+- When you ask GrokHub the same kind of thing around the same hour (for example patch notes most evenings), it offers once to schedule it or save a skill. Asks stay on this computer; Dismiss never suggests that cluster again.
