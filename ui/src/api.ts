@@ -556,6 +556,42 @@ export interface LocalStatus {
   memory: string;
 }
 
+export interface LocalEngineProgress {
+  done: number;
+  total: number | null;
+  verifying: boolean;
+  line: string;
+}
+
+export interface LocalEngineInfo {
+  /** ready | missing | downloading | noBuild */
+  state: string;
+  version: string;
+  sizeLabel: string;
+  hint: string;
+  button: string;
+  progress: LocalEngineProgress | null;
+  error: string | null;
+}
+
+export interface LocalDraftOffer {
+  id: string;
+  name: string;
+  sizeLabel: string;
+  line: string;
+  button: string;
+  targetId: string;
+  targetName: string;
+}
+
+export interface LocalDraftProgress {
+  id: string;
+  done: number;
+  total: number | null;
+  verifying: boolean;
+  line: string;
+}
+
 export interface LocalAiView {
   config: LocalAiConfig;
   status: LocalStatus;
@@ -563,7 +599,26 @@ export interface LocalAiView {
   /** What hardware detection couldn't see. */
   limits: string[];
   maxThreads: number;
+  engine: LocalEngineInfo;
+  draftOffer: LocalDraftOffer | null;
+  /** Offers for every catalog model still missing its draft pair. */
+  draftOffers: LocalDraftOffer[];
+  draftProgress: LocalDraftProgress | null;
 }
+
+export type LocalEngineEvent = {
+  state: string;
+  progress: LocalEngineProgress | null;
+  error: string | null;
+  message: string | null;
+};
+
+export type LocalDrafterEvent = {
+  state: string;
+  progress: LocalDraftProgress | null;
+  error: string | null;
+  message: string | null;
+};
 
 /** Reads the hardware, so it can take a moment. */
 export function getLocalAi(): Promise<LocalAiView> {
@@ -584,6 +639,34 @@ export function checkModelFile(path: string): Promise<LocalFileRow> {
 
 export function runLocalSpeedTest(): Promise<string> {
   return invoke<string>("run_local_speed_test");
+}
+
+export function startLocalEngineDownload(): Promise<LocalEngineInfo> {
+  return invoke<LocalEngineInfo>("start_local_engine_download");
+}
+
+export function cancelLocalEngineDownload(): Promise<void> {
+  return invoke("cancel_local_engine_download");
+}
+
+export function startLocalDrafterDownload(targetId: string): Promise<LocalDraftOffer | null> {
+  return invoke<LocalDraftOffer | null>("start_local_drafter_download", { targetId });
+}
+
+export function cancelLocalDrafterDownload(): Promise<void> {
+  return invoke("cancel_local_drafter_download");
+}
+
+export function onLocalEngineEvent(
+  handler: (event: LocalEngineEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribe<LocalEngineEvent>("local-ai-engine", handler);
+}
+
+export function onLocalDrafterEvent(
+  handler: (event: LocalDrafterEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribe<LocalDrafterEvent>("local-ai-drafter", handler);
 }
 
 /** Settings → Web access (src-tauri/src/remote.rs). */
