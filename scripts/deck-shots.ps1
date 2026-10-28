@@ -411,9 +411,13 @@ Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' @nyxFresh
 $nyxUpgrade = @{ personality = 'default'; openSettings = 'personality' }
 Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' @nyxUpgrade
 Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' @nyxUpgrade
-# Personality picker beside slide 19; pinPersonality now opens Settings at launch.
+# Personality picker beside slide 19. pinPersonality opens Settings at launch
+# (no rail click / Ctrl+, — a miss left Hangout on screen in #958).
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
+Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
+# Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
+Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
 # Companion corner-box: DEFAULT rotation (Nyx deck poses) and an ACTION photo.
 Shot 1600 900 'companion-default-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
 Shot 1100 720 'companion-default-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
