@@ -108,7 +108,6 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
     }
     Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
     $app.currentThread = $id
-    if ($diag) { $app.diagnosticsMode = $true }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -223,6 +222,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
+    if ($diag) { $app.diagnosticsMode = $true }
     Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
@@ -352,20 +352,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $bmp.Dispose()
 }
 
-Shot 1600 900 '1600x900' 'ops-dark' $Slide
-Shot 1100 720 '1100x720' 'ops-dark' $Slide
-Shot 1600 900 '1600x900-slide20' 'ops-dark' '20'
-Shot 1100 720 '1100x720-slide20' 'ops-dark' '20'
-Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
-Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
-Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -clickAt 20, 695
-Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
-Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
-Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
 # Labs Diagnostics proof (scratch): tall windows so the Diagnostics section is
 # on screen without scrolling. Off, on with Save, and the toast after a Save.
 Shot 1100 1500 'diag-off-1100x1500' 'ops-dark' '12' -openSettings 'labs'
 Shot 1100 1500 'diag-on-1100x1500' 'ops-dark' '12' -openSettings 'labs' -diag
-Shot 1100 1500 'diag-saved-1100x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave
-Shot 1600 1500 'diag-saved-1600x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave
+Shot 1100 1500 'diag-saved-1100x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave -dock
+Shot 1600 1500 'diag-saved-1600x1500' 'ops-dark' '12' -openSettings 'labs' -diag -diagSave -dock
 Get-ChildItem $Out | Format-Table Name, Length
