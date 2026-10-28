@@ -153,7 +153,6 @@ mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
 mod code_resume_ui;
-mod companion_photos;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;

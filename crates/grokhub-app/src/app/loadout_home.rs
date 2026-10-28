@@ -14,6 +14,7 @@ use grokhub_core::{ChipKind, QuickChip, UpdateCard, UpdateStatus};
 use super::*;
 
 mod chat_first;
+mod companion_photos;
 
 /// The companion art slots, one per mood (slide 17). Swap a file to change
 /// that picture. `companion.png` is the hanging-out pose.
@@ -941,7 +942,7 @@ impl Cabin {
         let (tex, rotate) = self.companion_dock_texture(ui.ctx(), mood);
         if rotate {
             ui.ctx()
-                .request_repaint_after(super::companion_photos::PHOTO_HOLD);
+                .request_repaint_after(companion_photos::PHOTO_HOLD);
         }
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1021,7 +1022,7 @@ impl Cabin {
         ctx: &egui::Context,
         mood: Mood,
     ) -> (Option<egui::TextureHandle>, bool) {
-        use super::companion_photos::{
+        use companion_photos::{
             action_still, default_still, pinned_action, rotating_slot, CompanionAction,
         };
         // Slide-17 hello / helping mood pins keep the brand poses. A
@@ -1071,7 +1072,7 @@ impl Cabin {
 
     /// The dock's pose for what this chat is doing right now.
     pub(super) fn companion_mood(&self) -> Mood {
-        if super::companion_photos::pinned_action().is_some() {
+        if companion_photos::pinned_action().is_some() {
             return Mood::Helping;
         }
         if let Some(mood) = pinned_mood() {
