@@ -168,6 +168,7 @@ mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
+mod home;
 mod ideas_ui;
 mod imagine;
 mod inbox_ui;
@@ -882,6 +883,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
+    /// Modular Home slot layout (`home_layout.json` v2).
+    home_layout: grokhub_core::home::HomeLayout,
 }
 
 #[cfg(test)]
@@ -1447,6 +1450,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            home_layout: home::ensure_home_layout(&crate::config::config_dir()),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1908,6 +1912,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            home_layout: grokhub_core::home::HomeLayout::default(),
         }
     }
 

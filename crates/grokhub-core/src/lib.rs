@@ -52,6 +52,7 @@ pub mod health;
 pub mod heartbeat;
 pub mod heartbeat_throttle;
 pub mod history;
+pub mod home;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
