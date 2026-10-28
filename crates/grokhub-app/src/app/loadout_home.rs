@@ -95,9 +95,20 @@ pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
     }
 }
 
+/// Launch pins are read once per run. Tests flip them inside one process,
+/// so there every call reads the variable again; a cached value made the
+/// result depend on which test ran first.
+pub(super) fn launch_pin<T: Copy + Send + Sync>(cell: &'static OnceLock<T>, read: fn() -> T) -> T {
+    if cfg!(test) {
+        read()
+    } else {
+        *cell.get_or_init(read)
+    }
+}
+
 fn pinned_mood() -> Option<Mood> {
     static PIN: OnceLock<Option<Mood>> = OnceLock::new();
-    *PIN.get_or_init(|| {
+    launch_pin(&PIN, || {
         std::env::var("GROKHUB_DECK_MOOD")
             .ok()
             .as_deref()
@@ -782,19 +793,25 @@ pub(super) fn proof_shot_requested() -> bool {
 
 fn deck_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    launch_pin(&ON, || {
         std::env::var("GROKHUB_DECK_SHOT")
             .ok()
             .is_some_and(|v| v.trim() == "1")
     })
 }
 
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
+/// trimmed and lowercased.
+fn deck_nav() -> Option<String> {
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
 /// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
 pub(super) fn deck_nav_home_pinned() -> bool {
-    deck_shot_env()
-        && std::env::var("GROKHUB_DECK_NAV")
-            .ok()
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case("home"))
+    deck_shot_env() && deck_nav().as_deref() == Some("home")
 }
 
 /// Windows home-mc deck pairs must match slide 09 (layout A), not the modular grid.
@@ -804,7 +821,7 @@ pub(super) fn deck_home_mc_shot() -> bool {
 
 fn web_search_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    launch_pin(&ON, || {
         std::env::var("GROKHUB_WEB_SEARCH_SHOT")
             .ok()
             .is_some_and(|v| v.trim() == "1")
@@ -1055,18 +1072,14 @@ impl Cabin {
             }
             _ => {}
         }
-        // `GROKHUB_DECK_NAV` pins the rail page for Mission Control shots.
-        // Applied after last-chat so home-mc wins over Hangout seed.
-        match std::env::var("GROKHUB_DECK_NAV")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "home" => {
-                self.open_mission_home();
-                // Slide 09: Home with no Activity popover over it.
-                self.activity.open = false;
+        // `GROKHUB_DECK_NAV` opens that rail page at launch (any `set_nav_id`
+        // id), so a shot never depends on a rail click landing. Applied after
+        // last-chat so home-mc wins over the Hangout seed. Every pinned page
+        // closes the seeded Activity list, which would cover its top right.
+        if let Some(id) = deck_nav() {
+            self.activity.open = false;
+            self.set_nav_id(&id);
+            if id == "home" {
                 // Empty Hangout thread so dock mission todos load for Objectives.
                 if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
                     self.thread_idx = i;
@@ -1075,10 +1088,6 @@ impl Cabin {
                     }
                 }
             }
-            "objectives" | "mission" => self.set_nav_id("objectives"),
-            "pulse" => self.set_nav_id("pulse"),
-            "library" => self.set_nav_id("library"),
-            _ => {}
         }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
         // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
@@ -2098,6 +2107,42 @@ mod tests {
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
+    }
+
+    #[test]
+    fn a_deck_shot_opens_the_pinned_rail_page_with_activity_closed() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        let mut cabin = Cabin::quiet_for_test();
+        for (pinned, nav, id) in [
+            (" Pulse ", Nav::Pulse, "pulse"),
+            ("library", Nav::Library, "library"),
+            ("mission", Nav::Objectives, "objectives"),
+            ("workboard", Nav::Workboard, "workboard"),
+        ] {
+            std::env::set_var("GROKHUB_DECK_NAV", pinned);
+            cabin.activity.open = true;
+            cabin.apply_deck_shot_seed();
+            assert_eq!(cabin.nav, nav, "{pinned}");
+            assert_eq!(cabin.nav_id(), id, "{pinned}");
+            assert!(!cabin.activity.open, "{pinned} closes the Activity list");
+        }
+        std::env::remove_var("GROKHUB_DECK_NAV");
+        cabin.apply_deck_shot_seed();
+        assert!(
+            cabin.activity.open,
+            "without a pinned page the list stays open"
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
         match prev_nav {
             Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
