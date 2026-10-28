@@ -10,6 +10,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::local::{ChatMessage, LocalRuntime};
+use crate::client::{CancelToken, ResponsesRequest, TurnOutput};
+use crate::route::providers::{openai_body, parse_openai_reply};
 
 /// Runtime that posts to `{base}/v1/chat/completions`.
 #[derive(Clone)]
@@ -155,6 +157,39 @@ impl LocalRuntime for HttpLocalRuntime {
             on_delta(&text);
         }
         Ok(text)
+    }
+
+    fn chat_tools(
+        &self,
+        req: &ResponsesRequest,
+        cancel: &CancelToken,
+    ) -> Result<TurnOutput, String> {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        if !self.loopback_ok() {
+            return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
+        }
+        let _busy = super::local_sidecar::busy();
+        super::local_sidecar::touch_global();
+        // Non-streaming: tool_calls are unreliable on SSE for llama-server.
+        let mut body = openai_body(&self.model, None, req);
+        body["stream"] = json!(false);
+        let resp = Self::agent()
+            .post(&format!("{}/v1/chat/completions", self.base_url))
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Content-Type", "application/json")
+            .send_json(body)
+            .map_err(|e| format!("local model request failed: {e}"))?;
+        if resp.status() >= 400 {
+            let status = resp.status();
+            let body = resp.into_string().unwrap_or_default();
+            return Err(format!("local model HTTP {status}: {body}"));
+        }
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("local model read: {e}"))?;
+        parse_openai_reply(&text).map_err(|e| e.to_string())
     }
 }
 
