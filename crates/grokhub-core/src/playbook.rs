@@ -17,7 +17,10 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-news-library.toml"),
+    include_str!("../assets/playbooks/gaming-help.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
+    include_str!("../assets/playbooks/build-loadout.toml"),
 ];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
@@ -381,10 +384,13 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
-                "game-tuning"
+                "game-news-library",
+                "gaming-help",
+                "game-tuning",
+                "build-loadout"
             ]
         );
-        let game = parse(BUILTIN[7]).unwrap();
+        let game = parse(BUILTIN[9]).unwrap();
         assert_eq!(
             (
                 game.fit("task", "gaming", "windows"),
