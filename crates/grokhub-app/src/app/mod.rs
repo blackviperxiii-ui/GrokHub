@@ -189,6 +189,7 @@ mod marketplace_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
+mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
@@ -200,6 +201,7 @@ pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
@@ -253,7 +255,6 @@ use pulse::*;
 use settings::*;
 #[cfg(test)]
 use sidebar::*;
-pub(crate) use status_toasts::token_budget_notice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
@@ -575,6 +576,7 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
+    print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -1199,6 +1201,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1665,6 +1668,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
@@ -3339,7 +3343,8 @@ impl Cabin {
             return;
         };
         let line = grokhub_core::budget_line(&self.usage, cap);
-        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        let (title, body) =
+            budget_ui::token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
         self.status = format!("{title} — {body}");
         if crate::notify::allow_ping(self.quiet_now()) {
             crate::notify::ping(title, &body);
@@ -3519,11 +3524,8 @@ impl Cabin {
             }
             match act {
                 HeartbeatAct::Housekeep => {
-                    self.housekeep_rhythm_and_recap();
+                    self.tick_housekeep();
                     self.tick_day_brief();
-                    if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist_bg();
-                    }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.

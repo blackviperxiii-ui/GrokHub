@@ -32,20 +32,7 @@ fn sync_writes_a_local_hub_snapshot() {
     assert!(cabin.sync_rx.is_some());
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
-    // Windows ACL + antivirus can make the sync worker's first secrets/app.json
-    // writes take longer than a tight 2s poll. Wait for the channel, not a wall clock.
-    let start = std::time::Instant::now();
-    let budget = std::time::Duration::from_secs(8);
-    while cabin.sync_rx.is_some() && start.elapsed() < budget {
-        cabin.poll_sync();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(
-        cabin.sync_rx.is_none(),
-        " /sync must land the hub snapshot; status={:?} after {:?}",
-        cabin.status,
-        start.elapsed()
-    );
+    wait_sync(&mut cabin);
     // SY-03: one result line in the chat; the pane stays on Chat.
     assert!(matches!(cabin.nav, Nav::Chat), "nav={:?}", cabin.nav);
     assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
@@ -110,11 +97,20 @@ fn pair_test_peer(cabin: &Cabin, id: &str) {
 }
 
 fn wait_sync(cabin: &mut Cabin) {
+    // Sync waits for the full snapshot's disk writes before egress. Drain that
+    // FIFO job first so Windows ACL/antivirus latency doesn't consume the poll budget.
+    cabin.persist_svc.flush();
     let start = std::time::Instant::now();
     while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(8) {
         cabin.poll_sync();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    assert!(
+        cabin.sync_rx.is_none(),
+        "/sync must land the hub snapshot; status={:?} after {:?}",
+        cabin.status,
+        start.elapsed()
+    );
 }
 
 // Spike-4a: chats and memory to a not-yet-granted destination are hard Send.
