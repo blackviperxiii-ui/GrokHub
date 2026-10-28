@@ -1566,6 +1566,42 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
     ));
+    let mut health_session = None;
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now,
+            cpu_temp_c: Some(70.0),
+            gpu_temp_c: Some(75.0),
+            cpu_util_pct: Some(40),
+            gpu_util_pct: Some(85),
+            cpu_clock_mhz: Some(4000),
+            gpu_clock_mhz: Some(1800),
+            game_label: Some("Hades".into()),
+        },
+        now,
+    );
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now + 70_000,
+            cpu_temp_c: Some(72.0),
+            gpu_temp_c: Some(78.0),
+            cpu_util_pct: Some(42),
+            gpu_util_pct: Some(88),
+            cpu_clock_mhz: Some(4100),
+            gpu_clock_mhz: Some(1850),
+            game_label: Some("Hades".into()),
+        },
+        now + 70_000,
+    );
+    let health =
+        grokhub_core::pc_health::summarize(health_session.as_ref().expect("session"), now + 70_000);
+    rows.push((
+        "tick_pc_health",
+        grokhub_core::summary_card(&health, now),
+        "Hades",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));

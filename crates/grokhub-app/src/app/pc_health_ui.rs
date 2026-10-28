@@ -5,9 +5,12 @@
 use std::path::PathBuf;
 
 use grokhub_core::pc_health::{
-    self as ph, game_running, observe, parse_amdgpu_busy, parse_cpuinfo_mhz,
-    parse_hwmon_temp_milli, parse_nvidia_sensor_csv, summary_card, temps_from_hwmon, GameSession,
+    self as ph, game_running, observe, parse_nvidia_sensor_csv, summary_card, GameSession,
     ObserveOut, PcHealthLedger, SensorSample, SAMPLE_EVERY_MS,
+};
+#[cfg(target_os = "linux")]
+use grokhub_core::pc_health::{
+    parse_amdgpu_busy, parse_cpuinfo_mhz, parse_hwmon_temp_milli, temps_from_hwmon,
 };
 
 use super::*;

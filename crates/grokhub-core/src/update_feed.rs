@@ -5121,6 +5121,48 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 ),
                 "Test GPU",
             ),
+            (
+                "summary_card",
+                {
+                    let mut session = None;
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at,
+                            cpu_temp_c: Some(70.0),
+                            gpu_temp_c: Some(75.0),
+                            cpu_util_pct: Some(40),
+                            gpu_util_pct: Some(85),
+                            cpu_clock_mhz: Some(4000),
+                            gpu_clock_mhz: Some(1800),
+                            game_label: Some("Hades".into()),
+                        },
+                        at,
+                    );
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at + 70_000,
+                            cpu_temp_c: Some(72.0),
+                            gpu_temp_c: Some(78.0),
+                            cpu_util_pct: Some(42),
+                            gpu_util_pct: Some(88),
+                            cpu_clock_mhz: Some(4100),
+                            gpu_clock_mhz: Some(1850),
+                            game_label: Some("Hades".into()),
+                        },
+                        at + 70_000,
+                    );
+                    crate::pc_health::summary_card(
+                        &crate::pc_health::summarize(
+                            session.as_ref().expect("session"),
+                            at + 70_000,
+                        ),
+                        at,
+                    )
+                },
+                "Hades",
+            ),
         ];
         let links = [CitedLink {
             url: "https://blog.rust-lang.org/1.99".into(),
