@@ -1,0 +1,1 @@
+- Pass the local llama-server API key through its child environment instead of exposing it in process command lines.
