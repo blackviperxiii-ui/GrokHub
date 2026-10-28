@@ -1396,6 +1396,18 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "finish_local_models",
+        grokhub_core::local_model_news::Suggestion::Release {
+            repo: "ggml-org/Qwen3-14B-GGUF".into(),
+            run_mb: 10_020,
+            budget_mb: 16_384,
+            mem: grokhub_core::local_picker::Memory::Gpu,
+            like: None,
+        }
+        .card(now),
+        "Qwen3-14B",
+    ));
+    rows.push((
         "post_model_offer",
         grokhub_core::model_drop::ModelOffer {
             file: grokhub_core::model_drop::ModelFile {
