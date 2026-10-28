@@ -367,6 +367,8 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Game launch companion: the card on top of Pulse once Steam reports the launch.
 Shot 1600 900 'game-launch-1600x900' 'ops-dark' '14' -library -pulse -gameLaunch -nav 'pulse'
 Shot 1100 720 'game-launch-1100x720' 'ops-dark' '14' -library -pulse -gameLaunch -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'game-launch-1100x720-scrolled' 'ops-dark' '14' -library -pulse -gameLaunch -nav 'pulse' -wheel 12
 Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
