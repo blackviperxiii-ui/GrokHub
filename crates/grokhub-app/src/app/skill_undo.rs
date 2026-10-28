@@ -498,6 +498,8 @@ mod tests {
                     true,
                     grokhub_core::ThoughtFold::Expanded,
                     false,
+                    false,
+                    1,
                 );
                 let _ = paint_skill_undo_rows(ui, &rows);
             });

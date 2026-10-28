@@ -29,5 +29,6 @@
 - `config_dir()`: a test-thread pin (`TestConfigDir`), then `GROKHUB_CONFIG`, then `%APPDATA%\GrokHub` on Windows, then `~/.config/GrokHub`, then `.grokhub` in the cwd. Workers capture the dir at schedule time so a later env change cannot move the file.
 - `GROKHUB_CONFIG` is process-global: tests take `hold_test_config` and a `test_config_root`; CI runs `--test-threads=1`.
 - `atomic_write` creates the temp file 0600 (user-only DACL on Windows via `crates/grokhub-app/src/win_acl.rs`) before any bytes land.
+- `diagnostics_mode` (Labs): off by default; camelCase `diagnosticsMode` on disk.
 ## See also
 - [app-module](app-module.md), [amr](amr.md), [grokhub-app](grokhub-app.md), [heartbeat](heartbeat.md)

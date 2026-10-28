@@ -272,7 +272,13 @@ pub use desktop_mcp::{
     apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, CABIN_CU_SERVERS,
     CUA_MCP_RULE, CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER, SELF_MCP_SERVER,
 };
-pub use diagnostics::diagnostics_bundle;
+pub use diagnostics::{
+    content_level_label, desktop_dir, diagnostics_bundle, diagnostics_markdown,
+    diagnostics_saved_status, diagnostics_zip_name, diagnostics_zip_path, redact_for_diagnostics,
+    redact_turn, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier, DiagnosticsExport,
+    DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall, DiagnosticsTurn,
+    DIAGNOSTICS_PREVIEW_LINES,
+};
 pub use doctor::{
     doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,
     hub_kind_from_health, DoctorLine,

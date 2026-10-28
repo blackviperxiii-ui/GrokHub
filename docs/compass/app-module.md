@@ -31,5 +31,6 @@
 - `on_exit` stops background native runs (`kill_bg_runs`), flushes PersistService, then waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
 - `cabin_signed_in` reads only the cabin's own OAuth in `secrets.json` (`cabin_signed_in_false_when_idle`), so a Grok CLI logged in under HOME does not change cabin tests. `isolated_cabin` only pins config, so isolate HOME too for tests that touch the user's files.
+- Labs Diagnostics mode (`diagnostics_ui.rs`, `AppConfig.diagnostics_mode`): off by default; Save writes a redacted `loadout-diagnostics-*.zip` to the Desktop (JSON + Markdown) and toasts Open folder.
 ## See also
 - [grokhub-app](grokhub-app.md), [app-config](app-config.md), [slash](slash.md), [harness](harness.md), [heartbeat](heartbeat.md)

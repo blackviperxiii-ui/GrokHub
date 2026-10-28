@@ -971,6 +971,17 @@ fn labs_beta_channel_toggle_is_wired() {
             && settings.contains("channel_auto_off_note"),
         "Labs must wire the Beta channel toggle, status line, Windows note, and auto-off"
     );
+    assert!(
+        settings.contains("ui_labs_diagnostics"),
+        "Labs must paint the Diagnostics mode toggle"
+    );
+    let diag = include_str!("diagnostics_ui.rs");
+    assert!(
+        diag.contains("Diagnostics mode")
+            && diag.contains("save_chat_diagnostics")
+            && diag.contains("loadout-diagnostics"),
+        "Labs Diagnostics UI must wire the mode toggle and Desktop zip export"
+    );
     let app = include_str!("mod.rs");
     assert!(
         app.contains("fn queue_channel_switch")

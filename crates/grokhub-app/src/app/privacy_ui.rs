@@ -1066,6 +1066,8 @@ mod tests {
                     true,
                     grokhub_core::ThoughtFold::Expanded,
                     false,
+                    false,
+                    1,
                 );
                 let _ = paint_privacy_revokes(ui, &rows, None);
             });
@@ -1223,6 +1225,8 @@ mod tests {
                     true,
                     grokhub_core::ThoughtFold::Expanded,
                     false,
+                    false,
+                    1,
                 );
                 let _ = paint_privacy_revokes(ui, &rows, None);
             });

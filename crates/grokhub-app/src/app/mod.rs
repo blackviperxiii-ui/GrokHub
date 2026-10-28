@@ -157,6 +157,7 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod diagnostics_ui;
 mod dock_ui;
 mod episode_ui;
 mod evidence_ui;
@@ -879,6 +880,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
+    /// Last Labs Diagnostics zip on the Desktop (Open folder).
+    diagnostics_last_zip: Option<std::path::PathBuf>,
 }
 
 #[cfg(test)]
@@ -1442,6 +1445,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1901,6 +1905,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
         }
     }
 

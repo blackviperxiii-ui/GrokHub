@@ -2309,6 +2309,7 @@ fn quiet_cabin() -> Cabin {
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),
         activity: Default::default(),
+        diagnostics_last_zip: None,
     }
 }
 
