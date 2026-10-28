@@ -1975,6 +1975,7 @@ impl Cabin {
         self.pulse_note(&card.title, kind.ledger_reason(), day);
         if kind.counts_negative() {
             self.nudge_watcher_dismissed(&card);
+            self.ask_offer_dismissed(&card);
             self.heartbeat_card_dismissed();
             self.proactive_dismissed(&card);
             self.pulse_remove_dismiss(&card, true);

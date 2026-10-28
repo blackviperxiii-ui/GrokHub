@@ -190,6 +190,7 @@ mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
 mod night;
+mod ask_offers_ui;
 mod nudge_watchers_ui;
 mod oauth;
 mod pages;

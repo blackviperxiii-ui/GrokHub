@@ -1869,6 +1869,7 @@ impl Cabin {
             self.outcome_user_said(&text);
             self.harness_user_sent();
         }
+        self.note_ask_offer(&text);
         self.harness.typed_send = true;
         self.send_chat(text);
         self.harness.typed_send = false;
