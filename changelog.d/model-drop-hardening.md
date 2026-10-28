@@ -1,0 +1,1 @@
+- Model drop: the Open and Move one-taps quote file paths so a crafted file name cannot run its own shell command, and a 3MF preview stops reading an entry that inflates past a size cap.
