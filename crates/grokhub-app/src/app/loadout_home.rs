@@ -739,7 +739,7 @@ impl Cabin {
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
-// Windows proof (#968): Home parks empty; Chat rail restores Hangout.
+        // Windows proof (#968): Home parks empty; Chat rail restores Hangout.
         match deck_last_chat_mode().as_deref() {
             Some("home") => self.open_fresh_home(),
             Some("chat") => {
@@ -1389,7 +1389,7 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
-let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var("GROKHUB_DECK_MOOD");
@@ -1454,7 +1454,7 @@ let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
         }
-match prev_nav {
+        match prev_nav {
             Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
             None => std::env::remove_var("GROKHUB_DECK_NAV"),
         }
