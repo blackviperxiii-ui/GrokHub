@@ -9,6 +9,11 @@ on:
     # when the label is added (guards job reads live labels too).
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
+  merge_group:
+  # Nightly full run: everything PRs skip (cross-check, macOS shell,
+  # phone-ios, windows-release, deny) still runs once a day.
+  schedule:
+    - cron: "17 8 * * *"
 
 permissions:
   contents: read
@@ -27,9 +32,12 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
 
-# Tests, lint and the Windows release build run side by side, so the wall
-# time is the slowest job, not their sum. `linux` and `windows` keep their
-# names (tests); the lint and release jobs are new checks.
+# PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
+# build) and windows (same), plus path-filtered shell and phone-android. The
+# slow jobs (cross-check, macOS shell, phone-ios, windows-release, and deny
+# unless Cargo.lock or deny.toml changed) run on push to beta/main, nightly
+# and on manual runs. Every gate is a job-level `if:`, never a workflow-level
+# path filter, so a skipped job still reports and required checks never hang.
 # Each job restores its own build cache; caches save only from pushes to beta
 # and main, so PRs start warm from their base branch.
 jobs:
@@ -44,8 +52,16 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # pull_request and push use paths-filter. merge_group has no filter base,
+    # so it counts as code=true; schedule and workflow_dispatch run everything.
     outputs:
       code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+      deny: ${{ github.event_name != 'pull_request' || steps.paths.outputs.deny == 'true' }}
+      cross: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && steps.paths.outputs.cross == 'true') }}
+      phone_android: ${{ (github.event_name != 'pull_request' && github.event_name != 'push') || steps.paths.outputs.phone == 'true' }}
+      phone_ios: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && steps.paths.outputs.phone == 'true') }}
+      release: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+      shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -60,6 +76,51 @@ jobs:
               - '!**/*.md'
               - '!screenshots/**'
               - '!research/**'
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: paths
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        with:
+          filters: |
+            deny:
+              - 'Cargo.lock'
+              - 'deny.toml'
+            cross:
+              - 'crates/grokhub-proto/**'
+              - 'crates/grokhub-core/**'
+              - 'crates/grokhub-hub/**'
+              - 'crates/grokhub-agent/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            phone:
+              - 'ui/**'
+              - 'src-tauri/**'
+              - '.github/workflows/ci.yml'
+            shell:
+              - 'ui/**'
+              - 'src-tauri/**'
+              - 'crates/grokhub-core/**'
+              - 'crates/grokhub-agent/**'
+              - 'crates/grokhub-desktop/**'
+              - 'crates/grokhub-proto/**'
+              - '.github/workflows/ci.yml'
+      # Shell matrix: PRs run ubuntu + windows only when shell/UI paths change;
+      # merge_group runs ubuntu + windows; push, nightly and manual add macOS.
+      - name: Shell matrix
+        id: shell
+        env:
+          EVENT: ${{ github.event_name }}
+          SHELL_PATHS: ${{ steps.paths.outputs.shell }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest","windows-latest"]'; else os='[]'; fi
+          elif [ "$EVENT" = merge_group ]; then
+            os='["ubuntu-latest","windows-latest"]'
+          else
+            os='["ubuntu-latest","windows-latest","macos-latest"]'
+          fi
+          echo "os=$os" >> "$GITHUB_OUTPUT"
       - name: No Electron leftover
         run: |
           test ! -f package.json
@@ -125,16 +186,18 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/ci-guards.sh
 
+  # Clippy and tests in one job so they share one build and one cache.
   linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+          components: clippy
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -148,6 +211,9 @@ jobs:
             pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
+      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
+      # must be deleted, not allowed.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
         with:
           tool: nextest
@@ -158,39 +224,11 @@ jobs:
       - run: cargo build -p grokhub-app -p grokhub-hub
       - name: Cabin binary exists
         run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
-  linux-lint:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-          components: clippy
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          shared-key: linux-lint
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
-      - name: Native GUI build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libgl1-mesa-dev libwayland-dev libasound2-dev
-      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
-      # must be deleted, not allowed.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.deny == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -210,7 +248,7 @@ jobs:
   # piece the web client will share.
   cross-check:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.cross == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -262,11 +300,11 @@ jobs:
   # The web app smoke test (Phase 5) runs on Linux.
   shell:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.shell_os != '[]' && needs.changes.outputs.shell_os != ''
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(needs.changes.outputs.shell_os) }}
     name: shell (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -356,7 +394,7 @@ jobs:
   # on an emulator or simulator and reads the app's report back.
   phone-android:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.phone_android == 'true'
     name: phone (android)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -414,7 +452,7 @@ jobs:
 
   phone-ios:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.phone_ios == 'true'
     name: phone (ios)
     runs-on: macos-latest
     timeout-minutes: 60
@@ -459,32 +497,12 @@ jobs:
       - name: Smoke test
         run: node ui/e2e/phone.mjs ios "$APP"
 
+  # Clippy and tests in one job so they share one build and one cache.
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          shared-key: windows-test
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
-        with:
-          tool: nextest
-      - run: cargo nextest run --workspace --locked --profile ci
-      - run: cargo test --doc --workspace --locked
-
-  windows-lint:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -493,16 +511,21 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          shared-key: windows-lint
+          shared-key: windows-test
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --workspace --locked --profile ci
+      - run: cargo test --doc --workspace --locked
 
   windows-release:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
