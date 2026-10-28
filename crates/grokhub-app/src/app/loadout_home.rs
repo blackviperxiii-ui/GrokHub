@@ -764,7 +764,13 @@ impl Cabin {
         self.cfg.personality = "viper".into();
         self.persist_cfg();
         self.pin_chat_tail();
-        self.seed_activity_dock_for_deck();
+        // Slide 10's chat-first layout has no Activity popover or pending Ask
+        // over the snapshot column.
+        // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
+        let activity_off = std::env::var("GROKHUB_DECK_ACTIVITY").is_ok_and(|v| v.trim() == "0");
+        if !self.cfg.chat_objectives && !activity_off {
+            self.seed_activity_dock_for_deck();
+        }
         // Windows proof: Home parks empty; Chat rail restores Hangout.
         match deck_last_chat_mode().as_deref() {
             Some("home") => self.open_fresh_home(),
@@ -775,15 +781,14 @@ impl Cabin {
             }
             _ => {}
         }
-        // `GROKHUB_DECK_SETTINGS_SEC` opens Settings on that section at boot so
-        // slide 19 shots do not depend on a fragile rail click (missed → Hangout).
-        // Applied after last-chat mode so Personality proofs win when pinned.
-        if let Some(sec) = super::settings::pinned_settings_sec() {
-            if self.nav != Nav::Settings {
-                self.settings_back = self.nav;
-            }
-            self.nav = Nav::Settings;
-            self.settings_sec = sec;
+        // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
+        // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
+        // (privacy / full-page proofs). No rail click or Ctrl+, — a miss left
+        // Hangout on screen in #958. After last-chat mode so Personality wins.
+        if super::settings::pinned_settings_sec().is_some()
+            || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
+        {
+            self.set_nav_id("settings");
         }
     }
 
@@ -1552,8 +1557,28 @@ mod tests {
         assert_ne!(
             cabin.nav,
             Nav::Settings,
-            "without GROKHUB_DECK_SETTINGS_SEC the seed stays on Hangout"
+            "without GROKHUB_DECK_SETTINGS_SEC / OPEN_SETTINGS the seed stays on Hangout"
         );
+        assert!(cabin.activity.open);
+        assert!(cabin.perm_ask.is_some());
+
+        let mut chat_first = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
+        chat_first.cfg.chat_objectives = true;
+        chat_first.apply_deck_shot_seed();
+        assert_eq!(chat_first.messages.len(), 4);
+        assert!(!chat_first.activity.open);
+        assert!(chat_first.perm_ask.is_none());
+        assert_ne!(chat_first.nav, Nav::Settings);
+
+        std::env::set_var("GROKHUB_DECK_OPEN_SETTINGS", "1");
+        std::env::set_var("GROKHUB_DECK_ACTIVITY", "0");
+        let mut settings = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
+        settings.apply_deck_shot_seed();
+        std::env::remove_var("GROKHUB_DECK_OPEN_SETTINGS");
+        std::env::remove_var("GROKHUB_DECK_ACTIVITY");
+        assert_eq!(settings.nav, Nav::Settings);
+        assert!(!settings.activity.open);
+        assert!(settings.perm_ask.is_none());
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
             None => std::env::remove_var("GROKHUB_DECK_SHOT"),

@@ -222,6 +222,18 @@ fn settings_dropdown(
     (idx != prev).then_some(idx)
 }
 
+/// Where Settings sits. Loadout fills the window right of the rail and under
+/// the titlebar, as a page (deck slide 12); other themes keep the centred sheet.
+pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSec) -> egui::Rect {
+    if page {
+        return egui::Rect::from_min_max(
+            screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
+            screen.max,
+        );
+    }
+    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
+}
+
 impl Cabin {
     pub(super) fn reset_home_learned(&mut self) {
         self.card_prefs = grokhub_core::CardPrefs::default();
@@ -470,11 +482,7 @@ impl Cabin {
                     ui.set_clip_rect(modal);
                     egui::Frame::NONE
                         .fill(crate::theme::bg())
-                        .corner_radius(if page {
-                            0.0
-                        } else {
-                            crate::theme::SHEET_RADIUS
-                        })
+                        .corner_radius(if page { 0.0 } else { crate::theme::SHEET_RADIUS })
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
