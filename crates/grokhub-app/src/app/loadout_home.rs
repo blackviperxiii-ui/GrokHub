@@ -1077,8 +1077,17 @@ impl Cabin {
         // last-chat so home-mc wins over the Hangout seed. Every pinned page
         // closes the seeded Activity list, which would cover its top right.
         if let Some(id) = deck_nav() {
-            self.activity.open = false;
+            let before = self.nav;
             self.set_nav_id(&id);
+            // `set_nav_id` falls back to Chat for an id it doesn't know; a typo
+            // must not shoot Chat in place of the page, so undo it and say so.
+            // `profile` opens the menu over the current page, which may be Chat.
+            if self.nav == Nav::Chat && !matches!(id.as_str(), "chat" | "eyes" | "profile") {
+                eprintln!("GROKHUB_DECK_NAV: unknown page `{id}`, ignored");
+                self.nav = before;
+            } else {
+                self.activity.open = false;
+            }
             if id == "home" {
                 // Empty Hangout thread so dock mission todos load for Objectives.
                 if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
@@ -2134,6 +2143,22 @@ mod tests {
             assert_eq!(cabin.nav_id(), id, "{pinned}");
             assert!(!cabin.activity.open, "{pinned} closes the Activity list");
         }
+        std::env::set_var("GROKHUB_DECK_NAV", "pulsee");
+        cabin.activity.open = true;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(
+            cabin.nav,
+            Nav::Workboard,
+            "a typo keeps the last page, never Chat"
+        );
+        assert!(cabin.activity.open, "an unknown page leaves the list alone");
+        cabin.nav = Nav::Chat;
+        cabin.settings_menu_open = false;
+        std::env::set_var("GROKHUB_DECK_NAV", "profile");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav_id(), "profile");
+        assert!(!cabin.activity.open, "profile over Chat is a known page");
+        cabin.settings_menu_open = false;
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();
         assert!(

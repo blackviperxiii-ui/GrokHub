@@ -5001,6 +5001,28 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Keys file",
             ),
             (
+                "alert_card",
+                crate::print_alerts::alert_card(
+                    &crate::print_alerts::AlertResult {
+                        kind: crate::print_alerts::AlertKind::Finished,
+                        printer_key: "k1".into(),
+                        status: crate::print_alerts::PrinterStatus {
+                            name: "Shop K2".into(),
+                            kind: crate::print_alerts::PrinterKind::Moonraker,
+                            state: crate::print_alerts::PrintState::Complete,
+                            progress_pct: Some(100.0),
+                            eta_secs: None,
+                            filename: Some("bracket.gcode".into()),
+                            message: None,
+                            camera_path: None,
+                        },
+                        camera_enabled: false,
+                    },
+                    at,
+                ),
+                "Shop K2",
+            ),
+            (
                 "automation_failed_card",
                 automation_failed_card("a1", "Nightly backup", "The disk is full.", at),
                 "Nightly backup",

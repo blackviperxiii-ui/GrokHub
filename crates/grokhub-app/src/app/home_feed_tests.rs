@@ -1409,6 +1409,20 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "internet",
     ));
     rows.push((
+        "post_model_offer",
+        grokhub_core::model_drop::ModelOffer {
+            file: grokhub_core::model_drop::ModelFile {
+                path: "/home/user/Downloads/bracket.stl".into(),
+                name: "bracket.stl".into(),
+                bytes: 2048,
+            },
+            dims: Some([60.0, 20.0, 40.0]),
+            thumb: None,
+        }
+        .card(None, now),
+        "bracket.stl",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {
@@ -1574,6 +1588,26 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ..Default::default()
     };
     let nudge = grokhub_core::nudge_watchers::detect_gpu_driver(&gpu_snap).expect("gpu nudge");
+    let print_alert = grokhub_core::AlertResult {
+        kind: grokhub_core::AlertKind::Failed,
+        printer_key: "k1".into(),
+        status: grokhub_core::PrinterStatus {
+            name: "Shop K2".into(),
+            kind: grokhub_core::PrinterKind::Moonraker,
+            state: grokhub_core::PrintState::Error,
+            progress_pct: Some(42.0),
+            eta_secs: None,
+            filename: Some("bracket.gcode".into()),
+            message: None,
+            camera_path: None,
+        },
+        camera_enabled: false,
+    };
+    rows.push((
+        "tick_print_alerts",
+        grokhub_core::alert_card(&print_alert, now),
+        "Shop K2",
+    ));
     rows.push((
         "tick_nudge_watchers",
         grokhub_core::nudge_watcher_card(&nudge, now),
