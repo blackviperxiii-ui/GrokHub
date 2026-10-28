@@ -1,1 +1,2 @@
 - Privacy: chips.json no longer stores raw chat lines as chip keys; a one-time scrub drops legacy text keys.
+- Tests: drain queued snapshot writes before timing sync completion, avoiding Windows disk-latency timeouts while retaining consent and exactly-once send checks.
