@@ -507,7 +507,27 @@ mod tests {
         );
         assert_eq!(
             id("question", "gaming", "linux").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            id("question", "game-help", "windows").as_deref(),
             Some("gaming-help")
+        );
+        assert_eq!(
+            id("task", "loadout", "linux").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("research", "loadout", "windows").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            id("question", "library", "linux").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            id("research", "library", "windows").as_deref(),
+            Some("game-news-library")
         );
         assert_eq!(
             id("question", "general", "linux").as_deref(),
@@ -525,6 +545,77 @@ mod tests {
         assert_eq!(id("chat", "general", "linux"), None);
         assert_eq!(id("chat", "gaming", "windows"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gaming_specialists_are_picked_for_tips_builds_and_library() {
+        let (all, _) = load(&crate::harness::test_dir(
+            "playbook-gaming-specialists-pick",
+        ));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("tips for Minecraft mods this patch, no spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("how do I unlock the new Fortnite mythic without spoilers").as_deref(),
+            Some("gaming-help")
+        );
+        assert_eq!(
+            pick_id("build a PC for 1440p gaming under 1500").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("best loadout for Warzone this season").as_deref(),
+            Some("build-loadout")
+        );
+        assert_eq!(
+            pick_id("what's on sale in my Steam library").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("show patch notes for Cyberpunk").as_deref(),
+            Some("game-news-library")
+        );
+        assert_eq!(
+            pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
+            Some("game-tuning")
+        );
+        // Cabin app name "Loadout" and bare Steam repairs must not steal specialists.
+        assert_ne!(
+            pick_id("open Loadout settings").as_deref(),
+            Some("build-loadout")
+        );
+        assert_ne!(
+            pick_id("Loadout won't start").as_deref(),
+            Some("build-loadout")
+        );
+        let loadout_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Loadout won't start",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(loadout_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(loadout_wont.domain.as_str(), "loadout");
+        assert_ne!(
+            pick_id("Steam won't launch").as_deref(),
+            Some("game-news-library")
+        );
+        let steam_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Steam won't launch",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(steam_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(steam_wont.domain.as_str(), "library");
+        assert_eq!(pick_id("hi there"), None);
     }
 
     #[test]
