@@ -23,7 +23,7 @@ pub(super) struct ResumeState {
 }
 
 impl ResumeState {
-    /// Cached repos from the last scan (empty until the launch scan lands).
+    /// Cached repos from the launch scan (empty until the scan finishes).
     pub(super) fn repos(&self) -> &[RepoStatus] {
         &self.repos
     }
@@ -33,6 +33,7 @@ impl ResumeState {
         self.editor.as_deref()
     }
 
+    /// Seed repos for tests (no git scan).
     #[cfg(test)]
     pub(super) fn seed_repos_for_test(&mut self, repos: Vec<RepoStatus>) {
         self.repos = repos;
