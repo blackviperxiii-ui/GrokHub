@@ -578,7 +578,10 @@ mod tests {
             id(&all, "question", "general").as_deref(),
             Some("quick-answer")
         );
-        assert_eq!(id(&all, "background", "general").as_deref(), Some("any-work"));
+        assert_eq!(
+            id(&all, "background", "general").as_deref(),
+            Some("any-work")
+        );
         // The default for its kind beats the generic fallback.
         assert_eq!(id(&all, "task", "general").as_deref(), Some(SHIPPED));
         // Excluding an intent drops it even when nothing else is named.

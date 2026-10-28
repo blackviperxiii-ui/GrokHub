@@ -50,6 +50,18 @@ pub(super) struct PickerState {
     pub age_check: bool,
 }
 
+/// Deck shots (`scripts/deck-shots.ps1`) set this to open with the 18+ check
+/// showing, since a click inside Settings is too fragile on the runner.
+const DECK_AGE_CHECK_ENV: &str = "GROKHUB_DECK_AGE_CHECK";
+
+/// The picker a window starts with: the 18+ row only for that deck shot.
+pub(super) fn first_picker() -> PickerState {
+    PickerState {
+        age_check: std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1"),
+        ..Default::default()
+    }
+}
+
 /// A custom preset open in the editor.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Draft {
@@ -1140,6 +1152,21 @@ mod tests {
         assert_eq!(cabin.personality_id(), "nyx");
         assert_eq!(cabin.chat_personality().id, "nyx");
         assert_eq!(cabin.open_chat_personality(), "nyx");
+    }
+
+    #[test]
+    fn a_deck_shot_opens_with_the_18_plus_check_showing() {
+        let before = std::env::var(DECK_AGE_CHECK_ENV).ok();
+        std::env::remove_var(DECK_AGE_CHECK_ENV);
+        assert!(!first_picker().age_check, "never shown on a normal start");
+        std::env::set_var(DECK_AGE_CHECK_ENV, " 1 ");
+        assert!(first_picker().age_check);
+        std::env::set_var(DECK_AGE_CHECK_ENV, "0");
+        assert!(!first_picker().age_check);
+        match before {
+            Some(v) => std::env::set_var(DECK_AGE_CHECK_ENV, v),
+            None => std::env::remove_var(DECK_AGE_CHECK_ENV),
+        }
     }
 
     #[test]

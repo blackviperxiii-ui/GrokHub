@@ -1301,7 +1301,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            picker: Default::default(),
+            picker: personality_ui::first_picker(),
             playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
