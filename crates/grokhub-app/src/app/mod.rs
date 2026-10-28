@@ -169,6 +169,7 @@ mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
+mod home;
 mod ideas_ui;
 mod imagine;
 mod inbox_ui;
@@ -231,6 +232,7 @@ mod tests;
 mod threads_nav;
 mod voice;
 mod web_search_ui;
+mod week_recap_ui;
 mod wishlist_ui;
 
 use background::BgWork;
@@ -269,6 +271,8 @@ use sidebar::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
+    /// Modular Mission Control (rail Home). No chat tab bar.
+    Home,
     Chat,
     Devices,
     Memory,
@@ -885,6 +889,10 @@ pub struct Cabin {
     activity: activity_dock::DockState,
     /// Last Labs Diagnostics zip on the Desktop (Open folder).
     diagnostics_last_zip: Option<std::path::PathBuf>,
+    /// Modular Home slot layout (`home_layout.json` v2).
+    home_layout: grokhub_core::home::HomeLayout,
+    /// Edit Home modules dialog draft (`None` = closed).
+    home_edit: Option<home::HomeEditDraft>,
 }
 
 #[cfg(test)]
@@ -1451,6 +1459,8 @@ impl Cabin {
             status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics_last_zip: None,
+            home_layout: home::ensure_home_layout(&crate::config::config_dir()),
+            home_edit: None,
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1913,6 +1923,8 @@ impl Cabin {
             status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics_last_zip: None,
+            home_layout: grokhub_core::home::HomeLayout::default(),
+            home_edit: None,
         }
     }
 
@@ -3508,9 +3520,7 @@ impl Cabin {
             }
             match act {
                 HeartbeatAct::Housekeep => {
-                    self.roll_today();
-                    self.release_situation_ping();
-                    self.note_rhythm();
+                    self.housekeep_rhythm_and_recap();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -5369,6 +5379,7 @@ impl eframe::App for Cabin {
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
+            // Chat tabs only in Chat — never on modular Home.
             if self.page_nav() == Nav::Chat {
                 self.ui_chat_tabs(ui);
             }
@@ -5379,6 +5390,7 @@ impl eframe::App for Cabin {
                 self.ui_docked_main(ui);
             } else {
                 match self.page_nav() {
+                    Nav::Home => self.ui_home_mission(ui),
                     Nav::Chat => {
                         self.sync_native_usage(ui);
                         self.ui_loadout_dock(ui);
@@ -5406,6 +5418,9 @@ impl eframe::App for Cabin {
         // after GitHub Latest returns, when the window is already sized.
         if self.nav == Nav::Settings {
             self.ui_settings(&ctx);
+        }
+        if self.home_edit.is_some() {
+            self.ui_home_edit(&ctx);
         }
         if self.palette_open {
             self.ui_palette(&ctx);

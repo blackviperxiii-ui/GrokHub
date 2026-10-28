@@ -84,6 +84,9 @@ mod persist_tests;
 #[path = "home_feed_tests.rs"]
 mod home_feed_tests;
 
+#[path = "home_mission_tests.rs"]
+mod home_mission_tests;
+
 #[path = "chat_threads_tests.rs"]
 mod chat_threads_tests;
 
@@ -2311,6 +2314,8 @@ fn quiet_cabin() -> Cabin {
         status_toasted: Default::default(),
         activity: Default::default(),
         diagnostics_last_zip: None,
+        home_layout: grokhub_core::home::HomeLayout::default(),
+        home_edit: None,
     }
 }
 

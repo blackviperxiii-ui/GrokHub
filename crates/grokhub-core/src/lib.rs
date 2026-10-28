@@ -52,6 +52,7 @@ pub mod health;
 pub mod heartbeat;
 pub mod heartbeat_throttle;
 pub mod history;
+pub mod home;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
@@ -135,6 +136,7 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod watch_learn;
+pub mod week_recap;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;
