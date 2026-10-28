@@ -1,0 +1,1 @@
+- Restyle the Hangout chat column to slide 02: companion header with TALK/TYPE, red-rim assistant bubbles with face avatars, red composer outline and amber send
