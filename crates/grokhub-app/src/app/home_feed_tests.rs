@@ -1396,6 +1396,22 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "finish_achievements",
+        grokhub_core::steam_achievements::Nudge {
+            app_id: 1145360,
+            game: "Hades".into(),
+            kind: grokhub_core::steam_achievements::Kind::Close,
+            done: 48,
+            total: 50,
+            left: vec![grokhub_core::steam_achievements::Left {
+                name: "Is There No Escape?".into(),
+                percent: Some(21.4),
+            }],
+        }
+        .card(now),
+        "Hades",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {

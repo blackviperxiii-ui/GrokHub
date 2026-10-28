@@ -37,7 +37,7 @@ fn seal_steam_id(dir: &Path, id: u64) -> Result<(), String> {
     crate::config::atomic_write(&dir.join(ID_FILE), sealed.as_bytes())
 }
 
-fn open_steam_id(dir: &Path) -> Option<u64> {
+pub(super) fn open_steam_id(dir: &Path) -> Option<u64> {
     let sealed = std::fs::read_to_string(dir.join(ID_FILE)).ok()?;
     grokhub_agent::harness::LearnedVault::new(dir)
         .open(ID_AAD, sealed.trim())
@@ -47,7 +47,7 @@ fn open_steam_id(dir: &Path) -> Option<u64> {
 }
 
 /// One keyless GET through the source fetcher (public-only, egress-guarded).
-fn get(url: &str) -> Result<String, String> {
+pub(super) fn get(url: &str) -> Result<String, String> {
     let req = SourceReq {
         kind: SourceKind::Rss,
         url: url.to_string(),
@@ -118,7 +118,7 @@ impl Cabin {
         }
     }
 
-    fn wish_has_id(&mut self) -> bool {
+    pub(super) fn wish_has_id(&mut self) -> bool {
         *self
             .sources
             .wish
@@ -308,7 +308,7 @@ impl Cabin {
         ui.add_space(6.0);
     }
 
-    fn ui_steam_id_entry(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn ui_steam_id_entry(&mut self, ui: &mut egui::Ui) {
         let local = self
             .sources
             .wish
