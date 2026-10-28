@@ -15,8 +15,9 @@ use super::*;
 const DAY_MS: u64 = 86_400_000;
 /// How long a read of the egress log stays fresh on screen.
 const LEDGER_TTL: Duration = Duration::from_secs(30);
-/// Below this the story and the switches stack.
-const TWO_COL_MIN_W: f32 = 820.0;
+/// Below this the story and the switches stack. The Settings page at
+/// 1100x720 leaves about 800 px, which still fits both columns.
+const TWO_COL_MIN_W: f32 = 760.0;
 const DIAGRAM_H: f32 = 240.0;
 const BARS_H: f32 = 56.0;
 
@@ -297,7 +298,8 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
 
 /// The tag, the hero, the week's count and the diagram.
 pub(super) fn paint_privacy_story(ui: &mut egui::Ui, week: &Week) {
-    mode_chip(ui, mode_tag(week));
+    // A row, so the tag hugs its text inside a justified column.
+    ui.horizontal(|ui| mode_chip(ui, mode_tag(week)));
     ui.add_space(14.0);
     ui.label(
         RichText::new(hero(week))
@@ -588,6 +590,23 @@ mod tests {
         cabin.set_asks_first(true);
         assert_eq!(cabin.permission_mode, PermissionMode::Ask);
         assert_eq!(cabin.cfg.permission_mode, "ask");
+    }
+
+    #[test]
+    fn loadout_settings_is_a_page_wide_enough_for_both_columns() {
+        use super::super::settings::settings_page_rect;
+        for (w, h) in [(1600.0, 900.0), (1100.0, 720.0)] {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
+            let page = settings_page_rect(screen, true);
+            assert_eq!(page.min, egui::pos2(40.0, 40.0));
+            assert_eq!(page.max, egui::pos2(w, h));
+            // The nav column is 220 px and the body keeps a 40 px gutter.
+            assert!(page.width() - 260.0 >= TWO_COL_MIN_W, "{w}x{h}");
+        }
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let sheet = settings_page_rect(screen, false);
+        assert_eq!(sheet.size(), egui::vec2(920.0, 620.0));
+        assert_eq!(sheet.center(), egui::pos2(800.0, 450.0));
     }
 
     #[test]

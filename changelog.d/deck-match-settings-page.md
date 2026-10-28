@@ -1,0 +1,1 @@
+- Deck match: in the Loadout look, Settings opens as a full page beside the rail instead of a centred dialog, so Privacy & data shows its story, switches and off-device ledger side by side like deck slide 12, at 1600x900 and 1100x720.

@@ -328,8 +328,8 @@ Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
 # The gear at the foot of the rail opens Settings; Ctrl+, from SendKeys
 # missed the 1100x720 window.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 410, 246
-Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 160, 156
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 110, 146
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 110, 146
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
