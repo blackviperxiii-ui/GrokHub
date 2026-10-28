@@ -78,6 +78,8 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
 
 /// Settings modal size: Personality needs room for the slide 19 grid + detail panel.
 pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui::Vec2 {
+    let margin = egui::vec2(48.0, 48.0);
+    let max = (screen - margin).max(egui::vec2(320.0, 240.0));
     let want = if sec == SettingsSec::Personality && crate::theme::is_loadout_paint() {
         egui::vec2(1180.0, 720.0)
     } else if sec == SettingsSec::Defaults && super::loadout_home::web_search_settings_shot() {
@@ -86,7 +88,20 @@ pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui:
     } else {
         egui::vec2(920.0, 620.0)
     };
-    want.min(screen - egui::vec2(48.0, 48.0))
+    want.min(max)
+}
+
+/// Where Settings sits. Loadout fills the window right of the rail and under
+/// the titlebar, as a page (deck slide 12 / #966); other themes keep the
+/// centred sheet. Keeps the Personality picker inside the window at every size.
+pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSec) -> egui::Rect {
+    if page {
+        return egui::Rect::from_min_max(
+            screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
+            screen.max,
+        );
+    }
+    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
 }
 
 /// Chat catalog ids plus Auto. Auto persists an empty model pin.
@@ -212,18 +227,6 @@ fn settings_dropdown(
         },
     );
     (idx != prev).then_some(idx)
-}
-
-/// Where Settings sits. Loadout fills the window right of the rail and under
-/// the titlebar, as a page (deck slide 12); other themes keep the centred sheet.
-pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSec) -> egui::Rect {
-    if page {
-        return egui::Rect::from_min_max(
-            screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
-            screen.max,
-        );
-    }
-    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
 }
 
 impl Cabin {
@@ -465,11 +468,13 @@ impl Cabin {
             .interactable(true)
             .show(ctx, |ui| {
                 ui.set_min_size(cover.size());
+                ui.set_max_size(cover.size());
                 if !page {
                     ui.painter()
                         .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
                 }
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
+                    ui.set_clip_rect(modal);
                     egui::Frame::NONE
                         .fill(crate::theme::bg())
                         .corner_radius(if page { 0.0 } else { crate::theme::SHEET_RADIUS })
@@ -477,6 +482,7 @@ impl Cabin {
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
                             ui.set_min_size(modal.size());
+                            ui.set_max_size(modal.size());
                             ui.horizontal(|ui| {
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(220.0, modal.height()),
@@ -524,10 +530,12 @@ impl Cabin {
                                             });
                                     },
                                 );
+                                let body_w = (modal.width() - 220.0).max(280.0);
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2((modal.width() - 220.0).max(320.0), modal.height()),
+                                    egui::vec2(body_w, modal.height()),
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
+                                        ui.set_max_width(body_w);
                                         ui.add_space(16.0);
                                         ui.horizontal(|ui| {
                                             ui.add_space(20.0);
@@ -561,12 +569,18 @@ impl Cabin {
                                             );
                                         });
                                         ui.add_space(12.0);
+                                        // Personality owns its own grid scroll; keep the body
+                                        // height capped so the panel never grows past the window.
+                                        let body_h = (ui.available_height() - 8.0).max(120.0);
                                         egui::ScrollArea::vertical()
                                             .auto_shrink([false, false])
+                                            .max_height(body_h)
                                             .show(ui, |ui| {
-                                                ui.set_width((modal.width() - 260.0).max(280.0));
+                                                ui.set_width((body_w - 40.0).max(240.0));
+                                                ui.set_max_width((body_w - 40.0).max(240.0));
                                                 ui.add_space(8.0);
                                                 ui.indent("settings-body", |ui| {
+                                                    ui.set_max_width(ui.available_width());
                                                     match sec {
                                                         SettingsSec::Account => {
                                                             let name_before = self.cfg.display_name.clone();

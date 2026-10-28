@@ -781,11 +781,13 @@ impl Cabin {
             }
             _ => {}
         }
-        // Open Settings when the deck script asks (`GROKHUB_DECK_OPEN_SETTINGS`)
-        // or pins a section (`GROKHUB_DECK_SETTINGS_SEC`) — Ctrl+, / gear miss on
-        // some windows-release sizes (Card 49 Settings 1600×900).
-        if std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
-            || super::settings::pinned_settings_sec().is_some()
+        // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
+        // including `-pinPersonality` / `-pinBehavior`) or
+        // `GROKHUB_DECK_OPEN_SETTINGS=1` (privacy / full-page proofs). No rail
+        // click or Ctrl+, — a miss left Hangout on screen in #958. After
+        // last-chat mode so Personality / Behavior wins.
+        if super::settings::pinned_settings_sec().is_some()
+            || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
         {
             self.set_nav_id("settings");
         }
@@ -1553,6 +1555,11 @@ mod tests {
             cabin.titlebar_personality_label().to_ascii_uppercase(),
             "VIPER"
         );
+        assert_ne!(
+            cabin.nav,
+            Nav::Settings,
+            "without GROKHUB_DECK_SETTINGS_SEC / OPEN_SETTINGS the seed stays on Hangout"
+        );
         assert!(cabin.activity.open);
         assert!(cabin.perm_ask.is_some());
 
@@ -1615,6 +1622,26 @@ mod tests {
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn deck_settings_sec_opens_personality_without_a_click() {
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "personality");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Settings);
+        assert!(matches!(cabin.settings_sec, SettingsSec::Personality));
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_sec {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
+            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
         }
     }
 
