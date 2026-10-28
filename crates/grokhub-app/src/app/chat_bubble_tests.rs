@@ -761,6 +761,20 @@ fn chat_blocks_offer_copy_and_reply() {
         chat.contains("paint_hangout_header"),
         "ui_chat paints the Hangout header: {chat}"
     );
+    let stack = src
+        .split("fn composer_stack_slots(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn empty_home_side_gap(").next())
+        .expect("composer_stack_slots");
+    assert!(
+        stack.contains("hangout_composer_stack_order") && stack.contains("hangout_composer_layout"),
+        "Loadout Hangout moves chips above the composer and hides the session row: {stack}"
+    );
+    assert!(
+        src.contains("fn apply_composer_session_row(")
+            && src.contains("hangout_composer_layout(self.messages.is_empty())"),
+        "Hangout skips Chat/Plan/Use and Ask/Auto/Always under the composer"
+    );
     assert!(
         chat.contains("available_width") && chat.contains("set_max_width(pane)"),
         "thread uses the CentralPanel pane: {chat}"

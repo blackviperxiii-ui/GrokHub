@@ -182,6 +182,27 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
     ]
 }
 
+/// Slide 02 Hangout: chips above the composer; session/permission row stays in Settings.
+fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
+    &[
+        ComposerStackSlot::AuthBanner,
+        ComposerStackSlot::SessionTools,
+        ComposerStackSlot::LiveWork,
+        ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::Chips,
+        ComposerStackSlot::Attach,
+        ComposerStackSlot::Pill,
+    ]
+}
+
+fn composer_stack_slots(messages_empty: bool) -> &'static [ComposerStackSlot] {
+    if super::loadout_home::hangout_composer_layout(messages_empty) {
+        hangout_composer_stack_order()
+    } else {
+        composer_stack_order()
+    }
+}
+
 pub(super) fn empty_home_side_gap(avail_w: f32, pane_w: f32) -> f32 {
     ((avail_w - pane_w) * 0.5).max(0.0)
 }
@@ -1200,7 +1221,7 @@ impl Cabin {
             return;
         }
         let voice_on = self.voice_is_on();
-        let subtitle = if voice_on {
+        let subtitle = if super::loadout_home::deck_shot_requested() || voice_on {
             "Voice on · just talking"
         } else {
             "Here · tap Talk to speak"
@@ -2614,6 +2635,69 @@ impl Cabin {
         placed
     }
 
+    /// Session Chat/Plan/Use and Ask/Auto/Always under the composer. Hangout
+    /// (slide 02) hides this row — those controls stay in Settings / the
+    /// session menu — so chips can sit above the pill.
+    fn apply_composer_session_row(&mut self, ui: &mut egui::Ui) {
+        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
+            return;
+        }
+        let session_now = self.session_mode.as_str().to_string();
+        let perm_now = self.permission_mode.as_str().to_string();
+        let (rung, why) = self.auto_chip();
+        let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
+        if let Some(mode) = row.mode {
+            if let Some(m) = SessionMode::parse(&mode) {
+                if m == SessionMode::Plan {
+                    self.select_plan_without_rename();
+                } else if m == SessionMode::Ask && self.running {
+                    self.set_session_mode(m);
+                    self.status = "btw — side ask, main run continues".into();
+                } else {
+                    self.confirm = None;
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.set_session_mode(m);
+                    self.acp = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = if m == SessionMode::Ask {
+                        "btw — look-safe side ask".into()
+                    } else {
+                        format!("Session {}", m.as_str())
+                    };
+                }
+            }
+        }
+        if let Some(perm) = row.perm {
+            if let Some(p) = PermissionMode::parse(&perm) {
+                if p == PermissionMode::AlwaysApprove
+                    && self.permission_mode != PermissionMode::AlwaysApprove
+                {
+                    self.arm_session_always();
+                } else {
+                    self.confirm = None;
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.set_permission_mode(p);
+                    self.acp = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = format!("Permission {}", p.as_str());
+                }
+            }
+        }
+        if row.why {
+            self.run_why(false);
+        }
+    }
+
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
@@ -2622,7 +2706,7 @@ impl Cabin {
             let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width())
                 .min(ui.available_width());
             ui.set_max_width(col_w);
-            for slot in composer_stack_order() {
+            for slot in composer_stack_slots(self.messages.is_empty()) {
                 match slot {
                     ComposerStackSlot::AuthBanner => self.ui_native_auth_banner(ui),
                     ComposerStackSlot::ContextBar => {
@@ -2778,61 +2862,7 @@ impl Cabin {
                         let cap = pill_w.min(ui.available_width()).max(360.0);
                         ui.set_width(cap);
                         ui.set_max_width(cap);
-                        let session_now = self.session_mode.as_str().to_string();
-                        let perm_now = self.permission_mode.as_str().to_string();
-                        let (rung, why) = self.auto_chip();
-                        let row =
-                            crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
-                        if let Some(mode) = row.mode {
-                            if let Some(m) = SessionMode::parse(&mode) {
-                                if m == SessionMode::Plan {
-                                    self.select_plan_without_rename();
-                                } else if m == SessionMode::Ask && self.running {
-                                    self.set_session_mode(m);
-                                    self.status = "btw — side ask, main run continues".into();
-                                } else {
-                                    self.confirm = None;
-                                    if self.running {
-                                        self.halt_in_flight();
-                                    }
-                                    self.set_session_mode(m);
-                                    self.acp = None;
-                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                                        t.grok_session = None;
-                                    }
-                                    self.persist_idle_key = self.persist_idle_now();
-                                    self.status = if m == SessionMode::Ask {
-                                        "btw — look-safe side ask".into()
-                                    } else {
-                                        format!("Session {}", m.as_str())
-                                    };
-                                }
-                            }
-                        }
-                        if let Some(perm) = row.perm {
-                            if let Some(p) = PermissionMode::parse(&perm) {
-                                if p == PermissionMode::AlwaysApprove
-                                    && self.permission_mode != PermissionMode::AlwaysApprove
-                                {
-                                    self.arm_session_always();
-                                } else {
-                                    self.confirm = None;
-                                    if self.running {
-                                        self.halt_in_flight();
-                                    }
-                                    self.set_permission_mode(p);
-                                    self.acp = None;
-                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                                        t.grok_session = None;
-                                    }
-                                    self.persist_idle_key = self.persist_idle_now();
-                                    self.status = format!("Permission {}", p.as_str());
-                                }
-                            }
-                        }
-                        if row.why {
-                            self.run_why(false);
-                        }
+                        self.apply_composer_session_row(ui);
                         let composer_id = egui::Id::new("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
                         let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
