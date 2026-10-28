@@ -1572,7 +1572,10 @@ mod tests {
         std::env::remove_var("GROKHUB_DECK_AGE_CHECK");
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();
-        assert_eq!(cabin.cfg.personality, "viper", "other shots still pin Viper");
+        assert_eq!(
+            cabin.cfg.personality, "viper",
+            "other shots still pin Viper"
+        );
         assert!(cabin.cfg.explicit_personalities);
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
