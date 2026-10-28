@@ -244,7 +244,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    # A pinned $nav page keeps it off too (the cabin closes it on every GROKHUB_DECK_NAV).
+    # Home is never seeded. Other pinned $nav pages keep the seeded list (its
+    # titlebar count) and the cabin closes the popover over them.
     $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
