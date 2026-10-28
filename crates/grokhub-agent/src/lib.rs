@@ -137,9 +137,9 @@ pub use tasks::{
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
-    deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute, is_readonly,
-    public_only_resolve, schemas_for, schemas_for_job, tool_schemas, tool_set_for_kind,
-    tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet, READ_ONLY_PHASE,
-    TOOL_SET_OUTSIDE,
+    brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
+    is_readonly, public_only_resolve, schemas_for, schemas_for_job, seal_brave_key, tool_schemas,
+    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet,
+    WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

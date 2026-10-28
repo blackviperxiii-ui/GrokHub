@@ -92,8 +92,8 @@ fn tier_meta_carries_bench_caps_without_claiming_tools() {
     });
     let m = local::tier_meta("local:small");
     assert_eq!(m.context_length, Some(8_192));
-    // Eval pass rate must not unlock tool_calling — serve returns empty calls.
-    assert_eq!(m.tool_calling, Some(false));
+    // Chat tools (cabin web_search) are offered; eval pass rate is unrelated.
+    assert_eq!(m.tool_calling, Some(true));
     let n = m.notice.expect("notice");
     assert!(
         n.text.contains("42.0") && n.text.contains("120") && n.text.contains("eval"),

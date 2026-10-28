@@ -14,7 +14,7 @@
 - `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `schemas_for_job` / `ToolSet` (per-job allowlist filter), `execute` (read-only), `dispatch` / `dispatch_for_job` (gated set; job set refuses with `tool_set_outside`).
 - `crates/grokhub-agent/src/tools/fence.rs`, `crates/grokhub-agent/src/file_checkpoint.rs`, `crates/grokhub-agent/src/recovery.rs`: fences; copy-before-write (`/rewind step`; Brain 2 `checkpoint.rs` = gaps); `RecoveryState` projects ladder/parks/drive (no second retry stack).
 ## Change recipe
-- New tool: add a module under `crates/grokhub-agent/src/tools/`, register its schema in `schemas_for` on the right side of the `readonly_session` / `desktop` checks, dispatch it, and make sure `gate::decide` and the harness see it.
+- New tool: add a module under `crates/grokhub-agent/src/tools/`, register its schema in `schemas_for` on the right side of the `readonly_session` / `desktop` checks, dispatch it, and make sure `gate::decide` and the harness see it. Cabin `web_search` (`tools/web_search.rs`) is the free OpenRouter/local path; xAI hosted search strips that function tool in `responses_body` when `hosted_search` is on.
 - Outside data returned to the model: wrap with `tools::fence::fence(source, text)` (or `fence_if_outside` for path-gated reads).
 - Ported code: keep the `// Portions derived from xai-org/grok-build ...` header and add a line to `crates/grokhub-agent/NOTICE`.
 ## What breaks it
