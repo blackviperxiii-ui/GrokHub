@@ -87,6 +87,9 @@ pub fn govern(
     if name == "web_fetch" {
         return govern_fetch(base, gate, arguments, policy, always);
     }
+    if name == "web_search" {
+        return govern_search(base, gate, policy, always);
+    }
     if gate::is_media(name) {
         return govern_media(base, gate, name, policy, always);
     }
@@ -197,6 +200,12 @@ pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspa
             .iter()
             .any(|rule| rule.action == Action::Ask && webfetch_matches(rule, &url));
     }
+    if name == "web_search" {
+        return policy
+            .rules
+            .iter()
+            .any(|rule| rule.action == Action::Ask && websearch_matches(rule));
+    }
     if gate::is_media(name) {
         return policy
             .rules
@@ -242,6 +251,35 @@ fn govern_fetch(
         .rules
         .iter()
         .any(|rule| rule.action == Action::Allow && webfetch_matches(rule, &url))
+    {
+        return Decision::Run;
+    }
+    base
+}
+
+pub fn websearch_matches(rule: &Rule) -> bool {
+    matchers::tool_reaches(rule.tool, Tool::WebSearch)
+}
+
+fn govern_search(base: Decision, gate: &Gate, policy: &Policy, always: bool) -> Decision {
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Deny && websearch_matches(rule))
+    {
+        return Decision::Refuse(gate::unattended_deny("web_search"));
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Ask && websearch_matches(rule))
+    {
+        return ask(gate, "web_search", always);
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Allow && websearch_matches(rule))
     {
         return Decision::Run;
     }

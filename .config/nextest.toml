@@ -11,6 +11,13 @@
 [test-groups]
 serial = { max-threads = 1 }
 
+# Local bare-repo git fixtures under channel_tip_tests contend for git.exe /
+# Defender on windows-latest when nextest runs them side by side (fetch timed
+# out at the probe budget). One at a time keeps the tips checks honest.
+[[profile.ci.overrides]]
+filter = 'test(channel_tip_tests)'
+test-group = 'serial'
+
 [profile.ci]
 # Run everything and list every failure, not just the first.
 fail-fast = false
