@@ -713,7 +713,7 @@ pub(super) fn paint_privacy_revokes(
                 row,
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    ui.add_space(super::chat_ui::result_text_inset());
                     let r = ui.label(
                         RichText::new(&g.label)
                             .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
@@ -1195,60 +1195,70 @@ mod tests {
     /// bubble's text inset, not at the row edge.
     #[test]
     fn privacy_revoke_rows_line_up_with_the_bubble_text() {
-        let view = grokhub_core::ChatView {
-            kind: grokhub_core::ChatKind::Result,
-            title: String::new(),
-            body: format!("{PRIVACY_HEAD}\n\nGrants"),
-        };
-        let rows = vec![PrivacyRevoke {
-            id: "g1".into(),
-            label: "Files in notes".into(),
-            detail: Some("/home/you/Documents/notes".into()),
-        }];
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts_on(&ctx);
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1000.0, 600.0),
-            )),
-            ..Default::default()
-        };
-        let out = crate::theme::test_pass(&ctx, input, |ui| {
-            egui::CentralPanel::default().show(ui, |ui| {
-                let _ = super::super::chat_ui::paint_chat_block_with(
-                    ui,
-                    &view,
-                    true,
-                    true,
-                    grokhub_core::ThoughtFold::Expanded,
-                    false,
-                );
-                let _ = paint_privacy_revokes(ui, &rows, None);
+        // Loadout outlines the bubble, which moves its text; pin each paint
+        // so the result never depends on which test set it last.
+        let _paint = crate::theme::hold_paint_test();
+        for palette in [
+            crate::theme::PaintPalette::ClassicDark,
+            crate::theme::PaintPalette::OpsDark,
+        ] {
+            crate::theme::set_paint_palette(palette);
+            let view = grokhub_core::ChatView {
+                kind: grokhub_core::ChatKind::Result,
+                title: String::new(),
+                body: format!("{PRIVACY_HEAD}\n\nGrants"),
+            };
+            let rows = vec![PrivacyRevoke {
+                id: "g1".into(),
+                label: "Files in notes".into(),
+                detail: Some("/home/you/Documents/notes".into()),
+            }];
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = super::super::chat_ui::paint_chat_block_with(
+                        ui,
+                        &view,
+                        true,
+                        true,
+                        grokhub_core::ThoughtFold::Expanded,
+                        false,
+                    );
+                    let _ = paint_privacy_revokes(ui, &rows, None);
+                });
             });
-        });
-        let mut lefts = std::collections::HashMap::new();
-        fn walk(shape: &egui::Shape, lefts: &mut std::collections::HashMap<String, f32>) {
-            match shape {
-                egui::Shape::Text(t) => {
-                    lefts.insert(t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x);
+            let mut lefts = std::collections::HashMap::new();
+            fn walk(shape: &egui::Shape, lefts: &mut std::collections::HashMap<String, f32>) {
+                match shape {
+                    egui::Shape::Text(t) => {
+                        lefts.insert(t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x);
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
+                    _ => {}
                 }
-                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
-                _ => {}
             }
+            for clipped in &out.shapes {
+                walk(&clipped.shape, &mut lefts);
+            }
+            let head = lefts.get(PRIVACY_HEAD).copied().expect("bubble head");
+            let row = lefts
+                .get("Files in notes")
+                .copied()
+                .expect("revoke row label");
+            assert!(
+                (head - row).abs() < 1.0,
+                "{palette:?}: bubble text at {head}, Revoke row at {row}"
+            );
         }
-        for clipped in &out.shapes {
-            walk(&clipped.shape, &mut lefts);
-        }
-        let head = lefts.get(PRIVACY_HEAD).copied().expect("bubble head");
-        let row = lefts
-            .get("Files in notes")
-            .copied()
-            .expect("revoke row label");
-        assert!(
-            (head - row).abs() < 1.0,
-            "bubble text at {head}, Revoke row at {row}"
-        );
+        crate::theme::set_paint_dark(true);
     }
 
     #[test]

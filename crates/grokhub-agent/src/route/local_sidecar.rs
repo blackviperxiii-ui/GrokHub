@@ -198,16 +198,10 @@ pub fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
-/// Command line for llama-server: host locked to loopback, API key required,
+/// Command line for llama-server: host locked to loopback, no credentials,
 /// plus hardware-aware perf flags from [`super::local_perf`].
-pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
-    llama_args_with_perf(
-        model,
-        host,
-        port,
-        token,
-        &super::local_perf::current_defaults(),
-    )
+pub fn llama_args(model: &Path, host: &str, port: u16) -> Vec<String> {
+    llama_args_with_perf(model, host, port, &super::local_perf::current_defaults())
 }
 
 /// Same as [`llama_args`] with an explicit [`super::local_perf::RuntimeDefaults`].
@@ -215,15 +209,14 @@ pub fn llama_args_with_perf(
     model: &Path,
     host: &str,
     port: u16,
-    token: &str,
     perf: &super::local_perf::RuntimeDefaults,
 ) -> Vec<String> {
-    let mut args = base_args(model, host, port, token);
+    let mut args = base_args(model, host, port);
     args.extend(super::local_perf::llama_perf_args(perf));
     args
 }
 
-fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
+fn base_args(model: &Path, host: &str, port: u16) -> Vec<String> {
     vec![
         "-m".into(),
         model.display().to_string(),
@@ -231,8 +224,6 @@ fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
         host.into(),
         "--port".into(),
         port.to_string(),
-        "--api-key".into(),
-        token.into(),
     ]
 }
 
@@ -241,10 +232,9 @@ pub fn llama_args_with_launch(
     model: &Path,
     host: &str,
     port: u16,
-    token: &str,
     launch: &LaunchArgs,
 ) -> Vec<String> {
-    let mut args = base_args(model, host, port, token);
+    let mut args = base_args(model, host, port);
     args.extend(launch.to_args());
     args
 }
@@ -252,6 +242,13 @@ pub fn llama_args_with_launch(
 /// Where the server's load log goes, next to the binary (read for out-of-memory).
 pub fn server_log_path(binary: &Path) -> PathBuf {
     binary.with_file_name("llama-server.log")
+}
+
+fn llama_command(binary: &Path, args: &[String], token: &str) -> Command {
+    let mut cmd = Command::new(binary);
+    // llama-server reads this from its child environment, not the process list.
+    cmd.args(args).env("LLAMA_API_KEY", token);
+    cmd
 }
 
 fn spawn_llama(
@@ -288,18 +285,15 @@ fn spawn_llama(
         }
     }
     let args = match launch {
-        Some(l) => llama_args_with_launch(model, host, port, token, l),
-        None => llama_args(model, host, port, token),
+        Some(l) => llama_args_with_launch(model, host, port, l),
+        None => llama_args(model, host, port),
     };
     // The load log names out-of-memory failures; without a file it is dropped.
     let log = std::fs::File::create(server_log_path(binary))
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
-    let mut cmd = Command::new(binary);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(log);
+    let mut cmd = llama_command(binary, &args, token);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("could not start local model server: {e}"))
@@ -978,15 +972,51 @@ mod tests {
     use fake_server::FakeServer;
 
     #[test]
-    fn llama_args_pin_loopback_and_api_key() {
-        let args = llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711, "tok");
+    fn llama_args_pin_loopback_without_api_key() {
+        let args = llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711);
         assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
         assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
-        assert!(args.windows(2).any(|w| w == ["--api-key", "tok"]));
+        assert!(!args.iter().any(|a| a.contains("--api-key")));
         assert!(args.windows(2).any(|w| w == ["-m", "/m.gguf"]));
         // Perf defaults (PR C) ride along even with the CPU floor.
         assert!(args.windows(2).any(|w| w[0] == "-ngl"));
         assert!(args.iter().any(|a| a == "--cache-prompt"));
+    }
+
+    #[test]
+    fn llama_command_passes_api_key_only_in_child_environment() {
+        let launch = LaunchArgs {
+            backend: grokhub_core::local_profile::Backend::Cpu,
+            ngl: 0,
+            all_layers: 1,
+            n_cpu_moe: None,
+            ctx: 4096,
+            kv: autoconfig::KvType::Q8,
+            threads: 2,
+            threads_batch: None,
+            flash_attn: false,
+            mlock: false,
+            tensor_split: None,
+            draft: None,
+        };
+        for args in [
+            llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),
+            llama_args_with_launch(Path::new("/m.gguf"), "127.0.0.1", 4711, &launch),
+        ] {
+            let cmd = llama_command(Path::new(llama_server_name()), &args, "fake-local-token");
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert!(!args.iter().any(|a| a.contains("fake-local-token")));
+            assert!(!args.iter().any(|a| a.contains("--api-key")));
+            assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
+            assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
+            assert_eq!(
+                cmd.get_envs().collect::<Vec<_>>(),
+                vec![(
+                    std::ffi::OsStr::new("LLAMA_API_KEY"),
+                    Some(std::ffi::OsStr::new("fake-local-token"))
+                )]
+            );
+        }
     }
 
     #[test]
@@ -997,7 +1027,7 @@ mod tests {
             ram_mb: 32_768,
             free_disk_mb: 100_000,
         });
-        let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, "tok", &perf);
+        let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, &perf);
         assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
         assert!(args.windows(2).any(|w| w == ["-c", "16384"]));
         assert!(args.windows(2).any(|w| w == ["--flash-attn", "on"]));

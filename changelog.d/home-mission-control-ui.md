@@ -1,0 +1,2 @@
+- Home rail opens modular Mission Control (no chat tabs); Edit Home dialog; Send and chips jump to a new Chat tab.
+- Windows home-mc deck shots beside slide 09: dock + Steam seed, slide 09 layout on Home, Activity popover closed, weekly streak demo data, six-tile PC loadout with meters, coach line, full-height columns, Up next kept at 900×700.
