@@ -2073,6 +2073,7 @@ fn quiet_cabin() -> Cabin {
         situation_ping: None,
         window_focused: true,
         focus: Default::default(),
+        print_alerts: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
