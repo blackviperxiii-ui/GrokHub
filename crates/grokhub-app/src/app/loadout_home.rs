@@ -942,11 +942,13 @@ impl Cabin {
                 return (companion_still_texture(ctx, &cache, still.png), true);
             }
         }
-        let personality = super::personality_ui::shown_id(self.cfg.personality.trim());
-        let key = format!("default:{personality}");
+        // Resolve the voice id here (empty / retired "default" → Nyx) so the
+        // photo module never touches chat config or the personality crate.
+        let set_id = super::personality_ui::shown_id(self.cfg.personality.trim());
+        let key = format!("default:{set_id}");
         let slot = rotating_slot(&key, now);
-        if let Some(still) = default_still(personality, slot) {
-            let cache = format!("companion-default-{personality}-{slot}");
+        if let Some(still) = default_still(set_id, slot) {
+            let cache = format!("companion-default-{set_id}-{slot}");
             return (companion_still_texture(ctx, &cache, still.png), true);
         }
         (companion_texture(ctx, mood), false)

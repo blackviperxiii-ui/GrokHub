@@ -1,8 +1,11 @@
-//! Companion corner-box photo sets: five DEFAULT stills per personality that
+//! Companion corner-box photo sets: five DEFAULT stills per preset id that
 //! rotate while idle, plus ACTION stills (coding, fixing, reading, writing,
 //! working, thinking, gaming) while a task is running. Stills live under
 //! `assets/companion-photos/`; a later clip can replace any still with the
 //! same slot name.
+//!
+//! This module takes a resolved photo-set id from the UI. It does not read
+//! chat config or the voice preset module — only the dock / picker pass an id.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -13,6 +16,8 @@ include!(concat!(env!("OUT_DIR"), "/companion_photos.rs"));
 pub(super) const PHOTO_SLOTS: u8 = 5;
 /// How long each still holds before advancing.
 pub(super) const PHOTO_HOLD: Duration = Duration::from_millis(2800);
+/// Art folder used when a preset has no own stills yet (`defaults/nyx/`).
+const FALLBACK_SET: &str = "nyx";
 
 /// Task kinds that pick an ACTION photo set while tools run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -78,30 +83,29 @@ impl CompanionAction {
 }
 
 /// A still for the dock. Clip replacement later: look up the same
-/// personality/action + slot under a `clips/` twin and paint a short loop
-/// instead of `png`.
+/// set/action + slot under a `clips/` twin and paint a short loop instead of
+/// `png`.
 #[derive(Clone, Copy)]
 pub(super) struct CompanionStill {
     pub png: &'static [u8],
 }
 
-/// PNG bytes for personality `id` DEFAULT slot `1..=5`. Missing art falls
-/// back to Nyx, then to any lower slot that exists.
-pub(super) fn default_still(personality_id: &str, slot: u8) -> Option<CompanionStill> {
+/// PNG bytes for photo-set `id` DEFAULT slot `1..=5`. Missing art falls back
+/// to [`FALLBACK_SET`], then to any lower slot that exists. Callers pass a
+/// resolved id (empty / retired ids mapped upstream).
+pub(super) fn default_still(set_id: &str, slot: u8) -> Option<CompanionStill> {
     let slot = ((slot.saturating_sub(1)) % PHOTO_SLOTS) + 1;
-    let id = if personality_id.trim().is_empty()
-        || personality_id == grokhub_core::personality::LEGACY_DEFAULT_ID
-    {
-        grokhub_core::personality::DEFAULT_ID
-    } else {
-        personality_id.trim()
+    let id = {
+        let t = set_id.trim();
+        if t.is_empty() {
+            FALLBACK_SET
+        } else {
+            t
+        }
     };
     png_for_default(id, slot)
-        .or_else(|| png_for_default(grokhub_core::personality::DEFAULT_ID, slot))
-        .or_else(|| {
-            (1..=PHOTO_SLOTS)
-                .find_map(|s| png_for_default(grokhub_core::personality::DEFAULT_ID, s))
-        })
+        .or_else(|| png_for_default(FALLBACK_SET, slot))
+        .or_else(|| (1..=PHOTO_SLOTS).find_map(|s| png_for_default(FALLBACK_SET, s)))
         .map(|png| CompanionStill { png })
 }
 
@@ -165,16 +169,16 @@ mod tests {
     }
 
     #[test]
-    fn other_personality_falls_back_to_nyx_defaults() {
+    fn missing_set_falls_back_to_nyx_defaults() {
         let still = default_still("pirate", 2).expect("fallback");
         let nyx = default_still("nyx", 2).expect("nyx");
         assert_eq!(still.png.as_ptr(), nyx.png.as_ptr());
     }
 
     #[test]
-    fn legacy_default_id_uses_nyx() {
-        let a = default_still("default", 1).expect("legacy");
-        let b = default_still("nyx", 1).expect("nyx");
+    fn empty_set_id_uses_fallback_folder() {
+        let a = default_still("", 1).expect("empty");
+        let b = default_still(FALLBACK_SET, 1).expect("nyx");
         assert_eq!(a.png.as_ptr(), b.png.as_ptr());
     }
 
