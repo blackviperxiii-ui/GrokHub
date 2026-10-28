@@ -22,6 +22,20 @@ pub(super) struct ResumeState {
     editor: Option<String>,
 }
 
+impl ResumeState {
+    /// Cached repos from the launch scan (empty until the scan finishes).
+    pub(super) fn repos(&self) -> &[RepoStatus] {
+        &self.repos
+    }
+
+    /// Seed repos for tests (no git scan).
+    #[cfg(test)]
+    pub(super) fn seed_repos_for_test(&mut self, repos: Vec<RepoStatus>) {
+        self.repos = repos;
+        self.scanned = true;
+    }
+}
+
 pub(super) fn scan(folders: &[String], now_s: u64) -> Vec<RepoStatus> {
     let mut out = Vec::new();
     for folder in folders {

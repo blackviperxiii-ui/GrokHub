@@ -244,6 +244,11 @@ pub(super) enum PulseAct {
     LessKind(String),
     /// A backup reminder's one-tap, by chip id.
     BackupChip(String),
+    /// Hobby learning-path tip feedback.
+    HobbyDone(String),
+    HobbySkip(String),
+    HobbyTooEasy(String),
+    HobbyTooHard(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -812,6 +817,10 @@ pub(super) enum FeedPostAct {
     RetryNow,
     /// Save / Not interested / More like this on a source post.
     Source(SourceAct),
+    HobbyDone,
+    HobbySkip,
+    HobbyTooEasy,
+    HobbyTooHard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -869,6 +878,31 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
         }
         if super::change_undo::click_pill(ui, "Don't do this again") {
             act = Some(FeedPostAct::NeverAgain);
+        }
+    });
+    act
+}
+
+/// Done / Skip / Too easy / Too hard on an unanswered hobby learning-path tip.
+fn paint_hobby_path(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    let open = card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered);
+    if !open {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if super::change_undo::click_pill(ui, "Done") {
+            act = Some(FeedPostAct::HobbyDone);
+        }
+        if super::change_undo::click_pill(ui, "Skip") {
+            act = Some(FeedPostAct::HobbySkip);
+        }
+        if super::change_undo::click_pill(ui, "Too easy") {
+            act = Some(FeedPostAct::HobbyTooEasy);
+        }
+        if super::change_undo::click_pill(ui, "Too hard") {
+            act = Some(FeedPostAct::HobbyTooHard);
         }
     });
     act
@@ -957,8 +991,17 @@ pub(super) fn paint_post_body(
     if let Some(done) = paint_done_for_you(ui, card) {
         act = Some(done);
     }
+    if let Some(hobby) = paint_hobby_path(ui, card) {
+        act = Some(hobby);
+    }
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
+    }
+    if grokhub_core::local_model_news::is_upgrade_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Open in Settings")
+    {
+        act = Some(FeedPostAct::Open);
     }
     if super::fix_it::is_diagnosis_report_card(card) {
         if let Some(rec) = paint_recording(ui, card) {
@@ -1615,6 +1658,10 @@ impl Cabin {
                             FeedPostAct::FixIt(id) => PulseAct::FixIt(id),
                             FeedPostAct::RetryNow => PulseAct::RetryNow,
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
+                            FeedPostAct::HobbyDone => PulseAct::HobbyDone(card.id.clone()),
+                            FeedPostAct::HobbySkip => PulseAct::HobbySkip(card.id.clone()),
+                            FeedPostAct::HobbyTooEasy => PulseAct::HobbyTooEasy(card.id.clone()),
+                            FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
                         });
                     }
                     if let Some(id) = self.paint_backup_one_taps(ui, card) {
@@ -1909,6 +1956,18 @@ impl Cabin {
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
+            PulseAct::HobbyDone(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Done)
+            }
+            PulseAct::HobbySkip(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Skip)
+            }
+            PulseAct::HobbyTooEasy(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooEasy)
+            }
+            PulseAct::HobbyTooHard(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooHard)
+            }
         }
     }
 
@@ -1936,6 +1995,10 @@ impl Cabin {
     pub(super) fn pulse_run(&mut self, id: &str) -> Option<String> {
         if self.pulse_card(id)?.pulse.proactive.is_some() {
             self.proactive_click(id);
+            return None;
+        }
+        if self.pulse_card(id)?.pulse.print_alert.is_some() {
+            self.print_alert_run(id);
             return None;
         }
         self.pulse_run_line(id)
@@ -1981,6 +2044,7 @@ impl Cabin {
         self.pulse_note(&card.title, kind.ledger_reason(), day);
         if kind.counts_negative() {
             self.nudge_watcher_dismissed(&card);
+            self.ask_offer_dismissed(&card);
             self.heartbeat_card_dismissed();
             self.proactive_dismissed(&card);
             self.pulse_remove_dismiss(&card, true);

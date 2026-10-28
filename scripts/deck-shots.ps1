@@ -95,9 +95,16 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
            createdAt = $now - 10800000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'patch' }
     )
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
-    $lines = for ($i = 0; $i -lt 23; $i++) {
+    # Five distinct calendar days in the last week so Mission Control streak
+    # paints ~5 DAYS (not a single empty "0 DAYS" from one clustered timestamp).
+    $lines = @()
+    for ($d = 0; $d -lt 5; $d++) {
+        $at = $now - ($d * 86400000) - 3600000
+        $lines += @{ task = "streak-day-$d"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+    }
+    for ($i = 0; $i -lt 18; $i++) {
         $at = $now - 172800000 - $i * 60000
-        @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+        $lines += @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
     }
     Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
     $app.currentThread = $id
@@ -202,6 +209,21 @@ function Seed-Backup([string]$root) {
     return $code
 }
 
+# 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
+# after launch, since the first scan only marks what is already there.
+function Write-ModelDrop([string]$root) {
+    $v = @(@(0,0,0), @(60,0,0), @(60,20,0), @(0,20,0), @(0,0,40), @(60,0,40), @(60,20,40), @(0,20,40))
+    $faces = @(@(0,2,1), @(0,3,2), @(4,5,6), @(4,6,7), @(0,1,5), @(0,5,4), @(2,3,7), @(2,7,6), @(1,2,6), @(1,6,5), @(0,4,7), @(0,7,3))
+    $lines = @('solid bracket')
+    foreach ($f in $faces) {
+        $lines += '  facet normal 0 0 0', '    outer loop'
+        foreach ($i in $f) { $lines += "      vertex $($v[$i][0]) $($v[$i][1]) $($v[$i][2])" }
+        $lines += '    endloop', '  endfacet'
+    }
+    $lines += 'endsolid bracket'
+    Write-Utf8 (Join-Path $root 'Downloads\bracket.stl') ($lines -join "`n")
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -217,9 +239,12 @@ function Seed-Backup([string]$root) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
-# Pulse rail click, and closes the seeded Activity list over the page.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$backup, [string]$nav = '') {
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
+# home, pulse or library) instead of a rail click; the cabin closes the
+# seeded Activity list over every pinned page.
+# $localModels turns the local model suggestions on and runs the weekly check
+# on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$backup, [switch]$localModels, [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -242,6 +267,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         $app.backupNudge = $true
         $app.codeFolders = @(Seed-Backup $root)
     }
+    if ($modelDrop) {
+        $app.modelDrop = $true
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -256,17 +285,23 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
-    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
+    if ($localModels) {
+        Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
+        $env:GROKHUB_DECK_LOCAL_MODELS = '1'
+    } else { Remove-Item Env:GROKHUB_DECK_LOCAL_MODELS -ErrorAction SilentlyContinue }
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
-    if ($dock -and -not $mood) { $mood = 'hanging-out' }
+    if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
     elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
     else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality) { '0' } else { '' })
+    # Home is never seeded. Other pinned $nav pages keep the seeded list (its
+    # titlebar count) and the cabin closes the popover over them.
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -282,6 +317,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($modelDrop) {
+        # Downloads is listed every 20 s; the next scan finds the new file.
+        Write-ModelDrop $root
+        Start-Sleep -Seconds 28
+    }
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -410,6 +450,15 @@ Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup -nav 'pulse'
 Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup -nav 'pulse'
 # At 1100x720 the feed sits under Up next; scroll down to the post.
 Shot 1100 720 'backup-1100x720-scrolled' 'ops-dark' '14' -pulse -backup -nav 'pulse' -wheel 12
+# New local models: the catalog upgrade post on top of Pulse; at 1100x720
+# the feed sits under Up next, so that shot scrolls down to it.
+Shot 1600 900 'local-models-1600x900' 'ops-dark' '14' -pulse -localModels -nav 'pulse'
+Shot 1100 720 'local-models-1100x720-scrolled' 'ops-dark' '14' -pulse -localModels -nav 'pulse' -wheel 12
+# 3D model drop: the new-model post with its preview on top of Pulse.
+Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
+Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'model-drop-1100x720-scrolled' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse' -wheel 12
 # Library is the fifth icon on the 40 px rail, below the chat tab strip.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
@@ -420,6 +469,14 @@ Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
+# Home Mission Control (slide 09): Objectives+streak | PC Loadout | Up Next covers.
+# Pin via GROKHUB_DECK_NAV=home (cabin apply_deck_shot_seed) — a first-icon click
+# missed on windows-latest and captured Hangout instead. -library seeds Steam
+# covers + dock outcomes (multi-day streak) and waits for PC sensors; Activity
+# stays closed on Home. HARD DONE sizes plus narrow for the three-breakpoint proof.
+Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
+Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
+Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
 # Objectives (mission control) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
@@ -443,8 +500,10 @@ Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
 Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
 # Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
 Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
-foreach ($m in 'hello', 'helping', 'hanging-out') {
-    Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
-    Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
+# Nyx's corner box in each mode, beside the approved pictures in
+# docs/design/loadout-baseline-v1/nyx-modes/.
+foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
+    Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
+    Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
 }
 Get-ChildItem $Out | Format-Table Name, Length

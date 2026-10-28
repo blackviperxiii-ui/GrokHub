@@ -799,7 +799,7 @@ fn token_budget_warns_once_and_holds_scheduled_work() {
     app.cfg.daily_token_budget = 0;
     assert!(!app.budget_holds_scheduled(), "no budget: never hold");
 
-    let (title, body) = super::token_budget_notice(
+    let (title, body) = super::budget_ui::token_budget_notice(
         grokhub_core::BudgetLevel::Over,
         "1.2k of 1000 tokens today (120%)",
         false,
