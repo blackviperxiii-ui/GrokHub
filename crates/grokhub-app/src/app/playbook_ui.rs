@@ -296,11 +296,13 @@ mod tests {
             fits_line(&cabin.playbooks.all[1]),
             "Fits repair · system · linux, windows, macos"
         );
-        // The PC-fix family counts this computer's steps (CI runs Linux and Windows).
+        // The PC-fix family counts this computer's steps (CI runs Linux, Windows and macOS).
         assert_eq!(
             steps_line(&cabin.playbooks.all[1]),
             if cfg!(windows) {
                 "16 steps, up to Risky, asks first"
+            } else if cfg!(target_os = "macos") {
+                "13 steps, up to Risky, asks first"
             } else {
                 "26 steps, up to Risky, asks first"
             }
@@ -308,12 +310,24 @@ mod tests {
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits task · desktop");
         assert_eq!(fits_line(&cabin.playbooks.all[4]), "Fits research");
         assert_eq!(
+            fits_line(&cabin.playbooks.all[6]),
+            "Fits question, research, task · library"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[7]),
+            "Fits question, task · game-help"
+        );
+        assert_eq!(
             fits_line(&cabin.playbooks.all[8]),
             "Fits task, repair, question · gaming"
         );
         assert_eq!(
             steps_line(&cabin.playbooks.all[8]),
             "8 steps, up to Risky, asks first"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[9]),
+            "Fits task, question, research · loadout"
         );
         assert_eq!(fits_line(&cabin.playbooks.all[10]), "Fits chat");
         assert_eq!(fits_line(&cabin.playbooks.all[11]), "Fits chat · low");

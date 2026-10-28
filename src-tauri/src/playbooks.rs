@@ -133,13 +133,15 @@ mod tests {
         assert_eq!((files.name.as_str(), files.source), ("Files", "shipped"));
         assert_eq!(files.fits, "Fits task · files");
         assert_eq!(files.steps, "6 steps, up to Risky, asks first");
-        // The PC-fix family counts this computer's steps (CI runs Linux and Windows).
+        // The PC-fix family counts this computer's steps (CI runs Linux, Windows and macOS).
         let fix = find(&page, "pc-fix");
         assert_eq!(fix.fits, "Fits repair · system · linux, windows, macos");
         assert_eq!(
             fix.steps,
             if cfg!(windows) {
                 "16 steps, up to Risky, asks first"
+            } else if cfg!(target_os = "macos") {
+                "13 steps, up to Risky, asks first"
             } else {
                 "26 steps, up to Risky, asks first"
             }
