@@ -1150,7 +1150,9 @@ pub fn stream_routed(
         sink(StreamEvent::TextDelta(format!("{note}\n\n")));
     }
     let out = if on_device {
-        super::local::serve(class, &text, cancel)
+        // Pass the full request so cabin web_search / web_fetch tool calls round-trip
+        // through the agent loop (OpenAI-compatible tools on the local sidecar).
+        super::local::serve_request(class, &sent, cancel)
     } else if on_provider {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);

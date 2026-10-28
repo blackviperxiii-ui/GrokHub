@@ -537,6 +537,21 @@ jobs:
           path: target/deck-shots/
           if-no-files-found: ignore
           retention-days: 14
+      # Free web_search proof: live DDG Lite cites in OpenRouter + local chats
+      # at HARD DONE sizes. Evidence only — never fails the check.
+      - name: Web search shots
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/web-search-shots.ps1
+      - name: Upload web search shots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-search-shots
+          path: target/web-search-shots/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Pack script locks
         shell: pwsh
         run: ./scripts/make-windows-release.tests.ps1

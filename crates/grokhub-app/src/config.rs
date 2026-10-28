@@ -545,6 +545,41 @@ pub struct AppConfig {
     /// Omitted from `app.json` while this stays off. `"dream_model": true` turns it on.
     #[serde(default, rename = "dream_model", skip_serializing_if = "is_false")]
     pub dream_model: bool,
+    /// Settings → Models & providers → Web search. Free DuckDuckGo Lite by default;
+    /// optional SearXNG URL. Brave API keys stay in the OS keyring, never here.
+    #[serde(default, skip_serializing_if = "WebSearchConfig::is_default")]
+    pub web_search: WebSearchConfig,
+}
+
+/// Cabin web_search backend for OpenRouter and the local model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchConfig {
+    /// `duckduckgo` (default, free), `searxng`, or `brave`.
+    #[serde(default = "default_web_search_backend")]
+    pub backend: String,
+    /// Self-hosted SearXNG base URL when `backend` is `searxng`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub searxng_url: String,
+}
+
+fn default_web_search_backend() -> String {
+    "duckduckgo".into()
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_web_search_backend(),
+            searxng_url: String::new(),
+        }
+    }
+}
+
+impl WebSearchConfig {
+    pub fn is_default(&self) -> bool {
+        self.backend == "duckduckgo" && self.searxng_url.is_empty()
+    }
 }
 
 fn is_true(v: &bool) -> bool {
@@ -745,6 +780,7 @@ impl Default for AppConfig {
             memory_migrated: false,
             memory_writes: true,
             dream_model: false,
+            web_search: WebSearchConfig::default(),
         }
     }
 }
@@ -1139,6 +1175,27 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn web_search_defaults_omitted_and_overrides_parse() {
+        let v: serde_json::Value = serde_json::to_value(AppConfig::default()).unwrap();
+        assert!(
+            v.get("webSearch").is_none(),
+            "default config must omit top-level webSearch: {v}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(missing.web_search.is_default());
+        assert_eq!(missing.web_search.backend, "duckduckgo");
+        let set: AppConfig = serde_json::from_str(
+            r#"{"webSearch":{"backend":"searxng","searxngUrl":"https://searx.example"}}"#,
+        )
+        .unwrap();
+        assert_eq!(set.web_search.backend, "searxng");
+        assert_eq!(set.web_search.searxng_url, "https://searx.example");
+        let saved: serde_json::Value = serde_json::to_value(&set).unwrap();
+        assert_eq!(saved["webSearch"]["backend"], "searxng");
+        assert_eq!(saved["webSearch"]["searxngUrl"], "https://searx.example");
     }
 
     #[test]
