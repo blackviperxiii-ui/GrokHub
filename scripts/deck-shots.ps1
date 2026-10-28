@@ -155,6 +155,33 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Backup reminder: a repo under code\my-app whose last two commits, from four
+# days ago, were never pushed to its (local, bare) upstream.
+function Seed-Backup([string]$root) {
+    $code = Join-Path $root 'code'
+    $repo = Join-Path $code 'my-app'
+    $bare = Join-Path $root 'origin.git'
+    New-Item -ItemType Directory -Force -Path $repo | Out-Null
+    git init -q --bare $bare 2>&1 | Out-Null
+    git -C $repo init -q -b main 2>&1 | Out-Null
+    git -C $repo config user.name 'user' 2>&1 | Out-Null
+    git -C $repo config user.email 'user@example.com' 2>&1 | Out-Null
+    Write-Utf8 (Join-Path $repo 'README.md') 'my-app'
+    git -C $repo add -A 2>&1 | Out-Null
+    git -C $repo commit -q -m 'Start my-app' 2>&1 | Out-Null
+    git -C $repo remote add origin $bare 2>&1 | Out-Null
+    git -C $repo push -q -u origin main 2>&1 | Out-Null
+    $old = (Get-Date).AddDays(-4).ToString('yyyy-MM-ddTHH:mm:ss')
+    $env:GIT_AUTHOR_DATE = $old
+    $env:GIT_COMMITTER_DATE = $old
+    foreach ($m in 'Add the settings page', 'Fix the save button') {
+        Add-Content -Path (Join-Path $repo 'README.md') -Value $m
+        git -C $repo commit -q -a -m $m 2>&1 | Out-Null
+    }
+    Remove-Item Env:GIT_AUTHOR_DATE, Env:GIT_COMMITTER_DATE
+    return $code
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -170,7 +197,7 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [switch]$backup) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -189,6 +216,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($backup) {
+        $app.backupNudge = $true
+        $app.codeFolders = @(Seed-Backup $root)
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -343,6 +374,9 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Backup reminders: the unpushed-work post on top of Pulse.
+Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup
+Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
