@@ -34,9 +34,9 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 170.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
-/// Kept for optional photo embed rebuilds when real art lands.
-#[allow(dead_code)]
+/// Slots build.rs watches under `assets/personalities/<id>/`.
 const PHOTO_SLOTS: u8 = 5;
+const _: u8 = PHOTO_SLOTS;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
