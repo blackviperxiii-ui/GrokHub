@@ -412,6 +412,67 @@ fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHan
     Some(tex)
 }
 
+/// Circular face crop of the companion for Hangout bubbles and the chat header.
+pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("loadout-companion-face");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(tex);
+    }
+    let rgba = image::load_from_memory(COMPANION_PNG).ok()?.to_rgba8();
+    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+    // Head sits in the upper third of the full-body art.
+    let side = (w.min(h) * 45 / 100).max(64);
+    let x0 = w.saturating_sub(side) / 2;
+    let y0 = (h * 6 / 100).min(h.saturating_sub(side));
+    let out = side.max(1);
+    let mut pixels = vec![0_u8; out * out * 4];
+    let r = (out as f32 - 1.0) * 0.5;
+    let cx = r;
+    let cy = r;
+    for y in 0..out {
+        for x in 0..out {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let i = (y * out + x) * 4;
+            if dx * dx + dy * dy > r * r {
+                continue;
+            }
+            let sx = x0 + x * side / out;
+            let sy = y0 + y * side / out;
+            let src = (sy.min(h - 1) * w + sx.min(w - 1)) * 4;
+            pixels[i..i + 4].copy_from_slice(&rgba.as_raw()[src..src + 4]);
+        }
+    }
+    let tex = ctx.load_texture(
+        "loadout-companion-face",
+        egui::ColorImage::from_rgba_unmultiplied([out, out], &pixels),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Paint the circular companion face into `size`×`size`.
+pub(super) fn paint_companion_face(ui: &mut egui::Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    if let Some(tex) = companion_face(ui.ctx()) {
+        ui.painter().image(
+            tex.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        let mark = crate::theme::mark(ui.ctx());
+        ui.painter().image(
+            mark.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            crate::theme::muted(),
+        );
+    }
+}
+
 fn paint_wave(ui: &mut egui::Ui, live: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(44.0, 14.0), egui::Sense::hover());
     let color = if live {
@@ -926,6 +987,19 @@ mod tests {
     fn companion_art_decodes() {
         let img = image::load_from_memory(COMPANION_PNG).expect("brand/companion.png decodes");
         assert!(img.width() > 100 && img.height() > 100);
+    }
+
+    #[test]
+    fn companion_face_builds_a_circular_texture() {
+        let ctx = egui::Context::default();
+        let tex = companion_face(&ctx).expect("companion face");
+        let [w, h] = tex.size();
+        assert_eq!(w, h);
+        assert!(w >= 64);
+        let rgba = image::load_from_memory(COMPANION_PNG)
+            .expect("decode")
+            .to_rgba8();
+        assert!(rgba.width() > 100);
     }
 
     #[test]

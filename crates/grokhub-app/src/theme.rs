@@ -532,9 +532,28 @@ pub fn card_title_font() -> FontId {
     title_font(FONT_SECTION)
 }
 
-/// Composer pill hairline. Focus lifts to the strong border, never warning amber.
+/// Loadout composer / assistant rim width (matches `ui_kit::recipe::STROKE_W`).
+const LOADOUT_CHROME_STROKE_W: f32 = 1.5;
+/// Loadout composer corner (matches `ui_kit::recipe::CARD_RADIUS`).
+const LOADOUT_COMPOSER_RADIUS: f32 = 12.0;
+
+/// Composer chrome. Loadout uses the Signal Red rim (slide 02); classic keeps
+/// the quiet border, with focus lifting to the strong border, never amber.
 pub fn composer_chrome_stroke(focused: bool) -> Stroke {
-    Stroke::new(1.0_f32, if focused { border_strong() } else { border() })
+    if is_loadout_paint() {
+        Stroke::new(LOADOUT_CHROME_STROKE_W, signal_red())
+    } else {
+        Stroke::new(1.0_f32, if focused { border_strong() } else { border() })
+    }
+}
+
+/// Composer corner radius. Loadout hangs out as a rounded rect; classic stays a pill.
+pub fn composer_chrome_radius() -> f32 {
+    if is_loadout_paint() {
+        LOADOUT_COMPOSER_RADIUS
+    } else {
+        QUERY_RADIUS
+    }
 }
 
 #[cfg(test)]
@@ -1920,6 +1939,13 @@ mod tests {
         set_paint_dark(true);
         assert_eq!(composer_chrome_stroke(false).color, border());
         assert_eq!(composer_chrome_stroke(true).color, border_strong());
+        assert_ne!(composer_chrome_stroke(true).color, always_amber());
+        assert_eq!(composer_chrome_radius(), QUERY_RADIUS);
+        set_paint_palette(PaintPalette::OpsDark);
+        assert_eq!(composer_chrome_stroke(false).color, signal_red());
+        assert_eq!(composer_chrome_stroke(true).color, signal_red());
+        assert_eq!(composer_chrome_stroke(false).width, LOADOUT_CHROME_STROKE_W);
+        assert_eq!(composer_chrome_radius(), LOADOUT_COMPOSER_RADIUS);
         assert_ne!(composer_chrome_stroke(true).color, always_amber());
         set_paint_dark(true);
         let dark_sheet = sheet_shadow();
