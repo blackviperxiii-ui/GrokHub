@@ -388,6 +388,8 @@ pub(super) enum ChatBlockAct {
     Reply(String),
     /// Your own message back into the composer to fix and send again.
     Edit(String),
+    /// Labs Diagnostics mode: save this turn's redacted debug bundle.
+    SaveDiagnostics(u32),
 }
 
 pub(super) struct ChatBlockPaint {
@@ -623,6 +625,7 @@ fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
 }
 
 /// Quiet actions under a bubble. Your own messages also get Edit.
+/// Message actions. Diagnostics mode adds Save diagnostics on assistant rows.
 pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     if user {
         &["Copy", "Edit", "Reply"]
@@ -631,11 +634,23 @@ pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     }
 }
 
+pub(super) fn msg_act_labels_for(user: bool, diagnostics: bool) -> &'static [&'static str] {
+    if !user && diagnostics {
+        &["Copy", "Reply", "Save diagnostics"]
+    } else {
+        msg_act_labels(user)
+    }
+}
+
 /// Copy, the gaps, and Reply (plus Edit on your own message). A short user
 /// bubble is narrower than this row.
 pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
+    msg_acts_row_width_for(ui, user, false)
+}
+
+pub(super) fn msg_acts_row_width_for(ui: &egui::Ui, user: bool, diagnostics: bool) -> f32 {
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    let labels = msg_act_labels(user);
+    let labels = msg_act_labels_for(user, diagnostics);
     labels
         .iter()
         .map(|l| {
@@ -649,6 +664,7 @@ pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
         + gap * labels.len().saturating_sub(1) as f32
 }
 
+/// Message Copy / Reply / Edit (and Save diagnostics when Labs mode is on).
 pub(super) fn paint_msg_acts(
     ui: &mut egui::Ui,
     user: bool,
@@ -656,11 +672,23 @@ pub(super) fn paint_msg_acts(
     avail: f32,
     align_w: f32,
 ) -> MsgActsPaint {
+    paint_msg_acts_for(ui, user, body, avail, align_w, false, 1)
+}
+
+pub(super) fn paint_msg_acts_for(
+    ui: &mut egui::Ui,
+    user: bool,
+    body: &str,
+    avail: f32,
+    align_w: f32,
+    diagnostics: bool,
+    diag_turn: u32,
+) -> MsgActsPaint {
     let mut act = ChatBlockAct::None;
     #[cfg(test)]
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
-        for &label in msg_act_labels(user) {
+        for &label in msg_act_labels_for(user, diagnostics) {
             let flash_id = ui.next_auto_id();
             let shown = if label == "Copy" {
                 crate::theme::copy_flash_label(ui.ctx(), flash_id)
@@ -694,6 +722,7 @@ pub(super) fn paint_msg_acts(
                 act = match label {
                     "Copy" => ChatBlockAct::Copy(body.to_string()),
                     "Edit" => ChatBlockAct::Edit(body.to_string()),
+                    "Save diagnostics" => ChatBlockAct::SaveDiagnostics(diag_turn.max(1)),
                     _ => ChatBlockAct::Reply(body.to_string()),
                 };
             }
@@ -710,7 +739,11 @@ pub(super) fn paint_msg_acts(
     // ("hey"). A fixed 96px floor still let Reply draw past the window.
     // Size the lead from the real row so Reply ends on the bubble's right edge.
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    let acts_w = msg_acts_row_width(ui, user);
+    let acts_w = if diagnostics {
+        msg_acts_row_width_for(ui, user, true)
+    } else {
+        msg_acts_row_width(ui, user)
+    };
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal(|ui| {
@@ -1085,7 +1118,16 @@ pub(super) fn paint_chat_block(
     thought_acts: bool,
     thought_fold: ThoughtFold,
 ) -> ChatBlockPaint {
-    paint_chat_block_with(ui, block, thought_label, thought_acts, thought_fold, true)
+    paint_chat_block_with(
+        ui,
+        block,
+        thought_label,
+        thought_acts,
+        thought_fold,
+        true,
+        false,
+        1,
+    )
 }
 
 /// A progress reply mid-turn is its own bubble, but only the turn's last
@@ -1097,6 +1139,8 @@ pub(super) fn paint_chat_block_with(
     thought_acts: bool,
     thought_fold: ThoughtFold,
     reply_acts: bool,
+    diagnostics: bool,
+    diag_turn: u32,
 ) -> ChatBlockPaint {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
@@ -1110,6 +1154,9 @@ pub(super) fn paint_chat_block_with(
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
+            // User rows never show Save diagnostics; keep paint_msg_acts on the
+            // hot path so the thin wrapper stays live for tests and callers.
+            let _ = (diagnostics, diag_turn);
             ChatBlockPaint {
                 act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act,
                 drawn: true,
@@ -1119,7 +1166,16 @@ pub(super) fn paint_chat_block_with(
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
             let act = if reply_acts {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+                paint_msg_acts_for(
+                    ui,
+                    false,
+                    &block.body,
+                    avail,
+                    resp.rect.width(),
+                    diagnostics,
+                    diag_turn,
+                )
+                .act
             } else {
                 ChatBlockAct::None
             };
@@ -1134,7 +1190,16 @@ pub(super) fn paint_chat_block_with(
             // It never takes the thought frame, its slanted text, or its label.
             let resp = paint_result_bubble(ui, &block.body);
             let act = if reply_acts {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+                paint_msg_acts_for(
+                    ui,
+                    false,
+                    &block.body,
+                    avail,
+                    resp.rect.width(),
+                    diagnostics,
+                    diag_turn,
+                )
+                .act
             } else {
                 ChatBlockAct::None
             };
@@ -1164,7 +1229,16 @@ pub(super) fn paint_chat_block_with(
                 ui.add_space(4.0);
                 let resp = paint_thought_bubble(ui, &block.body);
                 if thought_acts {
-                    act = paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act;
+                    act = paint_msg_acts_for(
+                        ui,
+                        false,
+                        &block.body,
+                        avail,
+                        resp.rect.width(),
+                        diagnostics,
+                        diag_turn,
+                    )
+                    .act;
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -1483,6 +1557,13 @@ impl Cabin {
                                 || (change_at == Some(i) && !change_rows.is_empty())
                                 || findings_at == Some(i);
                             let evidence_here = evidence_at == Some(i);
+                            let diagnostics = self.cfg.diagnostics_mode;
+                            // User asks up to this row in the visible transcript.
+                            let diag_turn = shown[..=i]
+                                .iter()
+                                .filter(|v| v.kind == ChatKind::User)
+                                .count()
+                                .max(1) as u32;
                             let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                 let mut p = paint_chat_block_with(
                                     ui,
@@ -1491,6 +1572,8 @@ impl Cabin {
                                     thought_shows_acts(next_expanded),
                                     fold,
                                     reply_acts && !privacy_here,
+                                    diagnostics,
+                                    diag_turn,
                                 );
                                 if privacy_here {
                                     if skill_at == Some(i) {
@@ -1523,8 +1606,16 @@ impl Cabin {
                                             ui.available_width().min(ui.max_rect().width()),
                                         );
                                         let w = crate::markdown::bubble_width(avail);
-                                        p.act =
-                                            paint_msg_acts(ui, false, &block.body, avail, w).act;
+                                        p.act = paint_msg_acts_for(
+                                            ui,
+                                            false,
+                                            &block.body,
+                                            avail,
+                                            w,
+                                            diagnostics,
+                                            diag_turn,
+                                        )
+                                        .act;
                                     }
                                 }
                                 if evidence_here {
@@ -1650,6 +1741,9 @@ impl Cabin {
                             self.composer = edit_into_composer(&self.composer, &body);
                             self.composer_want_focus = true;
                             self.status = "Edit and send to ask again".into();
+                        }
+                        ChatBlockAct::SaveDiagnostics(turn) => {
+                            self.save_chat_diagnostics(Some(turn.max(1)));
                         }
                         ChatBlockAct::None => {}
                     }
@@ -2045,6 +2139,8 @@ impl Cabin {
                                 false,
                                 ThoughtFold::Expanded,
                                 last_say,
+                                self.cfg.diagnostics_mode,
+                                self.turn_no().max(1),
                             )
                             .act;
                         }
@@ -2626,6 +2722,10 @@ impl Cabin {
                 }
                 if session_menu_row(ui, "Export", export_on) {
                     self.run_slash(Slash::Export);
+                }
+                if self.cfg.diagnostics_mode && session_menu_row(ui, "Save diagnostics", export_on)
+                {
+                    self.save_chat_diagnostics(None);
                 }
                 let archive_label = if self
                     .threads

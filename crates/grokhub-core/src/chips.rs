@@ -1,7 +1,9 @@
 //! Predictive quick chips — stage, draft, habits, fast-mode parse.
-//! Secrets never persist in chip memory.
+//! Secrets never persist in chip memory. Chip keys are opaque hashes;
+//! free-form chat lines are never stored as keys, labels, or habit values.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use crate::is_plain_text;
@@ -14,9 +16,15 @@ pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
 /// How long the cabin waits before spending tokens on another chip suggestion.
 pub const CHIP_LLM_SPEND_MS: u64 = 30 * 60 * 1000;
 pub const CHIP_LLM_MODE: &str = "fast";
+/// On-disk `chips.json` schema. v1 embedded raw chat in keys; v2 uses opaque hashes.
+pub const CHIP_MEMORY_VERSION: u32 = 2;
 const CHIP_SCAN_CAP: usize = 4096;
 const MAX_HITS: usize = 80;
 const MAX_TRANSITIONS: usize = 12;
+/// Hex chars kept from the sha256 of a normalized value (`kind:v1:{hex}`).
+const VALUE_KEY_HASH_HEX: usize = 16;
+/// Visible habit labels stay short; never the full typed line.
+const HABIT_LABEL_MAX_CHARS: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -174,6 +182,7 @@ pub struct ChipMemory {
     pub updated_at: u64,
 }
 
+/// Serde default when `version` is missing: treat as legacy v1 so load scrubs.
 fn chip_memory_version() -> u32 {
     1
 }
@@ -181,7 +190,7 @@ fn chip_memory_version() -> u32 {
 impl Default for ChipMemory {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: CHIP_MEMORY_VERSION,
             hits: vec![],
             transitions: BTreeMap::new(),
             last_chip_key: None,
@@ -254,16 +263,77 @@ pub fn chip_memory_key(chip: &QuickChip) -> String {
     }
 }
 
-fn value_key(value: &str, kind: ChipKind) -> String {
-    let v = value.trim().to_ascii_lowercase();
-    let v: String = v.split_whitespace().collect::<Vec<_>>().join(" ");
-    let kind = match kind {
+fn kind_key_prefix(kind: ChipKind) -> &'static str {
+    match kind {
         ChipKind::Chat => "chat",
         ChipKind::Shell => "shell",
         ChipKind::Nav => "nav",
         ChipKind::Mode => "mode",
+    }
+}
+
+/// Normalize a chip value the same way legacy keys did (lowercase, collapse space).
+fn normalize_chip_value(value: &str) -> String {
+    let v = value.trim().to_ascii_lowercase();
+    v.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Opaque habit key: `chat:v1:{16 hex}` — never the raw ask or reply text.
+fn value_key(value: &str, kind: ChipKind) -> String {
+    let v = normalize_chip_value(value);
+    let digest = Sha256::digest(v.as_bytes());
+    let hex = hex::encode(digest);
+    format!(
+        "{}:v1:{}",
+        kind_key_prefix(kind),
+        &hex[..VALUE_KEY_HASH_HEX]
+    )
+}
+
+fn is_opaque_value_key(key: &str) -> bool {
+    for prefix in ["chat:v1:", "shell:v1:", "nav:v1:", "mode:v1:"] {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            return rest.len() == VALUE_KEY_HASH_HEX && rest.chars().all(|c| c.is_ascii_hexdigit());
+        }
+    }
+    false
+}
+
+/// True when a stored key was built by embedding normalized chat/shell text
+/// (pre-v2 `chat:the whole ask…`). Catalog `id:…` and opaque `*:v1:hex` keys pass.
+pub fn chip_key_embeds_chat_text(key: &str) -> bool {
+    let key = key.trim();
+    if key.is_empty() || key.starts_with("id:") || is_opaque_value_key(key) {
+        return false;
+    }
+    for prefix in ["chat:", "shell:", "nav:", "mode:"] {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            // Legacy: kind + raw normalized text. Opaque keys already returned above.
+            return !rest.is_empty();
+        }
+    }
+    // Bare prose keys (defensive): spaces mean a line, not an id.
+    key.contains(' ')
+}
+
+/// Short generated habit label — topic words only, never the full typed line.
+fn habit_label_from_text(text: &str) -> String {
+    let topic = topic_from_text(text);
+    let label = if topic.trim().is_empty() {
+        match text.trim().chars().next() {
+            Some('$') | Some('/') => "Host command".to_string(),
+            _ => "Saved ask".to_string(),
+        }
+    } else {
+        topic
     };
-    format!("{kind}:{}", v.chars().take(160).collect::<String>())
+    let clipped: String = label.chars().take(HABIT_LABEL_MAX_CHARS).collect();
+    let clipped = clipped.trim();
+    if clipped.is_empty() {
+        "Saved ask".into()
+    } else {
+        chip_label(clipped)
+    }
 }
 
 pub fn chip_scan(s: &str) -> &str {
@@ -1467,12 +1537,18 @@ pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, h
     } else {
         ChipKind::Chat
     };
-    if kind == ChipKind::Chat && raw.len() > 120 {
+    // Free-form chat asks must never land in chips.json as keys, labels, or
+    // habit values. Only reinforce chips the person already picked.
+    if kind == ChipKind::Chat {
         boost_matching(memory, raw, now_ms);
         return;
     }
     let key = value_key(raw, kind);
-    let label = chip_label(raw);
+    debug_assert!(
+        !chip_key_embeds_chat_text(&key),
+        "value_key must stay opaque: {key}"
+    );
+    let label = habit_label_from_text(raw);
     let from = memory.last_chip_key.clone();
     upsert_hit(
         memory,
@@ -2256,6 +2332,12 @@ fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
 
 /// Drop leftover desk/host habits so chips.json cannot resurrect them.
 pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
+    let retired = prune_retired_host_hits(mem);
+    let scrubbed = scrub_chat_text_chip_keys(mem);
+    retired || scrubbed
+}
+
+fn prune_retired_host_hits(mem: &mut ChipMemory) -> bool {
     let before = mem.hits.len();
     mem.hits
         .retain(|h| !retired_host_copy(&h.key, &h.label, &h.value));
@@ -2275,6 +2357,40 @@ pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
         mem.last_chip_key = None;
     }
     mem.hits.len() != before
+}
+
+/// One-time (idempotent) scrub: drop any habit whose key was built from raw
+/// chat/shell text. Catalog `id:…` and opaque `*:v1:hex` keys stay.
+pub fn scrub_chat_text_chip_keys(mem: &mut ChipMemory) -> bool {
+    let before_hits = mem.hits.len();
+    let before_last = mem.last_chip_key.clone();
+    let before_transitions = mem.transitions.len();
+    let before_version = mem.version;
+
+    mem.hits.retain(|h| !chip_key_embeds_chat_text(&h.key));
+    let keys: std::collections::HashSet<String> = mem.hits.iter().map(|h| h.key.clone()).collect();
+    mem.transitions.retain(|from, dests| {
+        if chip_key_embeds_chat_text(from) {
+            return false;
+        }
+        dests.retain(|to, _| keys.contains(to) && !chip_key_embeds_chat_text(to));
+        !dests.is_empty()
+    });
+    if mem
+        .last_chip_key
+        .as_ref()
+        .is_some_and(|k| chip_key_embeds_chat_text(k))
+    {
+        mem.last_chip_key = None;
+    }
+    if mem.version < CHIP_MEMORY_VERSION {
+        mem.version = CHIP_MEMORY_VERSION;
+    }
+
+    mem.hits.len() != before_hits
+        || mem.last_chip_key != before_last
+        || mem.transitions.len() != before_transitions
+        || mem.version != before_version
 }
 
 fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
@@ -3560,39 +3676,136 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_typed_once_or_twice_is_not_a_chip() {
+    fn chat_text_never_becomes_a_chip_key() {
         let mut mem = ChipMemory::default();
-        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 10, 8);
+        // Synthetic private-sounding line — never a real user quote in fixtures.
+        let ask = "draft a private cabin story about the fireplace tonight";
+        for i in 0..5u64 {
+            remember_typed_prompt(&mut mem, ask, 10 + i * 10, 8);
+        }
         assert!(
-            learned_chips_from_memory(&mem, 20).is_empty(),
-            "typed once is not a habit"
+            mem.hits.is_empty(),
+            "typed chat must not create habit hits: {:?}",
+            mem.hits
         );
-        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 30, 8);
+        assert!(learned_chips_from_memory(&mem, 100).is_empty());
+        for h in &mem.hits {
+            assert!(
+                !h.key.contains("fireplace") && !h.key.contains("private"),
+                "key leaked chat text: {}",
+                h.key
+            );
+            assert!(
+                !chip_key_embeds_chat_text(&h.key),
+                "key must stay opaque: {}",
+                h.key
+            );
+        }
+        let learn = QuickChip {
+            id: "learn-x".into(),
+            label: "Cabin brief".into(),
+            value: ask.into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        let key = chip_memory_key(&learn);
         assert!(
-            learned_chips_from_memory(&mem, 40).is_empty(),
-            "typed twice is not a habit"
+            key.starts_with("chat:v1:"),
+            "learn keys must be opaque hashes: {key}"
         );
-        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 50, 8);
-        assert_eq!(
-            learned_chips_from_memory(&mem, 60).len(),
-            1,
-            "the third time it is"
+        assert!(
+            !key.contains("fireplace") && !key.contains("private") && !key.contains(' '),
+            "chip key must not embed the ask: {key}"
         );
+        assert!(!chip_key_embeds_chat_text(&key));
     }
 
     #[test]
-    fn typed_prompt_becomes_habit() {
+    fn scrub_removes_legacy_chat_text_chip_keys() {
+        let mut mem = ChipMemory {
+            version: 1,
+            ..ChipMemory::default()
+        };
+        mem.hits.push(ChipHit {
+            key: "chat:draft a private cabin story about the fireplace".into(),
+            label: "draft a private cabin story about the fireplace".into(),
+            value: "draft a private cabin story about the fireplace".into(),
+            kind: ChipKind::Chat,
+            uses: 3,
+            typed_uses: 3,
+            picks: 0,
+            last_used_at: 1,
+            hour_hits: vec![0; 24],
+            successes: 0,
+            failures: 0,
+            context_tags: vec![],
+            dismisses: 0,
+            dismiss_hours: vec![0; 24],
+            last_dismissed_at: 0,
+        });
+        mem.hits.push(ChipHit {
+            key: "id:ctx-connect".into(),
+            label: "Connect Grok".into(),
+            value: "__nav:settings".into(),
+            kind: ChipKind::Nav,
+            uses: 2,
+            typed_uses: 0,
+            picks: 2,
+            last_used_at: 2,
+            hour_hits: vec![0; 24],
+            successes: 1,
+            failures: 0,
+            context_tags: vec![],
+            dismisses: 0,
+            dismiss_hours: vec![0; 24],
+            last_dismissed_at: 0,
+        });
+        let dirty = "chat:draft a private cabin story about the fireplace".to_string();
+        mem.last_chip_key = Some(dirty.clone());
+        mem.transitions
+            .entry(dirty.clone())
+            .or_default()
+            .insert("id:ctx-connect".into(), 1);
+        mem.transitions
+            .entry("id:ctx-connect".into())
+            .or_default()
+            .insert(dirty, 1);
+
+        assert!(scrub_chat_text_chip_keys(&mut mem));
+        assert_eq!(mem.hits.len(), 1);
+        assert_eq!(mem.hits[0].key, "id:ctx-connect");
+        assert!(mem.last_chip_key.is_none());
+        assert!(!mem.transitions.keys().any(|k| chip_key_embeds_chat_text(k)));
+        assert!(mem
+            .transitions
+            .values()
+            .all(|d| d.keys().all(|k| !chip_key_embeds_chat_text(k))));
+        assert_eq!(mem.version, CHIP_MEMORY_VERSION);
+        assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
+    }
+
+    #[test]
+    fn shell_typed_prompt_uses_opaque_key_and_short_label() {
         let mut mem = ChipMemory::default();
-        remember_typed_prompt(&mut mem, "morning brief for the cabin", 10, 8);
-        remember_typed_prompt(&mut mem, "morning brief for the cabin", 20, 8);
+        remember_typed_prompt(&mut mem, "$ uname -a && whoami", 10, 8);
+        remember_typed_prompt(&mut mem, "$ uname -a && whoami", 20, 8);
         remember_typed_prompt(&mut mem, "/clear", 30, 8);
-        remember_typed_prompt(&mut mem, "/compact", 40, 8);
         assert_eq!(mem.hits.len(), 1);
         assert!(mem.hits[0].typed_uses >= 2);
-        assert_eq!(
-            top_habit_labels(&mem, 3)[0],
-            chip_label("morning brief for the cabin")
+        assert!(
+            mem.hits[0].key.starts_with("shell:v1:"),
+            "shell key must be opaque: {}",
+            mem.hits[0].key
         );
+        assert!(!chip_key_embeds_chat_text(&mem.hits[0].key));
+        assert!(
+            mem.hits[0].label.chars().count() <= HABIT_LABEL_MAX_CHARS,
+            "label too long: {}",
+            mem.hits[0].label
+        );
+        assert_ne!(mem.hits[0].label, "$ uname -a && whoami");
     }
 
     fn labels(chips: &[QuickChip]) -> Vec<String> {
