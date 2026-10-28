@@ -78,6 +78,7 @@ pub mod mission;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
+pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
 pub mod openclaw;

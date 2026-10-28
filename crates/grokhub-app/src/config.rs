@@ -428,6 +428,9 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -712,6 +715,7 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            net_log: false,
             dock_panels: false,
             chat_objectives: false,
             desktop_control: false,
