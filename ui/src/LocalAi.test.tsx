@@ -15,6 +15,12 @@ const api = vi.hoisted(() => ({
   resetLocalAi: vi.fn<() => Promise<LocalAiView>>(),
   checkModelFile: vi.fn<(path: string) => Promise<LocalFileRow>>(),
   runLocalSpeedTest: vi.fn<() => Promise<string>>(),
+  startLocalEngineDownload: vi.fn(),
+  cancelLocalEngineDownload: vi.fn(),
+  startLocalDrafterDownload: vi.fn(),
+  cancelLocalDrafterDownload: vi.fn(),
+  onLocalEngineEvent: vi.fn(async () => () => undefined),
+  onLocalDrafterEvent: vi.fn(async () => () => undefined),
 }));
 
 vi.mock("./api", () => api);
@@ -78,6 +84,18 @@ function config(over: Partial<LocalAiConfig> = {}): LocalAiConfig {
   };
 }
 
+function missingEngine(): LocalAiView["engine"] {
+  return {
+    state: "missing",
+    version: "b11602",
+    sizeLabel: "32 MB",
+    hint: "llama.cpp b11602 · 32 MB · from github.com",
+    button: "Get engine b11602 (32 MB)",
+    progress: null,
+    error: null,
+  };
+}
+
 function view(
   models: LocalModelRow[],
   status: Partial<LocalStatus>,
@@ -98,6 +116,10 @@ function view(
     picker: { models, onThisPc: [], selected: pre?.id ?? "" },
     limits: [],
     maxThreads: 16,
+    engine: missingEngine(),
+    draftOffer: null,
+    draftOffers: [],
+    draftProgress: null,
     ...over,
   };
 }
@@ -422,5 +444,53 @@ describe("LocalAi", () => {
     expect(api.resetLocalAi).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Back to Auto.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("offers Get engine when the local engine is missing", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["8 GB GPU"]);
+    api.startLocalEngineDownload.mockResolvedValue({
+      ...missingEngine(),
+      state: "downloading",
+      button: "Cancel",
+      progress: {
+        done: 0,
+        total: 32_000_000,
+        verifying: false,
+        line: "Downloading engine b11602: 0 of 32 MB",
+      },
+    });
+    render(<LocalAi />);
+    expect(await screen.findByLabelText("Local engine")).toBeInTheDocument();
+    expect(screen.getByText(/llama\.cpp b11602/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Get engine b11602/ }));
+    expect(api.startLocalEngineDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("picking Muse shows the draft install offer when its drafter is missing", async () => {
+    const museOffer = {
+      id: "muse-glimmer-30b-dflash-q4_k_m",
+      name: "Muse Glimmer DFlash drafter",
+      sizeLabel: "1.6 GB",
+      line: "Optional: Muse Glimmer DFlash drafter can draft replies for Muse Glimmer 30B, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+      button: "Install and run draft model (1.6 GB)",
+      targetId: "muse-glimmer-30b-q4_k_m",
+      targetName: "Muse Glimmer 30B",
+    };
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["24 GB GPU"],
+      draftOffers: [museOffer],
+      draftOffer: null,
+    });
+    api.startLocalDrafterDownload.mockResolvedValue(museOffer);
+    render(<LocalAi />);
+    await openManual();
+    expect(screen.queryByLabelText("Draft model offer")).toBeNull();
+    await userEvent.click(screen.getByRole("radio", { name: /Muse Glimmer 30B/ }));
+    const offer = await screen.findByLabelText("Draft model offer");
+    expect(offer).toHaveTextContent(/Optional: Muse Glimmer DFlash drafter/);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Install and run draft model (1.6 GB)" }),
+    );
+    expect(api.startLocalDrafterDownload).toHaveBeenCalledWith("muse-glimmer-30b-q4_k_m");
   });
 });
