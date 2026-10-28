@@ -730,7 +730,7 @@ mod tests {
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
-        // Liked then dismissed is used/done, not a bury.
+        // Liked then dismissed is used/done, not a bury (#969 / #972).
         assert!(memory().ends_with("pulse: used \"Board\" reason=used\n"));
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
