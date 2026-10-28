@@ -423,8 +423,15 @@ fn voice_mode_has_indicator_and_stop() {
     );
     let perm = fn_src(&src, "set_permission_mode");
     assert!(
-        perm.contains("persistable_permission_mode"),
-        "Always must not persist: {perm}"
+        perm.contains("persistable_permission_mode") && perm.contains("always_confirmed"),
+        "Ask/Auto/Always persist; Always marks the one-time confirm: {perm}"
+    );
+    let arm = include_str!("confirm.rs");
+    assert!(
+        arm.contains("fn arm_session_always")
+            && arm.contains("always_confirmed")
+            && arm.contains("apply_session_always"),
+        "Always confirm runs once, then sticks"
     );
 }
 

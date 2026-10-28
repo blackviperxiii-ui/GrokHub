@@ -20,11 +20,11 @@ use super::*;
 
 /// Ask-card Always second beat. Named so tests can lock the inherit line.
 pub(super) const ALWAYS_CONFIRM_LINE1: &str =
-    "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes.";
+    "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes.";
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
-    "Night, loops, and /send inherit --always-approve until quit.";
+    "Night, loops, and /send inherit Always. This confirm only shows once.";
 
-pub(super) const ALWAYS_SESSION_TITLE: &str = "Always this launch";
+pub(super) const ALWAYS_SESSION_TITLE: &str = "Turn on Always";
 pub(super) const HOST_CONFIRM_TITLE: &str = "Destructive host";
 pub(super) const HOST_CONFIRM_PRIMARY: &str = "Run";
 pub(super) const REMOVE_JOB_PRIMARY: &str = "Remove";
@@ -406,6 +406,12 @@ impl Cabin {
     }
 
     pub(super) fn arm_session_always(&mut self) {
+        // First Always pick shows the sheet once. After that, Always sticks
+        // without asking again until the user picks Ask or Auto.
+        if self.cfg.always_confirmed {
+            self.apply_session_always();
+            return;
+        }
         // Arm the sheet only. Cancel drops confirm. Confirm applies Always
         // and then tears the live job down. Doing that on arm would clear
         // the sheet and kill the job before it can paint.
@@ -419,21 +425,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn always_confirm_runs_once_then_sticks() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("always-confirm-once");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = Cabin::quiet_for_test();
+        assert!(!cabin.cfg.always_confirmed);
+        cabin.arm_session_always();
+        assert!(matches!(cabin.confirm, Some(ConfirmKind::AlwaysSession)));
+        cabin.apply_session_always();
+        assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+        assert_eq!(cabin.cfg.permission_mode, "always-approve");
+        assert!(cabin.cfg.always_confirmed);
+        assert!(cabin.confirm.is_none());
+        cabin.set_permission_mode(PermissionMode::Ask);
+        cabin.arm_session_always();
+        assert!(
+            cabin.confirm.is_none(),
+            "second Always pick skips the sheet"
+        );
+        assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+        // Restart: Always and the confirm flag survive app.json.
+        cabin.persist_svc.flush();
+        crate::config::save(&cabin.cfg).expect("save always");
+        let loaded = crate::config::load();
+        assert_eq!(loaded.permission_mode, "always-approve");
+        assert!(loaded.always_confirmed);
+        let mut again = Cabin::quiet_for_test();
+        again.cfg = loaded;
+        again.permission_mode = PermissionMode::AlwaysApprove;
+        again.arm_session_always();
+        assert!(again.confirm.is_none());
+        assert_eq!(again.permission_mode, PermissionMode::AlwaysApprove);
+        std::env::remove_var("GROKHUB_CONFIG");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn always_confirm_names_session_skip_and_scheduled_inherit() {
         assert_eq!(
             ALWAYS_CONFIRM_LINE1,
-            "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
+            "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
-        assert!(crate::cards::composer_perm_tip("always-approve")
-            .is_some_and(|(_, tip)| tip.contains(
-                "money, sending, deleting your data, credentials and irreversible system changes"
-            )));
         assert!(
-            ALWAYS_CONFIRM_LINE2.contains("--always") && ALWAYS_CONFIRM_LINE2.contains("approve")
+            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
+                .contains("money, sending, deleting, credentials and irreversible changes")
+                && tip.contains("Stays until Ask or Auto")
+                && tip.len() < 160)
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("/send"));
+        assert!(ALWAYS_CONFIRM_LINE2.contains("once"));
+        assert_eq!(ALWAYS_SESSION_TITLE, "Turn on Always");
         let a = serde_json::json!(1);
         let b = serde_json::json!(2);
         assert!(always_confirm_matches_rpc(Some(&a), &a));

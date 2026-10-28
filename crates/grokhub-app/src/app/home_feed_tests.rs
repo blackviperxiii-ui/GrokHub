@@ -366,8 +366,8 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .and_then(|s| s.split("fn paint_idea_open(").next())
         .expect("ui_ideas");
     assert!(
-        ideas.contains("Suggest ideas") && ideas.contains("maybe_suggest_ideas(true)"),
-        "the Ideas button asks the model for ideas now, not a disk reload: {ideas}"
+        ideas.contains("Suggest for you") && ideas.contains("maybe_suggest_ideas(true)"),
+        "the For You button asks the model for ideas now, not a disk reload: {ideas}"
     );
     let offer = pulse
         .split("fn accept_automate_offer(")
