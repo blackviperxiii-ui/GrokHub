@@ -1,21 +1,27 @@
 //! Settings → Personality (deck slide 19): a card grid of every preset, a selected
-//! detail panel with the sample line and an amber Talk as button, plus Try it,
+//! photo showcase (5 Nyx shots per preset) with dots and arrows, plus Try it,
 //! Duplicate and an editor for the user's own. A chat can pick its own personality;
 //! "Make default" / Talk as saves that pick as the default for every chat. Switching
 //! is silent apart from the status line. Custom presets live in `{config}/personalities/`.
+//! Built-in photos live in `crates/grokhub-app/assets/personalities/<id>/1..5.png`.
 
 use super::*;
 use grokhub_core::personality::{self, Personality};
+
+include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
 /// Width of the selected detail panel beside the grid (slide 19).
-const DETAIL_W: f32 = 260.0;
+const DETAIL_W: f32 = 280.0;
 /// Below this the detail panel stacks under the grid.
-const TWO_COL_MIN_W: f32 = 560.0;
+const TWO_COL_MIN_W: f32 = 640.0;
 const GRID_GAP: f32 = 10.0;
-const CARD_MIN_W: f32 = 148.0;
+const CARD_MIN_W: f32 = 140.0;
+const PHOTO_SLOTS: u8 = 5;
+const PHOTO_HOLD_SECS: f64 = 2.8;
+const PHOTO_FADE_SECS: f64 = 0.35;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +47,14 @@ pub(super) struct PickerState {
     pub draft: Option<Draft>,
     /// Which preset the detail panel shows. Empty means the current default.
     pub focus: Option<String>,
+    /// Card under the pointer; the showcase follows this when set.
+    pub hover: Option<String>,
+    /// 0..4 into that personality's photo set.
+    pub photo_idx: usize,
+    /// Personality id the photo carousel is currently on.
+    pub photo_for: String,
+    /// egui time when the current photo became primary (for auto-flip).
+    pub photo_since: f64,
 }
 
 /// A custom preset open in the editor.
@@ -407,12 +421,32 @@ impl Cabin {
             .as_ref()
             .filter(|(id, _)| *id == focus)
             .map(|(_, state)| state.clone());
-        let focused = personality::find(&presets, &focus);
+        let showcase_id = self
+            .picker
+            .hover
+            .clone()
+            .filter(|id| presets.iter().any(|p| p.id == *id))
+            .unwrap_or(focus.clone());
+        let showcased = personality::find(&presets, &showcase_id);
+        let now = ui.ctx().input(|i| i.time);
+        if self.picker.photo_for != showcase_id {
+            self.picker.photo_for = showcase_id.clone();
+            self.picker.photo_idx = 0;
+            self.picker.photo_since = now;
+        } else if now - self.picker.photo_since >= PHOTO_HOLD_SECS {
+            self.picker.photo_idx = (self.picker.photo_idx + 1) % PHOTO_SLOTS as usize;
+            self.picker.photo_since = now;
+        }
+        // Keep the crossfade / flip live while Settings is open.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
         let mut act_on: Option<CardAct> = None;
-        let avail = ui.available_width();
+        let mut hover_id: Option<String> = None;
+        let avail = ui.available_width().max(1.0);
+        ui.set_max_width(avail);
         let side_by_side = avail >= TWO_COL_MIN_W;
         let detail_w = if side_by_side {
-            DETAIL_W.min(avail * 0.42)
+            DETAIL_W.min(avail * 0.38).clamp(200.0, DETAIL_W)
         } else {
             avail
         };
@@ -422,15 +456,23 @@ impl Cabin {
             avail
         };
         let cols = grid_cols(grid_w);
-        let paint_grid = |ui: &mut egui::Ui, act_on: &mut Option<CardAct>| {
-            let card_w = ((grid_w - GRID_GAP * (cols.saturating_sub(1) as f32)) / cols as f32)
-                .max(CARD_MIN_W);
+        let card_w = ((grid_w - GRID_GAP * (cols.saturating_sub(1) as f32)) / cols as f32)
+            .clamp(96.0, grid_w);
+        let paint_grid = |ui: &mut egui::Ui,
+                          act_on: &mut Option<CardAct>,
+                          hover_id: &mut Option<String>| {
+            ui.set_max_width(grid_w);
             for row in presets.chunks(cols) {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = GRID_GAP;
+                    ui.set_max_width(grid_w);
                     for p in row {
                         let selected = p.id == focus;
-                        if let Some(act) = paint_grid_card(ui, p, selected, card_w) {
+                        let (act, hovered) = paint_grid_card(ui, p, selected, card_w);
+                        if hovered {
+                            *hover_id = Some(p.id.clone());
+                        }
+                        if let Some(act) = act {
                             *act_on = Some(act);
                         }
                     }
@@ -438,37 +480,74 @@ impl Cabin {
                 ui.add_space(GRID_GAP);
             }
         };
-        if side_by_side {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = GRID_GAP;
-                ui.allocate_ui_with_layout(
-                    egui::vec2(grid_w, ui.available_height()),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| paint_grid(ui, &mut act_on),
-                );
-                if let Some(act) = paint_detail_panel(
-                    ui,
-                    &focused,
-                    focused.id == current,
-                    tried.as_ref(),
-                    detail_w,
-                ) {
-                    act_on = Some(act);
-                }
-            });
-        } else {
+        let paint_detail = |ui: &mut egui::Ui,
+                            act_on: &mut Option<CardAct>,
+                            picker: &mut PickerState| {
             if let Some(act) = paint_detail_panel(
                 ui,
-                &focused,
-                focused.id == current,
+                &showcased,
+                showcased.id == current,
                 tried.as_ref(),
                 detail_w,
+                picker,
+                now,
             ) {
-                act_on = Some(act);
+                *act_on = Some(act);
             }
+        };
+        if side_by_side {
+            let row_h = ui.available_height().max(200.0);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GRID_GAP;
+                ui.set_max_width(avail);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(grid_w, row_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_max_width(grid_w);
+                        egui::ScrollArea::vertical()
+                            .id_salt("personality-grid")
+                            .auto_shrink([false, false])
+                            .max_height(row_h)
+                            .show(ui, |ui| {
+                                ui.set_width(grid_w);
+                                ui.set_max_width(grid_w);
+                                paint_grid(ui, &mut act_on, &mut hover_id);
+                            });
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(detail_w, row_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_max_width(detail_w);
+                        egui::ScrollArea::vertical()
+                            .id_salt("personality-detail")
+                            .auto_shrink([false, false])
+                            .max_height(row_h)
+                            .show(ui, |ui| {
+                                ui.set_width(detail_w);
+                                ui.set_max_width(detail_w);
+                                paint_detail(ui, &mut act_on, &mut self.picker);
+                            });
+                    },
+                );
+            });
+        } else {
+            paint_detail(ui, &mut act_on, &mut self.picker);
             ui.add_space(12.0);
-            paint_grid(ui, &mut act_on);
+            let grid_h = ui.available_height().max(160.0);
+            egui::ScrollArea::vertical()
+                .id_salt("personality-grid-stack")
+                .auto_shrink([false, false])
+                .max_height(grid_h)
+                .show(ui, |ui| {
+                    ui.set_width(avail);
+                    ui.set_max_width(avail);
+                    paint_grid(ui, &mut act_on, &mut hover_id);
+                });
         }
+        self.picker.hover = hover_id;
         match act_on {
             Some(CardAct::Focus(id)) => self.picker.focus = Some(id),
             Some(CardAct::Talk(id)) => {
@@ -809,7 +888,7 @@ fn paint_grid_card(
     p: &Personality,
     selected: bool,
     width: f32,
-) -> Option<CardAct> {
+) -> (Option<CardAct>, bool) {
     let mut act = None;
     let loadout = crate::theme::is_loadout_paint();
     let (fill, stroke) = if loadout {
@@ -833,6 +912,7 @@ fn paint_grid_card(
             egui::Stroke::new(1.0, crate::theme::border()),
         )
     };
+    let inner_w = (width - 24.0).max(64.0);
     let resp = egui::Frame::NONE
         .fill(fill)
         .corner_radius(if loadout {
@@ -843,7 +923,8 @@ fn paint_grid_card(
         .stroke(stroke)
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
-            ui.set_width((width - 24.0).max(80.0));
+            ui.set_width(inner_w);
+            ui.set_max_width(inner_w);
             ui.set_min_height(88.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -868,10 +949,168 @@ fn paint_grid_card(
         .response
         .interact(egui::Sense::click());
     let resp = crate::theme::pointing(resp);
+    let hovered = resp.hovered();
     if resp.clicked() {
         act = Some(CardAct::Focus(p.id.clone()));
     }
-    act
+    (act, hovered)
+}
+
+fn personality_accent(id: &str) -> egui::Color32 {
+    let h = id.bytes().enumerate().fold(0u32, |a, (i, b)| {
+        a.wrapping_add(u32::from(b).wrapping_mul(17 + i as u32))
+    });
+    egui::Color32::from_rgb(
+        60 + (h % 140) as u8,
+        50 + ((h / 3) % 140) as u8,
+        70 + ((h / 7) % 140) as u8,
+    )
+}
+
+fn personality_photo_tex(
+    ctx: &egui::Context,
+    id: &str,
+    slot: u8,
+) -> Option<egui::TextureHandle> {
+    let key = egui::Id::new(("personality-photo", id, slot));
+    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return Some(tex);
+    }
+    let bytes = personality_photo_png(id, slot)?;
+    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        format!("personality-photo-{id}-{slot}"),
+        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(key, tex.clone()));
+    Some(tex)
+}
+
+fn paint_photo_showcase(
+    ui: &mut egui::Ui,
+    p: &Personality,
+    picker: &mut PickerState,
+    now: f64,
+    photo_w: f32,
+) {
+    let accent = personality_accent(&p.id);
+    let photo_h = (photo_w * 1.15).clamp(120.0, 280.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(photo_w, photo_h), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 12.0, crate::theme::void_bg());
+    ui.painter().rect_stroke(
+        rect,
+        12.0,
+        egui::Stroke::new(2.0, accent),
+        egui::StrokeKind::Inside,
+    );
+    let idx = picker.photo_idx % PHOTO_SLOTS as usize;
+    let prev = (idx + PHOTO_SLOTS as usize - 1) % PHOTO_SLOTS as usize;
+    let fade_t = ((now - picker.photo_since) / PHOTO_FADE_SECS).clamp(0.0, 1.0) as f32;
+    let slot = |i: usize| -> u8 { (i as u8 % PHOTO_SLOTS) + 1 };
+    if let Some(tex) = personality_photo_tex(ui.ctx(), &p.id, slot(prev)) {
+        let a = ((1.0 - fade_t) * 255.0) as u8;
+        ui.painter().image(
+            tex.id(),
+            rect.shrink(4.0),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::from_white_alpha(a),
+        );
+    }
+    if let Some(tex) = personality_photo_tex(ui.ctx(), &p.id, slot(idx)) {
+        let a = (fade_t * 255.0) as u8;
+        ui.painter().image(
+            tex.id(),
+            rect.shrink(4.0),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::from_white_alpha(a.max(if fade_t < 1.0 { a } else { 255 })),
+        );
+    } else {
+        // Placeholder letter tile when a slot has no asset yet.
+        let letter = initial_letter(&p.name);
+        let galley = ui.fonts_mut(|f| {
+            f.layout_no_wrap(
+                letter.to_string(),
+                crate::theme::loadout_font(48.0),
+                crate::theme::fg(),
+            )
+        });
+        let pos = egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        );
+        ui.painter().galley(pos, galley, crate::theme::fg());
+    }
+    // Arrow hit targets on the photo.
+    let arrow_w = 28.0;
+    let left = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 4.0, rect.center().y - 14.0),
+        egui::vec2(arrow_w, 28.0),
+    );
+    let right = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - arrow_w - 4.0, rect.center().y - 14.0),
+        egui::vec2(arrow_w, 28.0),
+    );
+    for (r, label, delta) in [(left, "‹", -1isize), (right, "›", 1isize)] {
+        let resp = ui.allocate_rect(r, egui::Sense::click());
+        let hot = resp.hovered();
+        ui.painter().rect_filled(
+            r,
+            6.0,
+            egui::Color32::from_black_alpha(if hot { 160 } else { 110 }),
+        );
+        let galley = ui.fonts_mut(|f| {
+            f.layout_no_wrap(
+                label.to_string(),
+                crate::theme::loadout_font(18.0),
+                crate::theme::fg(),
+            )
+        });
+        let pos = egui::pos2(
+            r.center().x - galley.size().x * 0.5,
+            r.center().y - galley.size().y * 0.5,
+        );
+        ui.painter().galley(pos, galley, crate::theme::fg());
+        if resp.clicked() {
+            let n = PHOTO_SLOTS as isize;
+            picker.photo_idx = ((idx as isize + delta).rem_euclid(n)) as usize;
+            picker.photo_since = now;
+        }
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.with_layout(
+            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for i in 0..PHOTO_SLOTS as usize {
+                        let on = i == idx;
+                        let (dot, resp) = ui.allocate_exact_size(
+                            egui::vec2(if on { 8.0 } else { 6.0 }, if on { 8.0 } else { 6.0 }),
+                            egui::Sense::click(),
+                        );
+                        ui.painter().circle_filled(
+                            dot.center(),
+                            dot.width() * 0.5,
+                            if on {
+                                crate::theme::amber()
+                            } else {
+                                crate::theme::muted()
+                            },
+                        );
+                        if resp.clicked() {
+                            picker.photo_idx = i;
+                            picker.photo_since = now;
+                        }
+                    }
+                });
+            },
+        );
+    });
 }
 
 fn paint_detail_panel(
@@ -880,13 +1119,16 @@ fn paint_detail_panel(
     in_use: bool,
     tried: Option<&TryState>,
     width: f32,
+    picker: &mut PickerState,
+    now: f64,
 ) -> Option<CardAct> {
     let mut act = None;
     let loadout = crate::theme::is_loadout_paint();
+    let accent = personality_accent(&p.id);
     let (fill, stroke) = if loadout {
         (
             crate::theme::selected(),
-            egui::Stroke::new(2.0, crate::theme::signal_red()),
+            egui::Stroke::new(2.0, accent),
         )
     } else {
         (
@@ -894,6 +1136,7 @@ fn paint_detail_panel(
             egui::Stroke::new(1.5, crate::theme::fg()),
         )
     };
+    let inner_w = (width - 32.0).max(140.0);
     egui::Frame::NONE
         .fill(fill)
         .corner_radius(if loadout {
@@ -904,8 +1147,8 @@ fn paint_detail_panel(
         .stroke(stroke)
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            ui.set_width((width - 32.0).max(160.0));
-            ui.set_min_height(320.0);
+            ui.set_width(inner_w);
+            ui.set_max_width(inner_w);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 super::loadout_home::diamond(ui, true);
@@ -916,31 +1159,28 @@ fn paint_detail_panel(
                         .color(crate::theme::amber()),
                 );
             });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                paint_letter_tile(ui, initial_letter(&p.name), 64.0, true);
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(&p.name)
-                            .font(crate::theme::loadout_font(28.0))
-                            .strong()
-                            .color(crate::theme::fg()),
-                    );
-                    ui.add_space(4.0);
-                    paint_preset_tags(ui, p, true);
-                });
-            });
-            ui.add_space(12.0);
+            ui.add_space(10.0);
+            let photo_w = ui.available_width().max(100.0);
+            paint_photo_showcase(ui, p, picker, now, photo_w);
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(&p.name)
+                    .font(crate::theme::loadout_font(22.0))
+                    .strong()
+                    .color(crate::theme::fg()),
+            );
+            ui.add_space(4.0);
+            paint_preset_tags(ui, p, true);
+            ui.add_space(6.0);
             ui.label(
                 RichText::new(&p.description)
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::fg()),
             );
             if !p.sample.trim().is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 let sample_stroke = if loadout {
-                    egui::Stroke::new(1.0, crate::theme::signal_red())
+                    egui::Stroke::new(1.0, accent)
                 } else {
                     egui::Stroke::new(1.0, crate::theme::border())
                 };
@@ -951,6 +1191,7 @@ fn paint_detail_panel(
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        ui.set_max_width(ui.available_width());
                         ui.label(
                             RichText::new(format!("\u{201c}{}\u{201d}", p.sample.trim()))
                                 .size(crate::theme::FONT_META)
@@ -986,7 +1227,7 @@ fn paint_detail_panel(
                 }
                 None => {}
             }
-            ui.add_space(16.0);
+            ui.add_space(12.0);
             if p.explicit {
                 ui.label(
                     RichText::new("Adults only · opt-in")
@@ -1383,8 +1624,8 @@ mod tests {
     #[test]
     fn grid_cols_cap_at_four_and_need_room_for_each() {
         assert_eq!(grid_cols(100.0), 1);
-        assert_eq!(grid_cols(320.0), 2);
-        assert_eq!(grid_cols(500.0), 3);
+        assert_eq!(grid_cols(300.0), 2);
+        assert_eq!(grid_cols(460.0), 3);
         assert_eq!(grid_cols(900.0), 4);
         assert_eq!(grid_cols(2000.0), 4);
     }
@@ -1419,7 +1660,9 @@ mod tests {
             "Adults only · opt-in",
             "paint_detail_panel",
             "paint_grid_card",
+            "paint_photo_showcase",
             "DETAIL_W",
+            "PHOTO_SLOTS",
         ] {
             assert!(src.contains(want), "missing {want}");
         }
@@ -1434,14 +1677,34 @@ mod tests {
     }
 
     #[test]
+    fn personality_photos_embed_five_slots_for_builtins() {
+        const {
+            assert!(PERSONALITY_PHOTO_COUNT >= 100);
+        }
+        for id in ["nyx", "genie", "viper", "whore", "bard"] {
+            for slot in 1u8..=5 {
+                let bytes = personality_photo_png(id, slot)
+                    .unwrap_or_else(|| panic!("missing {id}/{slot}.png"));
+                assert!(
+                    bytes.starts_with(b"\x89PNG"),
+                    "{id}/{slot} should be a PNG"
+                );
+            }
+        }
+        assert!(personality_photo_png("no-such-preset", 1).is_none());
+    }
+
+    #[test]
     fn settings_pins_personality_for_deck_shots() {
         let src = include_str!("settings.rs");
         assert!(src.contains("GROKHUB_DECK_SETTINGS_SEC"));
         assert!(src.contains("pinned_settings_sec"));
         assert!(src.contains("settings_modal_size"));
+        assert!(src.contains("settings_page_rect"));
         let shots = include_str!("../../../../scripts/deck-shots.ps1");
-        assert!(shots.contains("-personality"));
+        assert!(shots.contains("-pinPersonality") || shots.contains("-personality"));
         assert!(shots.contains("personality-1600x900"));
+        assert!(shots.contains("personality-1920x1080"));
         assert!(shots.contains("slide-19") || shots.contains("'19'"));
     }
 }

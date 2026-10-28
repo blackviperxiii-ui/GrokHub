@@ -347,6 +347,7 @@ Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'defau
 # Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
+Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality -clickAt 20, 1040
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
