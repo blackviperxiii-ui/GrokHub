@@ -152,6 +152,76 @@ mod tests {
     }
 
     #[test]
+    fn load_chips_scrubs_legacy_chat_text_keys() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("chips-scrub");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        // Synthetic fixture — no real chat. Legacy key embeds the ask text.
+        let dirty = serde_json::json!({
+            "version": 1,
+            "hits": [{
+                "key": "chat:draft a private cabin story about the fireplace",
+                "label": "draft a private cabin story about the fireplace",
+                "value": "draft a private cabin story about the fireplace",
+                "kind": "chat",
+                "uses": 3,
+                "typedUses": 3,
+                "picks": 0,
+                "lastUsedAt": 1,
+                "hourHits": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                "successes": 0,
+                "failures": 0,
+                "contextTags": [],
+                "dismisses": 0,
+                "dismissHours": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                "lastDismissedAt": 0
+            }, {
+                "key": "id:ctx-connect",
+                "label": "Connect Grok",
+                "value": "__nav:settings",
+                "kind": "nav",
+                "uses": 1,
+                "typedUses": 0,
+                "picks": 1,
+                "lastUsedAt": 2,
+                "hourHits": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                "successes": 0,
+                "failures": 0,
+                "contextTags": [],
+                "dismisses": 0,
+                "dismissHours": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                "lastDismissedAt": 0
+            }],
+            "transitions": {},
+            "lastChipKey": "chat:draft a private cabin story about the fireplace",
+            "totalEvents": 4,
+            "updatedAt": 9
+        });
+        fs::create_dir_all(&root).expect("cfg dir");
+        fs::write(
+            root.join("chips.json"),
+            serde_json::to_vec_pretty(&dirty).expect("json"),
+        )
+        .expect("write dirty chips.json");
+        let loaded = load_chips();
+        assert_eq!(loaded.hits.len(), 1, "{:?}", loaded.hits);
+        assert_eq!(loaded.hits[0].key, "id:ctx-connect");
+        assert!(loaded.last_chip_key.is_none());
+        assert_eq!(loaded.version, grokhub_core::CHIP_MEMORY_VERSION);
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("chips.json")).expect("read"))
+                .expect("parse rewritten chips.json");
+        let disk = on_disk.to_string();
+        assert!(
+            !disk.contains("fireplace") && !disk.contains("private cabin story"),
+            "load must rewrite chips.json without the legacy ask: {disk}"
+        );
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
     fn wall_roundtrip() {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("wall");
