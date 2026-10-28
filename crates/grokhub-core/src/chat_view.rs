@@ -1030,7 +1030,9 @@ mod tests {
             reply.body
         );
         assert!(
-            reply.body.contains("https://doc.rust-lang.org/stable/releases.html"),
+            reply
+                .body
+                .contains("https://doc.rust-lang.org/stable/releases.html"),
             "{}",
             reply.body
         );

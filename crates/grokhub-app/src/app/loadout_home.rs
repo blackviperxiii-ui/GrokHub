@@ -794,8 +794,7 @@ impl Cabin {
                 self.settings_back = self.nav;
             }
             self.nav = Nav::Settings;
-            self.settings_sec = settings::pinned_settings_sec()
-                .unwrap_or(SettingsSec::Defaults);
+            self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Defaults);
             return;
         }
         let path = crate::config::config_dir().join("web-search-shot-seed.json");
