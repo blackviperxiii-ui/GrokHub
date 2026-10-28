@@ -660,11 +660,41 @@ impl Cabin {
             t.accessed_ms = now;
             t.last_active_ms = now;
         }
+        // Extra titled chats so the titlebar tab strip has several tabs in HARD DONE shots.
+        self.ensure_deck_extra_tab(
+            "deck-weekend",
+            "Weekend plan",
+            true,
+            now.saturating_sub(60_000),
+        );
+        self.ensure_deck_extra_tab(
+            "deck-driver",
+            "Driver update",
+            false,
+            now.saturating_sub(30_000),
+        );
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
+    }
+
+    fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {
+        if self.threads.iter().any(|t| t.id == id) {
+            return;
+        }
+        let mut t = ChatThread::new(title, false);
+        t.id = id.to_string();
+        t.native = true;
+        t.pinned = pinned;
+        if pinned {
+            t.pinned_ms = at;
+        }
+        t.accessed_ms = at;
+        t.last_active_ms = at;
+        t.messages = Arc::new(vec![("user".into(), format!("Seed for {title}"))]);
+        self.threads.push(t);
     }
 
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
@@ -1290,6 +1320,20 @@ mod tests {
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.messages.len(), 4);
         assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
+        let titles: Vec<&str> = cabin.threads.iter().map(|t| t.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Hangout")
+                && titles.contains(&"Weekend plan")
+                && titles.contains(&"Driver update"),
+            "deck seed must plant several tab titles for HARD DONE shots: {titles:?}"
+        );
+        assert!(
+            cabin
+                .threads
+                .iter()
+                .any(|t| t.title == "Weekend plan" && t.pinned),
+            "Weekend plan stays pinned on the left of the strip"
+        );
         assert_eq!(
             cabin
                 .composer_chips()
