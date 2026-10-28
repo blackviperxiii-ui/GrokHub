@@ -177,13 +177,15 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
-    $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
+    Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
     $env:USERPROFILE = $root
     $env:APPDATA = Join-Path $root 'AppData'
     $env:LOCALAPPDATA = Join-Path $root 'LocalAppData'
     $env:GROKHUB_RENDERER = 'wgpu'
+    $env:GROKHUB_DECK_SHOT = '1'
+    if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -298,6 +300,12 @@ Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
 Shot 1600 900 'pulse-1600x900' 'ops-dark' '14' -pulse
 Shot 1100 720 'pulse-1100x720' 'ops-dark' '14' -pulse
+# Deck-match 6 proof: same Pulse page beside slides 13 (loadout style) and 15
+# (card close-up), at the HARD DONE sizes.
+Shot 1600 900 'pulse-1600x900-slide13' 'ops-dark' '13' -pulse
+Shot 1100 720 'pulse-1100x720-slide13' 'ops-dark' '13' -pulse
+Shot 1600 900 'pulse-1600x900-slide15' 'ops-dark' '15' -pulse
+Shot 1100 720 'pulse-1100x720-slide15' 'ops-dark' '15' -pulse
 Shot 2560 1440 'pulse-2560x1440' 'ops-dark' '14' -pulse
 Shot 1440 900 'pulse-1440x900' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
