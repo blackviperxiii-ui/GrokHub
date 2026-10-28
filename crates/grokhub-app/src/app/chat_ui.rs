@@ -380,9 +380,40 @@ pub(super) fn is_error_reply(body: &str) -> bool {
     body.trim_start().starts_with("Error:")
 }
 
-/// The reply mark left of an assistant or result bubble, and the gap after it.
-const REPLY_MARK_W: f32 = 16.0;
-const REPLY_MARK_GAP: f32 = 6.0;
+/// Companion face left of an assistant or result bubble, and the gap after it.
+const REPLY_MARK_W: f32 = 28.0;
+const REPLY_MARK_GAP: f32 = 8.0;
+
+/// TALK / TYPE toggle chip in the Hangout header. `on` paints the selected recipe.
+fn hangout_mode_btn(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    use crate::ui_kit::recipe::{self, Part, State};
+    let font = crate::theme::title_font(crate::theme::FONT_CHROME);
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let pad = egui::vec2(14.0, 6.0);
+    let size = egui::vec2(
+        (galley.size().x + pad.x * 2.0).max(64.0),
+        (galley.size().y + pad.y * 2.0).max(28.0),
+    );
+    let id = egui::Id::new(("hangout-mode", label));
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let resp = ui.interact(rect, id, egui::Sense::click());
+    let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    let state = if on {
+        State::Selected
+    } else {
+        recipe::state(resp.hovered(), false, false)
+    };
+    let look = recipe::look(Part::Button, state);
+    recipe::paint(ui.painter(), rect, &look);
+    let text_pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(text_pos, galley, look.ink);
+    crate::theme::pointing(resp).clicked()
+}
+
 /// Where a result bubble's text starts, from the row's left edge: mark, gap,
 /// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
 /// `/skills changes` Undo rows (SU-06) line up here.
@@ -443,11 +474,24 @@ pub(super) fn paint_speech_bubble(
     // Pad with spaces, not Frame inner_margin: egui clips the rounded fill
     // against the content origin, which ate the first glyphs on Windows 2.10.6.
     let error = !user && is_error_reply(body);
+    let stroke = if user {
+        egui::Stroke::NONE
+    } else if error {
+        // A failed turn must not read as an answer: faint red wash plus a red hairline.
+        egui::Stroke::new(
+            1.0_f32,
+            crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6),
+        )
+    } else if crate::theme::is_loadout_paint() {
+        // Slide 02 Hangout: assistant bubbles carry a Signal Red outline.
+        egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, crate::theme::signal_red())
+    } else {
+        egui::Stroke::NONE
+    };
     let frame = egui::Frame::NONE
         .fill(if user {
             crate::theme::bubble_user()
         } else if error {
-            // A failed turn must not read as an answer: faint red wash plus a red hairline.
             crate::theme::blend_color(
                 crate::theme::bubble_assistant(),
                 crate::theme::offline(),
@@ -456,14 +500,7 @@ pub(super) fn paint_speech_bubble(
         } else {
             crate::theme::bubble_assistant()
         })
-        .stroke(if error {
-            egui::Stroke::new(
-                1.0_f32,
-                crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6),
-            )
-        } else {
-            egui::Stroke::NONE
-        })
+        .stroke(stroke)
         .corner_radius(crate::theme::USER_BUBBLE_RADIUS)
         .inner_margin(egui::Margin::ZERO);
     let paint_inner = |ui: &mut egui::Ui| {
@@ -507,21 +544,27 @@ pub(super) fn paint_speech_bubble(
             })
             .inner;
     }
-    // Assistant row: the mark sits at the top left, beside the bubble.
+    // Assistant row: the companion face sits at the top left, beside the bubble.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
             ui.spacing_mut().item_spacing.x = REPLY_MARK_GAP;
-            let mark = crate::theme::mark(ui.ctx());
-            let (mark_rect, _) = ui
-                .allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
-            ui.painter().image(
-                mark.id(),
-                mark_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                crate::theme::muted(),
-            );
+            if crate::theme::is_loadout_paint() {
+                super::loadout_home::paint_companion_face(ui, REPLY_MARK_W);
+            } else {
+                let mark = crate::theme::mark(ui.ctx());
+                let (mark_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(REPLY_MARK_W, REPLY_MARK_W),
+                    egui::Sense::hover(),
+                );
+                ui.painter().image(
+                    mark.id(),
+                    mark_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    crate::theme::muted(),
+                );
+            }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 ui.set_max_width(outer_w);
                 frame.show(ui, paint_inner).response
@@ -1151,6 +1194,47 @@ pub(super) fn paint_chat_block_with(
 }
 
 impl Cabin {
+    /// Hangout column header (slide 02): companion face, title, voice subtitle, TALK/TYPE.
+    pub(super) fn paint_hangout_header(&mut self, ui: &mut egui::Ui) {
+        if !crate::theme::is_loadout_paint() {
+            return;
+        }
+        let voice_on = self.voice_is_on();
+        let subtitle = if voice_on {
+            "Voice on · just talking"
+        } else {
+            "Here · tap Talk to speak"
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            super::loadout_home::paint_companion_face(ui, 36.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(
+                    RichText::new("Hangout")
+                        .font(crate::theme::title_font(crate::theme::TYPE_TITLE))
+                        .color(crate::theme::fg()),
+                );
+                ui.label(
+                    RichText::new(subtitle)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                // Right-to-left: TYPE first so TALK lands on the left of the pair.
+                if hangout_mode_btn(ui, "TYPE", !voice_on) && voice_on {
+                    self.leave_voice();
+                }
+                if hangout_mode_btn(ui, "TALK", voice_on) && !voice_on {
+                    self.listen_voice();
+                }
+            });
+        });
+        ui.add_space(10.0);
+    }
+
     pub(super) fn ui_chat(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let empty = self.messages.is_empty();
@@ -1180,6 +1264,7 @@ impl Cabin {
                 bottom: 8,
             });
         super::dock_ui::page_panel(ui, docked, page_frame, |ui| {
+            self.paint_hangout_header(ui);
             if empty {
                 self.ui_empty_home(ui);
                 return;
@@ -2389,11 +2474,15 @@ impl Cabin {
                     |ui| {
                         ui.set_width(pane_w);
                         if greet_on {
-                            let mark = crate::theme::mark(ui.ctx());
-                            ui.add(
-                                egui::Image::from_texture(&mark)
-                                    .fit_to_exact_size(egui::vec2(40.0, 40.0)),
-                            );
+                            if crate::theme::is_loadout_paint() {
+                                super::loadout_home::paint_companion_face(ui, 40.0);
+                            } else {
+                                let mark = crate::theme::mark(ui.ctx());
+                                ui.add(
+                                    egui::Image::from_texture(&mark)
+                                        .fit_to_exact_size(egui::vec2(40.0, 40.0)),
+                                );
+                            }
                             ui.add_space(12.0);
                             ui.label(
                                 RichText::new(&self.greeting)
@@ -2767,7 +2856,7 @@ impl Cabin {
                                 self.paint_composer_glow(ui, pill_rect);
                                 ui.painter().rect(
                                     pill_rect,
-                                    crate::theme::QUERY_RADIUS,
+                                    crate::theme::composer_chrome_radius(),
                                     crate::theme::elevated(),
                                     crate::theme::composer_chrome_stroke(focused),
                                     egui::StrokeKind::Middle,
@@ -2853,9 +2942,14 @@ impl Cabin {
                                                 15.0,
                                                 egui::FontFamily::Proportional,
                                             );
+                                            let hint_text = if crate::theme::is_loadout_paint() {
+                                                "Say something..."
+                                            } else {
+                                                "Ask anything"
+                                            };
                                             let hint = ui.fonts_mut(|f| {
                                                 f.layout_no_wrap(
-                                                    "Ask anything".to_string(),
+                                                    hint_text.to_string(),
                                                     hint_font,
                                                     ghost,
                                                 )

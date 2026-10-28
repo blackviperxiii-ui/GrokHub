@@ -68,7 +68,15 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
         (@{ type = 'function_call'; call_id = 'c1'; name = 'todo_write'; arguments = $todos } | ConvertTo-Json -Compress)
     ) -join "`n"
     Write-Utf8 (Join-Path $cfg "sessions/$id.jsonl") "$session`n"
-    $thread = @{ id = $id; title = 'Hangout'; native = $true; grokSession = $id; accessedMs = $now; lastActiveMs = $now; messages = @() }
+    # Sample Hangout transcript so deck-match 4 shots show red-rim assistant
+    # bubbles, the companion face, and the chat header beside the dock.
+    $messages = @(
+        @('user', 'yo, what are we running tonight?'),
+        @('assistant', "Diamond climb. You're 3 wins off — want a warm-up in the range, or I queue the duo finder?"),
+        @('user', 'queue the duo and fix my stutter first'),
+        @('assistant', "On it. I'll clear the shader cache, then find you a Diamond duo for tonight.")
+    )
+    $thread = @{ id = $id; title = 'Hangout'; native = $true; grokSession = $id; accessedMs = $now; lastActiveMs = $now; messages = $messages }
     Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject @($thread) -Depth 4)
     Write-Utf8 (Join-Path $cfg 'projects.json') '[]'
     $cards = @(
