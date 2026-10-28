@@ -664,7 +664,11 @@ impl Cabin {
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         self.pin_chat_tail();
-        self.seed_activity_dock_for_deck();
+        // Slide 10's chat-first layout has no Activity popover or pending Ask
+        // over the snapshot column.
+        if !self.cfg.chat_objectives {
+            self.seed_activity_dock_for_deck();
+        }
     }
 
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
@@ -1303,6 +1307,15 @@ mod tests {
                 "Fix my stutter"
             ]
         );
+        assert!(cabin.activity.open);
+        assert!(cabin.perm_ask.is_some());
+
+        let mut chat_first = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
+        chat_first.cfg.chat_objectives = true;
+        chat_first.apply_deck_shot_seed();
+        assert_eq!(chat_first.messages.len(), 4);
+        assert!(!chat_first.activity.open);
+        assert!(chat_first.perm_ask.is_none());
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
             None => std::env::remove_var("GROKHUB_DECK_SHOT"),
