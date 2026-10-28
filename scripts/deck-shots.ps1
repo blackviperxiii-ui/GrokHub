@@ -215,9 +215,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
     if ($pulse) {
-        # Pulse is the fourth icon on the 40 px rail, at every window size.
+        # Pulse is the fourth icon on the 40 px rail, at every window size. The chat
+        # tab strip under the titlebar pushes the rail down 37 px.
         [void][DeckWin]::SetForegroundWindow($hwnd)
-        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 218)
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         # Let the click land before the cursor moves: a queued click that lands
@@ -318,26 +319,27 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
-# Library is the fifth icon on the 40 px rail.
-Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
-Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Library is the fifth icon on the 40 px rail, below the chat tab strip.
+Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
+Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # Objectives (mission control) is the third icon on the rail.
-Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
-Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
+Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
+Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
-# The gear at the foot of the rail opens Settings; Ctrl+, from SendKeys
-# missed the 1100x720 window.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 110, 146
+# The gear at the foot of the rail opens Settings at 1100x720, where Ctrl+, from
+# SendKeys missed the window; at 1600x900 the gear sits below the runner's
+# screen, so Ctrl+, opens it there.
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -keys '^,' -clickAt 110, 146
 Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 110, 146
 
 # Nyx is the default personality: Settings -> Personality on a profile with no
 # pick, and on one still saved on the retired 'default' preset.
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -clickAt 20, 875, 110, 234
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -keys '^,' -clickAt 110, 234
 Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 110, 234
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -clickAt 20, 875, 110, 234
+Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -keys '^,' -clickAt 110, 234
 Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 110, 234
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
