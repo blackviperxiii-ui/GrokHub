@@ -1,0 +1,2 @@
+- Restyle chat tabs to even-fit widths with an overflow menu (no scroll bar), short context titles, close-on-hover, and remove the native usage/pool status bar.
+- Chat rail restores the last-used tab across Home↔Chat and restarts (closed → next live; none → fresh).

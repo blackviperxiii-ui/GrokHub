@@ -23,7 +23,7 @@ impl Cabin {
         self.settings_menu_open = false;
         match action {
             "nav:chat" => {
-                self.new_thread(false);
+                self.open_last_chat_tab();
                 self.nav = Nav::Chat;
             }
             "nav:night" => self.nav = Nav::Night,
