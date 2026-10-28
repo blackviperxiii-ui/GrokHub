@@ -20,12 +20,12 @@ import { ADULTS_ONLY, PERSONALITY_NOTE, Personality } from "./Personality";
 
 function preset(over: Partial<Preset> = {}): Preset {
   return {
-    id: "nyx",
-    name: "Nyx",
-    description: "Nerdy gamer and techie: warm, fun, and roasts when the room is right.",
+    id: "default",
+    name: "Default",
+    description: "GrokHub's own voice: brief, warm and plain.",
     sample: "",
     toneRules: "",
-    emoji: "light",
+    emoji: "none",
     verbosity: "normal",
     explicit: false,
     custom: false,
@@ -76,9 +76,9 @@ describe("Personality", () => {
   });
 
   it("turns adults-only personalities on and shows the explicit presets", async () => {
-    api.getPersonalities.mockResolvedValue(page("nyx", [preset(), PIRATE]));
+    api.getPersonalities.mockResolvedValue(page("default", [preset(), PIRATE]));
     api.setExplicitPersonalities.mockResolvedValue(
-      page("nyx", [preset(), PIRATE, VIPER], [], true),
+      page("default", [preset(), PIRATE, VIPER], [], true),
     );
     render(<Personality />);
     const toggle = await screen.findByRole("switch", { name: ADULTS_ONLY });
@@ -95,27 +95,27 @@ describe("Personality", () => {
   });
 
   it("marks the default in use and makes another the default", async () => {
-    api.getPersonalities.mockResolvedValue(page("nyx", [preset(), PIRATE]));
+    api.getPersonalities.mockResolvedValue(page("default", [preset(), PIRATE]));
     api.setPersonality.mockResolvedValue(page("pirate", [preset(), PIRATE]));
     render(<Personality />);
     expect(await screen.findByText(PERSONALITY_NOTE)).toBeVisible();
-    expect(card("Nyx").getByText("In use")).toBeVisible();
-    expect(card("Nyx").queryByRole("button", { name: "Use" })).toBeNull();
+    expect(card("Default").getByText("In use")).toBeVisible();
+    expect(card("Default").queryByRole("button", { name: "Use" })).toBeNull();
     expect(card("Pirate").getByText("“Yer build sank, matey.”")).toBeVisible();
     expect(card("Pirate").queryByRole("button", { name: "Edit" })).toBeNull();
 
     await userEvent.click(card("Pirate").getByRole("button", { name: "Use" }));
     expect(api.setPersonality).toHaveBeenCalledWith("pirate");
     expect(card("Pirate").getByText("In use")).toBeVisible();
-    expect(card("Nyx").getByText("Built in")).toBeVisible();
+    expect(card("Default").getByText("Built in")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("Personality: Pirate");
   });
 
   it("duplicates a built-in into the editor, saves, and deletes after a second click", async () => {
-    api.getPersonalities.mockResolvedValue(page("nyx", [preset(), PIRATE]));
+    api.getPersonalities.mockResolvedValue(page("default", [preset(), PIRATE]));
     api.duplicatePersonality.mockResolvedValue([
       "pirate-copy",
-      page("nyx", [preset(), PIRATE, COPY]),
+      page("default", [preset(), PIRATE, COPY]),
     ]);
     const deck = {
       ...COPY,
@@ -124,10 +124,10 @@ describe("Personality", () => {
       verbosity: "terse" as const,
     };
     api.savePersonality.mockResolvedValue(
-      page("nyx", [preset(), PIRATE, deck]),
+      page("default", [preset(), PIRATE, deck]),
     );
     api.deletePersonality.mockResolvedValue(
-      page("nyx", [preset(), PIRATE]),
+      page("default", [preset(), PIRATE]),
     );
     render(<Personality />);
 

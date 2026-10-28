@@ -83,7 +83,7 @@ pub(super) fn stored_id(id: &str) -> String {
 }
 
 /// The id a stored field stands for. The retired "default" preset is Nyx.
-pub(super) fn shown_id(stored: &str) -> &str {
+fn shown_id(stored: &str) -> &str {
     match stored.trim() {
         "" | personality::LEGACY_DEFAULT_ID => personality::DEFAULT_ID,
         id => id,
@@ -1019,7 +1019,12 @@ fn paint_detail_panel(
                 );
             });
             ui.add_space(12.0);
-            // Slide 19: big icon beside name + tags (no placeholder photo strip).
+            // Slide 19: letter icon until finals land under assets/personalities/.
+            // Read the embed so empty-asset builds stay clippy-clean; drop-in PNGs rebuild.
+            let _ = (
+                PERSONALITY_PHOTO_COUNT,
+                personality_photo_png(p.id.as_str(), 1),
+            );
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 paint_letter_tile(ui, initial_letter(&p.name), DETAIL_ICON, true);

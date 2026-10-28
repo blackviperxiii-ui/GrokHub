@@ -186,13 +186,14 @@ function Seed-Pulse([string]$cfg) {
 # x, y pair in $clickAt (in the window) is one more click after that. $library seeds the dock
 # and a Steam library; the shot clicks Library on the rail with $clickAt.
 # $personality is the stored pick in app.json ('default' is the preset older
-# builds shipped; load rewrites it to Nyx). $pinPersonality opens Settings →
-# Personality (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit
-# preset selected, for slide 19 shots. $openSettings opens Settings on that
-# section at launch (GROKHUB_DECK_OPEN_SETTINGS), with no click. $mood pins the
-# companion's pose (GROKHUB_DECK_MOOD); $action pins an ACTION photo set
-# (GROKHUB_DECK_ACTION). $libraryPick seeds a Library detail pick.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$action = '') {
+# builds shipped). $pinPersonality opens Settings → Personality
+# (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
+# selected, for slide 19 shots. $mood pins Nyx's corner box picture
+# (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
+# since no turn or game runs here; every shot defaults to hanging-out.
+# selected, for slide 19 shots. $mood pins the companion's pose
+# (GROKHUB_DECK_MOOD), since no turn runs here.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -226,26 +227,15 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
-    if ($dock -and -not $mood -and -not $action) { $mood = 'hanging-out' }
+    if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($action) { $env:GROKHUB_DECK_ACTION = $action } else { Remove-Item Env:GROKHUB_DECK_ACTION -ErrorAction SilentlyContinue }
-    # pinPersonality and openSettings both pin a section and open Settings at
-    # launch. Clear with Remove-Item (empty string still "exists" for child envs).
-    $settingsSec = if ($pinPersonality) { 'personality' } elseif ($openSettings) { $openSettings } else { '' }
-    if ($settingsSec) {
-        $env:GROKHUB_DECK_SETTINGS_SEC = $settingsSec
-        $env:GROKHUB_DECK_OPEN_SETTINGS = '1'
-    } else {
-        Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue
-        Remove-Item Env:GROKHUB_DECK_OPEN_SETTINGS -ErrorAction SilentlyContinue
-    }
+    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
+    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
+    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    if ($library -or $settingsSec) {
-        $env:GROKHUB_DECK_ACTIVITY = '0'
-    } else {
-        Remove-Item Env:GROKHUB_DECK_ACTIVITY -ErrorAction SilentlyContinue
-    }
-    Write-Host "Shot ${name}: personality=$personality settingsSec=$settingsSec openSettings=$openSettings pinPersonality=$pinPersonality"
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality) { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -397,34 +387,30 @@ Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # Objectives (mission control) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
-# Privacy & data is the second entry in the Settings list; open at launch so a
-# click or Ctrl+, never has to land (1600x900 gear can sit below the runner).
+# Privacy & data is the second entry in the Settings list; the dialog is centred.
+# The gear at the foot of the rail opens Settings at 1100x720, where Ctrl+, from
+# SendKeys missed the window; at 1600x900 the gear sits below the runner's
+# screen, so Ctrl+, opens it there.
 Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -openSettings 'privacy'
 Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -openSettings 'privacy'
-# Nyx is the default personality: Settings -> Personality at launch. Fresh
-# installs pass nyx; upgrades pass the retired 'default' id (cabin load
-# rewrites it to Nyx and keeps it). Splat so -personality and -openSettings
-# both bind (named-arg order was dropping openSettings on the runner).
-$nyxFresh = @{ personality = 'nyx'; openSettings = 'personality' }
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' @nyxFresh
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' @nyxFresh
-$nyxUpgrade = @{ personality = 'default'; openSettings = 'personality' }
-Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' @nyxUpgrade
-Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' @nyxUpgrade
-# Personality picker beside slide 19. pinPersonality opens Settings at launch
-# (no rail click / Ctrl+, — a miss left Hangout on screen in #958).
+
+# Nyx is the default personality: Settings -> Personality on a profile with no
+# pick, and on one still saved on the retired 'default' preset.
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -keys '^,' -clickAt 110, 234
+Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 110, 234
+Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -keys '^,' -clickAt 110, 234
+Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 110, 234
+# Personality picker beside slide 19. GROKHUB_DECK_SETTINGS_SEC opens Settings at
+# boot (no rail click / Ctrl+, — a miss left Hangout on screen in #958).
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
 Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
 # Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
 Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
-# Companion corner-box: DEFAULT rotation (Nyx deck poses) and an ACTION photo.
-Shot 1600 900 'companion-default-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
-Shot 1100 720 'companion-default-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
-Shot 1600 900 'companion-action-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -action 'coding'
-Shot 1100 720 'companion-action-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -action 'coding'
-foreach ($m in 'hello', 'helping', 'hanging-out') {
-    Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
-    Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
+# Nyx's corner box in each mode, beside the approved pictures in
+# docs/design/loadout-baseline-v1/nyx-modes/.
+foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
+    Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
+    Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
 }
 Get-ChildItem $Out | Format-Table Name, Length

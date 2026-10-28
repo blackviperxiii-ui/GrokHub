@@ -12,8 +12,8 @@
 - `crates/grokhub-core/src/host_safety.rs`: `forbidden_reason` (leaf match plus assignment/`+`/`$(echo)`/`chr()` deobfuscation and `base64|sh` rebuild refuse) and `recall_hits`. `crates/grokhub-core/src/ssrf.rs`: `ip_blocked` / `host_name_blocked`; `public_http_url` uses them (dialers add `public_only_resolve`, never env proxy).
 - Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2).
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
-- `crates/grokhub-core/src/personality.rs` + `assets/personalities.toml`: `DEFAULT_ID` is Nyx; `LEGACY_DEFAULT_ID` (`default`) maps to it.
 - `crates/grokhub-core/src/appearance.rs`: Settings theme ids (`ops-dark`, `oled-black`, `soft-charcoal`, classic `dark` / `light` / `system`) and `resolve_palette`.
+- `crates/grokhub-core/src/paths.rs`: `user_home`.
 - `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`.
 ## Change recipe
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
