@@ -60,12 +60,7 @@ impl Cabin {
             "linux"
         };
         let dirs = watch_dirs(&home, os);
-        let _ = tick_screenshot_offer(
-            &mut ledger,
-            &self.cfg.screenshot_explain,
-            &dirs,
-            now,
-        );
+        let _ = tick_screenshot_offer(&mut ledger, &self.cfg.screenshot_explain, &dirs, now);
         save_screenshot_offer_ledger(&ledger);
     }
 
@@ -82,7 +77,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             if ui
-                .button(format!("{CHIP_LABEL}"))
+                .button(CHIP_LABEL)
                 .on_hover_text("Read this screenshot and explain it in chat")
                 .clicked()
             {

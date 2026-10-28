@@ -191,7 +191,6 @@ mod model_wait_ui;
 mod native_signin_tests;
 mod night;
 mod nudge_watchers_ui;
-mod screenshot_offer_ui;
 mod oauth;
 mod pages;
 pub mod panels;
@@ -215,6 +214,7 @@ mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
+mod screenshot_offer_ui;
 #[cfg(test)]
 mod self_review_tests;
 mod self_review_ui;

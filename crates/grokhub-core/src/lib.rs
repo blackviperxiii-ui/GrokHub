@@ -79,7 +79,6 @@ pub mod model_download;
 pub mod model_registry;
 pub mod models;
 pub mod nudge_watchers;
-pub mod screenshot_offer;
 pub mod oauth;
 pub mod openclaw;
 pub mod organs;
@@ -112,6 +111,7 @@ pub mod rhythm;
 pub mod run_metrics;
 pub mod runtime_download;
 pub mod screen_record;
+pub mod screenshot_offer;
 pub mod sddl;
 pub mod self_review;
 pub mod shortcuts;
@@ -413,11 +413,6 @@ pub use nudge_watchers::{
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
 };
-pub use screenshot_offer::{
-    dismiss as dismiss_screenshot_offer, is_image_name, newest_in_watch_dirs,
-    tick as tick_screenshot_offer, watch_dirs, ScreenshotExplainSettings, ScreenshotOfferLedger,
-    TickOutcome, CHIP_LABEL, CHIP_TTL_MS, DISMISS_LABEL, EXPLAIN_PROMPT,
-};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,
@@ -492,6 +487,11 @@ pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
     rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_sensitive, rewind_snapshot_ready, RewindRecord,
+};
+pub use screenshot_offer::{
+    dismiss as dismiss_screenshot_offer, is_image_name, newest_in_watch_dirs,
+    tick as tick_screenshot_offer, watch_dirs, ScreenshotExplainSettings, ScreenshotOfferLedger,
+    TickOutcome, CHIP_LABEL, CHIP_TTL_MS, DISMISS_LABEL, EXPLAIN_PROMPT,
 };
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,

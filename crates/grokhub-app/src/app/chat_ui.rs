@@ -2847,15 +2847,15 @@ impl Cabin {
                             self.slash_filter_first.clear();
                         }
                     }
+                    ComposerStackSlot::ScreenshotOffer => {
+                        self.ui_screenshot_offer_chip(ui);
+                    }
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
                         let chips = self.composer_chips();
                         if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                             self.take_chip_act(act, &chips);
                         }
-                    }
-                    ComposerStackSlot::ScreenshotOffer => {
-                        self.ui_screenshot_offer_chip(ui);
                     }
                     ComposerStackSlot::Attach => {
                         self.ui_attach_tray(ui);

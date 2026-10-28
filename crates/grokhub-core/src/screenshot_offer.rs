@@ -15,17 +15,11 @@ pub const DISMISS_LABEL: &str = "Not now";
 pub const EXPLAIN_PROMPT: &str =
     "Explain what you see in this screenshot. Name the app or screen, the important text, and what the user might want to do next.";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotExplainSettings {
     #[serde(default)]
     pub enabled: bool,
-}
-
-impl Default for ScreenshotExplainSettings {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +65,7 @@ impl ScreenshotOfferLedger {
 
 pub fn watch_dirs(home: &Path, os: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut push = |p: PathBuf, out: &mut Vec<PathBuf>| {
+    let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
         if p.is_absolute() {
             out.push(p);
         }
@@ -146,7 +140,10 @@ pub fn newest_in_watch_dirs(dirs: &[PathBuf]) -> Option<ImageMeta> {
     let mut best: Option<ImageMeta> = None;
     for dir in dirs {
         if let Some(hit) = newest_image_meta(dir) {
-            if best.as_ref().is_none_or(|b| hit.modified_ms > b.modified_ms) {
+            if best
+                .as_ref()
+                .is_none_or(|b| hit.modified_ms > b.modified_ms)
+            {
                 best = Some(hit);
             }
         }
@@ -241,13 +238,13 @@ mod tests {
         };
         let mut settings = ScreenshotExplainSettings { enabled: false };
         assert_eq!(
-            tick(&mut ledger, &settings, &[dir.clone()], 2),
+            tick(&mut ledger, &settings, std::slice::from_ref(&dir), 2),
             TickOutcome::ClearedExpired
         );
         assert!(ledger.pending.is_none());
         settings.enabled = true;
         assert_eq!(
-            tick(&mut ledger, &settings, &[dir], 3),
+            tick(&mut ledger, &settings, std::slice::from_ref(&dir), 3),
             TickOutcome::NewOffer(ImageMeta {
                 path,
                 modified_ms: ledger.last_seen_modified_ms,
