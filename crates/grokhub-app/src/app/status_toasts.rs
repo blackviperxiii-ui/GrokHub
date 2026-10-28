@@ -145,6 +145,22 @@ fn sync_status_toasts_at(
     }
 }
 
+/// Title and body for a token budget warning.
+pub(crate) fn token_budget_notice(
+    level: grokhub_core::BudgetLevel,
+    line: &str,
+    pauses: bool,
+) -> (&'static str, String) {
+    match level {
+        grokhub_core::BudgetLevel::Over if pauses => (
+            "Token budget used up",
+            format!("{line}. Scheduled work waits until tomorrow."),
+        ),
+        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
+        _ => ("Token budget at 80%", format!("{line}.")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,21 +290,5 @@ mod tests {
                 && src.contains("TITLEBAR_H"),
             "cabin_toasts must pin TopRight under TITLEBAR_H"
         );
-    }
-}
-
-/// Title and body for a token budget warning.
-pub(crate) fn token_budget_notice(
-    level: grokhub_core::BudgetLevel,
-    line: &str,
-    pauses: bool,
-) -> (&'static str, String) {
-    match level {
-        grokhub_core::BudgetLevel::Over if pauses => (
-            "Token budget used up",
-            format!("{line}. Scheduled work waits until tomorrow."),
-        ),
-        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
-        _ => ("Token budget at 80%", format!("{line}.")),
     }
 }
