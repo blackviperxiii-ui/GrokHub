@@ -175,6 +175,44 @@ pub fn most_recently_accessed_index(threads: &[ChatThread]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// Empty Home / + draft: default "Chat" title, no transcript, no session.
+pub fn is_parking_chat_draft(thread: &ChatThread) -> bool {
+    !thread.scratch
+        && !thread.background
+        && thread.deleted_at.is_none()
+        && thread.archived_at.is_none()
+        && thread.messages.is_empty()
+        && thread
+            .grok_session
+            .as_deref()
+            .map_or(true, |s| s.trim().is_empty())
+        && thread.title.eq_ignore_ascii_case("Chat")
+}
+
+/// Live Chat-rail tab: not deleted, archived, or background.
+pub fn is_live_chat_tab(thread: &ChatThread) -> bool {
+    !thread.background
+        && thread.deleted_at.is_none()
+        && thread.archived_at.is_none()
+        && !is_background_history_title(&thread.title)
+}
+
+/// Last-used live tab for Chat-rail restore. Prefers real chats over Home
+/// parking drafts; skips deleted / archived / background.
+pub fn last_used_live_chat_index(threads: &[ChatThread]) -> Option<usize> {
+    let has_real = threads
+        .iter()
+        .any(|t| is_live_chat_tab(t) && !t.scratch && !is_parking_chat_draft(t));
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            is_live_chat_tab(t) && (!has_real || (!t.scratch && !is_parking_chat_draft(t)))
+        })
+        .max_by_key(|(i, t)| (t.accessed_ms, *i))
+        .map(|(i, _)| i)
+}
+
 /// Quiet MidThought line for a last-accessed titled thread. Empty for scratch or default names.
 pub fn continue_thread_hint(threads: &[ChatThread]) -> String {
     let Some(idx) = most_recently_accessed_index(threads) else {
@@ -1156,6 +1194,25 @@ mod tests {
         assert!(continue_thread_hint(&only_scratch).is_empty());
         let untitled = vec![ChatThread::new("Chat", false)];
         assert!(continue_thread_hint(&untitled).is_empty());
+    }
+
+    #[test]
+    fn last_used_live_skips_deleted_and_home_draft() {
+        let mut harbor = ChatThread::new("Harbor", false);
+        harbor.accessed_ms = 3_000;
+        harbor.messages_mut().push(("user".into(), "dock".into()));
+        let mut draft = ChatThread::new("Chat", false);
+        draft.accessed_ms = 9_000;
+        let mut gone = ChatThread::new("Gone", false);
+        gone.accessed_ms = 8_000;
+        gone.messages_mut().push(("user".into(), "bye".into()));
+        soft_delete_thread(&mut gone, 10_000);
+        let threads = vec![harbor, draft, gone];
+        assert!(is_parking_chat_draft(&threads[1]));
+        assert!(!is_live_chat_tab(&threads[2]));
+        assert_eq!(last_used_live_chat_index(&threads), Some(0));
+        let only_draft = vec![ChatThread::new("Chat", false)];
+        assert_eq!(last_used_live_chat_index(&only_draft), Some(0));
     }
 
     #[test]
