@@ -2,7 +2,7 @@
 
 ## Owns
 - Per-task outcomes: one `TaskOutcome` per finished task in `{config}/outcomes.jsonl`, keyed by signature (`skill:<name>` or `topic:<words>`). Success is VERIFY_OK, accepted, or no undo in `UNDO_WINDOW_MS`; failure is a detector finding, a deny, an undo, a correction, or the ladder's pause. A late fact is a superseding line; `fold_outcomes` keeps the newest per task.
-- The weekly self-review: `self_review_due` (Sunday at or after `dreamHour`, default `REVIEW_NIGHT_HOUR` 21; `night_passes` runs systems briefing, then this, then AMR dream), at most `SELF_REVIEW_CAP` (5) Pulse Suggestion cards, skill drafts, revert offers, and the replay gate. Separate: weekly systems briefing (`systems_brief`, Digest card, `/brief`) — read-only, no skill patches.
+- The weekly self-review: `self_review_due` (Sunday at or after `dreamHour`, default `REVIEW_NIGHT_HOUR` 21; `night_passes` runs systems briefing, then this, then AMR dream), at most `SELF_REVIEW_CAP` (5) Pulse Suggestion cards, skill drafts, revert offers, and the replay gate. Separate: weekly systems briefing (`systems_brief`, Digest card, `/brief`) — read-only, no skill patches. Separate again: fun `week_recap` Digest at the usual active hour (`week_recap.rs` / `week_recap_ui.rs`), not Sunday night.
 ## Quick commands
 - `cargo test -p grokhub-core outcome::` / `self_review::` / `systems_brief::` (pure rules, fake clock)
 - `cargo test -p grokhub-agent self_improve`, then `cargo test -p grokhub-app self_review_tests -- --test-threads=1` (isolate `GROKHUB_CONFIG`)

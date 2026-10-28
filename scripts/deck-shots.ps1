@@ -95,9 +95,16 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
            createdAt = $now - 10800000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'patch' }
     )
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
-    $lines = for ($i = 0; $i -lt 23; $i++) {
+    # Five distinct calendar days in the last week so Mission Control streak
+    # paints ~5 DAYS (not a single empty "0 DAYS" from one clustered timestamp).
+    $lines = @()
+    for ($d = 0; $d -lt 5; $d++) {
+        $at = $now - ($d * 86400000) - 3600000
+        $lines += @{ task = "streak-day-$d"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+    }
+    for ($i = 0; $i -lt 18; $i++) {
         $at = $now - 172800000 - $i * 60000
-        @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+        $lines += @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
     }
     Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
     $app.currentThread = $id
@@ -188,10 +195,12 @@ function Seed-Pulse([string]$cfg) {
 # $personality is the stored pick in app.json ('default' is the preset older
 # builds shipped). $pinPersonality opens Settings → Personality
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
-# selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD), since no turn runs here.
-# $nav opens that rail page at launch (GROKHUB_DECK_NAV) instead of the
-# Pulse rail click, and closes the seeded Activity list over the page.
+# selected, for slide 19 shots. $mood pins Nyx's corner box picture
+# (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
+# since no turn or game runs here; every shot defaults to hanging-out.
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
+# home, pulse or library) instead of a rail click; the cabin closes the
+# seeded Activity list over every pinned page.
 function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$chat = '', [switch]$ageCheck, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
@@ -227,7 +236,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
     if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
-    if ($dock -and -not $mood) { $mood = 'hanging-out' }
+    if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
     $env:GROKHUB_DECK_CHAT = $chat
     if ($ageCheck) { $env:GROKHUB_DECK_AGE_CHECK = '1' } else { Remove-Item Env:GROKHUB_DECK_AGE_CHECK -ErrorAction SilentlyContinue }
@@ -237,7 +246,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality) { '0' } else { '' })
+    # A pinned $nav page keeps it off too (the cabin closes it on every GROKHUB_DECK_NAV).
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -389,6 +399,14 @@ Shot 1600 900 'chat-joke-1600x900' 'ops-dark' '02' -dock -chat 'joke'
 Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
+# Home Mission Control (slide 09): Objectives+streak | PC Loadout | Up Next covers.
+# Pin via GROKHUB_DECK_NAV=home (cabin apply_deck_shot_seed) — a first-icon click
+# missed on windows-latest and captured Hangout instead. -library seeds Steam
+# covers + dock outcomes (multi-day streak) and waits for PC sensors; Activity
+# stays closed on Home. HARD DONE sizes plus narrow for the three-breakpoint proof.
+Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
+Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
+Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
 # Objectives (mission control) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
@@ -416,8 +434,10 @@ Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
 # adults-only still off. -nav opens Settings at launch; the gear click missed.
 Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
 Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
-foreach ($m in 'hello', 'helping', 'hanging-out') {
-    Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
-    Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
+# Nyx's corner box in each mode, beside the approved pictures in
+# docs/design/loadout-baseline-v1/nyx-modes/.
+foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
+    Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
+    Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
 }
 Get-ChildItem $Out | Format-Table Name, Length
