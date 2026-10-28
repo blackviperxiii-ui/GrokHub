@@ -1606,6 +1606,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
     ));
+    rows.push((
+        "tick_ask_offers",
+        grokhub_core::build_offer_card(
+            &grokhub_core::AskCluster {
+                key: "patch-note@h19".into(),
+                example: "check patch notes".into(),
+                count: 3,
+                peak_hour: 19,
+                weekday_share_pct: 40,
+                kind: grokhub_core::OfferKind::Automation,
+            },
+            now,
+        ),
+        "patch notes",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));

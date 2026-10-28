@@ -5121,6 +5121,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 ),
                 "Test GPU",
             ),
+            (
+                "build_offer_card",
+                crate::ask_offers::build_offer_card(
+                    &crate::ask_offers::AskCluster {
+                        key: "patch-note@h19".into(),
+                        example: "check patch notes".into(),
+                        count: 3,
+                        peak_hour: 19,
+                        weekday_share_pct: 40,
+                        kind: crate::ask_offers::OfferKind::Automation,
+                    },
+                    at,
+                ),
+                "patch notes",
+            ),
         ];
         let links = [CitedLink {
             url: "https://blog.rust-lang.org/1.99".into(),

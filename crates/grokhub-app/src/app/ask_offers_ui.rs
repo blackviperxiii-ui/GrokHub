@@ -38,13 +38,7 @@ impl Cabin {
         }
         let clock = Self::local_clock();
         let mut ledger = load_ask_offer_ledger();
-        append_ask(
-            &mut ledger,
-            text,
-            clock.hour,
-            clock.weekday,
-            now_ms(),
-        );
+        append_ask(&mut ledger, text, clock.hour, clock.weekday, now_ms());
         save_ask_offer_ledger(&ledger);
     }
 

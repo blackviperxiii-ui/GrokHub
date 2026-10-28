@@ -515,7 +515,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
     /// Settings → Behavior: offer to automate repeated local asks.
-    #[serde(default, skip_serializing_if = "grokhub_core::AskOfferSettings::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::AskOfferSettings::is_default"
+    )]
     pub ask_offers: grokhub_core::AskOfferSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.

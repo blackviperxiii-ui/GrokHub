@@ -61,6 +61,7 @@ pub mod ideas;
 pub mod imagine;
 pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
+pub mod ask_offers;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -78,7 +79,6 @@ pub mod mission;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
-pub mod ask_offers;
 pub mod nudge_watchers;
 pub mod oauth;
 pub mod openclaw;
@@ -156,10 +156,10 @@ pub use ask_offers::{
     append_ask, automate_accept_seed, build_offer_card, clock_token, cluster_asks,
     cluster_key_from_source, dismiss_cluster, is_ask_offer_card, may_log_ask, offer_preview,
     suggestion_title, tick as tick_ask_offers, AskCluster, AskLogEntry, AskOfferLedger,
-    AskOfferSettings, OfferKind, TickInput as AskOfferTickInput,
-    TickOutput as AskOfferTickOutput, DEFAULT_DAILY_MAX as ASK_OFFER_DAILY_MAX,
-    LEDGER_FILE as ASK_OFFERS_FILE, OFFER_MIN_COUNT, SOURCE_PREFIX as ASK_OFFER_PREFIX,
-    TICK_EVERY_MS as ASK_OFFER_TICK_MS, WINDOW_MS as ASK_OFFER_WINDOW_MS,
+    AskOfferSettings, OfferKind, TickInput as AskOfferTickInput, TickOutput as AskOfferTickOutput,
+    DEFAULT_DAILY_MAX as ASK_OFFER_DAILY_MAX, LEDGER_FILE as ASK_OFFERS_FILE, OFFER_MIN_COUNT,
+    SOURCE_PREFIX as ASK_OFFER_PREFIX, TICK_EVERY_MS as ASK_OFFER_TICK_MS,
+    WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,

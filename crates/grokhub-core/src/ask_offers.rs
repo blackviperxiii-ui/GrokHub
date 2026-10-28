@@ -314,12 +314,10 @@ pub fn suggestion_title(cluster: &AskCluster) -> String {
     let when = part_of_day(cluster.peak_hour);
     let clock = hour_label(cluster.peak_hour);
     match cluster.kind {
-        OfferKind::Automation => format!(
-            "You ask this most {when} around {clock}, want me to do it automatically?"
-        ),
-        OfferKind::Skill => format!(
-            "You keep asking this — want me to save it as a skill?"
-        ),
+        OfferKind::Automation => {
+            format!("You ask this most {when} around {clock}, want me to do it automatically?")
+        }
+        OfferKind::Skill => "You keep asking this — want me to save it as a skill?".into(),
     }
 }
 
@@ -382,12 +380,7 @@ pub fn build_offer_card(cluster: &AskCluster, now_ms: u64) -> UpdateCard {
         }
         OfferKind::Skill => {
             let skill = skill_suggestion(cluster);
-            let mut card = idea_card(
-                &source,
-                &title,
-                skill.body.as_str(),
-                now_ms,
-            );
+            let mut card = idea_card(&source, &title, skill.body.as_str(), now_ms);
             card.idea_kind = Some(IdeaKind::Skill);
             card.skill = Some(skill);
             card.prompt = Some(preview);
@@ -431,7 +424,9 @@ pub fn dismiss_cluster(ledger: &mut AskOfferLedger, cluster_key: &str) {
 
 /// Source id → cluster key (`askoffer:topic@h19` → `topic@h19`).
 pub fn cluster_key_from_source(source_id: &str) -> Option<&str> {
-    source_id.strip_prefix(SOURCE_PREFIX).filter(|s| !s.is_empty())
+    source_id
+        .strip_prefix(SOURCE_PREFIX)
+        .filter(|s| !s.is_empty())
 }
 
 pub fn is_ask_offer_card(card: &UpdateCard) -> bool {
@@ -545,11 +540,7 @@ mod tests {
             entry("summarize open PRs for me", 9, 1),
         ];
         assert!(cluster_asks(&two, now).is_empty());
-        let three = [
-            two,
-            vec![entry("summarize my PRs this morning", 8, 2)],
-        ]
-        .concat();
+        let three = [two, vec![entry("summarize my PRs this morning", 8, 2)]].concat();
         let clusters = cluster_asks(&three, now);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].count, 3);
