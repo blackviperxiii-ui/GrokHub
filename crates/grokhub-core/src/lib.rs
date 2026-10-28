@@ -49,6 +49,7 @@ pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
 pub mod health;
+pub mod home;
 pub mod heartbeat;
 pub mod heartbeat_throttle;
 pub mod history;
