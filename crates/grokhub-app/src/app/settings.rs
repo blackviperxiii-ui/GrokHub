@@ -744,6 +744,7 @@ impl Cabin {
                                                                 }
                                                             }
                                                             self.ui_rhythm_rows(ui);
+                                                            self.ui_ask_offers(ui);
                                                             self.ui_dream_time_row(ui);
                                                             self.ui_quiet_self_review_rows(ui);
                                                             self.ui_self_change_history(ui);
@@ -1109,6 +1110,8 @@ impl Cabin {
                                                             );
                                                             let cwd = self.grok_cwd();
                                                             crate::native_plugins::paint(ui, &cwd);
+                                                            ui.add_space(12.0);
+                                                            self.ui_labs_diagnostics(ui);
                                                             ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")

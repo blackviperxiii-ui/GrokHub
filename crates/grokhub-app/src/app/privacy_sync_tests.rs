@@ -574,8 +574,10 @@ fn aged_slash_results_never_render_in_the_thought_frame() {
         let mut drawn = false;
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                drawn =
-                    super::chat_ui::paint_chat_block_with(ui, view, true, true, fold, true).drawn;
+                drawn = super::chat_ui::paint_chat_block_with(
+                    ui, view, true, true, fold, true, false, 1,
+                )
+                .drawn;
             });
         });
         let mut texts: Vec<(String, bool)> = Vec::new();
@@ -686,7 +688,7 @@ fn aged_model_reasoning_still_collapses() {
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 painted = Some(super::chat_ui::paint_chat_block_with(
-                    ui, thought, true, true, fold, true,
+                    ui, thought, true, true, fold, true, false, 1,
                 ));
             });
         });
