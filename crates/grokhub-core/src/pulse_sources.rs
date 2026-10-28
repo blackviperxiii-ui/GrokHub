@@ -301,6 +301,83 @@ pub struct SourceReq {
     pub topic: Option<String>,
 }
 
+/// One DuckDuckGo Lite hit for agent search (title, URL, optional snippet).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebHit {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+}
+
+/// DuckDuckGo Lite search URL for a query (free, no key).
+pub fn duckduckgo_lite_url(query: &str) -> String {
+    format!("https://lite.duckduckgo.com/lite/?q={}", query_value(query))
+}
+
+/// Parse DuckDuckGo Lite HTML into title / URL / snippet hits.
+pub fn parse_duckduckgo_lite(body: &str, max: usize) -> Vec<WebHit> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    while out.len() < max {
+        let Some(at) = rest.find("<a") else {
+            break;
+        };
+        rest = &rest[at..];
+        let Some(tag_end) = rest.find('>') else {
+            break;
+        };
+        let tag = &rest[..=tag_end];
+        rest = &rest[tag_end + 1..];
+        let Some(close) = rest.find("</a>") else {
+            break;
+        };
+        let title_raw = &rest[..close];
+        rest = &rest[close + 4..];
+        let Some(href) = html_attr(tag, "href") else {
+            continue;
+        };
+        if ddg_nav_href(&href) {
+            continue;
+        }
+        let Some(url) = unwrap_ddg_url(&href) else {
+            continue;
+        };
+        let title = one_line(&decode_entities(&strip_tags(title_raw)), 200);
+        if title.is_empty() {
+            continue;
+        }
+        if out.iter().any(|i: &WebHit| i.url == url) {
+            continue;
+        }
+        let snippet = next_result_snippet(rest);
+        out.push(WebHit {
+            title,
+            url,
+            snippet,
+        });
+    }
+    out
+}
+
+fn next_result_snippet(after_link: &str) -> String {
+    // Snippet sits in the next `result-snippet` cell before the following result-link.
+    let window = after_link.get(..4_000).unwrap_or(after_link);
+    let next_link = window.find("result-link").unwrap_or(window.len());
+    let slice = &window[..next_link];
+    let Some(at) = slice.find("result-snippet") else {
+        return String::new();
+    };
+    let after = &slice[at..];
+    let Some(gt) = after.find('>') else {
+        return String::new();
+    };
+    let body = &after[gt + 1..];
+    let Some(end) = body.find("</td>") else {
+        return String::new();
+    };
+    one_line(&decode_entities(&strip_tags(&body[..end])), 400)
+}
+
 /// Percent-encode for a query value.
 pub fn query_value(text: &str) -> String {
     let mut out = String::new();
@@ -631,48 +708,17 @@ fn ddg_nav_href(href: &str) -> bool {
 /// DuckDuckGo Lite HTML: result anchors, uddg unwrap, source_name = result host.
 fn parse_web_search(req: &SourceReq, body: &str) -> Vec<SourceItem> {
     let mut out = Vec::new();
-    let mut rest = body;
-    while out.len() < WEB_SEARCH_MAX {
-        let Some(at) = rest.find("<a") else {
-            break;
-        };
-        rest = &rest[at..];
-        let Some(tag_end) = rest.find('>') else {
-            break;
-        };
-        let tag = &rest[..=tag_end];
-        rest = &rest[tag_end + 1..];
-        let Some(close) = rest.find("</a>") else {
-            break;
-        };
-        let title_raw = &rest[..close];
-        rest = &rest[close + 4..];
-        let Some(href) = html_attr(tag, "href") else {
+    for hit in parse_duckduckgo_lite(body, WEB_SEARCH_MAX) {
+        let Some(source_name) = crate::pulse::source_host(&hit.url) else {
             continue;
         };
-        if ddg_nav_href(&href) {
-            continue;
-        }
-        let Some(url) = unwrap_ddg_url(&href) else {
-            continue;
-        };
-        let title = one_line(&decode_entities(&strip_tags(title_raw)), 200);
-        if title.is_empty() {
-            continue;
-        }
-        let Some(source_name) = crate::pulse::source_host(&url) else {
-            continue;
-        };
-        if out.iter().any(|i: &SourceItem| i.url == url) {
-            continue;
-        }
         out.push(SourceItem {
-            title,
-            url,
+            title: hit.title,
+            url: hit.url,
             kind: SourceKind::WebSearch,
             source_name,
             published_ms: 0,
-            summary: String::new(),
+            summary: hit.snippet,
             image: None,
             topic: req.topic.clone(),
             engagement: 0,
@@ -2120,6 +2166,35 @@ mod tests {
             "<html>captcha</html>"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn duckduckgo_lite_hits_include_snippets() {
+        let body = r#"
+            <a rel="nofollow" class='result-link' href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fa&amp;rut=x">Alpha</a>
+            <td class='result-snippet'>First blurb about Alpha.</td>
+            <a rel="nofollow" class='result-link' href="https://example.org/b">Beta</a>
+            <td class='result-snippet'>Second blurb.</td>
+        "#;
+        let hits = parse_duckduckgo_lite(body, 8);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].title, "Alpha");
+        assert_eq!(hits[0].url, "https://example.org/a");
+        assert!(
+            hits[0].snippet.contains("First blurb"),
+            "{}",
+            hits[0].snippet
+        );
+        assert_eq!(hits[1].url, "https://example.org/b");
+        assert!(
+            hits[1].snippet.contains("Second blurb"),
+            "{}",
+            hits[1].snippet
+        );
+        assert_eq!(
+            duckduckgo_lite_url("rust lang"),
+            "https://lite.duckduckgo.com/lite/?q=rust%20lang"
+        );
     }
 
     #[test]
