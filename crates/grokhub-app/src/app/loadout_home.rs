@@ -706,6 +706,11 @@ impl Cabin {
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
+        // Viper is an adults-only preset; without this gate the titlebar falls
+        // back to Nyx and HARD DONE shots look wrong.
+        self.cfg.explicit_personalities = true;
+        self.cfg.personality = "viper".into();
+        self.persist_cfg();
         self.pin_chat_tail();
         // The joke chat shows the whole exchange, with no popover or Ask over it.
         if !deck_chat_is_joke() {
@@ -1379,6 +1384,15 @@ mod tests {
                 "Find a duo",
                 "Fix my stutter"
             ]
+        );
+        assert!(
+            cabin.cfg.explicit_personalities,
+            "Viper is adults-only; deck seed must turn the gate on"
+        );
+        assert_eq!(cabin.cfg.personality, "viper");
+        assert_eq!(
+            cabin.titlebar_personality_label().to_ascii_uppercase(),
+            "VIPER"
         );
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),

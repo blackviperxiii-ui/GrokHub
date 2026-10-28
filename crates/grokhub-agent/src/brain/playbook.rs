@@ -326,7 +326,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (9, Source::Shipped, 0)
+            (10, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -360,6 +360,7 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-tuning", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours),
@@ -383,6 +384,7 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
+                ("game-tuning", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
                 ("task-general-copy", Source::Yours)
@@ -448,7 +450,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 10);
+        assert_eq!(all.len(), 11);
         assert_eq!(
             problems,
             vec![
@@ -497,6 +499,23 @@ mod tests {
         assert_eq!(id("research", "code", "linux").as_deref(), Some("research"));
         assert_eq!(id("task", "desktop", "linux").as_deref(), Some("desktop"));
         assert_eq!(id("task", "general", "linux").as_deref(), Some(SHIPPED));
+        assert_eq!(
+            id("task", "gaming", "windows").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            id("repair", "gaming", "windows").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            id("question", "gaming", "linux").as_deref(),
+            Some("game-tuning")
+        );
+        // Chat talking about games still gets the hangout playbook.
+        assert_eq!(
+            id("chat", "gaming", "windows").as_deref(),
+            Some("chat-hangout")
+        );
         assert_eq!(
             id("chat", "general", "linux").as_deref(),
             Some("chat-hangout")
@@ -569,6 +588,34 @@ mod tests {
         let (all, _) = load(&dir);
         assert_eq!(id(&all, "task", "files").as_deref(), Some("files-alt"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn game_tuning_is_picked_for_fps_asks_and_not_for_casual_chat() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-game-tuning-pick"));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "windows", &b.mood).map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
+            Some("game-tuning")
+        );
+        assert_eq!(
+            pick_id("boost FPS in Fortnite, aim for 144").as_deref(),
+            Some("game-tuning")
+        );
+        // Casual chat gets the hangout playbook, never game tuning.
+        assert_eq!(pick_id("hi there").as_deref(), Some("chat-hangout"));
+        assert_eq!(pick_id("thanks!").as_deref(), Some("chat-hangout"));
+        assert_eq!(
+            pick_id("do you like games?").as_deref(),
+            Some("chat-hangout")
+        );
     }
 
     fn shipped_one(id: &str) -> Playbook {

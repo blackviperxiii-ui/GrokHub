@@ -372,7 +372,7 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// Ideas. Love on the post writes the ledger line to the global MEMORY.md.
+// For You. Love on the post writes the ledger line to the global MEMORY.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
 // opens in the lightbox. Delete takes the first post away. After the post
@@ -480,7 +480,7 @@ async function pulse(s, config) {
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
+    value: "//div[@aria-label='Pulse view']/button[normalize-space()='For You']",
   });
   await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
   // The idea writer ran after the feed post: its idea leads, with no header.

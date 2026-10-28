@@ -17,6 +17,7 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
     include_str!("../assets/playbooks/desktop.toml"),
+    include_str!("../assets/playbooks/game-tuning.toml"),
     include_str!("../assets/playbooks/chat-hangout.toml"),
     include_str!("../assets/playbooks/wind-down.toml"),
 ];
@@ -32,7 +33,7 @@ pub const PLAYBOOK_LINE: &str =
     "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
-    "system", "code", "files", "desktop", "web", "media", "general",
+    "system", "code", "files", "desktop", "web", "media", "gaming", "general",
 ];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
@@ -415,9 +416,19 @@ mod tests {
                 "files",
                 "research",
                 "desktop",
+                "game-tuning",
                 "chat-hangout",
                 "wind-down"
             ]
+        );
+        let game = parse(BUILTIN[7]).unwrap();
+        assert_eq!(
+            (
+                game.fit("task", "gaming", "windows", "calm"),
+                game.fit("chat", "general", "windows", "calm"),
+                game.fit("question", "gaming", "linux", "calm")
+            ),
+            (Some(2), None, Some(2))
         );
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(
