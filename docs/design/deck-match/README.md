@@ -39,6 +39,8 @@ Side-by-side captures of the running Windows cabin (`grokhub.exe`) next to the l
 | `lastchat-home-win-1100x720-slide02.png` | 1100×720 | 02 |
 | `lastchat-chat-win-1600x900-slide02.png` | 1600×900 | 02 Chat rail restores Hangout |
 | `lastchat-chat-win-1100x720-slide02.png` | 1100×720 | 02 |
+| `local-models-win-1600x900-slide14.png` | 1600×900 | 14 catalog upgrade and Hugging Face release posts on Pulse |
+| `local-models-win-1100x720-slide14.png` | 1100×720 | 14 the same posts, scrolled to the feed |
 | `pair-home-mc-1600x900-slide09.png` | 1600×900 | 09 Mission Control Home (Wide) |
 | `pair-home-mc-1100x720-slide09.png` | 1100×720 | 09 Mission Control Home (Medium) |
 | `pair-home-mc-900x700-slide09.png` | 900×700 | 09 Mission Control Home (Narrow) |
