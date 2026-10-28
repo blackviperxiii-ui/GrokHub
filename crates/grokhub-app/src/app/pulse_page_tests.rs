@@ -594,7 +594,16 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         posts,
         vec!["Rust 1.92 ships".to_string(), "Backup ran".to_string()]
     );
-    let tex = cabin.pulse_view_texture_size("https://www.rust-lang.org/static/og.png");
+    // The thumb decodes off the UI thread; a slow runner needs more frames.
+    let og = "https://www.rust-lang.org/static/og.png";
+    for _ in 0..250 {
+        if cabin.pulse_view_texture_size(og).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pulse_texts(cabin, 1200.0);
+    }
+    let tex = cabin.pulse_view_texture_size(og);
     assert_eq!(tex, Some([8, 4]), "the cached source image is drawn");
     assert_eq!(
         cabin.pulse_view_texture_size("https://cdn.example.com/missing.jpg"),
