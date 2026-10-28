@@ -620,7 +620,7 @@ impl Cabin {
 
     /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
     pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
-        if super::loadout_home::deck_shot_requested()
+        if super::loadout_home::proof_shot_requested()
             || self.has_key()
             || self.imagine_native.tokens.is_some()
             || self.ui_wants_get_started()
