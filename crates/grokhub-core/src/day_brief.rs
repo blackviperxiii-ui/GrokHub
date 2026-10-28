@@ -286,7 +286,12 @@ pub fn delivery_ok(
 /// [`ITEM_CAP`] survive.
 pub fn build_brief(input: &DayBriefInputs) -> DayBrief {
     let mut scored: Vec<DayBriefItem> = Vec::new();
-    push_opt(&mut scored, DayBriefSection::Resume, input.resume.as_ref(), input);
+    push_opt(
+        &mut scored,
+        DayBriefSection::Resume,
+        input.resume.as_ref(),
+        input,
+    );
     for seed in &input.watchers {
         push_seed(&mut scored, DayBriefSection::Watcher, seed, input);
     }
@@ -572,10 +577,7 @@ mod tests {
         assert!(!day_brief_due(
             None,
             "2026-10-28",
-            &LocalClock {
-                hour: 14,
-                ..clock
-            },
+            &LocalClock { hour: 14, ..clock },
             false,
             None,
             true
@@ -584,10 +586,7 @@ mod tests {
         assert!(day_brief_due(
             None,
             "2026-10-28",
-            &LocalClock {
-                hour: 8,
-                ..clock
-            },
+            &LocalClock { hour: 8, ..clock },
             false,
             Some(8),
             true
@@ -596,10 +595,7 @@ mod tests {
         assert!(day_brief_due(
             None,
             "2026-10-28",
-            &LocalClock {
-                hour: 3,
-                ..clock
-            },
+            &LocalClock { hour: 3, ..clock },
             false,
             None,
             false
@@ -638,6 +634,10 @@ mod tests {
             "{}",
             quiet.greeting
         );
-        assert!(quiet.render().contains("Nothing proactive"), "{}", quiet.render());
+        assert!(
+            quiet.render().contains("Nothing proactive"),
+            "{}",
+            quiet.render()
+        );
     }
 }

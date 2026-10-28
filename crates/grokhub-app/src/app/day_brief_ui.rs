@@ -241,12 +241,10 @@ impl DayGather {
             Self::Watchers => nw::is_nudge_watcher_card(card),
             Self::GameNews => is_game_news_card(card),
             Self::Prints => {
-                card.source_id.starts_with("print:")
-                    || card.source_id.starts_with("printer:")
+                card.source_id.starts_with("print:") || card.source_id.starts_with("printer:")
             }
             Self::Backups => {
-                card.source_id.starts_with("backup:")
-                    || card.source_id.starts_with("backup-nudge:")
+                card.source_id.starts_with("backup:") || card.source_id.starts_with("backup-nudge:")
             }
         }
     }

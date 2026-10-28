@@ -153,11 +153,11 @@ mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
 mod code_resume_ui;
-mod day_brief_ui;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
 mod dock_ui;
 mod episode_ui;
 mod evidence_ui;
@@ -236,21 +236,6 @@ mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;
 
-/// Title and body for a token budget warning.
-pub(super) fn token_budget_notice(
-    level: grokhub_core::BudgetLevel,
-    line: &str,
-    pauses: bool,
-) -> (&'static str, String) {
-    match level {
-        grokhub_core::BudgetLevel::Over if pauses => (
-            "Token budget used up",
-            format!("{line}. Scheduled work waits until tomorrow."),
-        ),
-        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
-        _ => ("Token budget at 80%", format!("{line}.")),
-    }
-}
 use confirm::*;
 #[cfg(test)]
 use feed_ui::*;
@@ -266,6 +251,7 @@ use pulse::*;
 use settings::*;
 #[cfg(test)]
 use sidebar::*;
+pub(crate) use status_toasts::token_budget_notice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
