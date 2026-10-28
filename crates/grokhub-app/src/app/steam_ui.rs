@@ -51,6 +51,25 @@ impl SteamState {
         self.found == Some(true)
     }
 
+    /// Library games when Steam is found and the Pulse Steam source is on.
+    pub(super) fn library_for_recap(&self) -> Option<&[SteamGame]> {
+        if self.found() && self.prefs.enabled() {
+            Some(&self.games)
+        } else {
+            None
+        }
+    }
+
+    /// Seed the library cache for tests (no disk read). `now` keeps the TTL fresh.
+    #[cfg(test)]
+    pub(super) fn seed_library_for_test(&mut self, games: Vec<SteamGame>, on: bool, now: u64) {
+        self.found = Some(true);
+        self.games = games;
+        self.prefs.on = Some(on);
+        self.read_ms = now.max(1);
+        self.prefs_ms = now.max(1);
+    }
+
     /// Most recently played library title, if any (Linux controller nudges).
     #[cfg(target_os = "linux")]
     pub(super) fn top_game_name(&self) -> Option<String> {
