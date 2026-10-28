@@ -261,6 +261,7 @@ impl Cabin {
         self.ui_reactions(ui);
         self.ui_daily_drop(ui);
         self.ui_nudge_watchers(ui);
+        self.ui_print_alerts(ui);
     }
 }
 

@@ -21,6 +21,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [self-improve](self-improve.md) | Spike-7: task outcomes, the weekly self-review, skill drafts, the replay gate, revert offers |
 | [mission](mission.md) | foreground mission read model (`MissionView`) and Work-tree paint |
 | [nudge-watchers](nudge-watchers.md) | Command Centre card 42: proactive Pulse nudges from local watchers |
+| [print-alerts](print-alerts.md) | Command Centre card 60: LAN 3D printer finish/fail Pulse alerts |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-desktop/src/` and `crates/grokhub-core/src/desktop_mcp.rs` |
 | [self-manage](self-manage.md) | `crates/grokhub-agent/src/self_manage/` and `crates/grokhub-app/src/self_mcp.rs`: Grok's own skill, connection, and automation tools |

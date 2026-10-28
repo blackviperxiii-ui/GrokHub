@@ -90,6 +90,7 @@ pub mod personality;
 pub mod pii;
 pub mod pkce;
 pub mod playbook;
+pub mod print_alerts;
 pub mod proactive;
 pub mod proactive_auto;
 pub mod proc_util;
@@ -411,6 +412,13 @@ pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
+};
+pub use print_alerts::{
+    alert_card, control_action_json, control_request, controls_for, detect_alert, identify_api,
+    is_print_alert_card, observe as observe_print, parse_control_action, parse_moonraker_status,
+    parse_octoprint_job, AlertKind, AlertResult, ControlKind, PrintAlertMeta, PrintAlertsLedger,
+    PrintAlertsSettings, PrintState, PrinterKind, PrinterStatus, SavedPrinter, ALERT_COOLDOWN_MS,
+    CONTROL_TOOL, POLL_EVERY_MS,
 };
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
