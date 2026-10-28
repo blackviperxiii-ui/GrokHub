@@ -105,7 +105,7 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
-export type Theme = "system" | "dark" | "light";
+export type Theme = "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
 
 export function setTheme(theme: Theme): Promise<Settings> {
   return invoke<Settings>("set_theme", { theme });
