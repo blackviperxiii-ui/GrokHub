@@ -272,7 +272,111 @@ impl Cabin {
             return;
         }
         self.chat_archive_day = Some(today.to_string());
-        let _ = self.run_auto_archive(now_ms());
+        let now = now_ms();
+        let _ = self.run_auto_archive(now);
+        self.purge_expired_deleted_chats(now);
+    }
+
+    /// Permanently drop trash older than [`threads::TRASH_RETAIN_MS`].
+    pub(super) fn purge_expired_deleted_chats(&mut self, now: u64) {
+        let purged =
+            threads::purge_expired_deleted(&mut self.threads, now, threads::TRASH_RETAIN_MS);
+        if purged.is_empty() {
+            return;
+        }
+        if self.thread_idx >= self.threads.len() {
+            self.thread_idx = self.threads.len().saturating_sub(1);
+        }
+        if self.threads.is_empty() {
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+        } else if self
+            .threads
+            .get(self.thread_idx)
+            .is_none_or(threads::is_deleted)
+        {
+            self.land_after_soft_delete();
+        }
+        for gone in &purged {
+            self.drop_bg_runs_for(&gone.id);
+            self.hard_purge_thread_sessions(gone);
+        }
+        self.rename_idx = None;
+        self.persist();
+    }
+
+    pub(super) fn restore_deleted_thread_at(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        if !threads::restore_deleted_thread(t) {
+            self.status = format!("{title} is not in Recently deleted");
+            return;
+        }
+        t.last_active_ms = now_ms();
+        self.status = format!("Restored {title}");
+        self.persist();
+    }
+
+    fn hard_purge_thread_sessions(&mut self, gone: &ChatThread) {
+        let grok_id = gone
+            .grok_session
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &gone.retired_sessions);
+        if gone.native
+            && self
+                .acp
+                .as_ref()
+                .is_some_and(|handle| ids.iter().any(|id| id == &handle.session_id))
+        {
+            self.halt_in_flight();
+            self.acp = None;
+        }
+        for id in &ids {
+            if gone.native || id.starts_with("native-") {
+                let _ = grokhub_agent::delete_session(id);
+            }
+        }
+        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+    }
+
+    /// After soft-delete of the open chat: switch to another live tab or open a draft.
+    fn land_after_soft_delete(&mut self) {
+        let live_empty = self.messages.is_empty();
+        let listed =
+            threads::chat_section_indices(&self.threads, Some(self.thread_idx), live_empty);
+        let next = {
+            let keys: Vec<threads::SessionSortKey> = listed
+                .iter()
+                .map(|&i| {
+                    let t = &self.threads[i];
+                    threads::SessionSortKey {
+                        pinned: t.pinned,
+                        pinned_ms: t.pinned_ms,
+                        accessed_ms: t.accessed_ms,
+                        list_rank: 0,
+                    }
+                })
+                .collect();
+            let order = threads::session_list_order(&keys);
+            order.first().map(|&pos| listed[pos])
+        };
+        if let Some(next) = next {
+            self.apply_switch_thread(next);
+        } else {
+            self.threads.push(ChatThread::new("Chat", false));
+            let next = self.threads.len() - 1;
+            self.apply_switch_thread(next);
+        }
+        self.drop_leaving_thread_chrome();
     }
 
     /// Settings → Behavior → Auto-archive idle chats.
@@ -562,83 +666,92 @@ impl Cabin {
             .position(|t| t.grok_session.as_deref() == Some(id))
     }
 
-    pub(super) fn delete_thread_at(&mut self, idx: usize) {
-        let grok_id = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
-        let native = self.threads.get(idx).is_some_and(|t| t.native);
-        let retired = self
-            .threads
-            .get(idx)
-            .map(|t| t.retired_sessions.clone())
-            .unwrap_or_default();
+    /// Permanently drop a thread (idea discuss / helpers). No soft-delete trash.
+    pub(super) fn hard_drop_thread_at(&mut self, idx: usize) {
+        if idx >= self.threads.len() {
+            return;
+        }
         let was_current = idx == self.thread_idx;
-        match delete_thread(self.threads.len(), idx, self.thread_idx) {
-            DeleteOutcome::ResetLast => {
-                let old_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
-                self.halt_in_flight();
-                for id in &old_ids {
-                    self.drop_bg_runs_for(id);
-                }
-                self.finish_hub_dispatch("Chat deleted", false);
-                self.threads.clear();
-                self.threads.push(ChatThread::new("Chat", false));
-                self.thread_idx = 0;
-                self.messages = self.threads[0].messages.clone();
-                self.imagine_last.clear();
-                self.cfg.goal_pin.clear();
-                self.goal_step = 0;
-                self.drop_leaving_thread_chrome();
-                self.status = "Chat deleted".into();
-                self.stamp_current_access();
-            }
-            DeleteOutcome::Removed { next } => {
-                let gone = self.threads.remove(idx);
-                self.drop_bg_runs_for(&gone.id);
-                if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
-                    self.halt_in_flight();
-                    self.finish_hub_dispatch("Chat deleted", false);
-                }
-                self.thread_idx = next;
-                if was_current {
-                    self.messages = self
-                        .threads
-                        .get(next)
-                        .map(|t| t.messages.clone())
-                        .unwrap_or_else(|| Arc::new(Vec::new()));
-                    self.imagine_last =
-                        last_imagine_receipt(self.messages.iter().map(|m| m.1.as_str()))
-                            .unwrap_or_default();
-                    self.cfg.goal_pin = self
-                        .threads
-                        .get(next)
-                        .map(|t| t.goal.label.clone())
-                        .unwrap_or_default();
-                    self.goal_step = self.threads.get(next).map(|t| t.goal.step).unwrap_or(0);
-                    self.drop_leaving_thread_chrome();
-                }
-                self.status = format!("Deleted {}", gone.title);
-            }
-        }
-        let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &retired);
-        if native
-            && self
-                .acp
-                .as_ref()
-                .is_some_and(|handle| ids.iter().any(|id| id == &handle.session_id))
-        {
+        let gone = self.threads.remove(idx);
+        self.drop_bg_runs_for(&gone.id);
+        if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
             self.halt_in_flight();
-            self.acp = None;
+            self.finish_hub_dispatch("Chat deleted", false);
         }
-        // CLI-era sessions stay in ~/.grok untouched: GrokHub only reads them.
-        for id in &ids {
-            if native || id.starts_with("native-") {
-                let _ = grokhub_agent::delete_session(id);
+        self.hard_purge_thread_sessions(&gone);
+        if self.threads.is_empty() {
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+            self.stamp_current_access();
+        } else if was_current {
+            let next = if idx < self.threads.len() {
+                idx
+            } else {
+                self.threads.len().saturating_sub(1)
+            };
+            // Force a leave so messages reload onto the surviving row.
+            self.thread_idx = usize::MAX;
+            self.apply_switch_thread(next);
+        } else if idx < self.thread_idx {
+            self.thread_idx -= 1;
+        }
+        self.rename_idx = None;
+        self.persist();
+    }
+
+    pub(super) fn delete_thread_at(&mut self, idx: usize) {
+        if idx >= self.threads.len() {
+            return;
+        }
+        // Only one row left: hard reset (no trash to keep).
+        if self.threads.len() <= 1 {
+            let old_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
+            let gone = self.threads[0].clone();
+            self.halt_in_flight();
+            for id in &old_ids {
+                self.drop_bg_runs_for(id);
             }
+            self.finish_hub_dispatch("Chat deleted", false);
+            self.hard_purge_thread_sessions(&gone);
+            self.threads.clear();
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+            self.status = "Chat deleted".into();
+            self.stamp_current_access();
+            self.rename_idx = None;
+            self.persist();
+            return;
         }
-        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+        let was_current = idx == self.thread_idx;
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        let id = t.id.clone();
+        if !threads::soft_delete_thread(t, now_ms()) {
+            self.status = format!("{title} is already deleted");
+            return;
+        }
+        // Soft-delete keeps sessions and agent memory on disk for restore.
+        self.drop_bg_runs_for(&id);
+        if self.chat_job_thread.as_deref() == Some(id.as_str()) {
+            self.halt_in_flight();
+            self.finish_hub_dispatch("Chat deleted", false);
+        }
+        if was_current {
+            self.land_after_soft_delete();
+        }
+        self.status = format!("Deleted {title}");
         self.rename_idx = None;
         self.persist();
     }

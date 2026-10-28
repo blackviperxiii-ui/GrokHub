@@ -66,27 +66,10 @@ fn project_click_does_not_steal_chat_and_delete_releases_chats() {
         created.contains("project_id"),
         "new chat while a project is selected must file into that folder: {created}"
     );
-    let rail = src
-        .split("id_salt(\"rail-history\")")
-        .nth(1)
-        .and_then(|s| s.split("fn page_nav(").next())
-        .expect("rail-history");
+    let tabs = include_str!("chat_tabs.rs");
     assert!(
-        rail.contains("chat_section_indices") && !rail.contains("project_sel"),
-        "the chat section lists cabin chats and does not read the project selection: {rail}"
-    );
-    let projects = src
-        .split("RichText::new(\"Projects\")")
-        .nth(1)
-        .and_then(|s| s.split("id_salt(\"rail-history\")").next())
-        .expect("project section");
-    assert!(
-        projects.contains("project_section_chat_indices") && projects.contains("paint_tree_gutter"),
-        "chats nest under the folder or project they belong to: {projects}"
-    );
-    assert!(
-        projects.contains("activate_project_row") && projects.contains("ProjectKind::Project"),
-        "a project row is a chat: clicking it opens that chat: {projects}"
+        tabs.contains("chat_section_indices") && !tabs.contains("project_sel"),
+        "the chat tab strip lists cabin chats and does not read the project selection: {tabs}"
     );
     let activate = fn_src(&src, "activate_project_row");
     assert!(
@@ -97,22 +80,13 @@ fn project_click_does_not_steal_chat_and_delete_releases_chats() {
         "folder click only toggles open; project click opens the chat: {activate}"
     );
     assert!(
-        projects.contains("RailIcon::Folder")
-            && projects.contains("RailIcon::Chat")
-            && !projects.contains("RailIcon::File"),
-        "a folder looks like a folder and a project looks like a chat: {projects}"
+        tabs.contains("TabAct::Switch") && !tabs.contains("project_sel"),
+        "clicking a chat tab must not change project selection: {tabs}"
     );
-    let caret = projects.split("paint_folder_caret").next().unwrap_or("");
+    let indices = include_str!("../threads.rs");
     assert!(
-            projects.contains("paint_folder_caret")
-                && caret.contains("ProjectKind::Folder")
-                && !projects.contains("n.open = !n.open;\n                        }\n                        self.touch_projects"),
-            "only a folder collapses, and that click does not open a chat: {projects}"
-        );
-    let paint = fn_src(&src, "paint_section_chats");
-    assert!(
-        paint.contains("TabAct::Switch") && !paint.contains("project_sel"),
-        "clicking a listed chat must not change the other section: {paint}"
+        indices.contains("fn project_section_chat_indices"),
+        "project chats still have a section index helper"
     );
     let filed = fn_src(&src, "new_chat_under");
     assert!(
