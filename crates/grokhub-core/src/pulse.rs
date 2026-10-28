@@ -50,6 +50,9 @@ pub struct PulseMeta {
     /// Command Centre nudge watcher that posted this card (card 42).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudge_watcher: Option<crate::nudge_watchers::NudgeWatcherMeta>,
+    /// LAN 3D printer alert (Command Centre card 60).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_alert: Option<crate::print_alerts::PrintAlertMeta>,
     /// Bite-sized hobby learning-path tip (Know me opt-in).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hobby_path: Option<crate::hobby_paths::HobbyPathMeta>,
