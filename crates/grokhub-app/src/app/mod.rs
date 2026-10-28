@@ -153,6 +153,7 @@ mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
 mod code_resume_ui;
+mod day_brief_ui;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
@@ -3523,6 +3524,7 @@ impl Cabin {
                     self.roll_today();
                     self.release_situation_ping();
                     self.note_rhythm();
+                    self.tick_day_brief();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }

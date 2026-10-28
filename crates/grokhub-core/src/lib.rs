@@ -122,6 +122,7 @@ pub mod state;
 pub mod steam;
 pub mod steam_wishlist;
 pub mod stream;
+pub mod day_brief;
 pub mod systems_brief;
 pub mod talk;
 pub mod task;

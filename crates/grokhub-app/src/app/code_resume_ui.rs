@@ -22,6 +22,24 @@ pub(super) struct ResumeState {
     editor: Option<String>,
 }
 
+impl ResumeState {
+    /// Cached repos from the last scan (empty until the launch scan lands).
+    pub(super) fn repos(&self) -> &[RepoStatus] {
+        &self.repos
+    }
+
+    /// Preferred editor binary, if one was found on PATH.
+    pub(super) fn editor(&self) -> Option<&str> {
+        self.editor.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn seed_repos_for_test(&mut self, repos: Vec<RepoStatus>) {
+        self.repos = repos;
+        self.scanned = true;
+    }
+}
+
 fn scan(folders: &[String], now_s: u64) -> Vec<RepoStatus> {
     let mut out = Vec::new();
     for folder in folders {
