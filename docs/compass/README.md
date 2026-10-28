@@ -22,6 +22,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [mission](mission.md) | foreground mission read model (`MissionView`) and Work-tree paint |
 | [nudge-watchers](nudge-watchers.md) | Command Centre card 42: proactive Pulse nudges from local watchers |
 | [ask-offers](ask-offers.md) | Repeated local asks → one Automate / Skill offer (intent × hour) |
+| [print-alerts](print-alerts.md) | Command Centre card 60: LAN 3D printer finish/fail Pulse alerts |
 | [hobby-paths](hobby-paths.md) | Know me hobby learning paths: opt-in tips, progress, Pulse cards |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-desktop/src/` and `crates/grokhub-core/src/desktop_mcp.rs` |
