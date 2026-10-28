@@ -170,7 +170,7 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [switch]$gameLaunch) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -189,6 +189,13 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($gameLaunch) {
+        # Game launch companion: a real Steam game last played 30 days ago, so
+        # the card has its news since then; Steam's RunningAppID marks the launch.
+        $app.gameCompanion = $true
+        $last = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 30 * 86400
+        Write-Utf8 (Join-Path $root '.steam/steam/steamapps/appmanifest_1086940.acf') "`"AppState`"`n{`n`"appid`" `"1086940`"`n`"name`" `"Baldur's Gate 3`"`n`"LastPlayed`" `"$last`"`n}`n"
+    }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
@@ -221,6 +228,12 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($gameLaunch) {
+        if (-not (Test-Path 'HKCU:\Software\Valve\Steam')) { New-Item -Path 'HKCU:\Software\Valve\Steam' -Force | Out-Null }
+        Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 1086940 -Type DWord
+        # Sampled every 5 s; the news comes back from Steam on a worker.
+        Start-Sleep -Seconds 20
+    }
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -346,6 +359,10 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # Library is the fifth icon on the 40 px rail.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
+# Game launch companion: the card on top of Pulse once Steam reports the launch.
+Shot 1600 900 'game-launch-1600x900' 'ops-dark' '14' -library -pulse -gameLaunch
+Shot 1100 720 'game-launch-1100x720' 'ops-dark' '14' -library -pulse -gameLaunch
+Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
