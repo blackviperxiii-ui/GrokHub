@@ -8,7 +8,7 @@ use super::super::loadout_home::{
     caption, card, header, objective_progress, pc_profile, pc_score, pc_tile_grid, pc_tile_list,
     pulse_lines,
 };
-use super::super::mission_page::{paint_streak, up_next};
+use super::super::mission_page::{paint_streak, up_next, up_next_tile};
 use super::super::*;
 
 /// Actions a module paint may request (Cabin applies them after the frame).
@@ -164,9 +164,13 @@ fn paint_objectives(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
                     );
                 }
             }
-            ModuleSize::Medium => paint_objective_list(ui, mission.as_ref(), 3),
-            ModuleSize::Large => {
-                paint_objective_list(ui, mission.as_ref(), usize::MAX);
+            ModuleSize::Medium | ModuleSize::Large => {
+                let cap = if size == ModuleSize::Medium {
+                    3
+                } else {
+                    usize::MAX
+                };
+                paint_objective_list(ui, mission.as_ref(), cap);
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
@@ -185,11 +189,15 @@ fn paint_objectives(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
                     });
                 });
                 paint_streak(ui, &streak);
-                ui.label(
-                    RichText::new("Coach: warm up before ranked — first-match win rate climbs.")
+                if size == ModuleSize::Large {
+                    ui.label(
+                        RichText::new(
+                            "Coach: warm up before ranked — first-match win rate climbs.",
+                        )
                         .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
-                );
+                    );
+                }
             }
         }
     });
@@ -240,6 +248,9 @@ fn paint_up_next(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
     let now = now_ms();
     let (_, games) = cabin.steam_library(now);
     let next = up_next(games);
+    // Slot height before the card eats it — Wide S column is tall; Medium/Narrow strips are short.
+    let slot_h = ui.available_height();
+    let mut open = None;
     card(ui, |ui| {
         header(
             ui,
@@ -256,18 +267,39 @@ fn paint_up_next(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
             );
             return;
         }
-        let n = match size {
-            ModuleSize::Small => 1,
-            ModuleSize::Medium | ModuleSize::Large => next.len(),
+        let w = ui.available_width();
+        let gap = 8.0;
+        let n = next.len().max(1) as f32;
+        // Slide 09: cover art, not text names. Stack when the slot is tall
+        // (Wide right column / Medium+); strip horizontally when short.
+        let stack = match size {
+            ModuleSize::Medium | ModuleSize::Large => true,
+            ModuleSize::Small => slot_h > 220.0,
         };
-        for g in next.iter().take(n) {
-            ui.label(
-                RichText::new(&g.name)
-                    .size(crate::theme::TYPE_BODY)
-                    .color(crate::theme::fg()),
-            );
+        if stack {
+            let tile_h = ((ui.available_height() - gap * (n - 1.0)) / n).clamp(72.0, 150.0);
+            for g in &next {
+                if up_next_tile(ui, g, egui::vec2(w, tile_h)) {
+                    open = Some(g.app_id);
+                }
+                ui.add_space(gap);
+            }
+        } else {
+            let tile_w = ((w - gap * (n - 1.0)) / n).max(48.0);
+            let tile_h = ui.available_height().clamp(56.0, 100.0);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for g in &next {
+                    if up_next_tile(ui, g, egui::vec2(tile_w, tile_h)) {
+                        open = Some(g.app_id);
+                    }
+                }
+            });
         }
     });
+    if let Some(id) = open {
+        cabin.show_in_library(ui.ctx(), id);
+    }
 }
 
 fn paint_pulse(

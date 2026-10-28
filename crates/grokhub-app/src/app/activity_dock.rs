@@ -552,10 +552,13 @@ impl Cabin {
     }
 
     /// Deck-shot seed: plant a waiting approval so the dock paints on slides 02/20.
+    /// Home Mission Control shots (`GROKHUB_DECK_NAV=home`) keep the popover closed —
+    /// slide 09 must show the grid, not Activity over Home.
     pub(super) fn seed_activity_dock_for_deck(&mut self) {
         let now = now_ms();
         let id = self.visible_thread_id();
-        self.activity.open = !super::loadout_home::deck_nav_home_pinned();
+        let home_shot = super::loadout_home::deck_nav_home_pinned();
+        self.activity.open = !home_shot;
         self.activity.recent = vec![
             ActivityItem {
                 key: format!("chat:{id}"),
@@ -578,7 +581,8 @@ impl Cabin {
             ),
         ];
         // A live Ask keeps the waiting row tied to real approval paint.
-        if self.perm_ask.is_none() {
+        // Skip on Home shots so the Activity bell stays quiet over Mission Control.
+        if !home_shot && self.perm_ask.is_none() {
             self.perm_ask = Some(grokhub_core::wire::PermissionAsk {
                 rpc_id: serde_json::json!(1),
                 session_id: id.clone(),

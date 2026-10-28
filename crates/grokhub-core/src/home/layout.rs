@@ -9,8 +9,10 @@ use super::config::HomeLayout;
 pub const GAP: f32 = 12.0;
 /// Wide breakpoint: three equal-height columns.
 pub const WIDE_MIN_W: f32 = 1500.0;
-/// Medium breakpoint: L|M on top, 4 smalls in a row under.
-pub const MEDIUM_MIN_W: f32 = 1100.0;
+/// Medium breakpoint: L|M on top, smalls in a row under.
+/// 1000 so a 1100×720 cabin (content ≈1012 after rail + pad) still hits Medium
+/// and keeps slide-09 modules visible — not Narrow with an empty lower half.
+pub const MEDIUM_MIN_W: f32 = 1000.0;
 /// Below this, Large paints at Medium look (caller); layout still reserves L height.
 pub const NARROW_L_AS_M: f32 = 640.0;
 
@@ -339,14 +341,29 @@ fn place_narrow(
     mediums: &[(SlotId, Option<&str>)],
     smalls: &[(SlotId, &str)],
 ) -> Vec<PlacedSlot> {
-    let _ = h;
     let as_m = w < NARROW_L_AS_M;
+    let n_m = mediums
+        .iter()
+        .filter(|(_, id)| id.filter(|s| !s.is_empty()).is_some())
+        .count() as f32;
+    let s_rows = if smalls.is_empty() {
+        0.0
+    } else {
+        ((smalls.len() + 1) / 2) as f32
+    };
+    // Keep Medium + smalls in the first viewport (slide 09 900×700) instead of
+    // a 440 px Large that leaves an empty lower half with siblings off-screen.
+    let sibling_h = n_m * (MEDIUM_SLOT_H + GAP) + s_rows * (SMALL_SLOT_H + GAP);
+    let avail = if h > 0.0 { h } else { DEFAULT_BODY_H };
     let mut out = Vec::with_capacity(7);
     let mut y = oy;
     let l_h = if as_m {
         MEDIUM_SLOT_H
+    } else if sibling_h > 0.0 {
+        // Prefer fitting L+M+S in `avail` (900×700 body); floor only so Large stays readable.
+        (avail - sibling_h).clamp(120.0, MIN_BODY_H)
     } else {
-        MIN_BODY_H.min(440.0)
+        avail.max(MIN_BODY_H).min(440.0)
     };
     push_large(&mut out, large, ox, y, w, l_h, as_m);
     if large.filter(|s| !s.is_empty()).is_some() {
@@ -368,7 +385,7 @@ fn place_narrow(
         }
     }
 
-    // Smalls as 2×2.
+    // Smalls as 2×2 (one small → full-width row).
     if !smalls.is_empty() {
         let cols = 2.0_f32.min(smalls.len() as f32);
         let tile_w = ((w - GAP * (cols - 1.0)) / cols).max(1.0);
@@ -404,74 +421,87 @@ mod tests {
     fn breakpoint_edges() {
         assert_eq!(Breakpoint::for_width(1500.0), Breakpoint::Wide);
         assert_eq!(Breakpoint::for_width(1499.0), Breakpoint::Medium);
+        assert_eq!(Breakpoint::for_width(1000.0), Breakpoint::Medium);
+        assert_eq!(Breakpoint::for_width(999.0), Breakpoint::Narrow);
         assert_eq!(Breakpoint::for_width(1100.0), Breakpoint::Medium);
-        assert_eq!(Breakpoint::for_width(1099.0), Breakpoint::Narrow);
         assert_eq!(SlotId::Large.size(), ModuleSize::Large);
         assert_eq!(SlotId::Small3.label(), "Small 3");
         assert_eq!(ModuleSize::Medium.label(), "Medium");
     }
 
     #[test]
-    fn wide_places_seven_slots_equal_column_height() {
+    fn wide_places_slide09_three_columns() {
+        // Mission Control: Objectives | PC Loadout | Up Next (one each).
         let layout = default_layout();
         let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &layout);
-        assert_eq!(placed.len(), 7);
+        assert_eq!(placed.len(), 3);
         assert_eq!(placed[0].slot, SlotId::Large);
         assert_eq!(placed[0].module_id.as_deref(), Some("objectives"));
         assert_eq!(placed[0].size, ModuleSize::Large);
-        // L + M stack + S stack share the same top and bottom.
         let body_h = 470.0;
         assert!((placed[0].h - body_h).abs() < 0.01);
         let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
-        let m2 = placed.iter().find(|p| p.slot == SlotId::Medium2).unwrap();
-        assert!((m1.h + GAP + m2.h - body_h).abs() < 0.5);
-        let smalls: Vec<_> = placed
-            .iter()
-            .filter(|p| {
-                matches!(
-                    p.slot,
-                    SlotId::Small1 | SlotId::Small2 | SlotId::Small3 | SlotId::Small4
-                )
-            })
-            .collect();
-        assert_eq!(smalls.len(), 4);
-        let s_h: f32 = smalls.iter().map(|p| p.h).sum::<f32>() + GAP * 3.0;
-        assert!((s_h - body_h).abs() < 0.5);
-        // L is narrower than half (old Objectives-ish); M column is wider than L.
+        assert_eq!(m1.module_id.as_deref(), Some("pc_loadout"));
+        assert!((m1.h - body_h).abs() < 0.01);
+        assert!(placed.iter().all(|p| p.slot != SlotId::Medium2));
+        let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
+        assert_eq!(s1.module_id.as_deref(), Some("up_next"));
+        assert!((s1.h - body_h).abs() < 0.01);
         assert!(placed[0].w < m1.w);
-        // Ratio ≈ 1.5 : 1.85 : 1
         let (lw, mw, sw) = col_widths(1600.0, true);
         assert!((placed[0].w - lw).abs() < 0.01);
         assert!((m1.w - mw).abs() < 0.01);
-        assert!((smalls[0].w - sw).abs() < 0.01);
+        assert!((s1.w - sw).abs() < 0.01);
     }
 
     #[test]
     fn medium_puts_smalls_in_a_row_under() {
         let layout = default_layout();
         let placed = place_slots((0.0, 0.0, 1200.0, 500.0), &layout);
-        assert_eq!(placed.len(), 7);
+        assert_eq!(placed.len(), 3);
         let smalls: Vec<_> = placed
             .iter()
             .filter(|p| p.size == ModuleSize::Small)
             .collect();
-        assert_eq!(smalls.len(), 4);
-        let y0 = smalls[0].y;
-        assert!(smalls.iter().all(|p| (p.y - y0).abs() < 0.01));
+        assert_eq!(smalls.len(), 1);
+        assert_eq!(smalls[0].module_id.as_deref(), Some("up_next"));
         let large = placed.iter().find(|p| p.slot == SlotId::Large).unwrap();
-        assert!(y0 > large.y + large.h);
+        let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
+        assert_eq!(m1.module_id.as_deref(), Some("pc_loadout"));
+        assert!(smalls[0].y > large.y + large.h - 0.01);
+        assert!((smalls[0].y - (m1.y + m1.h + GAP)).abs() < 0.5);
     }
 
     #[test]
-    fn narrow_stacks_then_two_by_two_smalls() {
+    fn narrow_stacks_slide09_modules_in_viewport() {
         let layout = default_layout();
-        let placed = place_slots((10.0, 20.0, 800.0, 900.0), &layout);
-        assert_eq!(placed.len(), 7);
+        let placed = place_slots((10.0, 20.0, 800.0, 500.0), &layout);
+        assert_eq!(placed.len(), 3);
         let large = &placed[0];
         assert_eq!(large.x, 10.0);
         assert_eq!(large.size, ModuleSize::Large);
+        assert_eq!(large.module_id.as_deref(), Some("objectives"));
+        // Large shrinks so PC Loadout + Up Next stay in the first viewport.
+        assert!(large.h <= MIN_BODY_H + 0.01);
+        assert!(large.h >= 120.0 - 0.01);
         let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
+        assert_eq!(m1.module_id.as_deref(), Some("pc_loadout"));
         assert!(m1.y > large.y);
+        let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
+        assert_eq!(s1.module_id.as_deref(), Some("up_next"));
+        assert!(s1.y > m1.y);
+        assert!((s1.w - 800.0).abs() < 0.01, "one small spans full width");
+        let bottom = s1.y + s1.h - 20.0;
+        assert!(
+            bottom <= 500.0 + 0.5,
+            "slide 09 modules must fit the narrow body height, got bottom {bottom}"
+        );
+    }
+
+    #[test]
+    fn narrow_four_smalls_two_by_two() {
+        let layout = HomeLayout::preset(HomePreset::Performance);
+        let placed = place_slots((10.0, 20.0, 800.0, 900.0), &layout);
         let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
         let s2 = placed.iter().find(|p| p.slot == SlotId::Small2).unwrap();
         let s3 = placed.iter().find(|p| p.slot == SlotId::Small3).unwrap();
@@ -494,10 +524,9 @@ mod tests {
         layout.small = [None, None, None, None];
         let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &layout);
         assert!(placed.iter().all(|p| p.size != ModuleSize::Small));
-        assert_eq!(placed.len(), 3); // L + 2 M
+        assert_eq!(placed.len(), 2); // L + 1 M (Mission Control)
         let large = &placed[0];
         let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
-        // L:M at 1.5:1.85 with one gap
         let (lw, mw, sw) = col_widths(1600.0, false);
         assert_eq!(sw, 0.0);
         assert!((large.w - lw).abs() < 0.01);
@@ -509,6 +538,7 @@ mod tests {
     fn hiding_one_medium_lets_the_other_fill() {
         let mut layout = default_layout();
         layout.medium = vec!["up_next".into()]; // only M1
+        layout.small = [None, None, None, None];
         let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &layout);
         let mediums: Vec<_> = placed
             .iter()

@@ -785,6 +785,9 @@ impl Cabin {
         {
             "home" => {
                 self.open_mission_home();
+                // Slide 09: Home with no Activity popover over it.
+                self.activity.open = false;
+                // Empty Hangout thread so dock mission todos load for Objectives.
                 if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
                     self.thread_idx = i;
                     if let Some(t) = self.threads.get(i) {
@@ -1514,6 +1517,10 @@ mod tests {
             cabin.nav,
             Nav::Home,
             "GROKHUB_DECK_NAV=home must leave Mission Control Home, not Hangout"
+        );
+        assert!(
+            !cabin.activity.open,
+            "Home Mission Control deck shots must not open the Activity popover"
         );
         match prev_shot {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),

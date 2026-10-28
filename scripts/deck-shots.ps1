@@ -95,10 +95,12 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
            createdAt = $now - 10800000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'patch' }
     )
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
+    # Five distinct calendar days in the last week so Mission Control streak
+    # paints ~5 DAYS (not a single empty "0 DAYS" from one clustered timestamp).
     $lines = @()
     for ($d = 0; $d -lt 5; $d++) {
         $at = $now - ($d * 86400000) - 3600000
-        $lines += @{ task = "streak-day-$d"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+        $lines += @{ task = "streak-day-$d"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
     }
     for ($i = 0; $i -lt 18; $i++) {
         $at = $now - 172800000 - $i * 60000
@@ -355,11 +357,11 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
-# Home Mission Control (modular 1L+2M+4S grid). Pin via GROKHUB_DECK_NAV=home
-# (cabin apply_deck_shot_seed) —
-# a first-icon click missed on windows-latest and captured Hangout instead.
-# Beside slide 09 — HARD DONE sizes plus narrow for the three-breakpoint proof.
-# Seed dock objectives/outcomes + Steam library (Up next covers, PC loadout wait).
+# Home Mission Control (slide 09): Objectives+streak | PC Loadout | Up Next covers.
+# Pin via GROKHUB_DECK_NAV=home (cabin apply_deck_shot_seed) — a first-icon click
+# missed on windows-latest and captured Hangout instead. -library seeds Steam
+# covers + dock outcomes (multi-day streak) and waits for PC sensors; Activity
+# stays closed on Home. HARD DONE sizes plus narrow for the three-breakpoint proof.
 Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
 Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
 Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library

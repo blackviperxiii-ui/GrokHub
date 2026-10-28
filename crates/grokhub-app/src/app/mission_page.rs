@@ -560,7 +560,7 @@ pub(super) fn paint_streak(ui: &mut egui::Ui, days: &[bool; 7]) {
 }
 
 /// A drawn cover with the game's name; true when clicked.
-fn up_next_tile(ui: &mut egui::Ui, g: &SteamGame, size: egui::Vec2) -> bool {
+pub(super) fn up_next_tile(ui: &mut egui::Ui, g: &SteamGame, size: egui::Vec2) -> bool {
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let p = ui.painter_at(rect);
     paint_cover_at(&p, rect, g.app_id, rect.width().min(rect.height() * 1.2));
