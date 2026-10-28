@@ -331,7 +331,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (12, Source::Shipped, 0)
+            (15, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -370,6 +370,9 @@ mod tests {
                 ("build-loadout", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -396,6 +399,9 @@ mod tests {
                 ("build-loadout", Source::Shipped),
                 ("chat-hangout", Source::Shipped),
                 ("wind-down", Source::Shipped),
+                ("quick-answer", Source::Shipped),
+                ("plan-day", Source::Shipped),
+                ("creative", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -459,7 +465,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 16);
         assert_eq!(
             problems,
             vec![
@@ -515,6 +521,19 @@ mod tests {
             id("question", "gaming", "linux").as_deref(),
             Some("gaming-help")
         );
+        assert_eq!(
+            id("question", "general", "linux").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(id("task", "planning", "linux").as_deref(), Some("plan-day"));
+        assert_eq!(
+            id("question", "planning", "windows").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            id("creative", "media", "linux").as_deref(),
+            Some("creative")
+        );
         // Chat talking about games still gets the hangout playbook.
         assert_eq!(
             id("chat", "gaming", "windows").as_deref(),
@@ -554,18 +573,23 @@ mod tests {
             pick(&all, "task", "general", "linux", "low").map(|p| p.id.as_str()),
             Some(SHIPPED)
         );
-        assert_eq!(id(&all, "question", "general").as_deref(), Some("any-work"));
+        // The shipped quick answer takes questions; the generic one takes the rest.
+        assert_eq!(
+            id(&all, "question", "general").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(id(&all, "background", "general").as_deref(), Some("any-work"));
         // The default for its kind beats the generic fallback.
         assert_eq!(id(&all, "task", "general").as_deref(), Some(SHIPPED));
         // Excluding an intent drops it even when nothing else is named.
         let shut = generic.replacen(
             "[applies_when]",
-            "[applies_when]\nexclude = [\"question\"]",
+            "[applies_when]\nexclude = [\"background\"]",
             1,
         );
         save(&dir, &shut).unwrap();
         let (all, _) = load(&dir);
-        assert_eq!(id(&all, "question", "general"), None);
+        assert_eq!(id(&all, "background", "general"), None);
         // A talk playbook of the user's that names chat ties with the
         // shipped one, so its priority decides.
         save(&dir, &talk).unwrap();
@@ -592,6 +616,44 @@ mod tests {
         let (all, _) = load(&dir);
         assert_eq!(id(&all, "task", "files").as_deref(), Some("files-alt"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn work_specialists_are_picked_for_questions_plans_and_drafts() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-work-specialists-pick"));
+        let pick_id = |text: &str| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}"));
+            pick(&all, b.intent.as_str(), &b.domain, "linux", b.mood.as_str()).map(|p| p.id.clone())
+        };
+        assert_eq!(
+            pick_id("what is the capital of France?").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(
+            pick_id("plan my day around standup and a 3pm call").as_deref(),
+            Some("plan-day")
+        );
+        assert_eq!(
+            pick_id("write a poem about autumn").as_deref(),
+            Some("creative")
+        );
+        assert_eq!(
+            pick_id("add a retry to fetch() in src/net.rs").as_deref(),
+            Some("code-dev")
+        );
+        assert_eq!(
+            pick_id("compare the latest mid-range laptops").as_deref(),
+            Some("research")
+        );
+        assert_eq!(
+            pick_id("organize the downloads folder by date").as_deref(),
+            Some("files")
+        );
+        assert_eq!(pick_id("hi there").as_deref(), Some("chat-hangout"));
     }
 
     #[test]

@@ -286,7 +286,7 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 12);
+        assert_eq!(cabin.playbooks.all.len(), 15);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
@@ -317,6 +317,24 @@ mod tests {
         );
         assert_eq!(fits_line(&cabin.playbooks.all[10]), "Fits chat");
         assert_eq!(fits_line(&cabin.playbooks.all[11]), "Fits chat · low");
+        assert_eq!(fits_line(&cabin.playbooks.all[12]), "Fits question");
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[12]),
+            "2 steps, up to Look only"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[13]),
+            "Fits task, question · planning"
+        );
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[13]),
+            "4 steps, up to Risky, asks first"
+        );
+        assert_eq!(fits_line(&cabin.playbooks.all[14]), "Fits creative");
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[14]),
+            "3 steps, up to Look only"
+        );
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
         let good = draft
@@ -372,6 +390,9 @@ mod tests {
                 ("build-loadout", "Build & loadout", Source::Shipped),
                 ("chat-hangout", "Hanging out", Source::Shipped),
                 ("wind-down", "Winding down", Source::Shipped),
+                ("quick-answer", "Quick answer", Source::Shipped),
+                ("plan-day", "Plan the day", Source::Shipped),
+                ("creative", "Creative draft", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );
