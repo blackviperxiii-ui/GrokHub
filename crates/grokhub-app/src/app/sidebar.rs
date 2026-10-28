@@ -519,7 +519,7 @@ impl Cabin {
                                 self.settings_menu_open = !self.settings_menu_open;
                                 self.settings_menu_ignore = true;
                             }
-                            // Chat rail goes to Chat (new/reuse draft). Tabs live under the title bar.
+                            // Chat rail restores the last-used tab. Tabs live under the title bar.
                             "chat" => self.set_nav_id(id),
                             _ => self.set_nav_id(id),
                         }
@@ -632,7 +632,7 @@ impl Cabin {
                 return;
             }
             "chat" => {
-                self.new_thread(false);
+                self.open_last_chat_tab();
                 Nav::Chat
             }
             _ => Nav::Chat,
