@@ -792,8 +792,12 @@ impl Cabin {
             }
             ParkSource::Proactive(_) => {
                 if approve {
-                    self.harness.next_origin = Some(hx::Origin::Proactive);
-                    self.start_oneshot(&park.action, None);
+                    if park.tool == grokhub_core::CONTROL_TOOL {
+                        self.execute_print_control(&park.action);
+                    } else {
+                        self.harness.next_origin = Some(hx::Origin::Proactive);
+                        self.start_oneshot(&park.action, None);
+                    }
                 }
             }
             ParkSource::Egress(dest) => {
