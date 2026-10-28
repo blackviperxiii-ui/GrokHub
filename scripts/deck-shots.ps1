@@ -247,10 +247,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
     elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
     else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
-    # $openSettings opens Settings on that section at launch, with no click.
-    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings) { '1' } else { '' })
+    # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings) { '0' } else { '' })
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality) { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -420,9 +420,13 @@ Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -keys '^,' -clickAt 1
 Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 110, 234
 Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -keys '^,' -clickAt 110, 234
 Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 110, 234
-# Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
-Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -keys '^,'
-Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
+# Personality picker beside slide 19. GROKHUB_DECK_SETTINGS_SEC opens Settings at
+# boot (no rail click / Ctrl+, — a miss left Hangout on screen in #958).
+Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality
+Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
+Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
+# Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
+Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
