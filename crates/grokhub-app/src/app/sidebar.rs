@@ -603,7 +603,7 @@ impl Cabin {
                 if self.nav != Nav::Settings {
                     self.settings_back = self.nav;
                 }
-                self.settings_sec = SettingsSec::Account;
+                self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Account);
                 Nav::Settings
             }
             "skills" => Nav::Skills,
@@ -881,6 +881,9 @@ impl Cabin {
         });
     }
 
+    /// A rail row is `NAV_ROW_H` plus the item spacing a real `horizontal` leaves
+    /// under itself. Off-screen rows keep that slot and the one parent auto-id
+    /// `horizontal` would burn, and skip the icon, label, and click target.
     fn reserve_offscreen_rail_row(ui: &mut egui::Ui) -> bool {
         if !super::chat_ui::reserve_offscreen_chat_row(ui, crate::theme::NAV_ROW_H) {
             return false;
