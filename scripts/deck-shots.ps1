@@ -367,6 +367,8 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Release radar: the release-day post on top of Pulse.
 Shot 1600 900 'radar-1600x900' 'ops-dark' '14' -library -radar -nav 'pulse'
 Shot 1100 720 'radar-1100x720' 'ops-dark' '14' -library -radar -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'radar-1100x720-scrolled' 'ops-dark' '14' -library -radar -nav 'pulse' -wheel 12
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
