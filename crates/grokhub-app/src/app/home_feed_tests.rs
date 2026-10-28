@@ -1065,6 +1065,46 @@ fn automate_offer_files_a_daily_job() {
     assert_eq!(cabin.automations.len(), 2);
     assert!(!cabin.running);
 
+    // Repeated-ask offer: human title + editable schedule preview in `prompt`.
+    let mut preview = offer_card(
+        "repeat",
+        "You ask this most evenings around 7 PM, want me to do it automatically?",
+        UpdateStatus::Unread,
+    );
+    preview.prompt = Some("every day at 7pm, check patch notes".into());
+    preview.source_id = "askoffer:patch-note@h19".into();
+    cabin.automations.clear();
+    cabin.updates.push(preview);
+    cabin.accept_automate_offer("repeat");
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.automations[0].schedule, "daily");
+    assert_eq!(cabin.automations[0].time, "19:00");
+    assert_eq!(cabin.automations[0].name, "check patch notes");
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn ask_offer_dismiss_persists_in_ledger() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("ask-offer-dismiss");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    let mut card = offer_card(
+        "repeat",
+        "You ask this most evenings around 7 PM, want me to do it automatically?",
+        UpdateStatus::Unread,
+    );
+    card.source_id = "askoffer:patch-note@h19".into();
+    card.prompt = Some("every day at 7pm, check patch notes".into());
+    cabin.ask_offer_dismissed(&card);
+    let ledger = super::super::ask_offers_ui::load_ask_offer_ledger();
+    assert!(ledger.dismissed.contains("patch-note@h19"));
+
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
@@ -1611,6 +1651,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "tick_nudge_watchers",
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
+    ));
+    rows.push((
+        "tick_ask_offers",
+        grokhub_core::build_offer_card(
+            &grokhub_core::AskCluster {
+                key: "patch-note@h19".into(),
+                example: "check patch notes".into(),
+                count: 3,
+                peak_hour: 19,
+                weekday_share_pct: 40,
+                kind: grokhub_core::OfferKind::Automation,
+            },
+            now,
+        ),
+        "patch notes",
     ));
     let rust_step = grokhub_core::next_step(
         grokhub_core::HobbyId::Rust,
