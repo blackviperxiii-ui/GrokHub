@@ -468,10 +468,10 @@ mod tests {
             "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
         assert!(
-            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip.contains(
-                "money, sending, deleting your data, credentials and irreversible system changes"
-            ) && tip
-                .contains("Stays on until you pick Ask or Auto"))
+            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
+                .contains("money, sending, deleting, credentials and irreversible changes")
+                && tip.contains("Stays until Ask or Auto")
+                && tip.len() < 160)
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
