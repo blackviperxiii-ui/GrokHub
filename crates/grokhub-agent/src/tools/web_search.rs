@@ -488,23 +488,46 @@ fn filter_relevant(query: &str, hits: &[Hit]) -> Vec<Hit> {
 }
 
 const QUERY_STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "is", "are",
-    "was", "be", "with", "from", "by", "as", "it", "this", "that", "these", "those",
-    "current", "latest", "new", "how", "what", "where", "when", "why", "which", "who",
-    "web", "search", "find", "look", "about", "please", "show", "get", "cite", "real",
-    "links", "link", "today", "now",
+    "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "is", "are", "was", "be",
+    "with", "from", "by", "as", "it", "this", "that", "these", "those", "current", "latest", "new",
+    "how", "what", "where", "when", "why", "which", "who", "web", "search", "find", "look",
+    "about", "please", "show", "get", "cite", "real", "links", "link", "today", "now",
 ];
 
 const PROGRAMMING_SIGNALS: &[&str] = &[
-    "release", "notes", "changelog", "cargo", "crate", "crates", "compiler", "language",
-    "lang", "docs", "documentation", "rfc", "stable", "nightly", "edition", "npm", "pip",
-    "pypi", "maven", "sdk", "api", "programming", "stdlib", "toolchain",
+    "release",
+    "notes",
+    "changelog",
+    "cargo",
+    "crate",
+    "crates",
+    "compiler",
+    "language",
+    "lang",
+    "docs",
+    "documentation",
+    "rfc",
+    "stable",
+    "nightly",
+    "edition",
+    "npm",
+    "pip",
+    "pypi",
+    "maven",
+    "sdk",
+    "api",
+    "programming",
+    "stdlib",
+    "toolchain",
 ];
 
 fn query_tokens(query: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for raw in query.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()) {
+    for raw in query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+    {
         if raw.len() < 3 || QUERY_STOPWORDS.contains(&raw) {
             continue;
         }
