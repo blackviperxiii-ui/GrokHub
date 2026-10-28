@@ -525,6 +525,12 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior: offer to automate repeated local asks.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::AskOfferSettings::is_default"
+    )]
+    pub ask_offers: grokhub_core::AskOfferSettings,
     /// Settings → Pulse: LAN 3D printer finish/fail alerts (opt-in).
     #[serde(
         default,
@@ -794,6 +800,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            ask_offers: grokhub_core::AskOfferSettings::default(),
             print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
