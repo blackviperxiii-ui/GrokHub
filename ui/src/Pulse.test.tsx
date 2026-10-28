@@ -74,7 +74,7 @@ describe("Pulse", () => {
     expect(card).toHaveTextContent("2h ago");
     expect(screen.queryByText("I can tidy the workboard")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Ideas" }));
+    await userEvent.click(screen.getByRole("button", { name: "For You" }));
     expect(screen.getByRole("heading", { name: "Productivity" })).toBeInTheDocument();
     const idea = screen.getByRole("listitem", { name: "I can tidy the workboard" });
     expect(idea).toHaveTextContent("Close the done cards");
@@ -244,7 +244,7 @@ describe("Pulse", () => {
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
     const idea = screen.getByRole("listitem", { name: "I can tidy the workboard" });
     expect(idea).toHaveTextContent("Close the done cards");
     // An idea with no emoji of its own gets the bulb.
@@ -268,7 +268,7 @@ describe("Pulse", () => {
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
     expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Productivity"]);
     const row = screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" });
     expect(row.querySelector("img.idea-icon")).toHaveAttribute("src", "/emoji3d/1f980.png");
@@ -303,12 +303,12 @@ describe("Pulse", () => {
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
     await userEvent.click(screen.getByRole("button", { name: /I can tidy the workboard/ }));
     expect(await screen.findByRole("status")).toHaveTextContent("That card is gone.");
     expect(onRun).not.toHaveBeenCalled();
     expect(
-      await screen.findByText("No ideas yet. I'll add one when I spot something worth doing."),
+      await screen.findByText("Nothing for you yet. I'll add one when I spot something worth doing."),
     ).toBeInTheDocument();
   });
 
@@ -321,7 +321,7 @@ describe("Pulse", () => {
     api.pulseAct.mockRejectedValue("MEMORY.md is too large to add to. Nothing was changed.");
     render(<Pulse onRun={vi.fn()} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
     await userEvent.click(screen.getByRole("button", { name: /I can tidy the workboard/ }));
     expect(await screen.findByRole("status")).toHaveTextContent("MEMORY.md is too large");
     expect(screen.getByRole("button", { name: /I can tidy the workboard/ })).toBeDisabled();

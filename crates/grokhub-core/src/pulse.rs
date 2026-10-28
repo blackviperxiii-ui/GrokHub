@@ -1,4 +1,4 @@
-//! Pulse: one page for what the cabin would do next (Ideas) and what it noticed
+//! Pulse: one page for what the cabin would do next (For You) and what it noticed
 //! (Feed). Rules pick and order the cards; a model only ever writes sentences.
 //! Same inputs give the same order. Feedback lands in MEMORY.md as one
 //! structured ledger line per choice, and the ledger feeds the next ranking and
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ideas::same_topic;
 use crate::update_feed::{
-    post_update, public_http_url, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
+    post_update, public_http_url, CardReaction, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
 };
 
 /// Pulse fields on a feed card. Every one defaults, so older `updates.json`
@@ -62,22 +62,25 @@ fn is_false(v: &bool) -> bool {
 
 pub const PULSE_TITLE: &str = "Pulse";
 pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
-/// The Feed's caption when Ideas and Feed share the page.
+/// The Feed's caption when For You and Feed share the page.
 pub const FEED_HEADING: &str = "From your feed";
-/// Ideas with nothing to show and nothing running.
-pub const IDEAS_EMPTY: &str = "No ideas yet. I'll add one when I spot something worth doing.";
+/// For You with nothing to show and nothing running.
+pub const IDEAS_EMPTY: &str =
+    "Nothing for you yet. I'll add one when I spot something worth doing.";
 /// Feed with nothing to show.
 pub const FEED_EMPTY: &str = "No posts yet. Tell me what to watch in Feed instructions.";
 /// Lead before the Feed instructions link on the empty Feed.
 pub const FEED_EMPTY_LEAD: &str = "No posts yet. Tell me what to watch in ";
 /// Clickable end of the empty Feed line (opens the instructions sheet).
 pub const FEED_EMPTY_LINK: &str = "Feed instructions";
-/// Ideas while a suggestion call is running: shown with placeholder rows.
+/// For You while a suggestion call is running: shown with placeholder rows.
 pub const IDEAS_LOADING: &str = "Looking for ideas in your recent work…";
-/// Suggest ideas pressed with no Grok sign-in or key.
+/// Suggest for you pressed with no Grok sign-in or key.
 pub const IDEAS_SIGN_IN: &str = "Sign in to Grok to get ideas.";
-/// The longest bold line on an Ideas row.
+/// The longest bold line on a For You row.
 pub const I_CAN_MAX: usize = 70;
+/// User-facing name of the Pulse ideas tab (was "Ideas").
+pub const FOR_YOU_LABEL: &str = "For You";
 
 /// "Last pulse 2m ago. Nothing to do." for the silence line.
 pub fn silence_line(last_pulse_ms: u64, now_ms: u64) -> String {
@@ -135,7 +138,7 @@ impl PulseCategory {
             Self::Relationships => "Relationships",
             Self::Health => "Health & Fitness",
             Self::Shopping => "Shopping",
-            Self::More => "More ideas",
+            Self::More => "More for you",
         }
     }
 
@@ -557,6 +560,8 @@ pub fn is_feed_card(card: &UpdateCard) -> bool {
 pub enum LedgerReason {
     NotThis,
     Dismiss,
+    /// Used or engaged, then dismissed — neutral-complete, never a bury.
+    Used,
     Accepted,
     Wrong,
     Liked,
@@ -567,6 +572,7 @@ impl LedgerReason {
         match self {
             Self::NotThis => "not-this",
             Self::Dismiss => "dismiss",
+            Self::Used => "used",
             Self::Accepted => "accepted",
             Self::Wrong => "wrong",
             Self::Liked => "liked",
@@ -576,6 +582,7 @@ impl LedgerReason {
     fn verb(self) -> &'static str {
         match self {
             Self::NotThis | Self::Dismiss => "dismissed",
+            Self::Used => "used",
             Self::Accepted => "accepted",
             Self::Wrong => "rejected",
             Self::Liked => "liked",
@@ -586,6 +593,7 @@ impl LedgerReason {
         [
             Self::NotThis,
             Self::Dismiss,
+            Self::Used,
             Self::Accepted,
             Self::Wrong,
             Self::Liked,
@@ -604,6 +612,68 @@ impl LedgerReason {
 
     pub fn is_dislike(self) -> bool {
         matches!(self, Self::NotThis | Self::Wrong | Self::Dismiss)
+    }
+
+    /// True when this reason should move interest / reaction scores down.
+    pub fn is_negative_feedback(self) -> bool {
+        self.is_dislike()
+    }
+}
+
+/// How a Dismiss should be recorded for learning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DismissKind {
+    /// Never engaged — "not interested", negative.
+    NotInterested,
+    /// Used / liked / discussed then dismissed — neutral-complete.
+    UsedDone,
+}
+
+impl DismissKind {
+    pub fn ledger_reason(self) -> LedgerReason {
+        match self {
+            Self::NotInterested => LedgerReason::Dismiss,
+            Self::UsedDone => LedgerReason::Used,
+        }
+    }
+
+    /// True when reactions / interests / topic bury should treat this as a no.
+    pub fn counts_negative(self) -> bool {
+        matches!(self, Self::NotInterested)
+    }
+}
+
+/// For You card: selected, ran, opened into a task, or completed.
+/// `UpdateCard.runs` defaults to 1 on every new card, so only `runs > 1`
+/// means it actually ran; prefer `used_depth` / Opened / modified.
+pub fn idea_was_used(card: &UpdateCard, used_depth: u8) -> bool {
+    card.status == UpdateStatus::Opened
+        || card.built
+        || card.discuss_thread.is_some()
+        || used_depth > 0
+        || card.runs > 1
+        || card.modified
+}
+
+/// Feed card: liked or Discuss clicked.
+pub fn feed_was_engaged(card: &UpdateCard) -> bool {
+    card.reaction == Some(CardReaction::Up) || card.discuss_thread.is_some()
+}
+
+/// Whether the card was engaged before Dismiss, so the dismiss is not a bury.
+pub fn card_engaged_before_dismiss(card: &UpdateCard, used_depth: u8) -> bool {
+    if is_idea_card(card) {
+        idea_was_used(card, used_depth)
+    } else {
+        feed_was_engaged(card)
+    }
+}
+
+pub fn dismiss_kind(card: &UpdateCard, used_depth: u8) -> DismissKind {
+    if card_engaged_before_dismiss(card, used_depth) {
+        DismissKind::UsedDone
+    } else {
+        DismissKind::NotInterested
     }
 }
 
@@ -738,8 +808,9 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
         score += SCORE_REPEAT;
     }
     // 5 and 6. The ledger: accepted Learn cards lift a topic, Not this and
-    // Dismiss push it down. Dismiss only buries ideas: a dismissed Feed post is
-    // gone, but tomorrow's run report or quiet digest with that title still posts.
+    // unused Dismiss push it down. Used-then-dismissed is neutral. Dismiss only
+    // buries ideas: a dismissed Feed post is gone, but tomorrow's run report or
+    // quiet digest with that title still posts.
     let idea = is_idea_card(card);
     for entry in inputs.ledger {
         let hit = entry.title.eq_ignore_ascii_case(card.title.trim())
@@ -751,8 +822,7 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
             LedgerReason::Accepted => SCORE_LEARN_BOOST,
             LedgerReason::NotThis | LedgerReason::Wrong => -PENALTY_NOT_THIS,
             LedgerReason::Dismiss if idea => -PENALTY_DISMISS,
-            LedgerReason::Dismiss => 0,
-            LedgerReason::Liked => 0,
+            LedgerReason::Dismiss | LedgerReason::Used | LedgerReason::Liked => 0,
         };
     }
     // 7. A proactive offer's help (value × confidence × reversibility, × 1000).
@@ -1347,7 +1417,7 @@ mod tests {
                 "Shopping",
                 "Relationships",
                 "Health & Fitness",
-                "More ideas"
+                "More for you"
             ]
         );
         let mut stored = idea("i1", "Witcher 3 route", "", 1);
@@ -2023,10 +2093,105 @@ mod tests {
         );
         assert_eq!(
             IDEAS_EMPTY,
-            "No ideas yet. I'll add one when I spot something worth doing."
+            "Nothing for you yet. I'll add one when I spot something worth doing."
         );
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
+        assert_eq!(FOR_YOU_LABEL, "For You");
+        assert_eq!(PulseCategory::More.label(), "More for you");
+    }
+
+    #[test]
+    fn used_then_dismissed_does_not_score_negative() {
+        let idea = idea("idea-1", "Tidy the workboard", "", 40);
+        let mut used = idea.clone();
+        used.status = UpdateStatus::Opened;
+        assert_eq!(dismiss_kind(&used, 0), DismissKind::UsedDone);
+        assert!(!dismiss_kind(&used, 0).counts_negative());
+        assert_eq!(
+            dismiss_kind(&idea, 0),
+            DismissKind::NotInterested,
+            "unused idea dismiss is not interested"
+        );
+        assert!(dismiss_kind(&idea, 0).counts_negative());
+
+        let used_line = ledger_line("2026-10-28", "Tidy the workboard", LedgerReason::Used);
+        assert_eq!(
+            used_line,
+            "- [2026-10-28] pulse: used \"Tidy the workboard\" reason=used"
+        );
+        let used_ledger = parse_ledger(&used_line);
+        assert_eq!(used_ledger[0].reason, LedgerReason::Used);
+        assert!(!LedgerReason::Used.is_negative_feedback());
+        assert_eq!(
+            pulse_score(
+                &idea,
+                &PulseInputs {
+                    ledger: &used_ledger,
+                    now_ms: 5_000,
+                    ..Default::default()
+                }
+            ),
+            150,
+            "used+dismissed does not bury the topic"
+        );
+
+        let dismiss_ledger =
+            parse_ledger("- [2026-10-28] pulse: dismissed \"Tidy the workboard\" reason=dismiss\n");
+        assert_eq!(
+            pulse_score(
+                &idea,
+                &PulseInputs {
+                    ledger: &dismiss_ledger,
+                    now_ms: 5_000,
+                    ..Default::default()
+                }
+            ),
+            150 - PENALTY_DISMISS,
+            "unused+dismissed stays negative"
+        );
+
+        let not_this = parse_ledger(
+            "- [2026-10-28] pulse: dismissed \"Tidy the workboard\" reason=not-this\n",
+        );
+        assert_eq!(
+            pulse_score(
+                &idea,
+                &PulseInputs {
+                    ledger: &not_this,
+                    now_ms: 5_000,
+                    ..Default::default()
+                }
+            ),
+            150 - PENALTY_NOT_THIS,
+            "explicit not-this stays negative"
+        );
+    }
+
+    #[test]
+    fn feed_liked_or_discussed_then_dismissed_is_not_negative() {
+        let mut feed = digest_card("feed-1", "Rust 1.95 ships", "Notes.", 1_000);
+        assert_eq!(dismiss_kind(&feed, 0), DismissKind::NotInterested);
+        assert!(dismiss_kind(&feed, 0).counts_negative());
+
+        feed.reaction = Some(CardReaction::Up);
+        assert_eq!(dismiss_kind(&feed, 0), DismissKind::UsedDone);
+        assert!(!dismiss_kind(&feed, 0).counts_negative());
+
+        let mut discussed = digest_card("feed-2", "NFL scores", "Notes.", 2_000);
+        discussed.discuss_thread = Some("thr-1".into());
+        assert_eq!(dismiss_kind(&discussed, 0), DismissKind::UsedDone);
+
+        let opened_only = {
+            let mut c = digest_card("feed-3", "Nightly backup", "Notes.", 3_000);
+            c.status = UpdateStatus::Opened;
+            c
+        };
+        assert_eq!(
+            dismiss_kind(&opened_only, 0),
+            DismissKind::NotInterested,
+            "Feed open without like/discuss still counts as not interested"
+        );
     }
 
     #[test]
