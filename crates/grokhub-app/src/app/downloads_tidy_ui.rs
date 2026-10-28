@@ -89,8 +89,9 @@ fn scan(now: u64) -> Vec<Finding> {
 /// `GROKHUB_DECK_TIDY=approve` opens the review with every file ticked and
 /// the approval showing, for the Windows deck shot.
 fn deck_approve() -> bool {
-    super::loadout_home::deck_shot_requested()
-        && std::env::var("GROKHUB_DECK_TIDY").is_ok_and(|v| v.trim() == "approve")
+    // The env first: the deck-shot flag is read once per process.
+    std::env::var("GROKHUB_DECK_TIDY").is_ok_and(|v| v.trim() == "approve")
+        && super::loadout_home::deck_shot_requested()
 }
 
 impl Cabin {
