@@ -195,9 +195,9 @@ mod oauth;
 mod pages;
 pub mod panels;
 mod personality_ui;
-mod print_alerts_ui;
 mod playbook_ui;
 mod plus;
+mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
@@ -3523,7 +3523,15 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => self.tick_housekeep(),
+                HeartbeatAct::Housekeep => {
+                    self.roll_today();
+                    self.release_situation_ping();
+                    self.note_rhythm();
+                    self.tick_print_alerts();
+                    if self.last_persist.elapsed() > Duration::from_secs(2) {
+                        self.persist_bg();
+                    }
+                }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),

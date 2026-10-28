@@ -123,17 +123,6 @@ impl Cabin {
         self.write_pace_span(act.as_str(), if acted { "allow" } else { "hold" }, reason);
     }
 
-    /// Local upkeep on the Housekeep slot: rhythm, print alerts, persist.
-    pub(super) fn tick_housekeep(&mut self) {
-        self.roll_today();
-        self.release_situation_ping();
-        self.note_rhythm();
-        self.tick_print_alerts();
-        if self.last_persist.elapsed() > std::time::Duration::from_secs(2) {
-            self.persist_bg();
-        }
-    }
-
     /// One span line: the act, allow or hold, and the reason tag. No prompt,
     /// no reply, no chat id.
     fn write_pace_span(&self, act: &str, decision: &str, reason: &str) {

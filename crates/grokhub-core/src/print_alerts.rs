@@ -164,7 +164,12 @@ impl PrinterStatus {
         if let Some(eta) = self.eta_secs {
             parts.push(format!("ETA {}", format_eta(eta)));
         }
-        if let Some(f) = self.filename.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(f) = self
+            .filename
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             parts.push(f.to_string());
         }
         if parts.is_empty() {
@@ -273,8 +278,12 @@ pub fn identify_api(path: &str, body: &str) -> Option<PrinterKind> {
     }
     if path.contains("/api/version")
         || path.contains("/api/job")
-        || (body_l.contains("\"api\"") && body_l.contains("\"server\"") && body_l.contains("octoprint"))
-        || (body_l.contains("\"job\"") && body_l.contains("\"progress\"") && body_l.contains("\"state\""))
+        || (body_l.contains("\"api\"")
+            && body_l.contains("\"server\"")
+            && body_l.contains("octoprint"))
+        || (body_l.contains("\"job\"")
+            && body_l.contains("\"progress\"")
+            && body_l.contains("\"state\""))
     {
         return Some(PrinterKind::OctoPrint);
     }
@@ -316,15 +325,11 @@ fn moonraker_state(raw: &str, message: &str) -> PrintState {
 /// Parse a Moonraker `/printer/objects/query` (or flattened print_stats) JSON body.
 pub fn parse_moonraker_status(body: &str) -> Option<PrinterStatus> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    let status = v
-        .get("result")
-        .and_then(|r| r.get("status"))
-        .unwrap_or(&v);
-    let stats = status.get("print_stats").or_else(|| status.get("printStats"))?;
-    let state_raw = stats
-        .get("state")
-        .and_then(|s| s.as_str())
-        .unwrap_or("");
+    let status = v.get("result").and_then(|r| r.get("status")).unwrap_or(&v);
+    let stats = status
+        .get("print_stats")
+        .or_else(|| status.get("printStats"))?;
+    let state_raw = stats.get("state").and_then(|s| s.as_str()).unwrap_or("");
     let filename = stats
         .get("filename")
         .and_then(|s| s.as_str())
@@ -458,7 +463,9 @@ pub fn parse_octoprint_job(body: &str) -> Option<PrinterStatus> {
     } else if printing {
         PrintState::Printing
     } else if progress.is_some_and(|p| (p - 100.0).abs() < 0.5)
-        || text.eq_ignore_ascii_case("operational") && !printing && progress.is_some_and(|p| p > 99.0)
+        || text.eq_ignore_ascii_case("operational")
+            && !printing
+            && progress.is_some_and(|p| p > 99.0)
     {
         PrintState::Complete
     } else if operational || text.to_ascii_lowercase().contains("operational") {
@@ -513,30 +520,36 @@ pub fn controls_for(state: PrintState) -> Vec<ControlKind> {
 }
 
 /// Moonraker / OctoPrint HTTP path + method for a control (no host).
-pub fn control_request(kind: PrinterKind, control: ControlKind) -> (&'static str, &'static str, &'static str) {
+pub fn control_request(
+    kind: PrinterKind,
+    control: ControlKind,
+) -> (&'static str, &'static str, &'static str) {
     match (kind, control) {
-        (PrinterKind::Moonraker, ControlKind::Pause) => {
-            ("POST", "/printer/print/pause", "")
-        }
-        (PrinterKind::Moonraker, ControlKind::Cancel) => {
-            ("POST", "/printer/print/cancel", "")
-        }
-        (PrinterKind::Moonraker, ControlKind::Resume) => {
-            ("POST", "/printer/print/resume", "")
-        }
-        (PrinterKind::OctoPrint, ControlKind::Pause) => {
-            ("POST", "/api/job", r#"{"command":"pause","action":"pause"}"#)
-        }
+        (PrinterKind::Moonraker, ControlKind::Pause) => ("POST", "/printer/print/pause", ""),
+        (PrinterKind::Moonraker, ControlKind::Cancel) => ("POST", "/printer/print/cancel", ""),
+        (PrinterKind::Moonraker, ControlKind::Resume) => ("POST", "/printer/print/resume", ""),
+        (PrinterKind::OctoPrint, ControlKind::Pause) => (
+            "POST",
+            "/api/job",
+            r#"{"command":"pause","action":"pause"}"#,
+        ),
         (PrinterKind::OctoPrint, ControlKind::Cancel) => {
             ("POST", "/api/job", r#"{"command":"cancel"}"#)
         }
-        (PrinterKind::OctoPrint, ControlKind::Resume) => {
-            ("POST", "/api/job", r#"{"command":"pause","action":"resume"}"#)
-        }
+        (PrinterKind::OctoPrint, ControlKind::Resume) => (
+            "POST",
+            "/api/job",
+            r#"{"command":"pause","action":"resume"}"#,
+        ),
     }
 }
 
-pub fn may_alert(ledger: &PrintAlertsLedger, printer_key: &str, kind: AlertKind, now_ms: u64) -> bool {
+pub fn may_alert(
+    ledger: &PrintAlertsLedger,
+    printer_key: &str,
+    kind: AlertKind,
+    now_ms: u64,
+) -> bool {
     let key = dedupe_key(printer_key, kind);
     !ledger
         .last_alert_ms
@@ -544,7 +557,12 @@ pub fn may_alert(ledger: &PrintAlertsLedger, printer_key: &str, kind: AlertKind,
         .is_some_and(|t| now_ms.saturating_sub(*t) < ALERT_COOLDOWN_MS)
 }
 
-pub fn record_alert(ledger: &mut PrintAlertsLedger, printer_key: &str, kind: AlertKind, now_ms: u64) {
+pub fn record_alert(
+    ledger: &mut PrintAlertsLedger,
+    printer_key: &str,
+    kind: AlertKind,
+    now_ms: u64,
+) {
     ledger
         .last_alert_ms
         .insert(dedupe_key(printer_key, kind), now_ms);
@@ -605,7 +623,13 @@ pub fn alert_card(result: &AlertResult, now_ms: u64) -> UpdateCard {
     let source = alert_source_id(&result.printer_key, result.kind);
     let progress = result.status.progress_line();
     let mut body = progress.clone();
-    if let Some(msg) = result.status.message.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(msg) = result
+        .status
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         body = format!("{body}\n{msg}");
     }
     body.push_str("\nPause and cancel need the approval card.");
@@ -847,9 +871,7 @@ mod tests {
         let _ = observe(&settings, &mut ledger4, "f", &printing, 1);
         let fil = parse_moonraker_status(MOONRAKER_FILAMENT).unwrap();
         assert_eq!(
-            observe(&settings, &mut ledger4, "f", &fil, 2)
-                .unwrap()
-                .kind,
+            observe(&settings, &mut ledger4, "f", &fil, 2).unwrap().kind,
             AlertKind::Filament
         );
 

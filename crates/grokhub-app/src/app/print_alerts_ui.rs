@@ -68,6 +68,7 @@ fn printer_key(endpoint: &str) -> String {
 }
 
 fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<String> {
+    crate::xai::egress_ok(url, &[]).ok()?;
     let mut req = agent.get(url);
     if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
         req = req.set("X-Api-Key", key);
@@ -93,6 +94,7 @@ fn post_control(
         return Err("unsupported control method".into());
     }
     let url = format!("{}{path}", base_url(endpoint));
+    crate::xai::egress_ok(&url, &[])?;
     let mut req = agent.post(&url);
     if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
         req = req.set("X-Api-Key", key);
@@ -100,7 +102,8 @@ fn post_control(
     let resp = if body.is_empty() {
         req.call()
     } else {
-        req.set("Content-Type", "application/json").send_string(body)
+        req.set("Content-Type", "application/json")
+            .send_string(body)
     };
     match resp {
         Ok(_) => Ok(()),
@@ -109,17 +112,13 @@ fn post_control(
     }
 }
 
-fn fetch_status(
-    agent: &ureq::Agent,
-    saved: &SavedPrinter,
-) -> Option<PrinterStatus> {
+fn fetch_status(agent: &ureq::Agent, saved: &SavedPrinter) -> Option<PrinterStatus> {
     let base = base_url(&saved.endpoint);
     let key = saved.api_key.as_deref();
     match saved.kind {
         PrinterKind::Moonraker => {
-            let url = format!(
-                "{base}/printer/objects/query?print_stats&display_status&virtual_sdcard"
-            );
+            let url =
+                format!("{base}/printer/objects/query?print_stats&display_status&virtual_sdcard");
             let body = get_json(agent, &url, key)?;
             parse_moonraker_status(&body)
         }
@@ -149,17 +148,15 @@ fn probe_endpoint(agent: &ureq::Agent, host: &str, port: u16) -> Option<SavedPri
         if let Some(body) = get_json(agent, &url, None) {
             let kind = identify_api(path, &body).or(expect)?;
             let name = match kind {
-                PrinterKind::Moonraker => {
-                    serde_json::from_str::<serde_json::Value>(&body)
-                        .ok()
-                        .and_then(|v| {
-                            v.pointer("/result/hostname")
-                                .or_else(|| v.pointer("/result/printer_info/hostname"))
-                                .and_then(|h| h.as_str())
-                                .map(str::to_string)
-                        })
-                        .unwrap_or_else(|| format!("Moonraker @ {endpoint}"))
-                }
+                PrinterKind::Moonraker => serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| {
+                        v.pointer("/result/hostname")
+                            .or_else(|| v.pointer("/result/printer_info/hostname"))
+                            .and_then(|h| h.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| format!("Moonraker @ {endpoint}")),
                 PrinterKind::OctoPrint => format!("OctoPrint @ {endpoint}"),
             };
             return Some(SavedPrinter {
@@ -292,7 +289,10 @@ impl Cabin {
                 "Discover"
             };
             if ui
-                .add_enabled(!self.print_alerts.discovering, egui::Button::new(discover_label))
+                .add_enabled(
+                    !self.print_alerts.discovering,
+                    egui::Button::new(discover_label),
+                )
                 .clicked()
             {
                 self.start_print_discover();

@@ -1561,6 +1561,26 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ..Default::default()
     };
     let nudge = grokhub_core::nudge_watchers::detect_gpu_driver(&gpu_snap).expect("gpu nudge");
+    let print_alert = grokhub_core::AlertResult {
+        kind: grokhub_core::AlertKind::Failed,
+        printer_key: "k1".into(),
+        status: grokhub_core::PrinterStatus {
+            name: "Shop K2".into(),
+            kind: grokhub_core::PrinterKind::Moonraker,
+            state: grokhub_core::PrintState::Error,
+            progress_pct: Some(42.0),
+            eta_secs: None,
+            filename: Some("bracket.gcode".into()),
+            message: None,
+            camera_path: None,
+        },
+        camera_enabled: false,
+    };
+    rows.push((
+        "tick_print_alerts",
+        grokhub_core::alert_card(&print_alert, now),
+        "Shop K2",
+    ));
     rows.push((
         "tick_nudge_watchers",
         grokhub_core::nudge_watcher_card(&nudge, now),

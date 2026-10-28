@@ -413,13 +413,6 @@ pub use nudge_watchers::{
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
 };
-pub use print_alerts::{
-    alert_card, control_action_json, control_request, controls_for, detect_alert, identify_api,
-    is_print_alert_card, observe as observe_print, parse_control_action, parse_moonraker_status,
-    parse_octoprint_job, AlertKind, AlertResult, ControlKind, PrintAlertMeta, PrintAlertsLedger,
-    PrintAlertsSettings, PrintState, PrinterKind, PrinterStatus, SavedPrinter, ALERT_COOLDOWN_MS,
-    CONTROL_TOOL, POLL_EVERY_MS,
-};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,
@@ -450,6 +443,13 @@ pub use paths::{
     history_list_refresh_due, session_home, user_home,
 };
 pub use pii::{redact_pii, redact_recall};
+pub use print_alerts::{
+    alert_card, control_action_json, control_request, controls_for, detect_alert, identify_api,
+    is_print_alert_card, observe as observe_print, parse_control_action, parse_moonraker_status,
+    parse_octoprint_job, AlertKind, AlertResult, ControlKind, PrintAlertMeta, PrintAlertsLedger,
+    PrintAlertsSettings, PrintState, PrinterKind, PrinterStatus, SavedPrinter, ALERT_COOLDOWN_MS,
+    CONTROL_TOOL, POLL_EVERY_MS,
+};
 pub use proactive_auto::{
     ceiling_allows, AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss,
     PillMode, AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_REVERSIBILITY,
