@@ -12,6 +12,10 @@ use grokhub_core::personality::{self, Personality};
 
 include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 
+/// Keep the build.rs embed referenced until the Selected photo strip ships.
+const _: fn(&str, u8) -> Option<&'static [u8]> = personality_photo_png;
+const _: u32 = PERSONALITY_PHOTO_COUNT;
+
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
@@ -23,9 +27,9 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 140.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
-/// Kept for optional photo embed rebuilds when real art lands.
-#[allow(dead_code)]
+/// Slots build.rs watches under `assets/personalities/<id>/`.
 const PHOTO_SLOTS: u8 = 5;
+const _: u8 = PHOTO_SLOTS;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
