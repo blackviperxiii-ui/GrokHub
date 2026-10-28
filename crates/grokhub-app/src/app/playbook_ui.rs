@@ -305,12 +305,24 @@ mod tests {
         assert_eq!(fits_line(&cabin.playbooks.all[6]), "Fits task · desktop");
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
         assert_eq!(
+            fits_line(&cabin.playbooks.all[7]),
+            "Fits question, research, task · library"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[8]),
+            "Fits question, task · game-help"
+        );
+        assert_eq!(
             fits_line(&cabin.playbooks.all[9]),
             "Fits task, repair, question · gaming"
         );
         assert_eq!(
             steps_line(&cabin.playbooks.all[9]),
             "8 steps, up to Risky, asks first"
+        );
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[10]),
+            "Fits task, question, research · loadout"
         );
         assert_eq!(fits_line(&cabin.playbooks.all[11]), "Fits question");
         assert_eq!(

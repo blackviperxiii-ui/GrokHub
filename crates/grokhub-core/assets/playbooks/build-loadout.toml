@@ -24,8 +24,8 @@ give_up = [
 ]
 
 [applies_when]
-intent = ["task"]
-domain = ["gaming"]
+intent = ["task", "question", "research"]
+domain = ["loadout"]
 
 [[phase]]
 name = "Look"
