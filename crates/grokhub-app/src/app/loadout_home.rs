@@ -531,6 +531,19 @@ fn deck_shot_env() -> bool {
     })
 }
 
+/// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
+pub(super) fn deck_nav_home_pinned() -> bool {
+    deck_shot_env()
+        && std::env::var("GROKHUB_DECK_NAV")
+            .ok()
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("home"))
+}
+
+/// Windows home-mc deck pairs must match slide 09 (layout A), not the modular grid.
+pub(super) fn deck_home_mc_shot() -> bool {
+    deck_nav_home_pinned()
+}
+
 /// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
 pub(super) fn deck_tab_count() -> Option<usize> {
     std::env::var("GROKHUB_DECK_TABS")
@@ -662,7 +675,12 @@ impl Cabin {
             return;
         }
         ensure_deck_session_file();
-        let transcript = Arc::new(deck_transcript());
+        let home_mc = deck_nav_home_pinned();
+        let transcript = if home_mc {
+            Arc::new(vec![])
+        } else {
+            Arc::new(deck_transcript())
+        };
         let now = now_ms();
         if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
             self.thread_idx = i;
@@ -683,50 +701,52 @@ impl Cabin {
             t.accessed_ms = now;
             t.last_active_ms = now;
         }
-        // Extra titled chats so the titlebar tab strip has several tabs in HARD DONE shots.
-        self.ensure_deck_extra_tab(
-            "deck-weekend",
-            "Weekend plan",
-            true,
-            now.saturating_sub(60_000),
-        );
-        self.ensure_deck_extra_tab(
-            "deck-driver",
-            "Driver update",
-            false,
-            now.saturating_sub(30_000),
-        );
-        // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
-        let want = deck_tab_count().unwrap_or(3).max(3);
-        let extras = [
-            ("deck-duo", "Duo finder"),
-            ("deck-stutter", "Fix stutter"),
-            ("deck-fans", "Fan curve"),
-            ("deck-shaders", "Shader cache"),
-            ("deck-rank", "Rank climb"),
-            ("deck-patch", "Season patch"),
-            ("deck-aim", "Aim routine"),
-            ("deck-warmup", "Warm up range"),
-            ("deck-build", "Roast build"),
-            ("deck-backlog", "Backlog sort"),
-            ("deck-gpu", "GPU drivers"),
-            ("deck-queue", "Queue night"),
-            ("deck-voip", "Voip check"),
-            ("deck-map", "Map pool"),
-            ("deck-scrim", "Scrim notes"),
-            ("deck-perk", "Perk loadout"),
-        ];
-        for (n, (id, title)) in extras.iter().enumerate() {
-            // Hangout + Weekend + Driver already planted → total so far is 3.
-            if 3 + n >= want {
-                break;
-            }
+        if !home_mc {
+            // Extra titled chats so the titlebar tab strip has several tabs in HARD DONE shots.
             self.ensure_deck_extra_tab(
-                id,
-                title,
-                false,
-                now.saturating_sub(90_000 + n as u64 * 1_000),
+                "deck-weekend",
+                "Weekend plan",
+                true,
+                now.saturating_sub(60_000),
             );
+            self.ensure_deck_extra_tab(
+                "deck-driver",
+                "Driver update",
+                false,
+                now.saturating_sub(30_000),
+            );
+            // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
+            let want = deck_tab_count().unwrap_or(3).max(3);
+            let extras = [
+                ("deck-duo", "Duo finder"),
+                ("deck-stutter", "Fix stutter"),
+                ("deck-fans", "Fan curve"),
+                ("deck-shaders", "Shader cache"),
+                ("deck-rank", "Rank climb"),
+                ("deck-patch", "Season patch"),
+                ("deck-aim", "Aim routine"),
+                ("deck-warmup", "Warm up range"),
+                ("deck-build", "Roast build"),
+                ("deck-backlog", "Backlog sort"),
+                ("deck-gpu", "GPU drivers"),
+                ("deck-queue", "Queue night"),
+                ("deck-voip", "Voip check"),
+                ("deck-map", "Map pool"),
+                ("deck-scrim", "Scrim notes"),
+                ("deck-perk", "Perk loadout"),
+            ];
+            for (n, (id, title)) in extras.iter().enumerate() {
+                // Hangout + Weekend + Driver already planted → total so far is 3.
+                if 3 + n >= want {
+                    break;
+                }
+                self.ensure_deck_extra_tab(
+                    id,
+                    title,
+                    false,
+                    now.saturating_sub(90_000 + n as u64 * 1_000),
+                );
+            }
         }
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
@@ -739,6 +759,12 @@ impl Cabin {
         self.persist_cfg();
         self.pin_chat_tail();
         self.seed_activity_dock_for_deck();
+        if home_mc {
+            self.home_layout = grokhub_core::home::HomeLayout::default();
+            if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
+                self.thread_idx = i;
+            }
+        }
         // Windows proof (#968): Home parks empty; Chat rail restores Hangout.
         match deck_last_chat_mode().as_deref() {
             Some("home") => self.open_fresh_home(),
@@ -757,7 +783,15 @@ impl Cabin {
             .to_ascii_lowercase()
             .as_str()
         {
-            "home" => self.open_mission_home(),
+            "home" => {
+                self.open_mission_home();
+                if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
+                    self.thread_idx = i;
+                    if let Some(t) = self.threads.get(i) {
+                        self.messages = t.messages.clone();
+                    }
+                }
+            }
             "objectives" | "mission" => self.set_nav_id("objectives"),
             "pulse" => self.set_nav_id("pulse"),
             "library" => self.set_nav_id("library"),

@@ -95,9 +95,14 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
            createdAt = $now - 10800000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'patch' }
     )
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
-    $lines = for ($i = 0; $i -lt 23; $i++) {
+    $lines = @()
+    for ($d = 0; $d -lt 5; $d++) {
+        $at = $now - ($d * 86400000) - 3600000
+        $lines += @{ task = "streak-day-$d"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+    }
+    for ($i = 0; $i -lt 18; $i++) {
         $at = $now - 172800000 - $i * 60000
-        @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+        $lines += @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
     }
     Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
     $app.currentThread = $id
@@ -354,9 +359,10 @@ Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # (cabin apply_deck_shot_seed) —
 # a first-icon click missed on windows-latest and captured Hangout instead.
 # Beside slide 09 — HARD DONE sizes plus narrow for the three-breakpoint proof.
-Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home'
-Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home'
-Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home'
+# Seed dock objectives/outcomes + Steam library (Up next covers, PC loadout wait).
+Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
+Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
+Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
 # Objectives (legacy Objectives page) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141

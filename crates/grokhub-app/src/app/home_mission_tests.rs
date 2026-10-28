@@ -22,6 +22,28 @@ fn send_home_to_chat_leaves_home_for_chat() {
 }
 
 #[test]
+fn home_deck_mc_uses_slide_nine_layout() {
+    let src = include_str!("home/page.rs");
+    let body = src
+        .split("home-mission-body")
+        .nth(1)
+        .expect("home mission scroll body");
+    assert!(
+        body.contains("deck_home_mc_shot") && body.contains("paint_mission_control_body"),
+        "deck home-mc must paint slide 09 layout A, not the modular grid"
+    );
+}
+
+#[test]
+fn deck_home_mc_keeps_activity_dock_collapsed() {
+    let src = include_str!("activity_dock.rs");
+    assert!(
+        src.contains("deck_nav_home_pinned"),
+        "deck home-mc must not open the Activity popover over Mission Control"
+    );
+}
+
+#[test]
 fn home_chip_labels_match_mission_control_preset() {
     let src = include_str!("home/page.rs");
     let chips = src

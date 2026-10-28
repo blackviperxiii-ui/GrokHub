@@ -148,6 +148,15 @@ impl Cabin {
             });
     }
 
+    /// Slide 09 layout (objectives · PC loadout · Up next) for deck home-mc shots.
+    pub(in crate::app) fn paint_mission_control_body(&mut self, ui: &mut egui::Ui, w: f32) {
+        let now = now_ms();
+        let mission = self.dock_mission(ui.ctx());
+        let (_, games) = self.steam_library(now);
+        let next = up_next(games);
+        self.mission_body(ui, w, mission.as_ref(), &next, now);
+    }
+
     fn mission_header(&mut self, ui: &mut egui::Ui, done: usize) {
         let name = greeting_name(
             &self.greeting_user_md,

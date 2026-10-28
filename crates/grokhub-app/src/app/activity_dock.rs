@@ -555,7 +555,7 @@ impl Cabin {
     pub(super) fn seed_activity_dock_for_deck(&mut self) {
         let now = now_ms();
         let id = self.visible_thread_id();
-        self.activity.open = true;
+        self.activity.open = !super::loadout_home::deck_nav_home_pinned();
         self.activity.recent = vec![
             ActivityItem {
                 key: format!("chat:{id}"),

@@ -67,6 +67,10 @@ impl Cabin {
                             .id_salt("home-mission-body")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                if crate::app::loadout_home::deck_home_mc_shot() {
+                                    self.paint_mission_control_body(ui, w);
+                                    return;
+                                }
                                 let base = ui.cursor().min;
                                 for slot in &placed {
                                     let rect = egui::Rect::from_min_size(
