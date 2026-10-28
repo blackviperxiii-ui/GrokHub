@@ -730,7 +730,8 @@ mod tests {
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
-        assert!(memory().ends_with("pulse: dismissed \"Board\" reason=dismiss\n"));
+        // Loved then dismissed is used/done, not a negative bury (#969).
+        assert!(memory().ends_with("pulse: used \"Board\" reason=used\n"));
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
             Err("That card is gone. The page now shows what is left.".to_string())

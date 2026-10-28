@@ -458,43 +458,41 @@ impl Cabin {
         let cols = grid_cols(grid_w);
         let card_w = ((grid_w - GRID_GAP * (cols.saturating_sub(1) as f32)) / cols as f32)
             .clamp(96.0, grid_w);
-        let paint_grid = |ui: &mut egui::Ui,
-                          act_on: &mut Option<CardAct>,
-                          hover_id: &mut Option<String>| {
-            ui.set_max_width(grid_w);
-            for row in presets.chunks(cols) {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = GRID_GAP;
-                    ui.set_max_width(grid_w);
-                    for p in row {
-                        let selected = p.id == focus;
-                        let (act, hovered) = paint_grid_card(ui, p, selected, card_w);
-                        if hovered {
-                            *hover_id = Some(p.id.clone());
+        let paint_grid =
+            |ui: &mut egui::Ui, act_on: &mut Option<CardAct>, hover_id: &mut Option<String>| {
+                ui.set_max_width(grid_w);
+                for row in presets.chunks(cols) {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = GRID_GAP;
+                        ui.set_max_width(grid_w);
+                        for p in row {
+                            let selected = p.id == focus;
+                            let (act, hovered) = paint_grid_card(ui, p, selected, card_w);
+                            if hovered {
+                                *hover_id = Some(p.id.clone());
+                            }
+                            if let Some(act) = act {
+                                *act_on = Some(act);
+                            }
                         }
-                        if let Some(act) = act {
-                            *act_on = Some(act);
-                        }
-                    }
-                });
-                ui.add_space(GRID_GAP);
-            }
-        };
-        let paint_detail = |ui: &mut egui::Ui,
-                            act_on: &mut Option<CardAct>,
-                            picker: &mut PickerState| {
-            if let Some(act) = paint_detail_panel(
-                ui,
-                &showcased,
-                showcased.id == current,
-                tried.as_ref(),
-                detail_w,
-                picker,
-                now,
-            ) {
-                *act_on = Some(act);
-            }
-        };
+                    });
+                    ui.add_space(GRID_GAP);
+                }
+            };
+        let paint_detail =
+            |ui: &mut egui::Ui, act_on: &mut Option<CardAct>, picker: &mut PickerState| {
+                if let Some(act) = paint_detail_panel(
+                    ui,
+                    &showcased,
+                    showcased.id == current,
+                    tried.as_ref(),
+                    detail_w,
+                    picker,
+                    now,
+                ) {
+                    *act_on = Some(act);
+                }
+            };
         if side_by_side {
             let row_h = ui.available_height().max(200.0);
             ui.horizontal_top(|ui| {
@@ -967,11 +965,7 @@ fn personality_accent(id: &str) -> egui::Color32 {
     )
 }
 
-fn personality_photo_tex(
-    ctx: &egui::Context,
-    id: &str,
-    slot: u8,
-) -> Option<egui::TextureHandle> {
+fn personality_photo_tex(ctx: &egui::Context, id: &str, slot: u8) -> Option<egui::TextureHandle> {
     let key = egui::Id::new(("personality-photo", id, slot));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
         return Some(tex);
@@ -1126,10 +1120,7 @@ fn paint_detail_panel(
     let loadout = crate::theme::is_loadout_paint();
     let accent = personality_accent(&p.id);
     let (fill, stroke) = if loadout {
-        (
-            crate::theme::selected(),
-            egui::Stroke::new(2.0, accent),
-        )
+        (crate::theme::selected(), egui::Stroke::new(2.0, accent))
     } else {
         (
             crate::theme::surface(),
@@ -1685,10 +1676,7 @@ mod tests {
             for slot in 1u8..=5 {
                 let bytes = personality_photo_png(id, slot)
                     .unwrap_or_else(|| panic!("missing {id}/{slot}.png"));
-                assert!(
-                    bytes.starts_with(b"\x89PNG"),
-                    "{id}/{slot} should be a PNG"
-                );
+                assert!(bytes.starts_with(b"\x89PNG"), "{id}/{slot} should be a PNG");
             }
         }
         assert!(personality_photo_png("no-such-preset", 1).is_none());
