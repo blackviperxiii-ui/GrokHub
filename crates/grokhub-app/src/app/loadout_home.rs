@@ -1484,7 +1484,10 @@ mod tests {
         let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
         cabin.open_fresh_home();
         cabin.apply_web_search_shot_seed();
-        assert_eq!(cabin.threads[cabin.thread_idx].title, "OpenRouter · web search");
+        assert_eq!(
+            cabin.threads[cabin.thread_idx].title,
+            "OpenRouter · web search"
+        );
         assert_eq!(cabin.messages.len(), 2);
         assert!(
             cabin.messages[1].1.contains(cite),
