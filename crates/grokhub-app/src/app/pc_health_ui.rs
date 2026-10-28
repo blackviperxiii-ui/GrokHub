@@ -5,9 +5,9 @@
 use std::path::PathBuf;
 
 use grokhub_core::pc_health::{
-    self as ph, game_running, observe, parse_amdgpu_busy, parse_cpuinfo_mhz, parse_hwmon_temp_milli,
-    parse_nvidia_sensor_csv, summary_card, temps_from_hwmon, GameSession, ObserveOut,
-    PcHealthLedger, SensorSample, SAMPLE_EVERY_MS,
+    self as ph, game_running, observe, parse_amdgpu_busy, parse_cpuinfo_mhz,
+    parse_hwmon_temp_milli, parse_nvidia_sensor_csv, summary_card, temps_from_hwmon, GameSession,
+    ObserveOut, PcHealthLedger, SensorSample, SAMPLE_EVERY_MS,
 };
 
 use super::*;
@@ -82,13 +82,7 @@ impl Cabin {
         }
         let (game_up, sample) = self.collect_pc_health_sample(now);
         self.pc_health.last_sample_ms = now;
-        match observe(
-            true,
-            game_up,
-            sample,
-            &mut self.pc_health.session,
-            now,
-        ) {
+        match observe(true, game_up, sample, &mut self.pc_health.session, now) {
             ObserveOut::Idle | ObserveOut::Sampling => {}
             ObserveOut::Ended(summary) => {
                 let mut ledger = load_ledger();

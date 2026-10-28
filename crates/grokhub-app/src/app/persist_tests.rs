@@ -39,8 +39,16 @@ fn periodic_persist_leaves_the_ui_thread() {
         .and_then(|s| s.split("fn tick_anticipate").next())
         .expect("tick_heartbeat");
     assert!(
-        beat.contains("persist_bg(") && !beat.contains("self.persist()"),
+        beat.contains("tick_housekeep(") && !beat.contains("self.persist()"),
         "2s housekeep persist must not block the cabin: {beat}"
+    );
+    let house = include_str!("heartbeat_gate.rs");
+    assert!(
+        house.contains("fn tick_housekeep(")
+            && house.contains("persist_bg(")
+            && house.contains("tick_pc_health(")
+            && !house.contains("self.persist()"),
+        "tick_housekeep must persist off-thread and sample PC health: {house}"
     );
     let paint = src
         .split("self.flush_window(ctx)")

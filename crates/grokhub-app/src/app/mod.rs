@@ -192,9 +192,9 @@ mod native_signin_tests;
 mod night;
 mod nudge_watchers_ui;
 mod oauth;
-mod pc_health_ui;
 mod pages;
 pub mod panels;
+mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -582,7 +582,6 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
-    /// PC health while gaming (opt-in Command Centre card).
     pc_health: pc_health_ui::PcHealthState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
@@ -3518,15 +3517,7 @@ impl Cabin {
                 continue;
             }
             match act {
-                HeartbeatAct::Housekeep => {
-                    self.roll_today();
-                    self.release_situation_ping();
-                    self.note_rhythm();
-                    self.tick_pc_health();
-                    if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist_bg();
-                    }
-                }
+                HeartbeatAct::Housekeep => self.tick_housekeep(),
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
                 HeartbeatAct::Background => self.run_background(now, halted),

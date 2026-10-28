@@ -112,6 +112,18 @@ impl Cabin {
         self.governor.charge(kind, tokens, &Self::local_day());
     }
 
+    /// Local upkeep on each pulse: day roll, situation ping, rhythm, opt-in PC
+    /// health sample, and a non-blocking persist when due.
+    pub(super) fn tick_housekeep(&mut self) {
+        self.roll_today();
+        self.release_situation_ping();
+        self.note_rhythm();
+        self.tick_pc_health();
+        if self.last_persist.elapsed() > Duration::from_secs(2) {
+            self.persist_bg();
+        }
+    }
+
     fn trace_pace(&mut self, act: ProactiveAct, gate: PaceGate) {
         let reason = gate.reason();
         let acted = gate == PaceGate::Act;

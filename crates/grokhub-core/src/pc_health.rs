@@ -160,16 +160,8 @@ pub fn parse_nvidia_sensor_csv(text: &str) -> Option<(f32, u8, u32)> {
         }
         let mut cols = line.split(',').map(|c| c.trim());
         let temp: f32 = cols.next()?.parse().ok()?;
-        let util: u8 = cols
-            .next()?
-            .parse::<f32>()
-            .ok()?
-            .clamp(0.0, 100.0) as u8;
-        let clock: u32 = cols
-            .next()?
-            .parse::<f32>()
-            .ok()?
-            .max(0.0) as u32;
+        let util: u8 = cols.next()?.parse::<f32>().ok()?.clamp(0.0, 100.0) as u8;
+        let clock: u32 = cols.next()?.parse::<f32>().ok()?.max(0.0) as u32;
         best = Some(match best {
             None => (temp, util, clock),
             Some((t, u, _)) if temp > t || util > u => (temp, util, clock),
@@ -181,7 +173,10 @@ pub fn parse_nvidia_sensor_csv(text: &str) -> Option<(f32, u8, u32)> {
 
 /// AMDGPU sysfs `gpu_busy_percent` file contents.
 pub fn parse_amdgpu_busy(text: &str) -> Option<u8> {
-    text.trim().parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0) as u8)
+    text.trim()
+        .parse::<f32>()
+        .ok()
+        .map(|v| v.clamp(0.0, 100.0) as u8)
 }
 
 /// AMDGPU / hwmon `temp*_input` millidegrees → °C.
@@ -306,8 +301,8 @@ pub fn throttle_on_sample(session: &GameSession, sample: &SensorSample) -> Vec<T
             });
         } else if t >= GPU_HOT_C {
             if let (Some(cur), Some(peak)) = (sample.gpu_clock_mhz, session.peak_gpu_clock) {
-                if peak > 0 && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0
-                    >= CLOCK_DROP_PCT
+                if peak > 0
+                    && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0 >= CLOCK_DROP_PCT
                 {
                     out.push(ThrottleEvent {
                         at_ms: sample.at_ms,
@@ -327,8 +322,8 @@ pub fn throttle_on_sample(session: &GameSession, sample: &SensorSample) -> Vec<T
             });
         } else if t >= CPU_HOT_C {
             if let (Some(cur), Some(peak)) = (sample.cpu_clock_mhz, session.peak_cpu_clock) {
-                if peak > 0 && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0
-                    >= CLOCK_DROP_PCT
+                if peak > 0
+                    && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0 >= CLOCK_DROP_PCT
                 {
                     out.push(ThrottleEvent {
                         at_ms: sample.at_ms,
@@ -376,12 +371,8 @@ pub fn guess_bound(avg_cpu: Option<f32>, avg_gpu: Option<f32>) -> BoundGuess {
 /// Advice only — never applies changes.
 pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
     let mut tips = Vec::new();
-    let hot_gpu = summary
-        .max_gpu_temp_c
-        .is_some_and(|t| t >= GPU_HOT_C);
-    let hot_cpu = summary
-        .max_cpu_temp_c
-        .is_some_and(|t| t >= CPU_HOT_C);
+    let hot_gpu = summary.max_gpu_temp_c.is_some_and(|t| t >= GPU_HOT_C);
+    let hot_cpu = summary.max_cpu_temp_c.is_some_and(|t| t >= CPU_HOT_C);
     let throttled = !summary.throttles.is_empty();
 
     if throttled || hot_gpu || hot_cpu {
@@ -391,12 +382,14 @@ pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
         );
         tips.push("Blow dust out of heatsinks and make sure intake vents are clear.".into());
     }
-    if hot_gpu || summary.throttles.iter().any(|e| {
-        matches!(
-            e.kind,
-            ThrottleKind::GpuThermal | ThrottleKind::GpuClockDrop
-        )
-    }) {
+    if hot_gpu
+        || summary.throttles.iter().any(|e| {
+            matches!(
+                e.kind,
+                ThrottleKind::GpuThermal | ThrottleKind::GpuClockDrop
+            )
+        })
+    {
         tips.push(
             "Update the GPU driver from the vendor, then re-test with the same in-game preset."
                 .into(),
@@ -406,12 +399,14 @@ pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
                 .into(),
         );
     }
-    if hot_cpu || summary.throttles.iter().any(|e| {
-        matches!(
-            e.kind,
-            ThrottleKind::CpuThermal | ThrottleKind::CpuClockDrop
-        )
-    }) {
+    if hot_cpu
+        || summary.throttles.iter().any(|e| {
+            matches!(
+                e.kind,
+                ThrottleKind::CpuThermal | ThrottleKind::CpuClockDrop
+            )
+        })
+    {
         tips.push(
             "Close heavy background apps and lower CPU-heavy settings (crowd density, sim distance)."
                 .into(),
@@ -592,9 +587,7 @@ pub fn observe(
     }
     // Game not running: finish any open session.
     if let Some(done) = session.take() {
-        if done.samples.is_empty()
-            || now_ms.saturating_sub(done.started_ms) < MIN_SESSION_MS
-        {
+        if done.samples.is_empty() || now_ms.saturating_sub(done.started_ms) < MIN_SESSION_MS {
             return ObserveOut::Idle;
         }
         return ObserveOut::Ended(summarize(&done, now_ms));
@@ -606,7 +599,15 @@ pub fn observe(
 mod tests {
     use super::*;
 
-    fn sample(at: u64, cpu_t: f32, gpu_t: f32, cpu_u: u8, gpu_u: u8, cpu_c: u32, gpu_c: u32) -> SensorSample {
+    fn sample(
+        at: u64,
+        cpu_t: f32,
+        gpu_t: f32,
+        cpu_u: u8,
+        gpu_u: u8,
+        cpu_c: u32,
+        gpu_c: u32,
+    ) -> SensorSample {
         SensorSample {
             at_ms: at,
             cpu_temp_c: Some(cpu_t),
@@ -630,10 +631,7 @@ mod tests {
         assert_eq!(parse_hwmon_temp_milli("85000"), Some(85.0));
         assert_eq!(parse_hwmon_temp_milli("0"), None);
         assert_eq!(parse_amdgpu_busy("91\n"), Some(91));
-        let (cpu, gpu) = temps_from_hwmon(&[
-            ("k10temp".into(), 78_000),
-            ("amdgpu".into(), 86_000),
-        ]);
+        let (cpu, gpu) = temps_from_hwmon(&[("k10temp".into(), 78_000), ("amdgpu".into(), 86_000)]);
         assert_eq!(cpu, Some(78.0));
         assert_eq!(gpu, Some(86.0));
     }
@@ -675,11 +673,7 @@ mod tests {
     #[test]
     fn throttle_on_hot_gpu_with_clock_drop() {
         let mut opt = None;
-        note_sample(
-            &mut opt,
-            sample(0, 60.0, 70.0, 30, 80, 4500, 2100),
-            0,
-        );
+        note_sample(&mut opt, sample(0, 60.0, 70.0, 30, 80, 4500, 2100), 0);
         let session = opt.expect("session");
         let s = sample(10_000, 70.0, 86.0, 40, 98, 4400, 1600);
         let events = throttle_on_sample(&session, &s);
@@ -692,11 +686,7 @@ mod tests {
     #[test]
     fn summarize_flags_critical_temps_and_gpu_bound() {
         let mut session = None;
-        note_sample(
-            &mut session,
-            sample(0, 70.0, 75.0, 40, 95, 4200, 2000),
-            0,
-        );
+        note_sample(&mut session, sample(0, 70.0, 75.0, 40, 95, 4200, 2000), 0);
         note_sample(
             &mut session,
             sample(30_000, 72.0, 92.0, 42, 97, 4100, 1990),
@@ -710,7 +700,10 @@ mod tests {
         let summary = summarize(session.as_ref().unwrap(), 90_000);
         assert!(summary.max_gpu_temp_c.unwrap() >= 91.0);
         assert_eq!(summary.bound, BoundGuess::Gpu);
-        assert!(summary.throttles.iter().any(|e| e.kind == ThrottleKind::GpuThermal));
+        assert!(summary
+            .throttles
+            .iter()
+            .any(|e| e.kind == ThrottleKind::GpuThermal));
         assert!(!summary.tips.is_empty());
         let card = summary_card(&summary, 90_000);
         assert!(is_pc_health_card(&card));

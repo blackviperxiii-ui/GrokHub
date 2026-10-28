@@ -515,7 +515,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
     /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
-    #[serde(default, skip_serializing_if = "grokhub_core::PcHealthSettings::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
     pub pc_health: grokhub_core::PcHealthSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.

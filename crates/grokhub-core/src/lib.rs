@@ -84,9 +84,9 @@ pub mod openclaw;
 pub mod organs;
 pub mod outcome;
 pub mod pair;
-pub mod pc_health;
 pub mod panel_spec;
 pub mod paths;
+pub mod pc_health;
 pub mod personality;
 pub mod pii;
 pub mod pkce;
@@ -413,10 +413,6 @@ pub use nudge_watchers::{
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
 };
-pub use pc_health::{
-    game_running, is_pc_health_card, observe, summary_card, BoundGuess, GameSession, ObserveOut,
-    PcHealthLedger, PcHealthSettings, SensorSample, SessionSummary, SAMPLE_EVERY_MS,
-};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,
@@ -445,6 +441,10 @@ pub use pair::{
 pub use paths::{
     cabin_session_cwd, cabin_work_root, canonical_session_cwd, chat_appears_in_history,
     history_list_refresh_due, session_home, user_home,
+};
+pub use pc_health::{
+    game_running, is_pc_health_card, observe, summary_card, BoundGuess, GameSession, ObserveOut,
+    PcHealthLedger, PcHealthSettings, SensorSample, SessionSummary, SAMPLE_EVERY_MS,
 };
 pub use pii::{redact_pii, redact_recall};
 pub use proactive_auto::{
