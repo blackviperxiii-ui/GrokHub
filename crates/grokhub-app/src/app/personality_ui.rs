@@ -21,7 +21,9 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 140.0;
 /// Space reserved under the photo so TALK AS / Try it stay in the first
 /// viewport (deck shots do not scroll the detail column).
-const DETAIL_BELOW_PHOTO: f32 = 250.0;
+/// Space reserved under the photo for name, tags, tagline, sample, and TALK AS
+/// so the amber button stays on-screen at 1100×720 (slide 19).
+const DETAIL_BELOW_PHOTO: f32 = 340.0;
 const PHOTO_SLOTS: u8 = 5;
 const PHOTO_HOLD_SECS: f64 = 2.8;
 const PHOTO_FADE_SECS: f64 = 0.35;
