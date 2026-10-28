@@ -533,9 +533,9 @@ pub use trajectory::{
 pub use tui_gaps::{btw_queues_without_interrupt, BTW_LABEL, BTW_TIP_BODY, BTW_TIP_TITLE};
 pub use turn_timeline::{
     append_say, append_thought, append_tool, chunk_seam, decode_tool_rows, decode_turn,
-    encode_turn, last_say, split_at_last_sentence, tool_detail_is_status, tool_display_title,
-    tool_group_label, tool_status_failed, tool_status_running, turn_needs_timeline, turn_says,
-    views_up_to_last_user, LiveBlock, LiveKind, ToolRow, TurnPart,
+    encode_turn, last_say, split_at_last_sentence, strip_turn_labels, tool_detail_is_status,
+    tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
+    turn_needs_timeline, turn_says, views_up_to_last_user, LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
     beta_auto_off_for_versions, cabin_overlay_step, cabin_update_notice, cabin_version_newer,

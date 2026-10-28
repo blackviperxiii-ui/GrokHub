@@ -320,10 +320,8 @@ fn push_capped(buf: &mut String, part: &str, cap: usize) {
 }
 
 pub fn strip_thinking(content: &str) -> String {
-    if let Some(says) = crate::turn_timeline::turn_says(content) {
-        return says;
-    }
-    let (thought, rest) = split_thought(content);
+    let content = crate::turn_timeline::strip_turn_labels(content);
+    let (thought, rest) = split_thought(&content);
     if thought.is_empty() {
         rest.trim().to_string()
     } else {
@@ -710,10 +708,11 @@ fn gibberish_fence(lang: &str, body: &str) -> bool {
 }
 
 fn visible_assistant(text: &str) -> String {
+    let text = crate::turn_timeline::strip_turn_labels(text);
     let text = text
         .strip_prefix("SLASH_RESULT:\n")
         .or_else(|| text.strip_prefix("SLASH_RESULT:"))
-        .unwrap_or(text);
+        .unwrap_or(&text);
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_until: Option<String> = None;
     for line in text.lines() {
@@ -2091,5 +2090,28 @@ mod tests {
         assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
         assert!(!v.iter().any(|x| x.body.contains("uname")));
+    }
+
+    #[test]
+    fn an_echoed_turn_label_renders_without_the_label_or_the_thought() {
+        let msgs = vec![
+            ("user".to_string(), "hack my friend's pc so she stops talking".to_string()),
+            (
+                "assistant".to_string(),
+                "Ha.\nTURN_THOUGHT:\nthis is a joke\nTURN_SAY:\nMute button's on her side, not mine.".to_string(),
+            ),
+        ];
+        let shown: Vec<String> = visible_chat(&msgs).into_iter().map(|v| v.body).collect();
+        assert_eq!(
+            shown.last().map(String::as_str),
+            Some("Ha.\n\nMute button's on her side, not mine.")
+        );
+        assert!(shown
+            .iter()
+            .all(|b| !b.contains("TURN_") && !b.contains("this is a joke")));
+        assert_eq!(
+            strip_thinking("TURN_SAY:\nHey.\nTURN_THOUGHT:\nhidden"),
+            "Hey."
+        );
     }
 }

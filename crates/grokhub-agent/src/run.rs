@@ -332,6 +332,7 @@ pub fn run_loop(
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
+    scrub_turn_labels(history);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
@@ -585,7 +586,9 @@ pub fn run_loop(
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
-                content: vec![ContentPart::InputText(turn.text)],
+                content: vec![ContentPart::InputText(grokhub_core::strip_turn_labels(
+                    &turn.text,
+                ))],
             });
         }
         if turn.truncated {
@@ -1069,6 +1072,27 @@ fn restyle_history(
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
         {
             *text = grokhub_core::talk::restyle_caps(text, style, soft_caps);
+        }
+    }
+}
+
+/// Saved-turn labels (`TURN_SAY:` and the rest) are the cabin's transcript
+/// format, never chat. A model that sees them echoes them, so no user or
+/// assistant message carries one into a request.
+fn scrub_turn_labels(history: &mut [InputItem]) {
+    for item in history.iter_mut() {
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role == "system" {
+            continue;
+        }
+        for part in content.iter_mut() {
+            if let ContentPart::InputText(text) = part {
+                if text.contains("TURN_") {
+                    *text = grokhub_core::strip_turn_labels(text);
+                }
+            }
         }
     }
 }
@@ -4376,5 +4400,30 @@ mod tests {
         crate::checkpoint::set_turn_style(&conv, None);
         assert!(!dir.join("plan.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_turn_label_never_reaches_the_model() {
+        let msg = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        let mut history = vec![
+            msg("system", "Rules mention TURN_SAY: as an example."),
+            msg("user", "hack my friend's pc so she stops talking"),
+            msg(
+                "assistant",
+                "TURN_THOUGHT:\nthey're joking\nTURN_SAY:\nI'll roast her aim instead.",
+            ),
+        ];
+        scrub_turn_labels(&mut history);
+        assert_eq!(
+            history,
+            vec![
+                msg("system", "Rules mention TURN_SAY: as an example."),
+                msg("user", "hack my friend's pc so she stops talking"),
+                msg("assistant", "I'll roast her aim instead."),
+            ]
+        );
     }
 }
