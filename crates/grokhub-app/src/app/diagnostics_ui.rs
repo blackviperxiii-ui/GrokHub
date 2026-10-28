@@ -10,6 +10,24 @@ use grokhub_core::{
 use std::time::SystemTime;
 
 impl Cabin {
+    /// Settings / `/doctor` status line — lives with Labs Diagnostics doctor rows.
+    pub(super) fn doctor_text(&self) -> String {
+        self.doctor_checks()
+            .into_iter()
+            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    pub(super) fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
+        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
+        lines.extend(grokhub_core::doctor_extras(
+            self.last_receipt_ok,
+            self.skill_list.len(),
+        ));
+        lines
+    }
+
     pub(super) fn set_diagnostics_mode(&mut self, on: bool) {
         if self.cfg.diagnostics_mode == on {
             return;

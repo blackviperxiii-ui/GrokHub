@@ -2990,23 +2990,6 @@ impl Cabin {
         Some(cmd)
     }
 
-    fn doctor_text(&self) -> String {
-        self.doctor_checks()
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
-        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
-        lines.extend(grokhub_core::doctor_extras(
-            self.last_receipt_ok,
-            self.skill_list.len(),
-        ));
-        lines
-    }
-
     /// `/health` from what this session already knows: the last update probe,
     /// the doctor checks, failing automations, MCP servers and the newest dream.
     fn health_input(&self) -> grokhub_core::health::HealthInput {
