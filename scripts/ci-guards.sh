@@ -49,7 +49,7 @@ budget() {
   fi
 }
 
-budget "crates/grokhub-app/src/app/mod.rs" 5914 # web_search_ui + shot seed; #968 merge (#974); wind_down_ui
+budget "crates/grokhub-app/src/app/mod.rs" 5950 # Nav::Home + home_layout (Order -38) + web_search_ui (#974) + wind_down_ui
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2800

@@ -242,6 +242,11 @@ pub(super) enum PulseAct {
     /// More or fewer cards of this one's kind, from the ··· menu.
     MoreKind(String),
     LessKind(String),
+    /// Hobby learning-path tip feedback.
+    HobbyDone(String),
+    HobbySkip(String),
+    HobbyTooEasy(String),
+    HobbyTooHard(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -810,6 +815,10 @@ pub(super) enum FeedPostAct {
     RetryNow,
     /// Save / Not interested / More like this on a source post.
     Source(SourceAct),
+    HobbyDone,
+    HobbySkip,
+    HobbyTooEasy,
+    HobbyTooHard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -867,6 +876,31 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
         }
         if super::change_undo::click_pill(ui, "Don't do this again") {
             act = Some(FeedPostAct::NeverAgain);
+        }
+    });
+    act
+}
+
+/// Done / Skip / Too easy / Too hard on an unanswered hobby learning-path tip.
+fn paint_hobby_path(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    let open = card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered);
+    if !open {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if super::change_undo::click_pill(ui, "Done") {
+            act = Some(FeedPostAct::HobbyDone);
+        }
+        if super::change_undo::click_pill(ui, "Skip") {
+            act = Some(FeedPostAct::HobbySkip);
+        }
+        if super::change_undo::click_pill(ui, "Too easy") {
+            act = Some(FeedPostAct::HobbyTooEasy);
+        }
+        if super::change_undo::click_pill(ui, "Too hard") {
+            act = Some(FeedPostAct::HobbyTooHard);
         }
     });
     act
@@ -954,6 +988,9 @@ pub(super) fn paint_post_body(
     });
     if let Some(done) = paint_done_for_you(ui, card) {
         act = Some(done);
+    }
+    if let Some(hobby) = paint_hobby_path(ui, card) {
+        act = Some(hobby);
     }
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
@@ -1619,6 +1656,10 @@ impl Cabin {
                             FeedPostAct::FixIt(id) => PulseAct::FixIt(id),
                             FeedPostAct::RetryNow => PulseAct::RetryNow,
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
+                            FeedPostAct::HobbyDone => PulseAct::HobbyDone(card.id.clone()),
+                            FeedPostAct::HobbySkip => PulseAct::HobbySkip(card.id.clone()),
+                            FeedPostAct::HobbyTooEasy => PulseAct::HobbyTooEasy(card.id.clone()),
+                            FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
                         });
                     }
                 });
@@ -1908,6 +1949,18 @@ impl Cabin {
             PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
+            }
+            PulseAct::HobbyDone(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Done)
+            }
+            PulseAct::HobbySkip(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Skip)
+            }
+            PulseAct::HobbyTooEasy(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooEasy)
+            }
+            PulseAct::HobbyTooHard(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooHard)
             }
         }
     }
