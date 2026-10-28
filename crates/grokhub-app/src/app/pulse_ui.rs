@@ -995,6 +995,12 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
+    if grokhub_core::local_model_news::is_upgrade_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Open in Settings")
+    {
+        act = Some(FeedPostAct::Open);
+    }
     if super::fix_it::is_diagnosis_report_card(card) {
         if let Some(rec) = paint_recording(ui, card) {
             act = Some(rec);
@@ -1985,6 +1991,10 @@ impl Cabin {
             self.proactive_click(id);
             return None;
         }
+        if self.pulse_card(id)?.pulse.print_alert.is_some() {
+            self.print_alert_run(id);
+            return None;
+        }
         self.pulse_run_line(id)
     }
 
@@ -2028,6 +2038,7 @@ impl Cabin {
         self.pulse_note(&card.title, kind.ledger_reason(), day);
         if kind.counts_negative() {
             self.nudge_watcher_dismissed(&card);
+            self.ask_offer_dismissed(&card);
             self.heartbeat_card_dismissed();
             self.proactive_dismissed(&card);
             self.pulse_remove_dismiss(&card, true);
