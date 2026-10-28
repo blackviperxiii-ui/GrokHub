@@ -2715,8 +2715,7 @@ impl Cabin {
                 if session_menu_row(ui, "Export", export_on) {
                     self.run_slash(Slash::Export);
                 }
-                if self.cfg.diagnostics_mode
-                    && session_menu_row(ui, "Save diagnostics", export_on)
+                if self.cfg.diagnostics_mode && session_menu_row(ui, "Save diagnostics", export_on)
                 {
                     self.save_chat_diagnostics(None);
                 }

@@ -35,10 +35,7 @@ impl Cabin {
             self.set_diagnostics_mode(on);
         }
         if self.cfg.diagnostics_mode {
-            crate::cards::settings_note(
-                ui,
-                "Preview — each Save includes:",
-            );
+            crate::cards::settings_note(ui, "Preview — each Save includes:");
             for line in DIAGNOSTICS_PREVIEW_LINES {
                 crate::cards::settings_note(ui, &format!("• {line}"));
             }
@@ -50,9 +47,7 @@ impl Cabin {
             ) {
                 self.save_chat_diagnostics(None);
             }
-            if self.diagnostics_last_zip.is_some()
-                && crate::cards::ghost_pill(ui, "Open folder")
-            {
+            if self.diagnostics_last_zip.is_some() && crate::cards::ghost_pill(ui, "Open folder") {
                 self.open_diagnostics_folder();
             }
         }
@@ -64,10 +59,7 @@ impl Cabin {
             self.status = "No diagnostics file yet".into();
             return;
         };
-        let dir = path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or(path);
+        let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or(path);
         if let Err(e) = crate::desktop::open_path(&dir.display().to_string()) {
             self.status = format!("Couldn't open folder: {e}");
         }
@@ -120,12 +112,10 @@ impl Cabin {
             "provider".into()
         };
         let config_dir = config::config_dir();
-        let home = grokhub_core::user_home()
-            .and_then(|p| p.into_os_string().into_string().ok());
+        let home = grokhub_core::user_home().and_then(|p| p.into_os_string().into_string().ok());
         let home_ref = home.as_deref();
 
-        let mut export =
-            DiagnosticsExport::with_defaults(&version, &thread.id, &thread.title);
+        let mut export = DiagnosticsExport::with_defaults(&version, &thread.id, &thread.title);
         export.service_status = self.diagnostics_service_status();
         export.recent_logs = self.diagnostics_recent_logs(home_ref);
 
@@ -146,8 +136,7 @@ impl Cabin {
             let mut turn = DiagnosticsTurn {
                 turn: turn_no,
                 user_text: user_text.clone(),
-                final_reply: turn_says(&assistant_raw)
-                    .unwrap_or_else(|| assistant_raw.clone()),
+                final_reply: turn_says(&assistant_raw).unwrap_or_else(|| assistant_raw.clone()),
                 raw_saved_turn: assistant_raw.clone(),
                 classifier: DiagnosticsClassifier::default(),
                 playbook: DiagnosticsPlaybook::default(),
@@ -175,10 +164,7 @@ impl Cabin {
                     intent: line.brief.intent.as_str().into(),
                     care: line.brief.care.as_str().into(),
                     domain: line.brief.domain.clone(),
-                    why_chat_vs_task: why_chat_vs_task(
-                        line.brief.intent.as_str(),
-                        &line.brief.by,
-                    ),
+                    why_chat_vs_task: why_chat_vs_task(line.brief.intent.as_str(), &line.brief.by),
                     by: line.brief.by.clone(),
                 };
                 if let Some(p) = &line.policy {
@@ -231,10 +217,7 @@ impl Cabin {
             for span in &spans {
                 started = started.min(span.ts_ms);
                 finished = finished.max(span.ts_ms);
-                let summary = redact_for_diagnostics(
-                    &clip_chars(&span.result, 160),
-                    home_ref,
-                );
+                let summary = redact_for_diagnostics(&clip_chars(&span.result, 160), home_ref);
                 turn.tool_calls.push(DiagnosticsToolCall {
                     tool: span.tool.clone(),
                     decision: span.decision.clone(),
@@ -270,8 +253,10 @@ impl Cabin {
                 }
             }
             if assistant_raw.trim_start().starts_with("Error:") {
-                turn.errors
-                    .push(redact_for_diagnostics(&clip_chars(&assistant_raw, 240), home_ref));
+                turn.errors.push(redact_for_diagnostics(
+                    &clip_chars(&assistant_raw, 240),
+                    home_ref,
+                ));
             }
 
             export.turns.push(redact_turn(turn, home_ref));
@@ -492,10 +477,7 @@ mod tests {
         let mut thread = crate::threads::ChatThread::new("Hangout", false);
         thread.messages = std::sync::Arc::new(vec![
             ("user".into(), "hi there".into()),
-            (
-                "assistant".into(),
-                "TURN_SAY:\nHey — what's up?\n".into(),
-            ),
+            ("assistant".into(), "TURN_SAY:\nHey — what's up?\n".into()),
         ]);
         cabin.messages = thread.messages.clone();
         cabin.threads = vec![thread];

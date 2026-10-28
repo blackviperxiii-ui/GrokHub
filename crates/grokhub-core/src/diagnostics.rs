@@ -408,7 +408,8 @@ pub fn write_diagnostics_zip(path: &Path, export: &DiagnosticsExport) -> Result<
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Desktop folder: {e}"))?;
     }
-    let json = serde_json::to_string_pretty(export).map_err(|e| format!("diagnostics json: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(export).map_err(|e| format!("diagnostics json: {e}"))?;
     let md = diagnostics_markdown(export);
     let file = std::fs::File::create(path).map_err(|e| format!("create zip: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
@@ -453,10 +454,7 @@ fn fence(body: &str) -> String {
 }
 
 fn file_stamp(at: SystemTime) -> String {
-    let secs = at
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let secs = at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     // UTC YYYYMMDD-HHMMSS without chrono.
     let days = secs / 86_400;
     let day_secs = secs % 86_400;
@@ -573,7 +571,10 @@ mod tests {
         let out = redact_for_diagnostics(&raw, Some(home));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"), "{out}");
         assert!(!out.contains("user@example.com"), "{out}");
-        assert!(out.contains("[email]") || out.contains("[redacted]"), "{out}");
+        assert!(
+            out.contains("[email]") || out.contains("[redacted]"),
+            "{out}"
+        );
         assert!(!out.contains("/home/alice"), "{out}");
         assert!(out.contains("/home/user/secret/token.env"), "{out}");
     }
