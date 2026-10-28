@@ -1,0 +1,52 @@
+# GrokHub playbook: PC parts or in-game loadout comparisons.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+
+id = "build-loadout"
+name = "Build & loadout"
+summary = "Compare two or three PC part options or in-game loadouts with dated prices or stats; say trade-offs plainly and never auto-buy."
+
+checklist = [
+  "goal and budget clear",
+  "two or three options compared",
+  "prices or stats dated",
+  "no purchase unless the user approves",
+]
+backup = "Shopping or config edits need a copy or screenshot of the prior state first."
+verify = "Confirm the choice fits the stated budget and goal before any risky step."
+rollback = "Undo a purchase or config change if the user rejects it."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task"]
+domain = ["gaming"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Clarify PC upgrade vs in-game loadout and the budget or rank goal"
+
+[[phase.step]]
+name = "Read this PC's specs when the ask is about parts"
+
+[[phase]]
+name = "Compare"
+tier = "read_only"
+
+[[phase.step]]
+name = "Lay out two or three options with dated prices or patch-era stats and name trade-offs"
+
+[[phase]]
+name = "Act"
+tier = "risky"
+
+[[phase.step]]
+name = "Only open a store page or change a build after explicit approval"
