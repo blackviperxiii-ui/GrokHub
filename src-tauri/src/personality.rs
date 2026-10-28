@@ -52,10 +52,11 @@ pub fn dir(config_dir: &Path) -> PathBuf {
     config_dir.join("personalities")
 }
 
-/// The id a stored field stands for: empty is the default voice.
+/// The id a stored field stands for: empty, or the retired "default" preset,
+/// is the default voice.
 pub fn shown_id(stored: &str) -> &str {
     match stored.trim() {
-        "" => personality::DEFAULT_ID,
+        "" | personality::LEGACY_DEFAULT_ID => personality::DEFAULT_ID,
         id => id,
     }
 }
@@ -63,7 +64,7 @@ pub fn shown_id(stored: &str) -> &str {
 /// How an id is stored, so the default voice stays an empty field like the cabin's.
 pub fn stored_id(id: &str) -> String {
     match id.trim() {
-        personality::DEFAULT_ID => String::new(),
+        personality::DEFAULT_ID | personality::LEGACY_DEFAULT_ID => String::new(),
         id => id.to_string(),
     }
 }
@@ -116,8 +117,9 @@ pub fn allowed(p: Personality, explicit_on: bool) -> Result<Personality, String>
 /// The preset for `id`, refused when no preset has it.
 pub fn pick(config_dir: &Path, id: &str) -> Result<Personality, String> {
     let (all, _) = personality::load_all(&dir(config_dir));
+    let want = shown_id(id);
     all.into_iter()
-        .find(|p| p.id == id.trim())
+        .find(|p| p.id == want)
         .ok_or_else(|| format!("No personality called {id}."))
 }
 
@@ -185,13 +187,16 @@ mod tests {
     fn the_page_lists_the_builtins_with_the_default_first_and_current() {
         let cfg = scratch("page");
         let page = load(&cfg, "", false);
-        assert_eq!(page.current, "default");
-        assert_eq!(page.presets[0].id, "default");
-        assert_eq!(page.presets[0].name, "Default");
+        assert_eq!(page.current, "nyx");
+        assert_eq!(page.presets[0].id, "nyx");
+        assert_eq!(page.presets[0].name, grokhub_core::brand::companion_name());
+        assert!(page.presets.iter().all(|p| p.id != "default"));
+        // A profile saved on the retired "default" preset shows Nyx in use.
+        assert_eq!(load(&cfg, "default", false).current, "nyx");
         assert!(page.presets.iter().any(|p| p.id == "pirate" && !p.custom));
         assert_eq!(page.problems, Vec::<String>::new());
         assert_eq!(load(&cfg, "pirate", false).current, "pirate");
-        assert_eq!(load(&cfg, "gone-voice", false).current, "default");
+        assert_eq!(load(&cfg, "gone-voice", false).current, "nyx");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -208,7 +213,7 @@ mod tests {
         let off = load(&cfg, "whore", false);
         assert!(!off.explicit);
         assert_eq!(explicit(&off), Vec::<String>::new());
-        assert_eq!(off.current, "default");
+        assert_eq!(off.current, "nyx");
         let on = load(&cfg, "whore", true);
         assert!(on.explicit);
         assert_eq!(explicit(&on), ["viper", "whore"]);
@@ -232,7 +237,7 @@ mod tests {
     fn the_default_voice_adds_its_values_and_a_preset_adds_its_block_and_the_closer() {
         let cfg = scratch("voice");
         let default_voice = voice(&cfg, "", false);
-        assert!(default_voice.starts_with("Personality: Default. "));
+        assert!(default_voice.starts_with("Personality: Nyx. "));
         assert!(default_voice.contains("not sycophantic"));
         assert!(default_voice.contains(grokhub_core::talk::VOLATILE_SAFETY_CLOSER));
         assert_eq!(voice(&cfg, "default", false), default_voice);
@@ -294,7 +299,7 @@ mod tests {
 
         delete(&cfg, &id).expect("delete");
         assert!(!dir(&cfg).join("pirate-copy.toml").exists());
-        assert_eq!(load(&cfg, &id, false).current, "default");
+        assert_eq!(load(&cfg, &id, false).current, "nyx");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
@@ -325,19 +330,21 @@ mod tests {
             Err("No personality called nobody.".to_string())
         );
         let id = duplicate(&cfg, "default").unwrap();
-        assert_eq!(id, "my-voice");
+        assert_eq!(id, "nyx-copy");
         assert_eq!(
             save(&cfg, edit(&id, "")),
-            Err("Personality my-voice: the name must be 1 to 32 characters.".to_string())
+            Err("Personality nyx-copy: the name must be 1 to 32 characters.".to_string())
         );
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]
     fn stored_ids_keep_the_default_empty() {
+        assert_eq!(stored_id("nyx"), "");
         assert_eq!(stored_id("default"), "");
         assert_eq!(stored_id(" pirate "), "pirate");
-        assert_eq!(shown_id(""), "default");
+        assert_eq!(shown_id(""), "nyx");
+        assert_eq!(shown_id("default"), "nyx");
     }
 
     #[test]
