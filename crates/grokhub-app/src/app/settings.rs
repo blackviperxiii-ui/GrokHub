@@ -45,6 +45,11 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     }
 }
 
+/// `/fix` and the palette Health row open Settings → About.
+pub(super) fn health_settings_sec() -> SettingsSec {
+    SettingsSec::About
+}
+
 /// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
 /// (`scripts/deck-shots.ps1` / `web-search-shots.ps1`), so Ctrl+, lands on
 /// Personality / Behavior / Privacy / Cabin defaults without a fragile click.

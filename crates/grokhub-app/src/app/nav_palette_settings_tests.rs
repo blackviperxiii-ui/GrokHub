@@ -8,7 +8,10 @@ use eframe::egui;
 
 #[test]
 fn health_opens_the_about_page() {
-    assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
+    assert_eq!(
+        super::settings::health_settings_sec(),
+        super::SettingsSec::About
+    );
 }
 
 #[test]

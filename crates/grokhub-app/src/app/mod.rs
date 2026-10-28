@@ -5793,9 +5793,6 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
 }
-fn health_settings_sec() -> SettingsSec {
-    SettingsSec::About
-}
 
 fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
