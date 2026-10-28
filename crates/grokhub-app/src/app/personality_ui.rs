@@ -1647,7 +1647,10 @@ mod tests {
 
     #[test]
     fn two_col_widths_reserve_detail_inside_avail() {
-        assert!(two_col_widths(639.0).is_none(), "below TWO_COL_MIN_W stacks");
+        assert!(
+            two_col_widths(639.0).is_none(),
+            "below TWO_COL_MIN_W stacks"
+        );
         for avail in [640.0_f32, 782.0, 1100.0, 1282.0, 1602.0] {
             let (grid_w, detail_w) = two_col_widths(avail).expect("side-by-side");
             assert!(
@@ -1747,29 +1750,21 @@ mod tests {
                 .shapes;
                 for clipped in &shapes {
                     if let egui::Shape::Text(t) = &clipped.shape {
-                        texts.push((
-                            t.galley.job.text.clone(),
-                            t.pos,
-                            clipped.clip_rect,
-                        ));
+                        texts.push((t.galley.job.text.clone(), t.pos, clipped.clip_rect));
                     }
                 }
             }
             let selected = texts.iter().find(|(t, _, _)| t == "SELECTED");
-            let talk = texts
-                .iter()
-                .find(|(t, _, _)| t.starts_with("TALK AS "));
-            let (sel_text, sel_pos, sel_clip) = selected.unwrap_or_else(|| {
-                panic!("SELECTED missing at {w}x{h}; texts={texts:?}")
-            });
+            let talk = texts.iter().find(|(t, _, _)| t.starts_with("TALK AS "));
+            let (sel_text, sel_pos, sel_clip) =
+                selected.unwrap_or_else(|| panic!("SELECTED missing at {w}x{h}; texts={texts:?}"));
             assert_eq!(sel_text, "SELECTED");
             assert!(
                 sel_clip.contains(*sel_pos) && sel_pos.x < w && sel_pos.x > w * 0.45,
                 "SELECTED should sit in the right half on-screen at {w}x{h}: pos={sel_pos:?} clip={sel_clip:?}"
             );
-            let (talk_text, talk_pos, talk_clip) = talk.unwrap_or_else(|| {
-                panic!("TALK AS missing at {w}x{h}")
-            });
+            let (talk_text, talk_pos, talk_clip) =
+                talk.unwrap_or_else(|| panic!("TALK AS missing at {w}x{h}"));
             assert!(
                 talk_text.starts_with("TALK AS "),
                 "unexpected talk label {talk_text}"
