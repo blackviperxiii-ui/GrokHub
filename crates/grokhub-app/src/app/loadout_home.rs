@@ -749,6 +749,15 @@ impl Cabin {
             }
             _ => {}
         }
+        // Settings pin must open the modal itself — Ctrl+, / gear clicks miss
+        // on some windows-release sizes (1600×900 Settings shots).
+        if let Some(sec) = super::settings::pinned_settings_sec() {
+            if self.nav != Nav::Settings {
+                self.settings_back = self.nav;
+            }
+            self.settings_sec = sec;
+            self.nav = Nav::Settings;
+        }
     }
 
     fn ensure_deck_extra_tab(&mut self, id: &str, title: &str, pinned: bool, at: u64) {

@@ -394,10 +394,10 @@ foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
 }
 # Card 49: Screenshot explain — composer chip (Hangout) and Settings → Behavior.
-# 1600 Settings uses Ctrl+, (same as settings-1600x900); the gear click at
-# (20,875) missed the pinBehavior shot on windows-release.
+# Settings shots rely on GROKHUB_DECK_SETTINGS_SEC=behavior opening Nav::Settings
+# in apply_deck_shot_seed (SendKeys/gear clicks miss on 1600×900 in CI).
 Shot 1600 900 'screenshot-chip-1600x900' 'ops-dark' '02' -screenshotOffer
 Shot 1100 720 'screenshot-chip-1100x720' 'ops-dark' '02' -screenshotOffer
-Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior -keys '^,'
-Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior -clickAt 20, 695
+Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior
+Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior
 Get-ChildItem $Out | Format-Table Name, Length

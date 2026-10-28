@@ -1451,5 +1451,10 @@ mod tests {
         assert!(shots.contains("screenshot-settings-1600x900"));
         assert!(shots.contains("-pinBehavior") || shots.contains("pinBehavior"));
         assert!(shots.contains("-screenshotOffer") || shots.contains("screenshotOffer"));
+        let seed = include_str!("loadout_home.rs");
+        assert!(
+            seed.contains("pinned_settings_sec") && seed.contains("Nav::Settings"),
+            "deck seed must open Settings when GROKHUB_DECK_SETTINGS_SEC is set"
+        );
     }
 }
