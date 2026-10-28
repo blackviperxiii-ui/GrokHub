@@ -135,15 +135,12 @@ pub fn prompt_block(ctx: &PlanSkillCtx<'_>) -> String {
     }
     let mut lines = vec![
         "<plan-skills>".to_string(),
-        "Load these built-in skills with the skill tool at the named moments:"
-            .to_string(),
+        "Load these built-in skills with the skill tool at the named moments:".to_string(),
     ];
     for moment in moments {
         let names = skills_for(moment).join(", ");
         let when = match moment {
-            SkillMoment::BeforeShip { av_changed: false } => {
-                "before any ship or release step"
-            }
+            SkillMoment::BeforeShip { av_changed: false } => "before any ship or release step",
             SkillMoment::BeforeShip { av_changed: true } => {
                 "before any ship or release step (AV also changed)"
             }
@@ -212,10 +209,7 @@ mod tests {
     fn multi_step_plan_loads_follow_through() {
         assert!(is_multi_step(2));
         assert!(!is_multi_step(1));
-        assert_eq!(
-            skills_for(SkillMoment::MultiStepPlan),
-            &[FOLLOW_THROUGH]
-        );
+        assert_eq!(skills_for(SkillMoment::MultiStepPlan), &[FOLLOW_THROUGH]);
         let ctx = PlanSkillCtx {
             pending_steps: 3,
             ..Default::default()

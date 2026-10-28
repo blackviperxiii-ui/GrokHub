@@ -300,10 +300,7 @@ impl Cabin {
                 }) {
                     // Built-in / project / user skills discovered for the engine.
                     self.nav = Nav::Chat;
-                    self.send_chat(skill_use_in_chat_prompt(
-                        &format!("/{}", s.name),
-                        &s.name,
-                    ));
+                    self.send_chat(skill_use_in_chat_prompt(&format!("/{}", s.name), &s.name));
                 } else {
                     self.status = format!("No skill {name}");
                 }
