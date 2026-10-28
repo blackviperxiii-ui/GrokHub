@@ -1,3 +1,4 @@
 - Deck match: in the Loadout look, Settings opens as a full page beside the rail instead of a centred dialog, so Privacy & data shows its story, switches and off-device ledger side by side like deck slide 12, at 1600x900 and 1100x720.
 - Deck shots of the chat-first layout (slide 10) show the Hangout chat beside the objectives, without the Activity popover over the snapshot.
 - Deck shots: rail clicks allow for the chat tab strip, and Settings opens with Ctrl+, at 1600x900, so the Pulse, Library, Objectives, Privacy and Personality shots land on their pages again.
+- Deck shots: `-openSettings <section>` opens Settings on that section at launch (`GROKHUB_DECK_OPEN_SETTINGS`), and Library and Settings shots leave the Activity popover closed (`GROKHUB_DECK_ACTIVITY=0`) so it doesn't cover the page.

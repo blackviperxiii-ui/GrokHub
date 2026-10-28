@@ -169,7 +169,7 @@ function Seed-Pulse([string]$cfg) {
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins the companion's pose
 # (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -198,7 +198,13 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:GROKHUB_DECK_SHOT = '1'
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
+    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
+    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
+    # $openSettings opens Settings on that section at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings) { '1' } else { '' })
+    # The Activity popover would cover the Library tiles and the Settings page.
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings) { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -340,8 +346,8 @@ Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
 # The gear at the foot of the rail opens Settings at 1100x720, where Ctrl+, from
 # SendKeys missed the window; at 1600x900 the gear sits below the runner's
 # screen, so Ctrl+, opens it there.
-Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -keys '^,' -clickAt 110, 146
-Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 110, 146
+Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -openSettings 'privacy'
+Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -openSettings 'privacy'
 
 # Nyx is the default personality: Settings -> Personality on a profile with no
 # pick, and on one still saved on the retired 'default' preset.
