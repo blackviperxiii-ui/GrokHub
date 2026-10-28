@@ -256,13 +256,13 @@ describe("Settings", () => {
   });
 
   it("applies a theme at once and saves it", async () => {
-    api.setTheme.mockResolvedValue(shape({ theme: "dark" }));
+    api.setTheme.mockResolvedValue(shape({ theme: "ops-dark" }));
     render(<Settings caps={DESKTOP} />);
     await openSection("Appearance");
-    await userEvent.click(screen.getByRole("button", { name: "Dark" }));
-    expect(api.setTheme).toHaveBeenCalledWith("dark");
-    expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Ops Dark" }));
+    expect(api.setTheme).toHaveBeenCalledWith("ops-dark");
+    expect(document.documentElement.dataset.theme).toBe("ops-dark");
+    expect(screen.getByRole("button", { name: "Ops Dark" })).toHaveAttribute("aria-pressed", "true");
 
     api.setTheme.mockResolvedValue(shape({ theme: "system" }));
     await userEvent.click(screen.getByRole("button", { name: "System" }));
