@@ -461,6 +461,10 @@ pub struct AppConfig {
     /// in every picker, and a chat set to one speaks in the default voice.
     #[serde(default)]
     pub explicit_personalities: bool,
+    /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
+    /// message actions can Save a redacted debug bundle to the Desktop.
+    #[serde(default)]
+    pub diagnostics_mode: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -772,6 +776,7 @@ impl Default for AppConfig {
             self_improve_quiet: false,
             personality: String::new(),
             explicit_personalities: false,
+            diagnostics_mode: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
@@ -1553,6 +1558,35 @@ mod tests {
         assert!(!load().composer_autocomplete);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diagnostics_mode_defaults_off() {
+        assert!(!AppConfig::default().diagnostics_mode);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.diagnostics_mode);
+        let _g = hold_test_config();
+        let root = test_config_root("diagnostics-mode");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            diagnostics_mode: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().diagnostics_mode);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"diagnosticsMode\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.diagnostics_mode = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().diagnostics_mode);
+        fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!load().diagnostics_mode);
         let _ = fs::remove_dir_all(&root);
     }
 

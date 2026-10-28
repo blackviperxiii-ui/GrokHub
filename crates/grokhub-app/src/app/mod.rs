@@ -157,6 +157,7 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod diagnostics_ui;
 mod dock_ui;
 mod episode_ui;
 mod evidence_ui;
@@ -874,6 +875,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
+    /// Last Labs Diagnostics zip on the Desktop (Open folder).
+    diagnostics_last_zip: Option<std::path::PathBuf>,
     /// Modular Home slot layout (`home_layout.json` v2).
     home_layout: grokhub_core::home::HomeLayout,
     /// Edit Home modules dialog draft (`None` = closed).
@@ -1444,6 +1447,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
             home_edit: None,
         };
@@ -1908,6 +1912,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
         }
@@ -2985,23 +2990,6 @@ impl Cabin {
             let _ = crate::night::save_rewinds(&rows);
         });
         Some(cmd)
-    }
-
-    fn doctor_text(&self) -> String {
-        self.doctor_checks()
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
-        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
-        lines.extend(grokhub_core::doctor_extras(
-            self.last_receipt_ok,
-            self.skill_list.len(),
-        ));
-        lines
     }
 
     /// `/health` from what this session already knows: the last update probe,
