@@ -432,10 +432,7 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         assert!(!cabin.cfg.always_confirmed);
         cabin.arm_session_always();
-        assert!(matches!(
-            cabin.confirm,
-            Some(ConfirmKind::AlwaysSession)
-        ));
+        assert!(matches!(cabin.confirm, Some(ConfirmKind::AlwaysSession)));
         cabin.apply_session_always();
         assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
         assert_eq!(cabin.cfg.permission_mode, "always-approve");
@@ -470,10 +467,12 @@ mod tests {
             ALWAYS_CONFIRM_LINE1,
             "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
-        assert!(crate::cards::composer_perm_tip("always-approve")
-            .is_some_and(|(_, tip)| tip.contains(
+        assert!(
+            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip.contains(
                 "money, sending, deleting your data, credentials and irreversible system changes"
-            ) && tip.contains("Stays on until you pick Ask or Auto")));
+            ) && tip
+                .contains("Stays on until you pick Ask or Auto"))
+        );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("/send"));
