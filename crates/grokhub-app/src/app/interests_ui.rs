@@ -273,7 +273,8 @@ pub(super) fn ledger_signal(reason: grokhub_core::pulse::LedgerReason) -> Option
         LedgerReason::Accepted => Some(InterestSignal::Accepted),
         LedgerReason::Dismiss => Some(InterestSignal::Dismissed),
         LedgerReason::NotThis => Some(InterestSignal::NotInterested),
-        LedgerReason::Wrong => None,
+        // Used-then-dismissed: neutral-complete, not a bury.
+        LedgerReason::Used | LedgerReason::Wrong => None,
     }
 }
 
@@ -398,5 +399,10 @@ mod tests {
             Some(InterestSignal::Accepted)
         );
         assert_eq!(ledger_signal(LedgerReason::Wrong), None);
+        assert_eq!(
+            ledger_signal(LedgerReason::Used),
+            None,
+            "used-then-dismissed is not an interest bury"
+        );
     }
 }

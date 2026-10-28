@@ -779,7 +779,7 @@ impl Cabin {
                 // A hung ask must not leave the Ideas button on "Thinking…" for good.
                 if now_ms().saturating_sub(self.cfg.feed_pulse.last_ideas_ms) > IDEAS_WAIT_MS {
                     if self.nav == Nav::Pulse {
-                        self.status = "Ideas took too long. Try Suggest ideas again.".into();
+                        self.status = "For You took too long. Try Suggest for you again.".into();
                     }
                 } else {
                     self.ideas_rx = Some((rx, inputs));
@@ -923,11 +923,12 @@ impl Cabin {
         }
     }
 
-    /// Opened, built, discussed, or used before: an X then is not a "no".
+    /// Opened, built, discussed, liked, or used before: an X then is not a "no".
     fn card_touched(&self, card: &UpdateCard) -> bool {
         card.status == UpdateStatus::Opened
             || card.built
             || card.discuss_thread.is_some()
+            || card.reaction == Some(grokhub_core::CardReaction::Up)
             || grokhub_core::used_depth(&self.card_prefs, card) > 0
     }
 
@@ -1087,10 +1088,10 @@ pub(super) fn paint_feed_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
     open
 }
 
-/// Ideas tab empty body. Returns true when Suggest ideas is pressed.
+/// For You tab empty body. Returns true when Suggest for you is pressed.
 pub(super) fn paint_ideas_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
-    use grokhub_core::pulse::IDEAS_EMPTY;
-    empty_state(ui, "Ideas", IDEAS_EMPTY, Some("Suggest ideas"))
+    use grokhub_core::pulse::{FOR_YOU_LABEL, IDEAS_EMPTY};
+    empty_state(ui, FOR_YOU_LABEL, IDEAS_EMPTY, Some("Suggest for you"))
 }
 
 #[cfg(test)]
