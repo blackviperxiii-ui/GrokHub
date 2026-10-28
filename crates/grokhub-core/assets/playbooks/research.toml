@@ -9,11 +9,11 @@
 
 id = "research"
 name = "Research"
-summary = "Check more than one source, prefer the original, note dates, and cite where each claim came from."
+summary = "Gather sources until enough agree, prefer the original, note dates, cite claims, and stop once the bar is met."
 
-checklist = ["sources named", "answer summarized", "claims cited"]
+checklist = ["enough sources", "sources named", "answer summarized", "claims cited"]
 backup = "Nothing is changed: research only reads. Keep the link and date of each source used."
-verify = "Check each key claim against a second source; say plainly when sources disagree or only one source says it."
+verify = "Enough sources means at least two independent ones for each key claim (or one primary plus a corroborating one). Say plainly when sources disagree or only one source says it."
 rollback = "Drop any claim whose source turns out wrong or out of date, and say so."
 give_up = [
   "a hard approval was refused",
@@ -36,6 +36,9 @@ name = "Open the original source behind a claim when there is one"
 
 [[phase.step]]
 name = "Note each source's date and drop out-of-date ones"
+
+[[phase.step]]
+name = "Stop searching when two independent sources agree on each key claim, or three when they conflict; do not keep browsing past that"
 
 [[phase]]
 name = "Answer"
