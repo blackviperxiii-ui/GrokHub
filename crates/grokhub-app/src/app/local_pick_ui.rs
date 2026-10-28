@@ -69,7 +69,7 @@ impl Cabin {
         let all = choices();
         let labels: Vec<String> = all.iter().map(|m| choice_label(m, suggested)).collect();
         let shown = choice_label(current, suggested);
-        let hint = "Pick before you download. You can switch later in Settings without reinstalling GrokHub.";
+        let hint = "Pick before you download. You can switch later in Settings without reinstalling Loadout.";
         if let Some(i) = crate::cards::settings_dropdown(ui, "Local model", hint, &shown, &labels) {
             self.setup.choice = Some(all[i].id.to_string());
             return Some(all[i]);
