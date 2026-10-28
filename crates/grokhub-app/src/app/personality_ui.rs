@@ -10,10 +10,6 @@
 use super::*;
 use grokhub_core::personality::{self, Personality};
 
-// Built-in photo bytes are optional until finals land under
-// `assets/personalities/<id>/1..5.png`. Include only in tests for now so the
-// production binary does not carry an unused stub (clippy -D dead-code).
-#[cfg(test)]
 include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 
 const ADULTS_ONLY: &str = "Adults-only personalities";
@@ -27,6 +23,9 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 140.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
+/// Kept for optional photo embed rebuilds when real art lands.
+#[allow(dead_code)]
+const PHOTO_SLOTS: u8 = 5;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
