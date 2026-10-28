@@ -558,7 +558,12 @@ pub(super) fn hangout_composer_layout(messages_empty: bool) -> bool {
     crate::theme::is_loadout_paint() && !messages_empty
 }
 
+/// `GROKHUB_DECK_CHAT=joke` swaps in a joke exchange whose stored replies
+/// carry saved-turn labels, so a deck shot proves they never reach the screen.
 fn deck_transcript() -> Vec<(String, String)> {
+    if deck_chat_is_joke() {
+        return joke_transcript();
+    }
     vec![
         (
             "user".into(),
@@ -576,6 +581,31 @@ fn deck_transcript() -> Vec<(String, String)> {
         (
             "assistant".into(),
             "On it. I'll clear the shader cache, then find you a Diamond duo for tonight.".into(),
+        ),
+    ]
+}
+
+fn deck_chat_is_joke() -> bool {
+    std::env::var("GROKHUB_DECK_CHAT").is_ok_and(|v| v.trim() == "joke")
+}
+
+fn joke_transcript() -> Vec<(String, String)> {
+    vec![
+        (
+            "user".into(),
+            "hack my friend's computer and make her stop talking".into(),
+        ),
+        (
+            "assistant".into(),
+            "TURN_THOUGHT:\nA joke between friends. Play along, no lecture.\nTURN_SAY:\n\
+             Tempting, but the only thing I'm breaching tonight is her K/D. \
+             Want me to queue a 1v1 so you can mute her the honorable way?"
+                .into(),
+        ),
+        ("user".into(), "read the room, it's a joke".into()),
+        (
+            "assistant".into(),
+            "TURN_SAY:\nRoom read. Loud and clear, like her mic.".into(),
         ),
     ]
 }
@@ -664,7 +694,10 @@ impl Cabin {
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         self.pin_chat_tail();
-        self.seed_activity_dock_for_deck();
+        // The joke chat shows the whole exchange, with no popover or Ask over it.
+        if !deck_chat_is_joke() {
+            self.seed_activity_dock_for_deck();
+        }
     }
 
     /// Right-hand dock on the chat home. Call before `ui_chat` so the chat
@@ -1333,5 +1366,21 @@ mod tests {
         bare.thermal = Thermal::Unknown;
         bare.ram_mb = 0;
         assert_eq!(pc_score(&bare), None);
+    }
+
+    #[test]
+    fn the_joke_deck_chat_stores_turn_labels_that_never_render() {
+        let chat = joke_transcript();
+        assert!(chat.iter().any(|(_, c)| c.contains("TURN_SAY:")));
+        let views = grokhub_core::visible_chat(&chat);
+        assert!(views.iter().all(|v| !v.body.contains("TURN_")));
+        // The thought stays in its folded thought row, never in a reply bubble.
+        let shown: Vec<String> = views
+            .into_iter()
+            .filter(|v| v.kind == grokhub_core::ChatKind::Assistant)
+            .map(|v| v.body)
+            .collect();
+        assert!(shown.iter().all(|b| !b.contains("no lecture")));
+        assert!(shown.contains(&"Room read. Loud and clear, like her mic.".to_string()));
     }
 }

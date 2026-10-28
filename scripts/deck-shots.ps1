@@ -164,7 +164,7 @@ function Seed-Pulse([string]$cfg) {
 # and a Steam library; the shot clicks Library on the rail with $clickAt.
 # $personality is the stored pick in app.json ('default' is the preset older
 # builds shipped). $mood pins the companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [string]$chat = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -189,6 +189,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:GROKHUB_DECK_SHOT = '1'
     if ($dock -and -not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
+    $env:GROKHUB_DECK_CHAT = $chat
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -320,6 +321,9 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Layout B: the chat with objectives and recent chats left, snapshot right.
+# Chat quality: stored replies carry saved-turn labels; the chat shows only the replies.
+Shot 1600 900 'chat-joke-1600x900' 'ops-dark' '02' -dock -chat 'joke'
+Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 # Objectives (mission control) is the third icon on the rail.
