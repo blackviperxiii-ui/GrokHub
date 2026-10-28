@@ -611,7 +611,7 @@ mod tests {
              Cover: reproduced, smallest change, tests pass, summary given.\n\
              Reproduce (look only): See what is already changed (`git status`); Reproduce the failure or the ask before editing anything; Read the files and the tests around the change; Run the tests once first to know what already fails.\n\
              Change (safe, reversible): Make the smallest edit that fixes it; Add or update a test for the change; Build and run the tests after each edit; Give a short summary of the change and how it was checked.\n\
-             Bigger changes (risky, asks first): Delete files or folders the change no longer needs; Push, publish or deploy the change.\n\
+             Bigger changes (risky, asks first): Delete files or folders the change no longer needs; Before ship or release: load qa-walkthrough (and av-qa-walkthrough when audio, video, capture or streaming changed); before done run a verification step; multi-step work keeps follow-through; Push, publish or deploy the change.\n\
              Back up: Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own.\n\
              Check: After each change, build and run the tests that cover it; a change is done only when they pass and a short summary is ready.\n\
              Undo: Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed.\n\
