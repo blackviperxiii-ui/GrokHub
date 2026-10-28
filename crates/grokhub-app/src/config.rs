@@ -514,6 +514,9 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    #[serde(default)]
+    pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -736,6 +739,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
             memory_writes: true,

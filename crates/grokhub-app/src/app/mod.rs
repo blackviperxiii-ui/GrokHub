@@ -191,6 +191,7 @@ mod model_wait_ui;
 mod native_signin_tests;
 mod night;
 mod nudge_watchers_ui;
+mod screenshot_offer_ui;
 mod oauth;
 mod pages;
 pub mod panels;

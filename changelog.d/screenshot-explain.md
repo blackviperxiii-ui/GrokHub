@@ -1,0 +1,1 @@
+- Opt-in screenshot folder watch with a dismissible Explain chip; image bytes load only after the user taps (Command Centre card 49).

@@ -79,6 +79,7 @@ pub mod model_download;
 pub mod model_registry;
 pub mod models;
 pub mod nudge_watchers;
+pub mod screenshot_offer;
 pub mod oauth;
 pub mod openclaw;
 pub mod organs;
@@ -411,6 +412,11 @@ pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
     DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
+};
+pub use screenshot_offer::{
+    dismiss as dismiss_screenshot_offer, is_image_name, newest_in_watch_dirs,
+    tick as tick_screenshot_offer, watch_dirs, ScreenshotExplainSettings, ScreenshotOfferLedger,
+    TickOutcome, CHIP_LABEL, CHIP_TTL_MS, DISMISS_LABEL, EXPLAIN_PROMPT,
 };
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,

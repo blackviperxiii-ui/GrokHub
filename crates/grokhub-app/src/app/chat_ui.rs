@@ -18,6 +18,7 @@ pub(super) enum ComposerStackSlot {
     /// Steer / Queue for typed text during a run, queued messages, background runs.
     LiveWork,
     SlashPalette,
+    ScreenshotOffer,
     Chips,
     Attach,
     Voice,
@@ -175,6 +176,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::SessionTools,
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
         ComposerStackSlot::Pill,
@@ -190,6 +192,7 @@ fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Chips,
+        ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
     ]
@@ -2850,6 +2853,9 @@ impl Cabin {
                         if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                             self.take_chip_act(act, &chips);
                         }
+                    }
+                    ComposerStackSlot::ScreenshotOffer => {
+                        self.ui_screenshot_offer_chip(ui);
                     }
                     ComposerStackSlot::Attach => {
                         self.ui_attach_tray(ui);
