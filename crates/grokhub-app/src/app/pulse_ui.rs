@@ -1991,6 +1991,10 @@ impl Cabin {
             self.proactive_click(id);
             return None;
         }
+        if self.pulse_card(id)?.pulse.print_alert.is_some() {
+            self.print_alert_run(id);
+            return None;
+        }
         self.pulse_run_line(id)
     }
 
