@@ -696,6 +696,7 @@ impl Cabin {
     }
 
     /// A card's hidden chat goes with the card, along with its Grok Build session.
+    /// Hard-remove (no Recently deleted) — these are not user History chats.
     fn drop_idea_thread(&mut self, thread_id: Option<&str>) {
         let Some(idx) = thread_id.and_then(|tid| {
             self.threads
@@ -704,7 +705,7 @@ impl Cabin {
         }) else {
             return;
         };
-        self.delete_thread_at(idx);
+        self.hard_drop_thread_at(idx);
     }
 
     fn forget_idea_view(&mut self, id: &str) {

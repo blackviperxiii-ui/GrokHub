@@ -354,8 +354,8 @@ fn chat_side_effects_keep_the_origin_thread() {
         "the projects section does not offer New project"
     );
     assert!(
-        src.contains("on_hover_text(\"New folder\")") && src.contains("self.stage_new_folder()"),
-        "projects + creates a folder"
+        src.contains("fn stage_new_folder("),
+        "folder create helper stays after the chat drawer left"
     );
     let rename = src
         .split("Slash::ProjectRename")
@@ -535,8 +535,14 @@ fn chat_side_effects_keep_the_origin_thread() {
     );
     let deleted = fn_src(&src, "delete_thread_at");
     assert!(
-        deleted.contains("drop_leaving_thread_chrome"),
+        deleted.contains("land_after_soft_delete")
+            || deleted.contains("drop_leaving_thread_chrome"),
         "deleting the visible tab must drop plus-attach and followup budget: {deleted}"
+    );
+    let land = fn_src(&src, "land_after_soft_delete");
+    assert!(
+        land.contains("drop_leaving_thread_chrome"),
+        "soft-delete land must drop plus-attach and followup budget: {land}"
     );
     let verify = src
         .split("fn run_skill_verify")
@@ -805,11 +811,16 @@ fn chat_side_effects_keep_the_origin_thread() {
     let deleted = src
         .split("fn delete_thread_at")
         .nth(1)
-        .and_then(|s| s.split("fn send_chat").next())
+        .and_then(|s| s.split("fn delete_all_history").next())
         .expect("delete_thread_at");
     assert!(
-        deleted.contains("goal.step") && deleted.contains("self.goal_step"),
-        "deleting the visible tab must adopt the next tab's goal step: {deleted}"
+        deleted.contains("land_after_soft_delete") && deleted.contains("self.goal_step"),
+        "deleting the visible tab lands on another live chat (goal via apply_switch_thread): {deleted}"
+    );
+    let switch = fn_src(&src, "apply_switch_thread");
+    assert!(
+        switch.contains("goal.step") && switch.contains("self.goal_step"),
+        "switching tabs must adopt the next tab's goal step: {switch}"
     );
     assert!(
         src.contains("let goal_step = threads.get(thread_idx)"),
