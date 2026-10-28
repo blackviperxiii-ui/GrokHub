@@ -1,0 +1,51 @@
+# GrokHub playbook: Steam library, sales, and patch news (read-only).
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+
+id = "game-news-library"
+name = "Game news & library"
+summary = "Summarize what is installed, on sale, or in patch notes from read-only library and web sources; purchases still ask first."
+
+checklist = [
+  "library or sale source named",
+  "patch or sale dates shown",
+  "read-only unless user approves a buy",
+]
+backup = "Purchases and account changes always ask first; keep links to anything bought."
+verify = "Double-check sale end dates and patch version against a second source when possible."
+rollback = "Refund or undo only through the store the user approves."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["research"]
+domain = ["gaming"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "List installed games from the local library when the ask is about what to play"
+
+[[phase.step]]
+name = "Search current sales and patch notes with dates; prefer official store or publisher pages"
+
+[[phase]]
+name = "Answer"
+tier = "read_only"
+
+[[phase.step]]
+name = "Summarize what matters for this user; link each claim"
+
+[[phase]]
+name = "Buy"
+tier = "risky"
+
+[[phase.step]]
+name = "Never complete a purchase until the user approves on a risky step"
