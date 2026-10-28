@@ -935,7 +935,7 @@ impl Cabin {
                 if self.nav != Nav::Settings {
                     self.settings_back = self.nav;
                 }
-                self.settings_sec = SettingsSec::Account;
+                self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Account);
                 Nav::Settings
             }
             "skills" => Nav::Skills,

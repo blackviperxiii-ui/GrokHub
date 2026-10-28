@@ -1,6 +1,7 @@
-//! Settings → Personality (a card per preset, with Try it, Duplicate and an editor for
-//! the user's own) and the quick switch in the chat header. A chat can pick its own
-//! personality; "Make default" saves that pick as the default for every chat. Switching
+//! Settings → Personality (deck slide 19): a card grid of every preset, a selected
+//! detail panel with the sample line and an amber Talk as button, plus Try it,
+//! Duplicate and an editor for the user's own. A chat can pick its own personality;
+//! "Make default" / Talk as saves that pick as the default for every chat. Switching
 //! is silent apart from the status line. Custom presets live in `{config}/personalities/`.
 
 use super::*;
@@ -9,6 +10,12 @@ use grokhub_core::personality::{self, Personality};
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses Default.";
+/// Width of the selected detail panel beside the grid (slide 19).
+const DETAIL_W: f32 = 260.0;
+/// Below this the detail panel stacks under the grid.
+const TWO_COL_MIN_W: f32 = 560.0;
+const GRID_GAP: f32 = 10.0;
+const CARD_MIN_W: f32 = 148.0;
 
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +39,8 @@ pub(super) struct PickerState {
     pub problems: Vec<String>,
     pub loaded: bool,
     pub draft: Option<Draft>,
+    /// Which preset the detail panel shows. Empty means the current default.
+    pub focus: Option<String>,
 }
 
 /// A custom preset open in the editor.
@@ -370,6 +379,14 @@ impl Cabin {
         let mut adults = self.cfg.explicit_personalities;
         if crate::cards::settings_toggle(ui, ADULTS_ONLY, ADULTS_ONLY_HINT, &mut adults) {
             self.set_explicit_personalities(adults);
+            // An explicit focus drops when adults-only turns off.
+            if !adults {
+                if let Some(id) = self.picker.focus.clone() {
+                    if personality::lookup(&presets_dir(), &id).explicit {
+                        self.picker.focus = None;
+                    }
+                }
+            }
         }
         ui.add_space(10.0);
         if self.picker.draft.is_some() {
@@ -380,34 +397,87 @@ impl Cabin {
         for problem in self.picker.problems.clone() {
             crate::cards::settings_note(ui, &format!("Skipped {problem}"));
         }
-        let current = shown_id(&self.cfg.personality).to_string();
-        let mut act_on: Option<(CardAct, String)> = None;
-        // Two cards a row. A Frame's size is only known after it paints, so rows are
-        // laid out by hand instead of with horizontal_wrapped.
-        let card_w = ((ui.available_width() - 12.0) / 2.0).max(220.0);
-        for pair in presets.chunks(2) {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                for p in pair {
-                    let on = p.id == current;
-                    let tried = self
-                        .picker
-                        .shown
-                        .as_ref()
-                        .filter(|(id, _)| *id == p.id)
-                        .map(|(_, state)| state.clone());
-                    if let Some(act) = paint_preset_card(ui, p, on, tried.as_ref(), card_w) {
-                        act_on = Some((act, p.id.clone()));
+        let current = self
+            .allowed_id(shown_id(self.cfg.personality.trim()))
+            .to_string();
+        let focus = focus_id(&self.picker.focus, &current, &presets);
+        let tried = self
+            .picker
+            .shown
+            .as_ref()
+            .filter(|(id, _)| *id == focus)
+            .map(|(_, state)| state.clone());
+        let focused = personality::find(&presets, &focus);
+        let mut act_on: Option<CardAct> = None;
+        let avail = ui.available_width();
+        let side_by_side = avail >= TWO_COL_MIN_W;
+        let detail_w = if side_by_side {
+            DETAIL_W.min(avail * 0.42)
+        } else {
+            avail
+        };
+        let grid_w = if side_by_side {
+            (avail - detail_w - GRID_GAP).max(CARD_MIN_W)
+        } else {
+            avail
+        };
+        let cols = grid_cols(grid_w);
+        let paint_grid = |ui: &mut egui::Ui, act_on: &mut Option<CardAct>| {
+            let card_w = ((grid_w - GRID_GAP * (cols.saturating_sub(1) as f32)) / cols as f32)
+                .max(CARD_MIN_W);
+            for row in presets.chunks(cols) {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = GRID_GAP;
+                    for p in row {
+                        let selected = p.id == focus;
+                        if let Some(act) = paint_grid_card(ui, p, selected, card_w) {
+                            *act_on = Some(act);
+                        }
                     }
+                });
+                ui.add_space(GRID_GAP);
+            }
+        };
+        if side_by_side {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GRID_GAP;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(grid_w, ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| paint_grid(ui, &mut act_on),
+                );
+                if let Some(act) = paint_detail_panel(
+                    ui,
+                    &focused,
+                    focused.id == current,
+                    tried.as_ref(),
+                    detail_w,
+                ) {
+                    act_on = Some(act);
                 }
             });
+        } else {
+            if let Some(act) = paint_detail_panel(
+                ui,
+                &focused,
+                focused.id == current,
+                tried.as_ref(),
+                detail_w,
+            ) {
+                act_on = Some(act);
+            }
             ui.add_space(12.0);
+            paint_grid(ui, &mut act_on);
         }
         match act_on {
-            Some((CardAct::Use, id)) => self.set_default_personality(&id),
-            Some((CardAct::Try, id)) => self.try_personality(&id),
-            Some((CardAct::Duplicate, id)) => self.duplicate_personality(&id),
-            Some((CardAct::Edit, id)) => self.edit_personality(&id),
+            Some(CardAct::Focus(id)) => self.picker.focus = Some(id),
+            Some(CardAct::Talk(id)) => {
+                self.picker.focus = Some(id.clone());
+                self.set_default_personality(&id);
+            }
+            Some(CardAct::Try(id)) => self.try_personality(&id),
+            Some(CardAct::Duplicate(id)) => self.duplicate_personality(&id),
+            Some(CardAct::Edit(id)) => self.edit_personality(&id),
             None => {}
         }
     }
@@ -598,120 +668,367 @@ impl Cabin {
 }
 
 enum CardAct {
-    Use,
-    Try,
-    Duplicate,
-    Edit,
+    Focus(String),
+    Talk(String),
+    Try(String),
+    Duplicate(String),
+    Edit(String),
 }
 
-fn paint_preset_card(
+/// How many grid columns fit in `width` (slide 19 is four-up when wide).
+fn grid_cols(width: f32) -> usize {
+    let n = ((width + GRID_GAP) / (CARD_MIN_W + GRID_GAP)).floor() as usize;
+    n.clamp(1, 4)
+}
+
+/// The detail panel's preset: a still-visible focus, else the current default.
+fn focus_id(focus: &Option<String>, current: &str, presets: &[Personality]) -> String {
+    if let Some(id) = focus.as_deref() {
+        if presets.iter().any(|p| p.id == id) {
+            return id.to_string();
+        }
+    }
+    if presets.iter().any(|p| p.id == current) {
+        current.to_string()
+    } else {
+        presets
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| personality::DEFAULT_ID.to_string())
+    }
+}
+
+/// Amber Talk as label on the detail panel (slide 19 / acceptance).
+fn talk_label(name: &str) -> String {
+    format!("TALK AS {}", name.trim().to_uppercase())
+}
+
+/// First letter of the display name for the card avatar.
+fn initial_letter(name: &str) -> char {
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .unwrap_or('?')
+}
+
+fn paint_letter_tile(ui: &mut egui::Ui, letter: char, size: f32, hot: bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let radius = (size * 0.27).clamp(6.0, 18.0);
+    let fill = if hot {
+        crate::theme::selected()
+    } else {
+        crate::theme::hover()
+    };
+    let stroke = if crate::theme::is_loadout_paint() {
+        egui::Stroke::new(if hot { 2.0 } else { 1.0 }, crate::theme::signal_red())
+    } else {
+        egui::Stroke::new(1.0, crate::theme::border())
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+    let font = if size >= 48.0 {
+        crate::theme::loadout_font(size * 0.42)
+    } else {
+        crate::theme::loadout_font(15.0)
+    };
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(letter.to_string(), font, crate::theme::fg()));
+    let pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(pos, galley, crate::theme::fg());
+}
+
+fn paint_tag_chip(ui: &mut egui::Ui, label: &str, kind: TagKind) {
+    let (fill, stroke, ink) = match kind {
+        TagKind::Default => (
+            crate::theme::hover(),
+            egui::Stroke::new(1.0, crate::theme::border()),
+            crate::theme::muted(),
+        ),
+        TagKind::Roast => (
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(1.0, crate::theme::signal_red()),
+            crate::theme::signal_red(),
+        ),
+        TagKind::Explicit => (
+            crate::theme::amber(),
+            egui::Stroke::NONE,
+            crate::theme::void_bg(),
+        ),
+        TagKind::Yours => (
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(1.0, crate::theme::border()),
+            crate::theme::muted(),
+        ),
+    };
+    egui::Frame::NONE
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(6, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(label).size(11.0).strong().color(ink));
+        });
+}
+
+#[derive(Clone, Copy)]
+enum TagKind {
+    Default,
+    Roast,
+    Explicit,
+    Yours,
+}
+
+fn paint_preset_tags(ui: &mut egui::Ui, p: &Personality, detail: bool) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if p.id == personality::DEFAULT_ID {
+            paint_tag_chip(ui, "Default", TagKind::Default);
+        }
+        if p.explicit {
+            let label = if detail {
+                "Explicit · 18+"
+            } else {
+                "Explicit"
+            };
+            paint_tag_chip(ui, label, TagKind::Explicit);
+        }
+        if p.roast {
+            paint_tag_chip(ui, "Roast", TagKind::Roast);
+        }
+        if p.custom {
+            paint_tag_chip(ui, "Yours", TagKind::Yours);
+        }
+    });
+}
+
+fn paint_grid_card(
     ui: &mut egui::Ui,
     p: &Personality,
-    on: bool,
+    selected: bool,
+    width: f32,
+) -> Option<CardAct> {
+    let mut act = None;
+    let loadout = crate::theme::is_loadout_paint();
+    let (fill, stroke) = if loadout {
+        let look = crate::ui_kit::recipe::look(
+            crate::ui_kit::recipe::Part::Card,
+            if selected {
+                crate::ui_kit::recipe::State::Selected
+            } else {
+                crate::ui_kit::recipe::State::Default
+            },
+        );
+        (look.fill, look.stroke)
+    } else if selected {
+        (
+            crate::theme::surface(),
+            egui::Stroke::new(1.0, crate::theme::fg()),
+        )
+    } else {
+        (
+            crate::theme::surface(),
+            egui::Stroke::new(1.0, crate::theme::border()),
+        )
+    };
+    let resp = egui::Frame::NONE
+        .fill(fill)
+        .corner_radius(if loadout {
+            crate::ui_kit::recipe::CARD_RADIUS
+        } else {
+            12.0
+        })
+        .stroke(stroke)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width((width - 24.0).max(80.0));
+            ui.set_min_height(88.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(&p.name)
+                            .size(crate::theme::FONT_BODY)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    paint_preset_tags(ui, p, false);
+                });
+            });
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(&p.description)
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            );
+        })
+        .response
+        .interact(egui::Sense::click());
+    let resp = crate::theme::pointing(resp);
+    if resp.clicked() {
+        act = Some(CardAct::Focus(p.id.clone()));
+    }
+    act
+}
+
+fn paint_detail_panel(
+    ui: &mut egui::Ui,
+    p: &Personality,
+    in_use: bool,
     tried: Option<&TryState>,
     width: f32,
 ) -> Option<CardAct> {
     let mut act = None;
-    let stroke = if on {
-        crate::theme::fg()
+    let loadout = crate::theme::is_loadout_paint();
+    let (fill, stroke) = if loadout {
+        (
+            crate::theme::selected(),
+            egui::Stroke::new(2.0, crate::theme::signal_red()),
+        )
     } else {
-        crate::theme::border()
+        (
+            crate::theme::surface(),
+            egui::Stroke::new(1.5, crate::theme::fg()),
+        )
     };
     egui::Frame::NONE
-        .fill(crate::theme::surface())
-        .corner_radius(12.0)
-        .stroke(egui::Stroke::new(1.0_f32, stroke))
-        .inner_margin(egui::Margin::same(12))
+        .fill(fill)
+        .corner_radius(if loadout {
+            crate::ui_kit::recipe::CARD_RADIUS
+        } else {
+            12.0
+        })
+        .stroke(stroke)
+        .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            ui.set_width(width - 24.0);
-            // Each card stacks its own rows.
-            ui.vertical(|ui| paint_preset_rows(ui, p, on, tried, &mut act));
-        });
-    act
-}
-
-fn paint_preset_rows(
-    ui: &mut egui::Ui,
-    p: &Personality,
-    on: bool,
-    tried: Option<&TryState>,
-    act: &mut Option<CardAct>,
-) {
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(&p.name)
-                .size(crate::theme::FONT_BODY)
-                .strong()
-                .color(crate::theme::fg()),
-        );
-        if p.explicit {
-            crate::cards::status_chip(ui, "Explicit", crate::cards::ChipTone::Setup);
-        }
-        if p.custom {
-            crate::cards::status_chip(ui, "Yours", crate::cards::ChipTone::Mute);
-        }
-        if on {
-            crate::cards::status_chip(ui, "In use", crate::cards::ChipTone::Live);
-        }
-    });
-    ui.label(
-        RichText::new(&p.description)
-            .size(crate::theme::FONT_META)
-            .color(crate::theme::muted()),
-    );
-    if !p.sample.trim().is_empty() {
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(format!("\u{201c}{}\u{201d}", p.sample.trim()))
-                .size(crate::theme::FONT_META)
-                .italics()
-                .color(crate::theme::subtle()),
-        );
-    }
-    match tried {
-        Some(TryState::Running) => {
-            ui.add_space(4.0);
+            ui.set_width((width - 32.0).max(160.0));
+            ui.set_min_height(320.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                super::loadout_home::diamond(ui, true);
+                ui.label(
+                    RichText::new("SELECTED")
+                        .size(crate::theme::TYPE_CAPTION)
+                        .extra_letter_spacing(1.2)
+                        .color(crate::theme::amber()),
+                );
+            });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                paint_letter_tile(ui, initial_letter(&p.name), 64.0, true);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(&p.name)
+                            .font(crate::theme::loadout_font(28.0))
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.add_space(4.0);
+                    paint_preset_tags(ui, p, true);
+                });
+            });
+            ui.add_space(12.0);
             ui.label(
-                RichText::new("Trying…")
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-        }
-        Some(TryState::Reply(text)) => {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(text)
-                    .size(crate::theme::FONT_META)
+                RichText::new(&p.description)
+                    .size(crate::theme::FONT_BODY)
                     .color(crate::theme::fg()),
             );
-        }
-        Some(TryState::Failed(why)) => {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!("Try it failed: {why}"))
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::offline()),
-            );
-        }
-        None => {}
-    }
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        if !on && crate::cards::ghost_pill(ui, "Use") {
-            *act = Some(CardAct::Use);
-        }
-        let busy = matches!(tried, Some(TryState::Running));
-        if !busy && crate::cards::ghost_pill(ui, "Try it") {
-            *act = Some(CardAct::Try);
-        }
-        if p.custom {
-            if crate::cards::ghost_pill(ui, "Edit") {
-                *act = Some(CardAct::Edit);
+            if !p.sample.trim().is_empty() {
+                ui.add_space(10.0);
+                let sample_stroke = if loadout {
+                    egui::Stroke::new(1.0, crate::theme::signal_red())
+                } else {
+                    egui::Stroke::new(1.0, crate::theme::border())
+                };
+                egui::Frame::NONE
+                    .fill(crate::theme::void_bg())
+                    .stroke(sample_stroke)
+                    .corner_radius(10.0)
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(format!("\u{201c}{}\u{201d}", p.sample.trim()))
+                                .size(crate::theme::FONT_META)
+                                .italics()
+                                .color(crate::theme::fg()),
+                        );
+                    });
             }
-        } else if crate::cards::ghost_pill(ui, "Duplicate") {
-            *act = Some(CardAct::Duplicate);
-        }
-    });
+            match tried {
+                Some(TryState::Running) => {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Trying…")
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::muted()),
+                    );
+                }
+                Some(TryState::Reply(text)) => {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(text)
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::fg()),
+                    );
+                }
+                Some(TryState::Failed(why)) => {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Try it failed: {why}"))
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::offline()),
+                    );
+                }
+                None => {}
+            }
+            ui.add_space(16.0);
+            if p.explicit {
+                ui.label(
+                    RichText::new("Adults only · opt-in")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+            }
+            let talk = talk_label(&p.name);
+            let talk_w = ui.available_width();
+            let talk_clicked = if loadout {
+                crate::ui_kit::recipe::button(
+                    ui,
+                    Some(egui::Id::new(("personality-talk", p.id.as_str()))),
+                    &talk,
+                    true,
+                    egui::vec2(talk_w, 36.0),
+                    true,
+                )
+                .clicked()
+            } else {
+                crate::cards::white_pill(ui, &talk)
+            };
+            if talk_clicked && !in_use {
+                act = Some(CardAct::Talk(p.id.clone()));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let busy = matches!(tried, Some(TryState::Running));
+                if !busy && crate::cards::ghost_pill(ui, "Try it") {
+                    act = Some(CardAct::Try(p.id.clone()));
+                }
+                if p.custom {
+                    if crate::cards::ghost_pill(ui, "Edit") {
+                        act = Some(CardAct::Edit(p.id.clone()));
+                    }
+                } else if crate::cards::ghost_pill(ui, "Duplicate") {
+                    act = Some(CardAct::Duplicate(p.id.clone()));
+                }
+            });
+        });
+    act
 }
 
 #[cfg(test)]
@@ -1049,5 +1366,79 @@ mod tests {
         assert_eq!(cabin.speech_voice(), "eve");
         cabin.set_chat_personality("pirate");
         assert_eq!(cabin.speech_voice(), grokhub_core::DEFAULT_VOICE, "no hint");
+    }
+
+    #[test]
+    fn talk_label_is_uppercase_talk_as_name() {
+        assert_eq!(talk_label("Viper"), "TALK AS VIPER");
+        assert_eq!(
+            talk_label(" Sarcastic Sidekick "),
+            "TALK AS SARCASTIC SIDEKICK"
+        );
+    }
+
+    #[test]
+    fn grid_cols_cap_at_four_and_need_room_for_each() {
+        assert_eq!(grid_cols(100.0), 1);
+        assert_eq!(grid_cols(320.0), 2);
+        assert_eq!(grid_cols(500.0), 3);
+        assert_eq!(grid_cols(900.0), 4);
+        assert_eq!(grid_cols(2000.0), 4);
+    }
+
+    #[test]
+    fn focus_falls_back_when_the_id_is_hidden_or_missing() {
+        let presets = personality::builtins();
+        let visible = personality::visible(&presets, false);
+        assert!(!visible.iter().any(|p| p.id == "viper"));
+        assert_eq!(
+            focus_id(&Some("viper".into()), "nyx", &visible),
+            "nyx",
+            "explicit focus drops when adults-only is off"
+        );
+        assert_eq!(focus_id(&None, "pirate", &visible), "pirate");
+        assert_eq!(
+            focus_id(&Some("no-such".into()), "butler", &visible),
+            "butler"
+        );
+        assert_eq!(initial_letter("Viper"), 'V');
+        assert_eq!(initial_letter("84s Hacker"), '8');
+    }
+
+    #[test]
+    fn the_picker_source_keeps_slide_19_chrome() {
+        let src = include_str!("personality_ui.rs");
+        for want in [
+            "SELECTED",
+            "TALK AS",
+            "Explicit · 18+",
+            "Roast",
+            "Adults only · opt-in",
+            "paint_detail_panel",
+            "paint_grid_card",
+            "DETAIL_W",
+        ] {
+            assert!(src.contains(want), "missing {want}");
+        }
+        assert!(
+            src.contains("CardAct::Talk") && src.contains("CardAct::Try"),
+            "Talk as and Try it both stay reachable"
+        );
+        assert!(
+            src.contains("CardAct::Duplicate") && src.contains("CardAct::Edit"),
+            "Duplicate and Edit stay reachable"
+        );
+    }
+
+    #[test]
+    fn settings_pins_personality_for_deck_shots() {
+        let src = include_str!("settings.rs");
+        assert!(src.contains("GROKHUB_DECK_SETTINGS_SEC"));
+        assert!(src.contains("pinned_settings_sec"));
+        assert!(src.contains("settings_modal_size"));
+        let shots = include_str!("../../../../scripts/deck-shots.ps1");
+        assert!(shots.contains("-personality"));
+        assert!(shots.contains("personality-1600x900"));
+        assert!(shots.contains("slide-19") || shots.contains("'19'"));
     }
 }
