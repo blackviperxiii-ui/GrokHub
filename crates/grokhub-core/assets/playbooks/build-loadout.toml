@@ -1,25 +1,22 @@
-# GrokHub playbook: PC parts and in-game loadout advice with dated prices.
+# GrokHub playbook: PC parts or in-game loadout comparisons.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
 # replaces the shipped one; Reset puts the shipped one back.
-#
-# Look steps only read. Safe steps can be undone. Risky steps ask you first,
-# every time; a playbook can never make GrokHub skip an approval.
 
 id = "build-loadout"
-name = "Build and loadout"
-summary = "Compare two or three PC parts or in-game loadout options with dated prices. Recommend one; a buy step still asks first."
+name = "Build & loadout"
+summary = "Compare two or three PC part options or in-game loadouts with dated prices or stats; say trade-offs plainly and never auto-buy."
 
 checklist = [
   "goal and budget clear",
   "two or three options compared",
-  "prices dated",
-  "one pick recommended",
+  "prices or stats dated",
+  "no purchase unless the user approves",
 ]
-backup = "Nothing is bought until approval: keep the compared options and price dates in the reply so they can be revised."
-verify = "The reply compares two or three options, dates each price, and names one pick; no purchase was placed on its own."
-rollback = "If a wrong price or option was shown, correct it in one short follow-up and stop."
+backup = "Shopping or config edits need a copy or screenshot of the prior state first."
+verify = "Confirm the choice fits the stated budget and goal before any risky step."
+rollback = "Undo a purchase or config change if the user rejects it."
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
@@ -35,24 +32,21 @@ name = "Look"
 tier = "read_only"
 
 [[phase.step]]
-name = "Clarify the goal (PC parts or in-game loadout), budget, platform and any must-have parts or gear"
+name = "Clarify PC upgrade vs in-game loadout and the budget or rank goal"
 
 [[phase.step]]
-name = "Read this PC's current parts when the ask is a PC upgrade, so advice fits what is already here"
+name = "Read this PC's specs when the ask is about parts"
 
 [[phase]]
 name = "Compare"
-tier = "safe"
+tier = "read_only"
 
 [[phase.step]]
-name = "Compare two or three options with a short line each: fit, trade-offs and a price with its date"
-
-[[phase.step]]
-name = "Recommend one pick and say why; do not place an order or buy anything"
+name = "Lay out two or three options with dated prices or patch-era stats and name trade-offs"
 
 [[phase]]
-name = "Buy"
+name = "Act"
 tier = "risky"
 
 [[phase.step]]
-name = "Open a buy link or place an order only after approval — never purchase on your own"
+name = "Only open a store page or change a build after explicit approval"

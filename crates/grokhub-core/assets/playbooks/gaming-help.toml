@@ -1,24 +1,22 @@
-# GrokHub playbook: tips, settings and mods for a game, dated to its patch.
+# GrokHub playbook: in-game tips, settings, and mods for a title.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
 # replaces the shipped one; Reset puts the shipped one back.
-#
-# Look steps only read. Safe steps can be undone. Risky steps ask you first,
-# every time; a playbook can never make GrokHub skip an approval.
 
 id = "gaming-help"
 name = "Gaming help"
-summary = "Give tips, settings and mod advice dated to the game's current patch. No spoilers unless the user asks for them."
+summary = "Answer how-to questions for a named game: cite the patch version or date, give settings or mod steps, and skip story spoilers unless the user asks."
 
 checklist = [
-  "patch or version named",
-  "tips fit that patch",
-  "no spoilers unless asked",
+  "game and patch version noted",
+  "steps match the user's platform",
+  "no unrequested spoilers",
+  "sources or patch notes cited when used",
 ]
-backup = "Nothing is changed: gaming help only advises. Note the patch or build the tip was checked against."
-verify = "Every tip names the patch or build it fits; spoilers stay out unless the user asked for them."
-rollback = "If a tip was for the wrong patch or spoiled something, correct it in one short follow-up and stop."
+backup = "Read-only unless the user asks to change a config; then copy the file before editing."
+verify = "Ask whether the tip worked in-game or if a step needs adjusting."
+rollback = "Restore the backed-up config or undo the last change if something broke."
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
@@ -34,17 +32,14 @@ name = "Look"
 tier = "read_only"
 
 [[phase.step]]
-name = "Name the game and the patch, build or season the advice is for"
+name = "Confirm the game title, platform, and patch or season when known"
 
 [[phase.step]]
-name = "Ask whether spoilers are ok when the tip would reveal plot, drops or unlocks"
+name = "Check official patch notes or docs dated to that version before recommending a setting or mod"
 
 [[phase]]
-name = "Advise"
-tier = "safe"
+name = "Answer"
+tier = "read_only"
 
 [[phase.step]]
-name = "Give tips, settings or mod advice that fits that patch; skip spoilers unless asked"
-
-[[phase.step]]
-name = "Cite the patch notes or an official source when the tip depends on a recent change"
+name = "Give concrete steps; skip story spoilers unless the user asked for them"

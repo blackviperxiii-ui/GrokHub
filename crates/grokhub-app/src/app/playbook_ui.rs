@@ -306,11 +306,7 @@ mod tests {
         assert_eq!(fits_line(&cabin.playbooks.all[5]), "Fits research");
         assert_eq!(
             fits_line(&cabin.playbooks.all[7]),
-            "Fits task, repair, question · gaming"
-        );
-        assert_eq!(
-            steps_line(&cabin.playbooks.all[7]),
-            "8 steps, up to Risky, asks first"
+            "Fits question, research, task · library"
         );
         assert_eq!(
             fits_line(&cabin.playbooks.all[8]),
@@ -318,11 +314,15 @@ mod tests {
         );
         assert_eq!(
             fits_line(&cabin.playbooks.all[9]),
-            "Fits task, question, research · loadout"
+            "Fits task, repair, question · gaming"
+        );
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[9]),
+            "8 steps, up to Risky, asks first"
         );
         assert_eq!(
             fits_line(&cabin.playbooks.all[10]),
-            "Fits question, research, task · library"
+            "Fits task, question, research · loadout"
         );
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
@@ -374,14 +374,10 @@ mod tests {
                 ("files", "Files", Source::Shipped),
                 ("research", "Research", Source::Shipped),
                 ("desktop", "Desktop apps", Source::Shipped),
-                ("game-tuning", "Game tuning", Source::Shipped),
+                ("game-news-library", "Game news & library", Source::Shipped),
                 ("gaming-help", "Gaming help", Source::Shipped),
-                ("build-loadout", "Build and loadout", Source::Shipped),
-                (
-                    "game-news-library",
-                    "Game news and library",
-                    Source::Shipped
-                ),
+                ("game-tuning", "Game tuning", Source::Shipped),
+                ("build-loadout", "Build & loadout", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );

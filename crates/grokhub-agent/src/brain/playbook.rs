@@ -350,10 +350,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
-                ("game-tuning", Source::Shipped),
-                ("gaming-help", Source::Shipped),
-                ("build-loadout", Source::Shipped),
                 ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
+                ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -375,10 +375,10 @@ mod tests {
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
                 ("desktop", Source::Shipped),
-                ("game-tuning", Source::Shipped),
-                ("gaming-help", Source::Shipped),
-                ("build-loadout", Source::Shipped),
                 ("game-news-library", Source::Shipped),
+                ("gaming-help", Source::Shipped),
+                ("game-tuning", Source::Shipped),
+                ("build-loadout", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
