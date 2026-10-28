@@ -707,6 +707,7 @@ impl Cabin {
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "night" | "automations" => Nav::Night,
             "agents" | "queue" => Nav::Agents,
             "devices" => Nav::Devices,

@@ -183,6 +183,7 @@ mod local_pick_ui;
 mod local_probe;
 mod local_signals;
 mod marketplace_ui;
+mod mission_page;
 mod mission_ui;
 mod model_download_ui;
 mod model_wait_ui;
@@ -274,6 +275,7 @@ enum Nav {
     Imagine,
     Skills,
     Library,
+    Objectives,
     Night,
     History,
     Journal,
@@ -5386,6 +5388,7 @@ impl eframe::App for Cabin {
                     Nav::Imagine => self.ui_imagine(ui),
                     Nav::Skills => self.ui_skills(ui),
                     Nav::Library => self.ui_library(ui),
+                    Nav::Objectives => self.ui_mission_control(ui),
                     Nav::Night => self.ui_night(ui),
                     Nav::History => self.ui_history(ui),
                     Nav::Journal => self.ui_journal(ui),

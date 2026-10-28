@@ -34,7 +34,7 @@ const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
 /// XP for each finished task in the outcome log and each checked step.
 const XP_PER_TASK: u32 = 100;
 const XP_PER_STEP: u32 = 25;
-const XP_PER_LEVEL: u32 = 500;
+pub(super) const XP_PER_LEVEL: u32 = 500;
 
 /// The companion's pose on slide 17: Hello waves you in, Helping holds the
 /// checklist while a tool runs, Hanging out is just talking.
@@ -125,7 +125,7 @@ pub(super) fn level_xp(finished: usize, checked: usize) -> (u32, u32, f32) {
 }
 
 /// `2340` as `2,340`.
-fn grouped(n: u32) -> String {
+pub(super) fn grouped(n: u32) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -207,6 +207,13 @@ fn gb(mb: u64) -> String {
 
 /// Up to four tiles from what the probes actually read; blanks are skipped.
 pub(super) fn pc_tiles(p: &LocalProfile) -> Vec<PcTile> {
+    let mut tiles = pc_tile_list(p);
+    tiles.truncate(4);
+    tiles
+}
+
+/// Every tile the probes could fill, in the dock's order.
+pub(super) fn pc_tile_list(p: &LocalProfile) -> Vec<PcTile> {
     let gpu = p
         .gpus
         .iter()
@@ -255,7 +262,6 @@ pub(super) fn pc_tiles(p: &LocalProfile) -> Vec<PcTile> {
             value: gb(p.free_disk_mb),
         });
     }
-    tiles.truncate(4);
     tiles
 }
 
@@ -294,7 +300,7 @@ fn profile_slot() -> &'static Mutex<ProfileSlot> {
 }
 
 /// The last hardware read; starts a background re-read when it's stale.
-fn pc_profile() -> Option<LocalProfile> {
+pub(super) fn pc_profile() -> Option<LocalProfile> {
     let mut slot = profile_slot().lock().unwrap_or_else(|e| e.into_inner());
     let stale = slot.read_at.is_none_or(|t| t.elapsed() >= PROFILE_REFRESH);
     if stale && !slot.reading {
@@ -360,7 +366,13 @@ pub(super) fn diamond(ui: &mut egui::Ui, filled: bool) {
 
 /// Card title on the left, after an amber diamond when `mark` is set, and a
 /// count or score on the right in `right_color`.
-fn header(ui: &mut egui::Ui, mark: bool, title: &str, right: &str, right_color: egui::Color32) {
+pub(super) fn header(
+    ui: &mut egui::Ui,
+    mark: bool,
+    title: &str,
+    right: &str,
+    right_color: egui::Color32,
+) {
     ui.horizontal(|ui| {
         if mark {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -630,7 +642,7 @@ impl Cabin {
     }
 
     /// Finished tasks in the outcome log, re-read every [`XP_REFRESH`].
-    fn dock_finished_tasks(&self, ctx: &egui::Context) -> usize {
+    pub(super) fn dock_finished_tasks(&self, ctx: &egui::Context) -> usize {
         type Cached = (Instant, usize);
         let id = egui::Id::new("loadout-finished-tasks");
         if let Some((at, n)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
@@ -778,7 +790,6 @@ impl Cabin {
 }
 
 fn dock_pc(ui: &mut egui::Ui) {
-    use crate::ui_kit::recipe;
     let profile = pc_profile();
     card(ui, |ui| {
         let score = profile
@@ -795,53 +806,58 @@ fn dock_pc(ui: &mut egui::Ui) {
             );
             return;
         };
-        let tiles = pc_tiles(&p);
-        let gap = crate::theme::SPACING_8;
-        let w = (ui.available_width() - gap) / 2.0;
-        for row in tiles.chunks(2) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for (i, t) in row.iter().enumerate() {
-                    // The GPU tile is the selected one: amber rim and value.
-                    let picked = i == 0 && t.label == "GPU";
-                    let (stroke, ink) = if picked {
-                        (
-                            recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
-                            crate::theme::amber(),
-                        )
-                    } else {
-                        (
-                            egui::Stroke::new(1.0, crate::theme::border()),
-                            crate::theme::fg(),
-                        )
-                    };
-                    egui::Frame::NONE
-                        .fill(crate::theme::void_bg())
-                        .stroke(stroke)
-                        .corner_radius(recipe::BUTTON_RADIUS)
-                        .inner_margin(egui::Margin::same(8))
-                        .show(ui, |ui| {
-                            // Inner margin 8 and the rim on each side.
-                            ui.set_width(w - 16.0 - stroke.width * 2.0);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(caption(t.label));
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&t.value)
-                                            .size(crate::theme::TYPE_LABEL)
-                                            .strong()
-                                            .color(ink),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(&t.value);
-                            });
-                        });
-                }
-            });
-        }
+        pc_tile_grid(ui, &pc_tiles(&p));
     });
+}
+
+/// PC tiles two to a row; the GPU tile wears the amber rim.
+pub(super) fn pc_tile_grid(ui: &mut egui::Ui, tiles: &[PcTile]) {
+    use crate::ui_kit::recipe;
+    let gap = crate::theme::SPACING_8;
+    let w = (ui.available_width() - gap) / 2.0;
+    for row in tiles.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (i, t) in row.iter().enumerate() {
+                // The GPU tile is the selected one: amber rim and value.
+                let picked = i == 0 && t.label == "GPU";
+                let (stroke, ink) = if picked {
+                    (
+                        recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
+                        crate::theme::amber(),
+                    )
+                } else {
+                    (
+                        egui::Stroke::new(1.0, crate::theme::border()),
+                        crate::theme::fg(),
+                    )
+                };
+                egui::Frame::NONE
+                    .fill(crate::theme::void_bg())
+                    .stroke(stroke)
+                    .corner_radius(recipe::BUTTON_RADIUS)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        // Inner margin 8 and the rim on each side.
+                        ui.set_width(w - 16.0 - stroke.width * 2.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(caption(t.label));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&t.value)
+                                        .size(crate::theme::TYPE_LABEL)
+                                        .strong()
+                                        .color(ink),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&t.value);
+                        });
+                    });
+            }
+        });
+    }
 }
 
 #[cfg(test)]
