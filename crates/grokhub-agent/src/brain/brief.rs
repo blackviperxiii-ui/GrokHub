@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|general\"}";
+\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -99,7 +99,7 @@ pub struct Brief {
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
     /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
-    /// `game-help`, `loadout`, `library` or `general`.
+    /// `game-help`, `loadout`, `library`, `planning` or `general`.
     pub domain: String,
     /// `rules`, `model`, or `default` (unclear and no model call).
     pub by: String,
@@ -388,6 +388,22 @@ const LIBRARY_PHRASES: &[&str] = &[
     "store page",
     "in my library",
 ];
+/// One day plan: "plan my day", schedule today. Not a calendar booking.
+const PLAN_DAY_PHRASES: &[&str] = &[
+    "plan my day",
+    "plan the day",
+    "plan today",
+    "plan for today",
+    "plan my today",
+    "schedule my day",
+    "organize my day",
+    "organise my day",
+    "what should i do today",
+    "what should i do for today",
+    "day plan",
+    "today's plan",
+    "todays plan",
+];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
 
@@ -409,6 +425,10 @@ fn is_library(t: &str, ws: &[&str]) -> bool {
         return false;
     }
     any_phrase(t, LIBRARY_PHRASES)
+}
+
+fn is_plan_day(t: &str) -> bool {
+    any_phrase(t, PLAN_DAY_PHRASES)
 }
 
 fn words(t: &str) -> Vec<&str> {
@@ -446,6 +466,9 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
         (Intent::Task, "desktop") => &["the asked change is made", "result checked on screen"],
+        (Intent::Task, "planning") | (Intent::Question, "planning") => {
+            &["one plan drafted", "nothing booked automatically"]
+        }
         (Intent::Question, "gaming") => &[
             "hardware read from this PC",
             "recommendation fits this GPU",
@@ -472,9 +495,14 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
             "no purchase on its own",
         ],
         (Intent::Task, _) => &["the asked change is made", "result checked"],
-        (Intent::Question, _) => &["answered"],
-        (Intent::Research, _) => &["sources named", "answer summarized"],
-        (Intent::Creative, _) => &["draft delivered"],
+        (Intent::Question, _) => &["answered first", "no task offered"],
+        (Intent::Research, _) => &[
+            "enough sources",
+            "sources named",
+            "answer summarized",
+            "claims cited",
+        ],
+        (Intent::Creative, _) => &["draft delivered", "one line after"],
         (Intent::Background, _) => &["job finished"],
         (Intent::Chat, _) => &["answered"],
     };
@@ -537,6 +565,8 @@ fn domain_of(
         "game-help"
     } else if is_gaming(t, ws) {
         "gaming"
+    } else if is_plan_day(t) {
+        "planning"
     } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
@@ -603,6 +633,9 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
         Intent::Research
+    } else if is_plan_day(&t) {
+        // "plan my day" / "what should I do today" → one plan, not a task dump.
+        Intent::Task
     } else if TASK_VERBS.contains(&first)
         || input.files > 0
         || !input.tools.is_empty()
@@ -1059,6 +1092,27 @@ mod tests {
                 Intent::Repair,
                 Care::Critical,
                 "general",
+                "calm",
+            ),
+            (
+                "plan my day around standup and a 3pm call",
+                Intent::Task,
+                Care::Careful,
+                "planning",
+                "calm",
+            ),
+            (
+                "what should I do today?",
+                Intent::Task,
+                Care::Careful,
+                "planning",
+                "calm",
+            ),
+            (
+                "schedule my day with deep work first",
+                Intent::Task,
+                Care::Careful,
+                "planning",
                 "calm",
             ),
         ];
