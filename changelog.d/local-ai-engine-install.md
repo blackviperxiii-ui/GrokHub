@@ -1,0 +1,1 @@
+- Local AI: Get engine install in the shell Settings panel, restore the Muse/Gemma install-and-run draft offer, and wire Manual draft On/Off into the sidecar. Engine downloads allow GitHub's `release-assets.githubusercontent.com` CDN redirect.
