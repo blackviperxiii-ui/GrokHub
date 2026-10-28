@@ -1578,6 +1578,16 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
     ));
+    let rust_step = grokhub_core::next_step(
+        grokhub_core::HobbyId::Rust,
+        &grokhub_core::HobbyProgress::default(),
+    )
+    .expect("rust step");
+    rows.push((
+        "tick_hobby_paths",
+        grokhub_core::hobby_path_card(grokhub_core::HobbyId::Rust, rust_step, now),
+        "Rust",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
