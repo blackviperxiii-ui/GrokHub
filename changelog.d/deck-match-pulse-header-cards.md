@@ -1,0 +1,1 @@
+- Restyle Pulse to slides 13 and 15: outlined amber Feed/Ideas tabs, amber group diamonds, signal-red icon tiles, amber AUTOMATE tags, and the existing amber Run / red-outline Snooze / quiet Dismiss row actions

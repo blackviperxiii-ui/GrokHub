@@ -25,7 +25,8 @@ struct IdeasPass {
     reduced: bool,
 }
 
-/// The group mark: an amber diamond on Up next, a hollow one on categories.
+/// The group mark: a filled amber diamond on Up next, a hollow amber one on
+/// categories (deck slides 13 / 15).
 fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
     let c = rect.center();
@@ -36,10 +37,14 @@ fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
         c + egui::vec2(0.0, r),
         c + egui::vec2(-r, 0.0),
     ];
+    let amber = crate::theme::amber();
     let shape = if filled {
-        egui::Shape::convex_polygon(pts, crate::theme::amber(), egui::Stroke::NONE)
+        egui::Shape::convex_polygon(pts, amber, egui::Stroke::NONE)
     } else {
-        egui::Shape::closed_line(pts, egui::Stroke::new(1.5_f32, crate::theme::muted()))
+        egui::Shape::closed_line(
+            pts,
+            egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, amber),
+        )
     };
     ui.painter().add(shape);
 }
