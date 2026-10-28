@@ -219,7 +219,9 @@ function Write-ModelDrop([string]$root) {
 # $achievements turns the achievement nudges on and runs the weekly check on
 # canned Steam replies (GROKHUB_DECK_ACHIEVEMENTS), for slide 14.
 # $modelDrop seeds a 3D model in Downloads for slide 14.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$achievements, [switch]$modelDrop, [string]$nav = '') {
+# $localModels turns the local model suggestions on and runs the weekly check
+# on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$achievements, [switch]$localModels, [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -260,6 +262,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Write-Utf8 (Join-Path $cfg 'pulse-steam-achievements.json') '{"on":true,"lastCheckMs":0}'
         $env:GROKHUB_DECK_ACHIEVEMENTS = '1'
     } else { Remove-Item Env:GROKHUB_DECK_ACHIEVEMENTS -ErrorAction SilentlyContinue }
+    if ($localModels) {
+        Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
+        $env:GROKHUB_DECK_LOCAL_MODELS = '1'
+    } else { Remove-Item Env:GROKHUB_DECK_LOCAL_MODELS -ErrorAction SilentlyContinue }
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
@@ -420,6 +426,10 @@ Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 # the feed sits under Up next, so that shot scrolls down to it.
 Shot 1600 900 'achievements-1600x900' 'ops-dark' '14' -pulse -achievements -nav 'pulse'
 Shot 1100 720 'achievements-1100x720-scrolled' 'ops-dark' '14' -pulse -achievements -nav 'pulse' -wheel 12
+# New local models: the catalog upgrade post on top of Pulse; at 1100x720
+# the feed sits under Up next, so that shot scrolls down to it.
+Shot 1600 900 'local-models-1600x900' 'ops-dark' '14' -pulse -localModels -nav 'pulse'
+Shot 1100 720 'local-models-1100x720-scrolled' 'ops-dark' '14' -pulse -localModels -nav 'pulse' -wheel 12
 # 3D model drop: the new-model post with its preview on top of Pulse.
 Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
 Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'

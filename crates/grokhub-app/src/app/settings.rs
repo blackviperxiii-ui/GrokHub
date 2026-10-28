@@ -1110,6 +1110,8 @@ impl Cabin {
                                                             let cwd = self.grok_cwd();
                                                             crate::native_plugins::paint(ui, &cwd);
                                                             ui.add_space(12.0);
+                                                            self.ui_labs_diagnostics(ui);
+                                                            ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")
                                                                     .size(crate::theme::FONT_UI)

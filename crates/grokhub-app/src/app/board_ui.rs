@@ -791,6 +791,8 @@ impl Cabin {
                                 false,
                                 fold,
                                 last_reply == Some(i),
+                                false,
+                                1,
                             )
                         })
                         .inner;
@@ -827,6 +829,7 @@ impl Cabin {
                 }
                 ui.memory_mut(|m| m.request_focus(board_chat_edit_id(card_id)));
             }
+            ChatBlockAct::SaveDiagnostics(_) => {}
             ChatBlockAct::None => {}
         }
     }
