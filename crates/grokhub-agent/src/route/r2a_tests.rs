@@ -731,7 +731,7 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
     let _ = live::take_no_route();
     assert_eq!(
         send("grok-4.7", "one more").unwrap_err(),
-        ClientError::Protocol(live::NO_ROUTE_MSG.into())
+        ClientError::Protocol((*live::NO_ROUTE_MSG).into())
     );
     assert_eq!(echo.0.lock().unwrap().len(), before);
     let (class, model, why) = live::take_no_route().unwrap();

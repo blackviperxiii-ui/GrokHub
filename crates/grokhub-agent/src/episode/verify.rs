@@ -15,9 +15,11 @@ use crate::tools::ToolOutput;
 use crate::CancelToken;
 
 /// The checker's only instructions.
-pub const JUDGE_SYSTEM: &str = "You are GrokHub's VerifyGate. You did not do this task and you do not see how it was done. \
+pub static JUDGE_SYSTEM: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("You are {product}'s VerifyGate. You did not do this task and you do not see how it was done. \
 You get the goal and the final state of the desktop. Reply with exactly VERIFY_OK when the final state shows the goal is met. \
-Otherwise reply REJECT: followed by one short reason.";
+Otherwise reply REJECT: followed by one short reason.")
+});
 
 /// The checker's last try, after two calls that could not run, goes up the
 /// route ladder: it routes as the worker's class (`episode:step`, at the
@@ -118,7 +120,7 @@ pub fn verify_call_at(
     let input = vec![
         InputItem::Message {
             role: "system".into(),
-            content: vec![ContentPart::InputText(JUDGE_SYSTEM.into())],
+            content: vec![ContentPart::InputText((*JUDGE_SYSTEM).into())],
         },
         InputItem::Message {
             role: "user".into(),

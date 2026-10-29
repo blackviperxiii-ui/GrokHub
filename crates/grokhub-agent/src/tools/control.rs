@@ -100,7 +100,7 @@ pub fn scheduler_create_schema() -> Value {
     json!({
         "type": "function",
         "name": "scheduler_create",
-        "description": "Create or update a GrokHub automation. interval is at least 60s and at most 1d (10m, 1h, 1d). The job is stored in automations.json and the existing pulse fires it. fire_immediately makes the next run due now.",
+        "description": grokhub_core::brand::filled("Create or update a {product} automation. interval is at least 60s and at most 1d (10m, 1h, 1d). The job is stored in automations.json and the existing pulse fires it. fire_immediately makes the next run due now."),
         "parameters": {
             "type": "object",
             "properties": {
@@ -603,7 +603,7 @@ mod tests {
         write_automation("sweep the inbox", 30, false, None, now).unwrap();
         assert_eq!(
             write_automation("water the plants", 60, false, None, now + 1).unwrap_err(),
-            "Not added: GrokHub already made 2 automations on its own this week. \
+            "Not added: Loadout already made 2 automations on its own this week. \
              Keep one from its Work-tree row, or add this one yourself on the Automations page."
         );
         assert_eq!(

@@ -152,10 +152,10 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
          concrete thing to do now that moves open work forward."
             .into(),
         "- Be concrete: name the project, file, tool, or routine. No generic advice or productivity tips.".into(),
-        "Good: \"automation | I can run your GrokHub tests before you sit down | Your GrokHub tests run before you sit down. | You asked to run \
-         the GrokHub tests on 4 different days this week. | Every weekday at 8 the cabin runs the GrokHub tests \
+        "Good: \"automation | I can run your my-app tests before you sit down | Your my-app tests run before you sit down. | You asked to run \
+         the my-app tests on 4 different days this week. | Every weekday at 8 the cabin runs the my-app tests \
          and posts any failure to your feed, so you start on red instead of finding it later. | every weekday at \
-         8, run cargo test in ~/GrokHub and summarize failures\"."
+         8, run cargo test in ~/my-app and summarize failures\"."
             .into(),
         "Bad: \"automation | Driver update check\" after they installed a driver once; a skill and an automation \
          for the same ask; anything about chips; \"Set up: ...\"; \"A next step\"; restating a sentence they typed."

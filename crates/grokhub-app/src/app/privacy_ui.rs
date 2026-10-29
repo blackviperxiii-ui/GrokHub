@@ -139,12 +139,13 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
             hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then choose Try again.".into(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("Restore this data's key in your {name}, then choose Try again.")
+            // The key is filed under its stable keychain service, not the display brand.
+            format!("Restore this data's {} key in your {name}, then choose Try again.", hx::KEY_SERVICE)
         }
         hx::Locked::Busy => "Wait a moment for the other window, then choose Try again.".into(),
         hx::Locked::Unwritable => format!(
-            "Allow {} to write its settings folder, then choose Try again.",
-            grokhub_core::brand::product_name()
+            "Allow writing to the {} config folder, then choose Try again.",
+            grokhub_core::brand::INTERNAL_ID
         ),
     }
 }
@@ -159,14 +160,15 @@ pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> Strin
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
             format!(
-                "restore this data's key in your {}",
+                "restore this data's {} key in your {}",
+                hx::KEY_SERVICE,
                 hx::keyring_name_for(os)
             )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
         hx::Locked::Unwritable => format!(
-            "allow {} to write its settings folder",
-            grokhub_core::brand::product_name()
+            "allow writing to the {} config folder",
+            grokhub_core::brand::INTERNAL_ID
         ),
     };
     format!("Next: {step}, then Try again in Settings → Permissions.")
@@ -1147,6 +1149,24 @@ mod tests {
         assert_eq!(
             lock_next_step_short(&u, Linux),
             "Next: unlock or start your system password store, then Try again in Settings → Permissions."
+        );
+        for why in [hx::Locked::Missing, hx::Locked::WrongKey] {
+            assert_eq!(
+                lock_next_step(&why, Windows),
+                "Restore this data's GrokHub key in your Windows Credential Manager, then choose Try again."
+            );
+            assert_eq!(
+                lock_next_step_short(&why, Windows),
+                "Next: restore this data's GrokHub key in your Windows Credential Manager, then Try again in Settings → Permissions."
+            );
+        }
+        assert_eq!(
+            lock_next_step(&hx::Locked::Unwritable, Linux),
+            "Allow writing to the GrokHub config folder, then choose Try again."
+        );
+        assert_eq!(
+            lock_next_step_short(&hx::Locked::Unwritable, Linux),
+            "Next: allow writing to the GrokHub config folder, then Try again in Settings → Permissions."
         );
         assert_eq!(hx::keyring_name_for(Windows), "Windows Credential Manager");
         assert_eq!(hx::keyring_name_for(MacOs), "macOS Keychain");

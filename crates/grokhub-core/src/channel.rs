@@ -680,32 +680,36 @@ pub fn update_fail_hint(output: &str) -> &'static str {
 /// dirty clone, Rust too old, no clone, clone on the other branch, build failed.
 fn specific_fail_hint(s: &str) -> Option<&'static str> {
     Some(if s.contains("untracked working tree files would be") {
-        "Your GrokHub source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."
+        crate::brand::filled("Your {product} source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again.")
     } else if s.contains("uncommitted changes")
         || s.contains("would be overwritten by")
         || s.contains("you have unstaged changes")
         || s.contains("commit your changes or stash them")
     {
-        "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
+        crate::brand::filled("Your {product} source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
     } else if s.contains("requires rustc")
         || s.contains("rustc") && s.contains("is not supported")
         || s.contains("rust-version")
     {
-        "GrokHub needs a newer Rust to build. Run rustup update, then try again."
+        crate::brand::filled(
+            "{product} needs a newer Rust to build. Run rustup update, then try again.",
+        )
     } else if s.contains("not a grokhub source")
         || s.contains("can't find its source folder")
         || s.contains("no clone")
         || s.contains("set settings → source")
         || s.contains("grokhub_src")
     {
-        "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
+        crate::brand::filled(
+            "{product} can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).",
+        )
     } else if s.contains("is on main but the beta channel") || s.contains("source clone is on main")
     {
-        "Your GrokHub source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."
+        crate::brand::filled("Your {product} source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta).")
     } else if s.contains("is on beta but the stable channel")
         || s.contains("source clone is on beta")
     {
-        "Your GrokHub source folder is on beta, but GrokHub is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."
+        crate::brand::filled("Your {product} source folder is on beta, but {product} is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main).")
     } else if s.contains("build failed")
         || s.contains("cargo")
         || s.contains("could not compile")
@@ -752,9 +756,10 @@ pub fn channel_switch_preflight(
     }
     match source {
         Some(p) if is_source_tree(p) => Ok(()),
-        Some(_) | None => Err(
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
-        ),
+        Some(_) | None => Err(crate::brand::filled(
+            "{product} can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).",
+        )
+        .into()),
     }
 }
 
@@ -790,11 +795,11 @@ mod channel_switch_tests {
     fn fail_hints_are_literal_and_specific() {
         assert_eq!(
             channel_switch_fail_hint("error: /x has uncommitted changes; commit or stash"),
-            "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
+            "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
         );
         assert_eq!(
             channel_switch_fail_hint("not a GrokHub source tree — set Settings → source"),
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
+            "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
         );
         assert_eq!(
             channel_switch_fail_hint("error: could not compile `grokhub-app`"),
@@ -820,13 +825,13 @@ mod channel_switch_tests {
         let on_beta = "source clone is on beta — checkout main, then Update";
         let untracked = "error: The following untracked working tree files would be overwritten by merge:\n\tdocs/notes.md\nPlease move or remove them before you merge.";
         for (out, hint) in [
-            (untracked, "Your GrokHub source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."),
-            (dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
-            (pull_dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
-            (rustc, "GrokHub needs a newer Rust to build. Run rustup update, then try again."),
-            ("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).", "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."),
-            (on_main, "Your GrokHub source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."),
-            (on_beta, "Your GrokHub source folder is on beta, but GrokHub is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."),
+            (untracked, "Your Loadout source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."),
+            (dirty, "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
+            (pull_dirty, "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
+            (rustc, "Loadout needs a newer Rust to build. Run rustup update, then try again."),
+            ("Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).", "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."),
+            (on_main, "Your Loadout source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."),
+            (on_beta, "Your Loadout source folder is on beta, but Loadout is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."),
             ("error: could not compile `grokhub-app`", "Build failed — previous install kept."),
         ] {
             assert_eq!(update_fail_hint(out), hint, "{out}");
@@ -870,7 +875,7 @@ mod channel_switch_tests {
         assert_eq!(
             channel_switch_preflight(false, None),
             Err(
-                "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
+                "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
                     .into()
             )
         );

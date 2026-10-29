@@ -141,7 +141,7 @@ pub fn self_review_system_prompt() -> &'static str {
      PATCH_SKILL: skill:<name> | <short title> | <the full new steps, numbered, on one line>\n\
      When the failures share a cause no single skill fixes, you may add one general note for chat replies:\n\
      TUNE_SNIPPET: snippet:<short-name> | <short title> | <one or two sentences, at most 300 characters>\n\
-     When a failure needs a change to GrokHub's own code, describe it for its developers, at most 2:\n\
+     When a failure needs a change to {product}'s own code, describe it for its developers, at most 2:\n\
      CODE_IDEA: <short title> | <the problem, in a sentence> | <the evidence from the numbers above>\n\
      Only skills listed may be patched. Never propose changes to permissions, approval rules, \
      the hard-action list, consent, network access, honesty rules, {product}'s code, or how changes are reviewed; \

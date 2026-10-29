@@ -247,7 +247,9 @@ fn provider_pick() -> String {
 
 /// The text a call that paused returns: no healthy, included model could take
 /// it. The cabin waits and resumes it on its own ([`super::wait`]).
-pub const NO_ROUTE_MSG: &str = "No model in your plan is answering right now. GrokHub keeps checking and picks this back up on its own once one answers; Home shows which models it's waiting on.";
+pub static NO_ROUTE_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("No model in your plan is answering right now. {product} keeps checking and picks this back up on its own once one answers; Home shows which models it's waiting on.")
+});
 
 /// A pause the cabin hasn't shown yet: (class, model, what failed).
 static NO_ROUTE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
@@ -430,7 +432,7 @@ impl Decision {
             None if self.route.rule_ids.iter().any(|r| r == "local:paused") => {
                 super::local::LOCAL_PAUSED_MSG
             }
-            None => NO_ROUTE_MSG,
+            None => *NO_ROUTE_MSG,
         }
     }
 
@@ -700,13 +702,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             .and_then(|r| expected_cost_usd(&r.meta.prices, call.class, call.ctx_tokens))
             .unwrap_or(0.0);
         (!b.admits_background(est)).then_some(if b.used_up() {
-            budget::BUDGET_PAUSE_MSG
+            *budget::BUDGET_PAUSE_MSG
         } else {
             budget::BACKGROUND_PAUSE_MSG
         })
     } else if b.used_up() && BudgetNotes::load(config_dir).must_ask(&b) {
         *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()) = true;
-        Some(budget::BUDGET_PAUSE_MSG)
+        Some(*budget::BUDGET_PAUSE_MSG)
     } else {
         None
     };

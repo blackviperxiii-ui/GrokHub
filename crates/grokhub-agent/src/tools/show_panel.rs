@@ -11,8 +11,9 @@ pub const SHOW_PANEL: &str = "show_panel";
 
 const CONFIG_NAME: &str = "generative_ui.toml";
 
-const NOT_ENABLED: &str =
-    "show_panel is not enabled; set enabled = true in generative_ui.toml under the GrokHub config folder";
+static NOT_ENABLED: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("show_panel is not enabled; set enabled = true in generative_ui.toml under the {product} config folder")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Settings {
@@ -71,7 +72,7 @@ pub fn schema() -> Value {
 
 pub fn run(args: &Value) -> ToolOutput {
     if !enabled(&crate::perm::config_dir()) {
-        return ToolOutput::err(NOT_ENABLED);
+        return ToolOutput::err(*NOT_ENABLED);
     }
     let raw = match serde_json::to_string(args) {
         Ok(s) => s,
