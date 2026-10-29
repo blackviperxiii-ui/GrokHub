@@ -107,3 +107,10 @@ Shot 1100 720 'game-launch-1100x720' 'ops-dark' '14' -library -pulse -gameLaunch
 # At 1100x720 the feed sits under Up next; scroll down to the post.
 Shot 1100 720 'game-launch-1100x720-scrolled' 'ops-dark' '14' -library -pulse -gameLaunch -nav 'pulse' -wheel 12
 Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord
+# Card 49: Screenshot explain — composer chip (Hangout) and Settings → Behavior.
+# Settings shots rely on GROKHUB_DECK_SETTINGS_SEC=behavior opening Nav::Settings
+# in apply_deck_shot_seed (SendKeys/gear clicks miss on 1600×900 in CI).
+Shot 1600 900 'screenshot-chip-1600x900' 'ops-dark' '02' -screenshotOffer
+Shot 1100 720 'screenshot-chip-1100x720' 'ops-dark' '02' -screenshotOffer
+Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior
+Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior
