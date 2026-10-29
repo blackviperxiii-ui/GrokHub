@@ -1,8 +1,14 @@
 name: auto-merge
 # Squash auto-merge for PRs into beta unless held. Never checks out PR code;
 # required status checks still gate the actual merge.
+# pull_request, not pull_request_target: pull_request_target only runs from the
+# default branch (main), so this file never fired while it lived on beta alone.
+# Fork PRs are skipped by the job's same-repo check.
+# AUTO_MERGE_TOKEN (optional, fine-grained, contents + pull requests write) makes
+# the merge count as a push that starts beta workflows; github.token merges
+# don't start them.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, ready_for_review, synchronize, labeled, unlabeled, reopened]
     branches: [beta]
   pull_request_review:
@@ -13,7 +19,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   auto-merge:
-    if: github.event.pull_request.base.ref == 'beta' && github.event.pull_request.head.repo.full_name == github.repository
+    # Bot reviews (Copilot) only comment; their runs need approval and fail.
+    if: >-
+      github.event.pull_request.base.ref == 'beta' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name != 'pull_request_review' || github.event.review.user.type != 'Bot')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -22,6 +32,7 @@ jobs:
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          github-token: ${{ secrets.AUTO_MERGE_TOKEN || github.token }}
           script: |
             const HOLD = ['needs-windows-shots', 'visual', 'hold'];
             const { owner, repo } = context.repo;
