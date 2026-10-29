@@ -31,7 +31,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 tar = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Diagnostics: the real Desktop (Windows known folder / OneDrive, XDG user dirs).
-dirs = "6"
+dirs = ">=6, <8"
 ureq = { workspace = true }
 
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
