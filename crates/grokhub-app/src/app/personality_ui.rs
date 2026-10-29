@@ -127,21 +127,28 @@ fn try_it_input(p: &Personality) -> Vec<grokhub_agent::InputItem> {
         .collect()
 }
 
-/// Runs one Try it on its route. Off the UI thread. `cancel` stops a
-/// provider or local call; a Grok call ends at its own timeout.
+/// Runs one Try it on its route. Off the UI thread. Every route ends within
+/// [`TRY_IT_TIMEOUT`]; `cancel` drops a reply that comes back after it fired.
 fn run_try_it(
     route: TryRoute,
     p: &Personality,
     cancel: &grokhub_agent::CancelToken,
 ) -> Result<String, String> {
     match route {
-        TryRoute::Xai(key) => grok_chat(
+        TryRoute::Xai(key) => crate::xai::grok_chat_within(
             &key,
             model_for_mode("fast"),
             &personality::try_it_messages(p),
-            None,
-            None,
-        ),
+            TRY_IT_TIMEOUT,
+            &|| cancel.is_cancelled(),
+        )
+        .and_then(|text| {
+            if cancel.is_cancelled() {
+                Err("cancelled".into())
+            } else {
+                Ok(text)
+            }
+        }),
         TryRoute::Provider(model) => {
             let req = grokhub_agent::ResponsesRequest {
                 model: model.clone(),
@@ -567,6 +574,9 @@ impl Cabin {
 
     fn try_personality(&mut self, id: &str) {
         let Some(route) = self.try_route() else {
+            // A Try it still running would land its reply over this line.
+            self.cancel_try_it();
+            self.picker.rx = None;
             // Signed out: the card shows the sign-in line, never a red failure.
             // A provider pick without its key or grant says what is missing.
             self.picker.shown = (!self.cfg.provider_model.trim().is_empty())
@@ -1904,6 +1914,24 @@ mod tests {
                 "pirate".to_string(),
                 TryState::Failed("No reply after 45 seconds. Try again.".into())
             ))
+        );
+    }
+
+    #[test]
+    fn a_try_it_with_nowhere_to_go_still_stops_the_one_running() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.cfg.provider_model = "openrouter/vendor/x".into();
+        let first = grokhub_agent::CancelToken::new();
+        cabin.picker.cancel = Some(first.clone());
+        let (_tx, rx) = mpsc::channel();
+        cabin.picker.rx = Some(rx);
+        assert_eq!(cabin.try_route(), None, "no key or grant for that provider");
+        cabin.try_personality("pirate");
+        assert!(first.is_cancelled(), "the earlier call is stopped");
+        assert!(cabin.picker.rx.is_none(), "its late reply can't land");
+        assert_eq!(
+            cabin.picker.shown,
+            Some(("pirate".into(), TryState::Failed(TRY_IT_NO_PROVIDER.into())))
         );
     }
 

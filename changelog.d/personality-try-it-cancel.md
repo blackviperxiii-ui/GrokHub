@@ -1,1 +1,1 @@
-- Personality "Try it" stops its model call when it times out or when you click Try it again, so repeated clicks no longer pile up provider or local model calls in the background, and a provider call now ends at the 45-second limit.
+- Personality "Try it" drops the call it replaces or that timed out, so a late reply no longer lands over the new one. Every route now ends within the 45-second limit: a provider call is bounded by it, and a Grok call shares it across its Responses and Chat Completions attempts and skips the second once cancelled.
