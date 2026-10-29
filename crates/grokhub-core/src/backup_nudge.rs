@@ -146,6 +146,9 @@ pub struct NudgeState {
     /// restart. Snooze clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder: Option<Reminder>,
+    /// The `source_id` of that reminder's own post.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub card_source: String,
 }
 
 impl NudgeState {
@@ -442,6 +445,7 @@ mod tests {
         };
         state.reminder = reminder(&[repo("my-app", 2, 4)], &[], &[], NOW);
         state.reminder.as_mut().unwrap().tool = Some(BackupTool::Snapper);
+        state.card_source = "backup-nudge:20833".into();
         save(&dir, &state).unwrap();
         assert_eq!(load(&dir), state);
         let _ = std::fs::remove_dir_all(&dir);

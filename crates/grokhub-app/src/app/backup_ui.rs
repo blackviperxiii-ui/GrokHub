@@ -16,6 +16,8 @@ pub(super) struct BackupState {
     rx: Option<mpsc::Receiver<Option<Reminder>>>,
     checked: bool,
     reminder: Option<Reminder>,
+    /// The `source_id` of the post the reminder belongs to.
+    card_source: String,
 }
 
 fn check(code_folders: &[String], important: &[String], now: u64) -> Option<Reminder> {
@@ -47,7 +49,7 @@ impl Cabin {
         if !std::mem::replace(&mut self.focus.backup.checked, true) {
             let now = now_ms();
             let state = bn::load(&crate::config::config_dir());
-            self.restore_backup_reminder(state.reminder.clone());
+            self.restore_backup_reminder(state.reminder.clone(), &state.card_source);
             if !state.may_show(now) {
                 return;
             }
@@ -70,30 +72,35 @@ impl Cabin {
     }
 
     /// After a restart: the saved reminder's one-taps come back while its
-    /// Pulse post is still there.
-    fn restore_backup_reminder(&mut self, saved: Option<Reminder>) {
-        let posted = self.updates.iter().any(|c| {
-            c.source_id.starts_with(bn::CARD_SOURCE)
-                && c.status != grokhub_core::UpdateStatus::Dismissed
-        });
+    /// own Pulse post is still there (not an older day's post).
+    fn restore_backup_reminder(&mut self, saved: Option<Reminder>, card_source: &str) {
+        let posted = !card_source.is_empty()
+            && self.updates.iter().any(|c| {
+                c.source_id == card_source && c.status != grokhub_core::UpdateStatus::Dismissed
+            });
         if let Some(reminder) = saved.filter(|_| posted) {
             self.focus.backup.reminder = Some(reminder);
+            self.focus.backup.card_source = card_source.to_string();
             self.chip_paint_key.clear();
         }
     }
 
     fn show_backup_reminder(&mut self, reminder: Reminder, now: u64) {
-        if grokhub_core::post_update(&mut self.updates, reminder.card(now)) {
+        let card = reminder.card(now);
+        let card_source = card.source_id.clone();
+        if grokhub_core::post_update(&mut self.updates, card) {
             self.persist_updates();
         }
         let dir = crate::config::config_dir();
         let mut state = bn::load(&dir);
         state.last_shown_ms = now;
         state.reminder = Some(reminder.clone());
+        state.card_source = card_source.clone();
         if let Err(err) = bn::save(&dir, &state) {
             self.status = err;
         }
         self.focus.backup.reminder = Some(reminder);
+        self.focus.backup.card_source = card_source;
         self.chip_paint_key.clear();
     }
 
@@ -123,12 +130,16 @@ impl Cabin {
         let mut state = bn::load(&dir);
         state.snooze(now_ms());
         state.reminder = None;
-        self.status = match bn::save(&dir, &state) {
-            Ok(()) => format!("Backup reminders snoozed for {} days.", bn::SNOOZE_DAYS),
-            Err(err) => format!("Couldn't save the snooze: {err}"),
-        };
-        self.focus.backup.reminder = None;
-        self.chip_paint_key.clear();
+        state.card_source.clear();
+        match bn::save(&dir, &state) {
+            Ok(()) => {
+                self.status = format!("Backup reminders snoozed for {} days.", bn::SNOOZE_DAYS);
+                self.focus.backup.reminder = None;
+                self.chip_paint_key.clear();
+            }
+            // The one-taps stay so the snooze can be tried again.
+            Err(err) => self.status = format!("Couldn't save the snooze: {err}"),
+        }
         true
     }
 
@@ -139,7 +150,8 @@ impl Cabin {
         ui: &mut egui::Ui,
         card: &grokhub_core::UpdateCard,
     ) -> Option<String> {
-        if !card.source_id.starts_with(bn::CARD_SOURCE) {
+        // Only on the reminder's own post, not an older day's.
+        if card.source_id != self.focus.backup.card_source {
             return None;
         }
         let chips = self.backup_chips();
@@ -307,6 +319,19 @@ mod tests {
         bare.cfg.backup_nudge = true;
         bare.tick_backup();
         assert!(bare.backup_chips().is_empty());
+        // An older day's post still up while this one was dismissed: the
+        // one-taps don't move onto it.
+        let mut older = Cabin::quiet_for_test();
+        older.cfg.backup_nudge = true;
+        older.updates = cabin.updates.clone();
+        for c in &mut older.updates {
+            if c.source_id.starts_with(bn::CARD_SOURCE) {
+                c.status = grokhub_core::UpdateStatus::Dismissed;
+            }
+        }
+        older.updates.push(reminder().card(1_000));
+        older.tick_backup();
+        assert!(older.backup_chips().is_empty());
     }
 
     #[test]
@@ -329,6 +354,10 @@ mod tests {
             cabin.status.starts_with("Couldn't save the snooze: "),
             "{}",
             cabin.status
+        );
+        assert!(
+            !cabin.backup_chips().is_empty(),
+            "the one-taps stay to try again"
         );
         let _ = std::fs::remove_file(&root);
     }
