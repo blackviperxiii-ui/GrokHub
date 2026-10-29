@@ -22,15 +22,52 @@ fn send_home_to_chat_leaves_home_for_chat() {
 }
 
 #[test]
-fn home_deck_mc_uses_slide_nine_layout() {
+fn home_deck_shot_paints_the_same_module_grid() {
     let src = include_str!("home/page.rs");
+    let body = src
+        .split("fn ui_home_mission(")
+        .nth(1)
+        .and_then(|s| s.split("fn home_header(").next())
+        .expect("ui_home_mission");
     assert!(
-        src.contains("deck_home_mc_shot") && src.contains("paint_mission_control_body"),
-        "deck home-mc must paint slide 09 layout A, not the modular grid"
+        body.contains("place_slots") && body.contains("paint_module(self, ui, id, slot.size)"),
+        "Home paints the module grid: {body}"
     );
     assert!(
-        src.contains("paint_mission_control_body(ui, w, body_h)"),
-        "deck home-mc must stretch the module row to the compose bar"
+        !body.contains("deck_home_mc_shot") && !body.contains("paint_mission_control_body"),
+        "a deck shot must not swap in a layout real users never get: {body}"
+    );
+}
+
+#[test]
+fn objectives_is_the_details_page_without_made_up_stats() {
+    let page = include_str!("mission_page.rs");
+    let paint = include_str!("home/paint.rs");
+    for src in [page, paint] {
+        assert!(!src.contains("+12%"), "no hardcoded win rate");
+        assert!(!src.contains("Coach:"), "no coach line without a real stat");
+    }
+    let control = page
+        .split("fn ui_mission_control(")
+        .nth(1)
+        .and_then(|s| s.split("fn mission_header(").next())
+        .expect("ui_mission_control");
+    assert!(
+        control.contains("mission_objectives") && !control.contains("Up next"),
+        "Objectives shows the checklist, not a second Home: {control}"
+    );
+    assert!(
+        !page.contains("fn mission_pc(") && !page.contains("fn mission_compose("),
+        "the PC card and composer live on Home only"
+    );
+    let objectives = paint
+        .split("fn paint_objectives(")
+        .nth(1)
+        .and_then(|s| s.split("\nfn ").next())
+        .expect("paint_objectives");
+    assert!(
+        objectives.contains("ModuleAction::Nav(\"objectives\")"),
+        "Home's objectives card opens the Objectives details: {objectives}"
     );
 }
 
