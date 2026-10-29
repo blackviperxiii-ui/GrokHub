@@ -335,9 +335,19 @@ mod tests {
         assert!(!why.contains(&FAKE_ID.to_string()));
     }
 
+    /// A fresh config folder for this test, so parallel test processes never
+    /// share the real one's achievements file.
+    fn isolated_config(label: &str) -> crate::config::TestConfigDir {
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        crate::config::TestConfigDir::set(root)
+    }
+
     #[test]
     fn a_finished_check_posts_the_nudge_once_and_says_so() {
         let _g = crate::config::hold_test_config();
+        let _pin = isolated_config("ach-nudge");
         let mut cabin = Cabin::quiet_for_test();
         cabin.sources.ach.tracker = Some(Tracker {
             on: true,
@@ -368,6 +378,7 @@ mod tests {
     #[test]
     fn a_failed_check_retries_in_an_hour_then_backs_off() {
         let _g = crate::config::hold_test_config();
+        let _pin = isolated_config("ach-retry");
         let mut cabin = Cabin::quiet_for_test();
         let hour = 60 * 60 * 1000;
         cabin.sources.ach.tracker = Some(Tracker {
@@ -407,6 +418,7 @@ mod tests {
     #[test]
     fn a_private_check_posts_nothing_and_flags_the_setting() {
         let _g = crate::config::hold_test_config();
+        let _pin = isolated_config("ach-private");
         let mut cabin = Cabin::quiet_for_test();
         cabin.sources.ach.tracker = Some(Tracker {
             on: true,
