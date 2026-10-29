@@ -182,6 +182,22 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Internet drop log: on, with three drops between 1 and 3 AM UTC last night
+# and no daily card yet, so the first probe after launch posts the pattern
+# card through the real path. Runners keep UTC, so the hours read as local.
+function Seed-NetLog([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow
+    $night = [DateTimeOffset]::new($now.UtcDateTime.Date, [TimeSpan]::Zero)
+    if ($now.Hour -lt 3) { $night = $night.AddDays(-1) }
+    $outages = @()
+    foreach ($d in @(@(108, 4), @(124, 11), @(151, 6))) {
+        $start = $night.AddMinutes($d[0]).ToUnixTimeMilliseconds()
+        $outages += @{ startMs = $start; endMs = $start + $d[1] * 60000; offsetMin = 0 }
+    }
+    $log = @{ on = $true; outages = $outages; slow = @(); speed = @(); lastInsightMs = 0 }
+    Write-Utf8 (Join-Path $cfg 'net-log.json') ($log | ConvertTo-Json -Depth 4)
+}
+
 # Release radar: on, never checked, and a release-day reminder that came due
 # an hour ago, so launch posts "Out today" through the real reminder path and
 # the live store check runs for the seeded library.
@@ -232,7 +248,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -251,6 +267,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($netLog) {
+        Seed-NetLog $cfg
+        $app.netLog = $true
+    }
     if ($screenshotOffer -or $pinBehavior) {
         $app.screenshotExplain = @{ enabled = $true }
     }

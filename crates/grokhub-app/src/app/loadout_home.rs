@@ -850,7 +850,6 @@ pub(super) fn deck_overflow_open() -> bool {
         .unwrap_or(false)
 }
 
-/// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
 pub(super) fn deck_last_chat_mode() -> Option<String> {
     std::env::var("GROKHUB_DECK_LAST_CHAT")
         .ok()

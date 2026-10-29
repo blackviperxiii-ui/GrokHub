@@ -40,6 +40,11 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Internet drop log: the daily pattern card on Pulse, using the single
+# GROKHUB_DECK_NAV handler in loadout_home.rs.
+Shot 1600 900 'net-log-1600x900' 'ops-dark' '14' -netLog -nav 'pulse'
+Shot 1100 720 'net-log-1100x720' 'ops-dark' '14' -netLog -nav 'pulse'
+Shot 1100 720 'net-log-1100x720-scrolled' 'ops-dark' '14' -netLog -nav 'pulse' -wheel 12
 # New local models: the catalog upgrade post on top of Pulse; at 1100x720
 # the feed sits under Up next, so that shot scrolls down to it.
 Shot 1600 900 'local-models-1600x900' 'ops-dark' '14' -pulse -localModels -nav 'pulse'

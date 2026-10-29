@@ -711,6 +711,7 @@ impl Cabin {
                                                             self.ui_screenshot_explain_settings(ui);
                                                             self.ui_pc_health_row(ui);
                                                             self.ui_code_resume_row(ui);
+                                                            self.ui_net_log_row(ui);
                                                             self.ui_game_companion_row(ui);
                                                             self.ui_model_drop_row(ui);
                                                             let mut dock_panels = self.cfg.dock_panels;

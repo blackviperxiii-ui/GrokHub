@@ -1436,6 +1436,19 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "note_probe",
+        grokhub_core::net_log::insight_card(
+            &[&grokhub_core::net_log::Outage {
+                start_ms: 2 * 60 * 60 * 1000,
+                end_ms: Some(3 * 60 * 60 * 1000),
+                offset_min: 0,
+            }],
+            now,
+        )
+        .expect("insight"),
+        "internet",
+    ));
+    rows.push((
         "finish_release_radar",
         grokhub_core::release_radar::Upcoming {
             app_id: 9,

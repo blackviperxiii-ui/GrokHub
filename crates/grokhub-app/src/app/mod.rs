@@ -197,6 +197,7 @@ mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
+mod net_log_ui;
 mod night;
 mod nudge_watchers_ui;
 mod oauth;

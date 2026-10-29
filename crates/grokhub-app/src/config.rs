@@ -428,6 +428,9 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
     /// Settings → Behavior: the game launch companion card. Off by default.
     #[serde(default)]
     pub game_companion: bool,
@@ -788,6 +791,7 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            net_log: false,
             game_companion: false,
             game_companion_ping: false,
             model_drop: false,
