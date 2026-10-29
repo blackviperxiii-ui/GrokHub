@@ -26,6 +26,8 @@ pub(super) struct FocusState {
     pub resume: super::code_resume_ui::ResumeState,
     /// Backup and unpushed-work reminders.
     pub backup: super::backup_ui::BackupState,
+    /// The game launch companion.
+    pub game: super::game_companion_ui::GameUi,
     /// New 3D models in Downloads.
     pub models: super::model_drop_ui::ModelDropState,
 }
@@ -37,7 +39,13 @@ impl Cabin {
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
         self.tick_backup();
+        self.tick_game_companion();
         self.tick_model_drop();
+    }
+
+    /// From the UI pass: what the focus helpers paint over the cabin.
+    pub(super) fn paint_focus_overlays(&mut self, ctx: &egui::Context) {
+        self.paint_game_note(ctx);
     }
 
     /// Each frame with the window's focus. Only transitions do anything.
