@@ -14,6 +14,8 @@ use grokhub_core::QuickChip;
 pub(super) struct RadarState {
     radar: Option<Radar>,
     rx: Option<mpsc::Receiver<Result<Vec<Upcoming>, String>>>,
+    /// Where the check after the running one starts; saved once it worked.
+    next_seed: Option<u32>,
     /// This session's posts, for their "Remind me" one-taps.
     offers: Vec<Upcoming>,
     pub note: String,
@@ -34,21 +36,20 @@ impl Cabin {
         }
     }
 
-    /// The games to ask about: most played first, then the wishlist.
+    /// The games to ask about: most played and wishlisted in turn.
     fn radar_seeds(&mut self, now: u64) -> (Vec<(u32, String)>, BTreeSet<u32>) {
         let mut library = self.steam_library(now).1.to_vec();
         library.sort_by_key(|g| std::cmp::Reverse(g.playtime_min));
         let owned: BTreeSet<u32> = library.iter().map(|g| g.app_id).collect();
-        let mut seeds: Vec<(u32, String)> =
-            library.into_iter().map(|g| (g.app_id, g.name)).collect();
-        seeds.extend(
-            self.wish_now()
-                .apps
-                .iter()
-                .filter(|(_, seen)| !seen.name.is_empty())
-                .map(|(id, seen)| (*id, seen.name.clone())),
-        );
-        (seeds, owned)
+        let library = library.into_iter().map(|g| (g.app_id, g.name)).collect();
+        let wishlist = self
+            .wish_now()
+            .apps
+            .iter()
+            .filter(|(_, seen)| !seen.name.is_empty())
+            .map(|(id, seen)| (*id, seen.name.clone()))
+            .collect();
+        (rr::interleave_seeds(library, wishlist), owned)
     }
 
     fn radar_bias() -> i32 {
@@ -69,6 +70,8 @@ impl Cabin {
         if seeds.is_empty() {
             return;
         }
+        let (seeds, next_seed) = self.radar_now().seed_batch(&seeds);
+        self.sources.radar.next_seed = next_seed;
         self.radar_now().last_check_ms = now;
         self.save_radar();
         self.sources.radar.note = "Looking for upcoming DLC and sequels…".into();
@@ -94,7 +97,10 @@ impl Cabin {
 
     fn finish_release_radar(&mut self, found: Result<Vec<Upcoming>, String>, now: u64) {
         let found = match found {
-            Ok(found) => found,
+            Ok(found) => {
+                self.radar_now().next_seed = self.sources.radar.next_seed;
+                found
+            }
             Err(why) => {
                 self.sources.radar.note = format!("Release check failed: {why}.");
                 return;
