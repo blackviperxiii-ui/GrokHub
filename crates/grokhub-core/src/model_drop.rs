@@ -80,7 +80,8 @@ pub fn scan_new(dir: &Path, seen: &mut BTreeSet<String>, first: bool) -> Vec<Mod
 
 type Tri = [[f32; 3]; 3];
 
-/// A model's triangles, in its own units (millimetres for STL and 3MF).
+/// A model's triangles, in its own units (millimetres for STL and 3MF; OBJ
+/// states none).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mesh {
     pub tris: Vec<Tri>,
@@ -462,12 +463,15 @@ fn shell_quote(path: &Path, windows: bool) -> String {
 }
 
 impl Slicer {
-    /// The shell line that opens `model` in this slicer.
+    /// The shell line that opens `model` in this slicer. PowerShell reads a
+    /// quoted program path as a string, so it needs `&` to run it.
     pub fn open_line(&self, model: &Path, windows: bool) -> String {
         let quote = |p: &Path| shell_quote(p, windows);
         let mut parts = vec![quote(&self.program)];
         if self.program == Path::new("flatpak") {
             parts[0] = "flatpak".into();
+        } else if windows {
+            parts.insert(0, "&".into());
         }
         parts.extend(self.args.iter().cloned());
         parts.push(quote(model));
@@ -483,9 +487,10 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// "60 × 31 × 48 mm".
-pub fn dims_line(size: [f32; 3]) -> String {
-    format!("{:.0} × {:.0} × {:.0} mm", size[0], size[1], size[2])
+/// "60 × 31 × 48 mm". OBJ carries no units, so its sizes name none.
+pub fn dims_line(size: [f32; 3], mm: bool) -> String {
+    let unit = if mm { " mm" } else { " (OBJ units)" };
+    format!("{:.0} × {:.0} × {:.0}{unit}", size[0], size[1], size[2])
 }
 
 /// One new model, ready for the Feed and the composer.
@@ -505,9 +510,21 @@ impl ModelOffer {
             .unwrap_or_else(|| self.file.name.clone())
     }
 
+    /// STL and 3MF are in millimetres; OBJ states no unit.
+    fn dims_in_mm(&self) -> bool {
+        !Path::new(&self.file.name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("obj"))
+    }
+
     pub fn detail(&self) -> String {
         match self.dims {
-            Some(d) => format!("{}, {}", human_size(self.file.bytes), dims_line(d)),
+            Some(d) => format!(
+                "{}, {}",
+                human_size(self.file.bytes),
+                dims_line(d, self.dims_in_mm())
+            ),
             None => human_size(self.file.bytes),
         }
     }
@@ -549,7 +566,7 @@ impl ModelOffer {
         let path = self.file.path.to_string_lossy();
         let dims = self
             .dims
-            .map(dims_line)
+            .map(|d| dims_line(d, self.dims_in_mm()))
             .unwrap_or_else(|| "unknown size".into());
         let mut out = Vec::new();
         if let Some(s) = slicer {
@@ -789,7 +806,7 @@ mod tests {
             Path::new("C:\\Users\\user\\Downloads\\a\"; calc; $env:X `n \u{201c}x\u{201d}.stl");
         assert_eq!(
             win.open_line(evil_win, true),
-            "\"C:\\Program Files\\UltiMaker Cura 5.8.1\\UltiMaker-Cura.exe\" \"C:\\Users\\user\\Downloads\\a`\"; calc; `$env:X ``n `\u{201c}x`\u{201d}.stl\""
+            "& \"C:\\Program Files\\UltiMaker Cura 5.8.1\\UltiMaker-Cura.exe\" \"C:\\Users\\user\\Downloads\\a`\"; calc; `$env:X ``n `\u{201c}x`\u{201d}.stl\""
         );
         #[cfg(unix)]
         {
@@ -854,5 +871,17 @@ mod tests {
             "mv \"/home/user/Downloads/benchy.stl\" \"/home/user/Models\""
         );
         assert_eq!(offer.chips(None, Path::new("/m"), true).len(), 3);
+        let obj = ModelOffer {
+            file: ModelFile {
+                path: PathBuf::from("/home/user/Downloads/benchy.OBJ"),
+                name: "benchy.OBJ".into(),
+                bytes: 2048,
+            },
+            ..offer
+        };
+        assert_eq!(obj.detail(), "2 KB, 60 × 31 × 48 (OBJ units)");
+        assert!(obj.chips(None, Path::new("/m"), false)[0]
+            .value
+            .contains("benchy.OBJ (60 × 31 × 48 (OBJ units))"));
     }
 }
