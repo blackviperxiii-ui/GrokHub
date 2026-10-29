@@ -235,6 +235,18 @@ pub fn provider(config_dir: &Path, id: &str) -> Option<Provider> {
         .find(|p| p.id == id.trim())
 }
 
+/// Playbooks 8: which provider a `provider/model` id goes to, for the pre-send check.
+pub fn dest(config_dir: &Path, model: &str) -> grokhub_core::adult_guard::Dest {
+    use grokhub_core::adult_guard::{dest_of, Dest};
+    let Some(p) = split_provider_model(model).and_then(|(pid, _)| provider(config_dir, pid)) else {
+        return Dest::Other;
+    };
+    match p.kind {
+        ProviderKind::Anthropic => Dest::Anthropic,
+        ProviderKind::OpenAiCompatible => dest_of(&p.base_url),
+    }
+}
+
 /// Settings → "Add a provider": the key goes into the keyring first; only if
 /// that worked is the provider (no key) saved. Adding sends nothing: the
 /// destination is allowed separately, on a hard send card.
@@ -1110,7 +1122,13 @@ pub fn call_model(
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
-    let body = request_body(p.kind, wire_model, effort, req, max_output).to_string();
+    let mut body = request_body(p.kind, wire_model, effort, req, max_output);
+    // Playbooks 8: an explicit turn stays on OpenRouter's pick, never a stricter fallback.
+    let (text, _) = super::live::last_user_text(&req.input);
+    if super::adult::no_fallbacks(grokhub_core::adult_guard::dest_of(&p.base_url), &text) {
+        body["provider"] = json!({ "allow_fallbacks": false });
+    }
+    let body = body.to_string();
     let r = transport_for(config_dir)
         .post(&url, &p.headers(&key), &body)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;

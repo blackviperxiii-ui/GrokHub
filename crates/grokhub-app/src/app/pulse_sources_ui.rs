@@ -51,6 +51,8 @@ pub(super) struct SourcesState {
     pub wish: super::wishlist_ui::WishState,
     /// Achievement nudges and their weekly check.
     pub ach: super::achievements_ui::AchState,
+    /// Upcoming DLC and sequels, and release-day reminders.
+    pub radar: super::release_radar_ui::RadarState,
     /// New local model suggestions and their weekly check.
     pub models: super::local_models_ui::ModelNewsState,
 }
@@ -264,6 +266,7 @@ impl Cabin {
         let now = now_ms();
         self.kick_know_me(false);
         self.kick_wishlist(now);
+        self.kick_release_radar(now);
         if !self.interests_now().seeded {
             let user_md = crate::config::read_memory("USER.md");
             let memory_md = crate::config::read_memory("MEMORY.md");
@@ -332,6 +335,7 @@ impl Cabin {
         self.poll_know_me();
         self.poll_wishlist();
         self.tick_achievements(now_ms());
+        self.poll_release_radar();
         self.tick_local_models(now_ms());
         let Some(rx) = self.sources.rx.take() else {
             return;
@@ -753,6 +757,7 @@ impl Cabin {
         self.ui_steam_source(ui);
         self.ui_wishlist_source(ui);
         self.ui_achievements_source(ui);
+        self.ui_release_radar_source(ui);
         self.ui_local_models_source(ui);
         // The paid search extension point, shown off and not clickable.
         let mut paid = ps::PAID_SEARCH_ENABLED;

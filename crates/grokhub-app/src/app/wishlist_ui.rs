@@ -104,7 +104,7 @@ fn run_check(
 }
 
 impl Cabin {
-    fn wish_now(&mut self) -> &mut Wishlist {
+    pub(super) fn wish_now(&mut self) -> &mut Wishlist {
         self.sources
             .wish
             .list

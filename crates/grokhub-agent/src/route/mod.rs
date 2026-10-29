@@ -7,6 +7,7 @@
 //! [`ModelClient`]); a provider you added with your own key (R3b) goes over
 //! [`providers::call_model`], only under its key and your destination grant.
 
+pub mod adult;
 pub mod attention;
 pub mod budget;
 pub mod cabin;
@@ -203,7 +204,10 @@ pub fn call_model(
         )));
     }
     let dir = crate::perm::config_dir();
-    let text = live::last_user_text(&call.input).0;
+    // Playbooks 8: a banned ask never leaves the computer.
+    let mut sent = call.clone();
+    adult::scrub(&mut sent.input);
+    let text = live::last_user_text(&sent.input).0;
     let mut rc = RouteCall {
         provider: &call.provider,
         class: &call.class,
@@ -225,14 +229,19 @@ pub fn call_model(
         route_log(&dir, &rc, &decision, &RouteDone::unseen());
         return Err(ClientError::Protocol(decision.pause_text()));
     }
-    let mut sent = call.clone();
     sent.effort = decision.send_effort(call.effort.as_deref());
     sent.model = decision.send_model(&call.model);
+    // Explicit turns go only to xAI or this computer's model.
+    let on_provider =
+        decision.on_provider() && !adult::to_xai(&text, providers::dest(&dir, &sent.model));
+    if decision.on_provider() && !on_provider {
+        sent.model = adult::xai_model(&call.model);
+    }
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
     let out = if on_device {
         local::serve(&call.class, &text, cancel)
-    } else if decision.on_provider() {
+    } else if on_provider {
         let span_id = format!(
             "{}:{now}",
             if call.session.is_empty() {
@@ -255,7 +264,7 @@ pub fn call_model(
     };
     if on_device {
         rc.provider = local::PROVIDER_LOCAL;
-    } else if decision.on_provider() {
+    } else if on_provider {
         rc.provider = &decision.route.provider;
     }
     rc.effort = sent.effort.as_deref();

@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 /// The playbooks GrokHub ships, as TOML text.
 pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/task-general.toml"),
-    include_str!("../assets/playbooks/repair-linux.toml"),
-    include_str!("../assets/playbooks/repair-windows.toml"),
+    include_str!("../assets/playbooks/pc-fix.toml"),
     include_str!("../assets/playbooks/code-dev.toml"),
     include_str!("../assets/playbooks/files.toml"),
     include_str!("../assets/playbooks/research.toml"),
@@ -21,10 +20,15 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/gaming-help.toml"),
     include_str!("../assets/playbooks/game-tuning.toml"),
     include_str!("../assets/playbooks/build-loadout.toml"),
+    include_str!("../assets/playbooks/chat-hangout.toml"),
+    include_str!("../assets/playbooks/wind-down.toml"),
     include_str!("../assets/playbooks/quick-answer.toml"),
     include_str!("../assets/playbooks/plan-day.toml"),
     include_str!("../assets/playbooks/creative.toml"),
 ];
+
+/// The moods a Brief can carry.
+pub const MOODS: &[&str] = &["calm", "urgent", "frustrated", "low"];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
 /// later turn can swap or drop it in place.
@@ -116,7 +120,24 @@ pub struct AppliesWhen {
     /// `linux`, `windows`, `macos`; empty matches any.
     #[serde(default)]
     pub os: Vec<String>,
+    /// Brief moods (`calm`, `urgent`, `frustrated`, `low`); empty matches any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mood: Vec<String>,
+    /// Brief intents that never get this playbook, even when `intent` is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Breaks a tie between two playbooks that fit equally well; higher wins.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priority: u8,
 }
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// Talk, not work: a playbook fits these intents only when it names them, so
+/// small talk never falls through to a task playbook.
+pub const TALK_INTENTS: &[&str] = &["chat"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -133,6 +154,9 @@ pub struct Step {
     /// Defaults to the phase's tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
+    /// `linux`, `windows`, `macos`: the step is for these only; empty is every OS.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub os: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,8 +201,19 @@ impl Playbook {
             .flat_map(|p| p.steps.iter().map(move |s| (p, s)))
     }
 
-    /// How closely it fits: one point per named intent, domain and OS that
-    /// matches; `None` when any named one doesn't.
+    /// Only the steps for `os` (and those for every OS); a phase left with
+    /// none is dropped. One family file covers Linux, Windows and macOS.
+    pub fn for_os(&self, os: &str) -> Playbook {
+        let mut p = self.clone();
+        for phase in &mut p.phases {
+            phase
+                .steps
+                .retain(|s| s.os.is_empty() || s.os.iter().any(|o| o == os));
+        }
+        p.phases.retain(|ph| !ph.steps.is_empty());
+        p
+    }
+
     /// The playbook as one paragraph for the turn's prompt: phases in order
     /// with their steps, then how to back up, check, undo and when to stop.
     pub fn prompt_block(&self) -> String {
@@ -213,10 +248,23 @@ impl Playbook {
         out.join("\n").replace("\n\n", "\n")
     }
 
-    pub fn fit(&self, intent: &str, domain: &str, os: &str) -> Option<usize> {
+    /// How closely it fits: one point per named intent, domain, OS and mood
+    /// that matches; `None` when any named one doesn't, when it excludes the
+    /// intent, or when the intent is talk and the playbook doesn't name it.
+    pub fn fit(&self, intent: &str, domain: &str, os: &str, mood: &str) -> Option<usize> {
         let a = &self.applies_when;
+        if a.exclude.iter().any(|x| x == intent)
+            || (TALK_INTENTS.contains(&intent) && !a.intent.iter().any(|x| x == intent))
+        {
+            return None;
+        }
         let mut score = 0;
-        for (list, v) in [(&a.intent, intent), (&a.domain, domain), (&a.os, os)] {
+        for (list, v) in [
+            (&a.intent, intent),
+            (&a.domain, domain),
+            (&a.os, os),
+            (&a.mood, mood),
+        ] {
             if list.is_empty() {
                 continue;
             }
@@ -285,6 +333,8 @@ pub fn check(p: &Playbook) -> Result<(), String> {
         ("intent", &a.intent, crate::brain_policy::INTENTS),
         ("domain", &a.domain, DOMAINS),
         ("os", &a.os, OSES),
+        ("mood", &a.mood, MOODS),
+        ("exclude", &a.exclude, crate::brain_policy::INTENTS),
     ] {
         if let Some(bad) = list.iter().find(|v| !known.contains(&v.as_str())) {
             return Err(format!(
@@ -306,6 +356,21 @@ pub fn check(p: &Playbook) -> Result<(), String> {
                 return Err(format!(
                     "step \"{}\": run must be at most {TEXT_MAX} characters",
                     s.name
+                ));
+            }
+            if let Some(bad) = s
+                .os
+                .iter()
+                .find(|o| !OSES.contains(&o.as_str()) || (!a.os.is_empty() && !a.os.contains(o)))
+            {
+                return Err(format!(
+                    "step \"{}\": os `{bad}` must be one of {}",
+                    s.name,
+                    if a.os.is_empty() {
+                        OSES.join(", ")
+                    } else {
+                        a.os.join(", ")
+                    }
                 ));
             }
             let tier = s.tier_in(phase);
@@ -392,8 +457,7 @@ mod tests {
             ids,
             vec![
                 "task-general",
-                "repair-linux",
-                "repair-windows",
+                "pc-fix",
                 "code-dev",
                 "files",
                 "research",
@@ -402,56 +466,58 @@ mod tests {
                 "gaming-help",
                 "game-tuning",
                 "build-loadout",
+                "chat-hangout",
+                "wind-down",
                 "quick-answer",
                 "plan-day",
                 "creative",
             ]
         );
-        let game = parse(BUILTIN[9]).unwrap();
+        let game = parse(BUILTIN[8]).unwrap();
         assert_eq!(
             (
-                game.fit("task", "gaming", "windows"),
-                game.fit("chat", "general", "windows"),
-                game.fit("question", "gaming", "linux")
+                game.fit("task", "gaming", "windows", "calm"),
+                game.fit("chat", "general", "windows", "calm"),
+                game.fit("question", "gaming", "linux", "calm")
             ),
             (Some(2), None, Some(2))
         );
-        let help = parse(BUILTIN[8]).unwrap();
+        let help = parse(BUILTIN[7]).unwrap();
         assert_eq!(
             (
-                help.fit("question", "game-help", "windows"),
-                help.fit("task", "gaming", "windows"),
-                help.fit("question", "gaming", "linux")
+                help.fit("question", "game-help", "windows", "calm"),
+                help.fit("task", "gaming", "windows", "calm"),
+                help.fit("question", "gaming", "linux", "calm")
             ),
             (Some(2), None, None)
         );
-        let loadout = parse(BUILTIN[10]).unwrap();
+        let loadout = parse(BUILTIN[9]).unwrap();
         assert_eq!(
             (
-                loadout.fit("research", "loadout", "linux"),
-                loadout.fit("task", "gaming", "windows")
+                loadout.fit("research", "loadout", "linux", "calm"),
+                loadout.fit("task", "gaming", "windows", "calm")
             ),
             (Some(2), None)
         );
-        let library = parse(BUILTIN[7]).unwrap();
+        let library = parse(BUILTIN[6]).unwrap();
         assert_eq!(
             (
-                library.fit("question", "library", "windows"),
-                library.fit("research", "web", "linux")
+                library.fit("question", "library", "windows", "calm"),
+                library.fit("research", "web", "linux", "calm")
             ),
             (Some(2), None)
         );
-        let quick = parse(BUILTIN[11]).unwrap();
-        let plan = parse(BUILTIN[12]).unwrap();
-        let creative = parse(BUILTIN[13]).unwrap();
+        let quick = parse(BUILTIN[12]).unwrap();
+        let plan = parse(BUILTIN[13]).unwrap();
+        let creative = parse(BUILTIN[14]).unwrap();
         assert_eq!(
             (
-                quick.fit("question", "general", "linux"),
-                quick.fit("task", "general", "linux"),
-                plan.fit("task", "planning", "linux"),
-                plan.fit("task", "general", "linux"),
-                creative.fit("creative", "media", "linux"),
-                creative.fit("task", "media", "linux"),
+                quick.fit("question", "general", "linux", "calm"),
+                quick.fit("task", "general", "linux", "calm"),
+                plan.fit("task", "planning", "linux", "calm"),
+                plan.fit("task", "general", "linux", "calm"),
+                creative.fit("creative", "media", "linux", "calm"),
+                creative.fit("task", "media", "linux", "calm"),
             ),
             (Some(1), None, Some(2), None, Some(1), None)
         );
@@ -468,16 +534,77 @@ mod tests {
         );
         assert_eq!(
             (
-                p.fit("repair", "system", "linux"),
-                p.fit("chat", "general", "linux")
+                p.fit("repair", "system", "linux", "calm"),
+                p.fit("chat", "general", "linux", "calm")
             ),
             (Some(1), None)
+        );
+        // The PC-fix family carries the repair lessons on every OS.
+        let fix = parse(BUILTIN[1]).unwrap();
+        assert!(fix.verify.ends_with(
+            "After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
+        ));
+        assert!(fix
+            .verify
+            .contains("Say a fix is approved only after the user said yes, and done only after the check passed."));
+        for os in OSES {
+            let block = fix.for_os(os).prompt_block();
+            for lesson in [
+                "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap",
+                "A permission-denied answer means the check needs admin rights, not that something is missing",
+                "Take a restore point before the first change",
+            ] {
+                assert!(block.contains(lesson), "{os}: {lesson}");
+            }
+        }
+        assert_eq!(
+            (
+                fix.fit("repair", "system", "macos", "calm"),
+                fix.fit("repair", "system", "windows", "calm"),
+                fix.fit("task", "system", "linux", "calm")
+            ),
+            (Some(3), Some(3), None)
+        );
+    }
+
+    #[test]
+    fn a_family_playbook_keeps_only_this_computers_steps() {
+        let fix = parse(BUILTIN[1]).unwrap();
+        let names = |os: &str| -> Vec<String> {
+            fix.for_os(os)
+                .steps()
+                .map(|(_, s)| s.name.clone())
+                .collect()
+        };
+        let mac = names("macos");
+        assert!(mac.contains(&"Install macOS updates".to_string()));
+        assert!(!mac
+            .iter()
+            .any(|n| n.starts_with("On Arch") || n == "Repair system files"));
+        let win = names("windows");
+        assert!(win.contains(&"Repair system files".to_string()));
+        assert!(!win
+            .iter()
+            .any(|n| n.starts_with("On Fedora") || n == "Install macOS updates"));
+        // Windows has nothing in the copy-a-config step's OS list, and keeps the shared ones.
+        assert!(!win.contains(&"Copy a config file before editing it".to_string()));
+        assert!(win.contains(&"Take a restore point before the first change".to_string()));
+        let linux = fix.for_os("linux").prompt_block();
+        assert!(linux
+            .contains("On Debian or Ubuntu: install pending updates (`sudo apt-get upgrade -y`)"));
+        assert!(linux.contains("On Fedora: install pending updates (`sudo dnf upgrade -y`)"));
+        assert!(!linux.contains("winget"));
+        // A step can only name an OS the playbook applies to.
+        let bad = BUILTIN[1].replacen("os = [\"macos\"]", "os = [\"bsd\"]", 1);
+        assert_eq!(
+            parse(&bad).unwrap_err(),
+            "step \"Check disk space (df -h)\": os `bsd` must be one of linux, windows, macos"
         );
     }
 
     #[test]
     fn the_prompt_block_lists_phases_in_order_and_when_to_stop() {
-        let p = parse(BUILTIN[3]).unwrap();
+        let p = parse(BUILTIN[2]).unwrap();
         assert_eq!(
             p.prompt_block(),
             "Playbook for this turn: Code changes. Reproduce first, make the smallest change, prove it with tests, then give a short summary.\n\
@@ -506,8 +633,8 @@ mod tests {
         let closer = crate::talk::VOLATILE_SAFETY_CLOSER;
         let style = "Talk style for this turn: short.";
         let system = format!("Rules.\n\nNotes.\n\n{style}\n\n{closer}");
-        let code = parse(BUILTIN[3]).unwrap().prompt_block();
-        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let code = parse(BUILTIN[2]).unwrap().prompt_block();
+        let files = parse(BUILTIN[3]).unwrap().prompt_block();
         let one = with_playbook(&system, Some(&code));
         assert_eq!(
             one,

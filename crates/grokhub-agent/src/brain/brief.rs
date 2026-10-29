@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
+\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -94,7 +94,7 @@ impl Care {
 pub struct Brief {
     pub intent: Intent,
     pub care: Care,
-    /// `calm`, `urgent` or `frustrated`.
+    /// `calm`, `urgent`, `frustrated` or `low` (tired, stressed, venting).
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
@@ -243,6 +243,47 @@ const QUESTION_WORDS: &[&str] = &[
 ];
 const CHAT_WORDS: &[&str] = &[
     "hi", "hello", "hey", "thanks", "thank", "thx", "yo", "morning", "lol", "cool", "nice", "bye",
+];
+/// Laughing or teasing: a short line with one of these is banter.
+const BANTER_WORDS: &[&str] = &[
+    "lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "hehe", "jk", "kidding", "joking", "omg",
+    "bruh",
+];
+/// Small talk that reads like a question or an order but is neither.
+const SMALL_TALK_PHRASES: &[&str] = &[
+    "how are you",
+    "how are u",
+    "how's it going",
+    "hows it going",
+    "what's up",
+    "whats up",
+    "wyd",
+    "what are you up to",
+    "what you up to",
+    "how was your",
+    "tell me a joke",
+    "make me laugh",
+    "you there",
+    "miss me",
+    "about yourself",
+];
+/// Words after a task verb that are nothing to act on: "turn around",
+/// "stop it lol", "make me laugh" are banter, "turn off the lights" is a task.
+const NOT_AN_OBJECT: &[&str] = &[
+    "around", "it", "that", "this", "me", "you", "us", "talking", "joking", "kidding", "laughing",
+    "laugh", "smile", "lying", "yapping", "being", "over", "already", "now", "please", "lol",
+    "lmao", "haha", "bro", "dude", "man", "ok", "okay", "then", "so",
+];
+/// A question about the ask's subject, not about the assistant.
+const SUBJECT_WORDS: &[&str] = &[
+    "about",
+    "explain",
+    "mean",
+    "means",
+    "difference",
+    "work",
+    "works",
+    "recommend",
 ];
 const FOLLOW_UPS: &[&str] = &[
     "yes",
@@ -406,6 +447,29 @@ const PLAN_DAY_PHRASES: &[&str] = &[
 ];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
+/// Tired, stressed or venting: the person needs company, not a fix.
+const LOW_WORDS: &[&str] = &[
+    "tired",
+    "exhausted",
+    "stressed",
+    "drained",
+    "overwhelmed",
+    "burnt",
+    "burned",
+    "sad",
+    "lonely",
+    "vent",
+    "venting",
+];
+const LOW_PHRASES: &[&str] = &[
+    "crashing out",
+    "crash out",
+    "crashed out",
+    "rough day",
+    "long day",
+    "bad day",
+    "fed up",
+];
 
 fn is_gaming(t: &str, ws: &[&str]) -> bool {
     any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES)
@@ -512,7 +576,10 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
 fn mood_of(raw: &str, ws: &[&str]) -> &'static str {
     let letters: Vec<char> = raw.chars().filter(|c| c.is_alphabetic()).collect();
     let shouting = letters.len() >= 8 && letters.iter().all(|c| c.is_uppercase());
-    if shouting || raw.contains("!!") || any_word(ws, FRUSTRATED_WORDS) {
+    let t = raw.to_lowercase();
+    if any_word(ws, LOW_WORDS) || any_phrase(&t, LOW_PHRASES) {
+        "low"
+    } else if shouting || raw.contains("!!") || any_word(ws, FRUSTRATED_WORDS) {
         "frustrated"
     } else if any_word(ws, URGENT_WORDS) {
         "urgent"
@@ -584,14 +651,60 @@ fn domain_of(
     }
 }
 
+/// A task verb only makes a task when it has something to act on.
+fn has_object(after_verb: &[&str]) -> bool {
+    after_verb.iter().any(|w| !NOT_AN_OBJECT.contains(w))
+}
+
+/// The last few user lines were all small talk: we're hanging out.
+fn hanging_out(recent: &[String]) -> bool {
+    let last = &recent[recent.len().saturating_sub(3)..];
+    !last.is_empty()
+        && last.iter().all(|r| {
+            rules(&BriefInput {
+                text: r,
+                ..Default::default()
+            })
+            .is_some_and(|b| b.intent == Intent::Chat)
+        })
+}
+
+/// "how are you?", "do you like games?": a short line about the assistant,
+/// not about a subject. `ws` is the line without its "can you" opener.
+fn small_talk(t: &str, ws: &[&str]) -> bool {
+    let about_you = any_word(ws, &["you", "your", "you're", "yourself", "u", "ya"]);
+    any_phrase(t, SMALL_TALK_PHRASES)
+        || (about_you && ws.len() <= 8 && !any_word(ws, SUBJECT_WORDS))
+}
+
 /// The rules' Brief, or `None` when they can't tell what the ask is.
 pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let t = input.text.trim().to_lowercase();
     let ws = words(&t);
     let system = system_change(&t, &ws);
+    let last_was_work = || {
+        input.recent.last().is_some_and(|r| {
+            rules(&BriefInput {
+                text: r,
+                recent: &[],
+                ..*input
+            })
+            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair))
+        })
+    };
+    let mut rest = t.as_str();
+    for p in POLITE {
+        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
+    }
+    let rest_words = words(rest);
+    let first = rest_words.first().copied().unwrap_or_default();
+    let acted_on = has_object(rest_words.get(1..).unwrap_or_default());
+    // "stop", "delete it": a task verb with nothing named to act on.
+    let bare_verb = TASK_VERBS.contains(&first) && !acted_on;
     if !input.background
         && !input.recent.is_empty()
-        && FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+        && (FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+            || (bare_verb && last_was_work()))
     {
         let last = input.recent.last().map(String::as_str).unwrap_or_default();
         return rules(&BriefInput {
@@ -603,18 +716,25 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     if t.is_empty() && input.files == 0 {
         return None;
     }
-    let mut rest = t.as_str();
-    for p in POLITE {
-        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
-    }
-    let first = words(rest).first().copied().unwrap_or_default();
+    // Hanging out, a plain line about nothing in particular stays chat.
+    let chatting = !input.background && hanging_out(input.recent);
+    let topic = domain_of(&t, &ws, input, Intent::Chat, system);
+    let generic = topic == "general";
+    // "I'm crashing out" is a mood; "my game is crashing" is a repair.
+    let venting = mood_of(input.text, &ws) == "low" && generic;
+    let casual = venting
+        || small_talk(&t, &rest_words)
+        || (ws.len() <= 6 && any_word(&ws, BANTER_WORDS))
+        // Talking games while hanging out is still hanging out.
+        || (chatting && matches!(topic, "general" | "gaming") && ws.len() <= 8);
+    let task_verb = TASK_VERBS.contains(&first) && acted_on;
     // "use X for Y", with X up to four words.
     let use_for = ws
         .iter()
         .enumerate()
         .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"));
     let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
-    let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
+    let broken = !venting && (any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES));
     let gaming = is_gaming(&t, &ws);
     let game_help = gaming && is_game_help(&t, &ws);
     let loadout = is_loadout(&t);
@@ -636,7 +756,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     } else if is_plan_day(&t) {
         // "plan my day" / "what should I do today" → one plan, not a task dump.
         Intent::Task
-    } else if TASK_VERBS.contains(&first)
+    } else if task_verb
         || input.files > 0
         || !input.tools.is_empty()
         || system
@@ -644,6 +764,8 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         || loadout
     {
         Intent::Task
+    } else if casual || bare_verb {
+        Intent::Chat
     } else if QUESTION_WORDS.contains(&first) || t.ends_with('?') || library || game_help {
         // Library / tips asks with no verb still need a specialist, not None.
         Intent::Question
@@ -688,7 +810,7 @@ fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
     let intent = Intent::parse(&word("intent")?)?;
     let care = Care::parse(&word("care")?)?;
     let mood = word("mood")
-        .filter(|m| ["calm", "urgent", "frustrated"].contains(&m.as_str()))
+        .filter(|m| grokhub_core::playbook::MOODS.contains(&m.as_str()))
         .unwrap_or_else(|| "calm".into());
     let domain = word("domain")
         .filter(|d| grokhub_core::playbook::DOMAINS.contains(&d.as_str()))
@@ -1166,6 +1288,102 @@ mod tests {
     }
 
     #[test]
+    fn casual_lines_stay_chat_and_real_tasks_stay_tasks() {
+        for text in [
+            "lol",
+            "haha you're funny",
+            "stop it lol",
+            "turn around",
+            "make me laugh",
+            "how are you?",
+            "what are you up to tonight?",
+            "do you like games?",
+            "tell me about yourself",
+            "can you tell me a joke",
+            "stop",
+            "start over",
+            "jk jk",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!((b.intent, b.care), (Intent::Chat, Care::Casual), "{text}");
+        }
+        for (text, intent) in [
+            ("turn off the bedroom lights", Intent::Task),
+            ("could you set a timer for ten minutes", Intent::Task),
+            ("make me a playlist of chill songs", Intent::Task),
+            ("start the backup now", Intent::Task),
+            ("can you explain how you work?", Intent::Question),
+            ("what do you know about black holes?", Intent::Question),
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!(b.intent, intent, "{text}");
+        }
+        // Hanging out, a short question stays chat; a real task is still a task.
+        let hangout = ["hey".to_string(), "lol same".to_string()];
+        let chat = |text| BriefInput {
+            text,
+            recent: &hangout,
+            ..Default::default()
+        };
+        assert_eq!(
+            rules(&chat("what game should we play?")).unwrap().intent,
+            Intent::Chat
+        );
+        assert_eq!(
+            rules(&chat("is it late where you are")).unwrap().intent,
+            Intent::Chat
+        );
+        assert_eq!(
+            short(&rules(&chat("rename the photos in my downloads folder")).unwrap()),
+            (Intent::Task, Care::Careful, "files", "calm")
+        );
+        // Without the hangout, the same question is a question.
+        assert_eq!(
+            rules(&input("what game should we play?")).unwrap().intent,
+            Intent::Question
+        );
+        // After real work, a bare "stop it" or "delete it" is about that work.
+        let work = ["delete the old backups in Documents".to_string()];
+        let after = BriefInput {
+            text: "delete it",
+            recent: &work,
+            ..Default::default()
+        };
+        assert_eq!(
+            short(&rules(&after).unwrap()),
+            (Intent::Task, Care::Critical, "files", "calm")
+        );
+    }
+
+    #[test]
+    fn tired_or_venting_lines_are_low_chat_and_a_real_crash_is_still_a_repair() {
+        for text in [
+            "i'm so tired today",
+            "ugh long day",
+            "honestly i'm crashing out rn",
+            "just need to vent for a sec",
+            "feeling kinda overwhelmed",
+        ] {
+            let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
+            assert_eq!(
+                (b.intent, b.care, b.mood.as_str()),
+                (Intent::Chat, Care::Casual, "low"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            short(&rules(&input("my game keeps crashing on launch")).unwrap()),
+            (Intent::Repair, Care::Critical, "gaming", "calm")
+        );
+        // Tired of a broken machine is still that machine's repair.
+        let pc = rules(&input("so tired of my pc crashing")).unwrap();
+        assert_eq!(
+            (pc.intent, pc.domain.as_str(), pc.mood.as_str()),
+            (Intent::Repair, "system", "low")
+        );
+    }
+
+    #[test]
     fn unclear_asks_call_the_model_exactly_once_and_clear_ones_never() {
         let mut calls = Vec::new();
         let mut ask = |t: &str| {
@@ -1250,11 +1468,27 @@ mod tests {
     }
 
     #[test]
+    fn a_hangout_chat_talks_naturally_with_no_word_cap() {
+        let shipped = grokhub_core::brain_policy::builtin_policy();
+        for text in ["hey", "just chilling tonight", "😉", "nah just chill"] {
+            let b = classify(&input(text), None);
+            assert_eq!((b.intent, b.care), (Intent::Chat, Care::Casual), "{text}");
+            let row =
+                grokhub_core::brain_policy::pick_row(&shipped, b.intent.as_str(), b.care.as_str())
+                    .unwrap();
+            let style = grokhub_core::talk::TalkStyle::of(&row.talk);
+            assert_eq!(style, grokhub_core::talk::TalkStyle::Natural, "{text}");
+            assert_eq!(style.reply_cap_words(), None);
+            assert_eq!(row.stop, "need met");
+        }
+    }
+
+    #[test]
     fn care_first_effort_comes_from_the_brief_and_classify_stays_low() {
         let hi = rules(&input("hey")).unwrap();
         assert_eq!((hi.intent, hi.care), (Intent::Chat, Care::Casual));
         let shipped = grokhub_core::brain_policy::builtin_policy();
-        assert_eq!(effort_word(&hi, &shipped), "speed");
+        assert_eq!(effort_word(&hi, &shipped), "care");
         let on = grokhub_core::brain_policy::apply_care_first(shipped);
         assert_eq!(effort_word(&hi, &on), "care");
         let question = rules(&input("what time is it?")).unwrap();
@@ -1287,8 +1521,8 @@ mod tests {
             turn: 2,
             brief: b.clone(),
             policy,
-            playbook: "Repair Linux".into(),
-            playbook_id: "repair-linux".into(),
+            playbook: "Fix this PC".into(),
+            playbook_id: "pc-fix".into(),
         };
         record_brief(&dir, &line).unwrap();
         let other = rules(&input("hi")).unwrap();
@@ -1319,7 +1553,7 @@ mod tests {
                 "critical",
                 "system",
                 "repair × critical",
-                "repair-linux"
+                "pc-fix"
             )
         );
         assert_eq!(

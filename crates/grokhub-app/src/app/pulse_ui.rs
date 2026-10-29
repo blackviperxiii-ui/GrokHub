@@ -242,6 +242,8 @@ pub(super) enum PulseAct {
     /// More or fewer cards of this one's kind, from the ··· menu.
     MoreKind(String),
     LessKind(String),
+    /// A backup reminder's one-tap, by chip id.
+    BackupChip(String),
     /// Start-my-day brief: run one item's one-tap prompt.
     DayTap(String),
     /// Hobby learning-path tip feedback.
@@ -1696,6 +1698,9 @@ impl Cabin {
                             FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
                         });
                     }
+                    if let Some(id) = self.paint_backup_one_taps(ui, card) {
+                        act = Some(PulseAct::BackupChip(id));
+                    }
                     if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
                         if let Some(tap) = paint_day_brief_taps(ui, &self.day_brief_taps()) {
                             act = Some(PulseAct::DayTap(tap));
@@ -2004,6 +2009,7 @@ impl Cabin {
             PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::BackupChip(id) => self.tap_backup_chip(&id),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
             // Recorded by react_to_act; nothing else to do.
             PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
@@ -2527,6 +2533,18 @@ fn kick_pulse_decode(ctx: egui::Context, name: String, path: std::path::PathBuf)
         }
         ctx.request_repaint();
     });
+}
+
+/// Tests: block until no thumb decode is in flight, so the next pass uploads it.
+#[cfg(test)]
+pub(super) fn wait_pulse_decodes() {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        if pulse_tex_gate().lock().is_ok_and(|g| g.inflight.is_empty()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn fetch_agent() -> ureq::Agent {
