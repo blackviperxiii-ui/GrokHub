@@ -33,6 +33,11 @@ impl SteamState {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn mute_for_test(&mut self, app_id: u32) {
+        self.prefs.set_muted(app_id, true);
+    }
+
     /// The library and prefs, read again when they are stale.
     fn refresh(&mut self, now: u64, root: impl FnOnce() -> Option<std::path::PathBuf>) {
         if self.found.is_none() || now.saturating_sub(self.read_ms) >= LIBRARY_TTL_MS {
