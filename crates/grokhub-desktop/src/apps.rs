@@ -61,11 +61,12 @@ pub(crate) fn volume_guid(name: &str) -> Option<&str> {
 }
 
 /// A fixed volume's Recycle Bin is off when the shell can't query it, a
-/// policy turns recycling off (`NoRecycleFiles`), or the volume is set to
-/// delete right away (`NukeOnDelete`).
+/// policy in any hive turns recycling off (`NoRecycleFiles`; a user `0`
+/// doesn't hide a machine `1`), or the volume is set to delete right away
+/// (`NukeOnDelete`).
 #[cfg(any(windows, test))]
-pub(crate) fn recycle_bin_off(policy: Option<u32>, nuke: Option<u32>, query_ok: bool) -> bool {
-    !query_ok || policy.is_some_and(|v| v != 0) || nuke.is_some_and(|v| v != 0)
+pub(crate) fn recycle_bin_off(policies: &[Option<u32>], nuke: Option<u32>, query_ok: bool) -> bool {
+    !query_ok || policies.iter().flatten().any(|&v| v != 0) || nuke.is_some_and(|v| v != 0)
 }
 
 /// Outside Windows a trash move with no trash fails instead of deleting.
@@ -803,9 +804,8 @@ mod win {
         if unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) != 3 } {
             return true;
         }
-        let policy = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
-            .into_iter()
-            .find_map(|k| reg_dword(k, POLICY_KEY, "NoRecycleFiles"));
+        let policies = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
+            .map(|k| reg_dword(k, POLICY_KEY, "NoRecycleFiles"));
         let nuke = volume_name(&wide)
             .as_deref()
             .and_then(super::volume_guid)
@@ -823,7 +823,7 @@ mod win {
         };
         // SAFETY: a NUL-terminated root and an out-struct sized in cbSize.
         let query_ok = unsafe { SHQueryRecycleBinW(wide.as_ptr(), &mut info) } == 0;
-        super::recycle_bin_off(policy, nuke, query_ok)
+        super::recycle_bin_off(&policies, nuke, query_ok)
     }
 
     const POLICY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
@@ -910,18 +910,25 @@ mod tests {
         assert_eq!(volume_guid(&format!(r"\\?\Volume{guid}\")), Some(guid));
         assert_eq!(volume_guid(r"\\?\Volume{short}\"), None);
         assert_eq!(volume_guid(r"C:\"), None);
-        assert!(!recycle_bin_off(None, None, true), "a normal fixed drive");
-        assert!(!recycle_bin_off(Some(0), Some(0), true));
         assert!(
-            recycle_bin_off(None, Some(1), true),
+            !recycle_bin_off(&[None, None], None, true),
+            "a normal fixed drive"
+        );
+        assert!(!recycle_bin_off(&[Some(0), Some(0)], Some(0), true));
+        assert!(
+            recycle_bin_off(&[None, None], Some(1), true),
             "volume set to delete right away"
         );
         assert!(
-            recycle_bin_off(Some(1), None, true),
+            recycle_bin_off(&[Some(1), None], None, true),
             "policy turns recycling off"
         );
         assert!(
-            recycle_bin_off(None, None, false),
+            recycle_bin_off(&[Some(0), Some(1)], None, true),
+            "a user 0 doesn't hide a machine 1"
+        );
+        assert!(
+            recycle_bin_off(&[None, None], None, false),
             "the shell can't query the bin"
         );
     }

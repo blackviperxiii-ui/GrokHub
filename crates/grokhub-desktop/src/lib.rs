@@ -551,7 +551,7 @@ impl DesktopBackend for LiveBackend {
         apps::set_window_geometry(title, geom)
     }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
-        apps::trash(paths)
+        trash_paths(paths)
     }
     // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
     #[cfg(target_os = "linux")]
