@@ -712,6 +712,7 @@ impl Cabin {
                                                             self.ui_pc_health_row(ui);
                                                             self.ui_code_resume_row(ui);
                                                             self.ui_wind_down_row(ui);
+                                                            self.ui_downloads_tidy_row(ui);
                                                             self.ui_backup_row(ui);
                                                             self.ui_net_log_row(ui);
                                                             self.ui_game_companion_row(ui);

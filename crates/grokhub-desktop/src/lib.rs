@@ -230,6 +230,15 @@ pub fn resolve_bin(name: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// Move files to the trash (Linux) or the Recycle Bin (Windows). Refuses
+/// on Windows when a path has no Recycle Bin, where it would delete for good.
+pub fn trash_paths(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    if paths.iter().any(|p| apps::no_recycle_bin(p)) {
+        return Err("That drive has no Recycle Bin, so nothing was moved.".into());
+    }
+    apps::trash(paths)
+}
+
 pub fn which(name: &str) -> bool {
     resolve_bin(name).is_some()
 }

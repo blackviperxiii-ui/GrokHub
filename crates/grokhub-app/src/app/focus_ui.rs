@@ -26,6 +26,8 @@ pub(super) struct FocusState {
     pub resume: super::code_resume_ui::ResumeState,
     /// The late-night wind-down reminder.
     pub wind: super::wind_down_ui::WindDownState,
+    /// Downloads tidy suggestions and their review.
+    pub tidy: super::downloads_tidy_ui::TidyState,
     /// Backup and unpushed-work reminders.
     pub backup: super::backup_ui::BackupState,
     /// The internet drop log.
@@ -43,6 +45,7 @@ impl Cabin {
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
         self.tick_wind_down();
+        self.tick_downloads_tidy();
         self.tick_backup();
         self.tick_net_log();
         self.tick_game_companion();
@@ -117,7 +120,10 @@ impl Cabin {
         }
         self.cfg.focus_help = on;
         if !on {
+            // Downloads tidy is its own setting: keep its findings and review.
+            let tidy = std::mem::take(&mut self.focus.tidy);
             self.focus = FocusState::default();
+            self.focus.tidy = tidy;
             self.chip_paint_key.clear();
         }
         self.persist_cfg();
