@@ -1195,14 +1195,18 @@ mod tests {
             rows,
             vec![("example.com", "chat"), ("docs.example.net", "chat")]
         );
+        // The raw file is sealed base64, which can hold "/go" by chance; a
+        // "." can't appear in it, so look for the host and path together.
         let raw = std::fs::read_to_string(crate::harness::egress_path(&dir)).unwrap();
+        assert!(
+            !raw.contains("sk-abc") && !raw.contains("example.com/go") && !raw.contains("landed"),
+            "{raw}"
+        );
         let opened = format!("{log:?}");
-        for text in [&raw, &opened] {
-            assert!(
-                !text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"),
-                "{text}"
-            );
-        }
+        assert!(
+            !opened.contains("sk-abc") && !opened.contains("/go") && !opened.contains("landed"),
+            "{opened}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
