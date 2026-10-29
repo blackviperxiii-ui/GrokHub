@@ -96,10 +96,15 @@ impl Cabin {
             .get_or_insert_with(|| wd::load(&crate::config::config_dir()))
     }
 
-    fn save_wind(&mut self) {
+    /// False (with the error in the status line) when the write failed.
+    fn save_wind(&mut self) -> bool {
         let tracker = self.wind_now().clone();
-        if let Err(err) = wd::save(&crate::config::config_dir(), &tracker) {
-            self.status = err;
+        match wd::save(&crate::config::config_dir(), &tracker) {
+            Ok(()) => true,
+            Err(err) => {
+                self.status = err;
+                false
+            }
         }
     }
 
@@ -215,7 +220,8 @@ impl Cabin {
         self.wind_now().on
     }
 
-    pub(super) fn set_wind_on(&mut self, on: bool) {
+    /// False when the switch couldn't be saved; the status says why.
+    pub(super) fn set_wind_on(&mut self, on: bool) -> bool {
         if on {
             self.wind_now().on = true;
             self.focus.wind.last_read = None;
@@ -223,7 +229,7 @@ impl Cabin {
             self.wind_now().turn_off();
             self.focus.wind.rx = None;
         }
-        self.save_wind();
+        self.save_wind()
     }
 
     /// Settings → Behavior: the wind-down toggle.

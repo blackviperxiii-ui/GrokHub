@@ -260,10 +260,20 @@ fn settings_drops_cabin_tabs() {
 }
 
 #[test]
-fn about_section_opens_update() {
+fn about_heading_opens_about_with_the_build() {
+    // QA: the About heading opened a panel titled "Update" with no version.
     assert_eq!(
         super::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::Update
+        super::SettingsSec::About
+    );
+    let about = include_str!("settings.rs")
+        .split("SettingsSec::About => {")
+        .nth(1)
+        .and_then(|s| s.split("SettingsSec::Defaults => {").next())
+        .expect("About arm");
+    assert!(
+        about.contains("crate::update::build_detail_line()"),
+        "About shows the version and build: {about}"
     );
 }
 
@@ -605,7 +615,7 @@ fn settings_section_titles_match_the_page() {
     ));
     assert!(matches!(
         super::settings::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::Update
+        super::SettingsSec::About
     ));
 }
 

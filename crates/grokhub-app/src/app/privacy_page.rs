@@ -25,6 +25,8 @@ const BARS_H: f32 = 56.0;
 
 pub(super) const HERO_LOCAL: &str = "Your data stays on this PC.";
 pub(super) const HERO_SENT: &str = "Only what you allow leaves this PC.";
+/// Signed in, so chat and background work can reach Grok, but nothing has yet.
+pub(super) const HERO_IDLE: &str = "Nothing left this PC this week.";
 pub(super) const LEDGER_HEAD: &str = "Off-device ledger · 7 days";
 pub(super) const PC_TILES: [&str; 4] = ["Local model", "Memory", "Files", "Game data"];
 const WIPE_ARMED_ID: &str = "privacy-wipe-armed";
@@ -40,7 +42,7 @@ pub(super) enum Week {
 }
 
 impl Week {
-    fn total(&self) -> Option<u32> {
+    pub(super) fn total(&self) -> Option<u32> {
         match self {
             Week::Counts(days) => Some(days.iter().sum()),
             _ => None,
@@ -68,19 +70,70 @@ pub(super) fn week_initials(now_ms: u64) -> [&'static str; 7] {
     std::array::from_fn(|i| INITIALS[((today + 5 + i as u64) % 7) as usize])
 }
 
-pub(super) fn mode_tag(week: &Week) -> &'static str {
-    if week.total() == Some(0) {
+/// What can reach the cloud right now, from the real routing: chat always
+/// goes to Grok once signed in, and background work does too except the
+/// small jobs an installed on-device model takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Cloud {
+    /// GrokHub's own sign-in or an API key is there.
+    pub signed_in: bool,
+    /// The on-device model is on and installed.
+    pub local_jobs: bool,
+}
+
+impl Cloud {
+    /// Nothing has left this week and nothing can.
+    fn sealed(self, week: &Week) -> bool {
+        week.total() == Some(0) && !self.signed_in
+    }
+}
+
+pub(super) fn mode_tag(week: &Week, cloud: Cloud) -> &'static str {
+    if cloud.sealed(week) {
         "LOCAL MODE"
     } else {
         "LOCAL FIRST"
     }
 }
 
-pub(super) fn hero(week: &Week) -> &'static str {
-    if week.total() == Some(0) {
-        HERO_LOCAL
+pub(super) fn hero(week: &Week, cloud: Cloud) -> &'static str {
+    match week.total() {
+        Some(0) if cloud.signed_in => HERO_IDLE,
+        Some(0) => HERO_LOCAL,
+        _ => HERO_SENT,
+    }
+}
+
+/// Which features send what, under the week's count.
+pub(super) fn cloud_line(cloud: Cloud) -> &'static str {
+    if !cloud.signed_in {
+        "Grok isn't signed in, so nothing can leave this PC."
+    } else if cloud.local_jobs {
+        "Chat sends your messages to Grok. Small background jobs run on this PC; bigger ones use Grok too."
     } else {
-        HERO_SENT
+        "Chat and background tasks send their prompts to Grok in the cloud."
+    }
+}
+
+/// The diagram's cloud: OFF only when nothing can leave, READY when it can
+/// but nothing has this week, ON once something did.
+pub(super) fn cloud_state(week: &Week, cloud: Cloud) -> &'static str {
+    match week.total() {
+        Some(0) if cloud.signed_in => "READY",
+        Some(0) => "OFF",
+        Some(_) => "ON",
+        None => "—",
+    }
+}
+
+/// The On-device model switch's hint, by what the router really does.
+pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
+    match (on, installed) {
+        (false, _) => "Background tasks use Grok in the cloud",
+        (true, false) => {
+            "On, but the on-device model isn't installed, so background tasks still use Grok"
+        }
+        (true, true) => "Small background jobs run on this PC; bigger ones still use Grok",
     }
 }
 
@@ -120,7 +173,7 @@ static LEDGER: Mutex<LedgerCache> = Mutex::new(LedgerCache {
 /// The last seven days of the egress log. The log is sealed and a read may
 /// wait on the keyring, so it is read off the UI thread and kept for
 /// [`LEDGER_TTL`].
-fn ledger_week(ctx: &egui::Context, now: u64) -> Week {
+pub(super) fn ledger_week(ctx: &egui::Context, now: u64) -> Week {
     let Ok(mut g) = LEDGER.lock() else {
         return Week::Loading;
     };
@@ -186,11 +239,12 @@ fn paint_cloud(p: &egui::Painter, c: egui::Pos2, s: f32, stroke: Color32) {
 }
 
 /// THIS PC with its four tiles, the link to the cloud, and the cloud's state.
-pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
+pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week, cloud: Cloud) {
     let w = ui.available_width().min(560.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, DIAGRAM_H), egui::Sense::hover());
     let p = ui.painter_at(rect.expand(16.0));
-    let off = week.total() == Some(0);
+    let off = cloud.sealed(week);
+    let ready = week.total() == Some(0) && cloud.signed_in;
     let red = crate::theme::signal_red();
     let amber = crate::theme::amber();
     let pc = egui::Rect::from_min_size(
@@ -252,16 +306,19 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
         egui::pos2(pc.right() + 6.0, pc.center().y),
         egui::pos2(cloud_c.x - cloud_s * 0.8, pc.center().y),
     );
-    if off {
+    if off || ready {
+        let dash = if off { red } else { amber };
         let mut x = a.x;
         while x < b.x {
             let end = (x + 9.0).min(b.x);
             p.line_segment(
                 [egui::pos2(x, a.y), egui::pos2(end, a.y)],
-                egui::Stroke::new(2.0, red),
+                egui::Stroke::new(2.0, dash),
             );
             x += 15.0;
         }
+    }
+    if off {
         let m = egui::pos2((a.x + b.x) / 2.0, a.y);
         let cross = egui::Stroke::new(3.0, red);
         p.line_segment(
@@ -272,7 +329,7 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
             [m + egui::vec2(9.0, -14.0), m + egui::vec2(-9.0, 14.0)],
             cross,
         );
-    } else {
+    } else if !ready {
         p.line_segment([a, b], egui::Stroke::new(2.0, amber));
     }
     paint_cloud(&p, cloud_c, cloud_s, crate::theme::muted());
@@ -284,10 +341,11 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
         crate::theme::title_font(crate::theme::TYPE_CAPTION + 2.0),
         crate::theme::muted(),
     );
-    let (state, color) = match week.total() {
-        Some(0) => ("OFF", red),
-        Some(_) => ("ON", amber),
-        None => ("—", crate::theme::muted()),
+    let state = cloud_state(week, cloud);
+    let color = match state {
+        "OFF" => red,
+        "—" => crate::theme::muted(),
+        _ => amber,
     };
     p.text(
         egui::pos2(cloud_c.x, under + 24.0),
@@ -299,22 +357,22 @@ pub(super) fn paint_privacy_diagram(ui: &mut egui::Ui, week: &Week) {
 }
 
 /// The tag, the hero, the week's count and the diagram.
-pub(super) fn paint_privacy_story(ui: &mut egui::Ui, week: &Week) {
+pub(super) fn paint_privacy_story(ui: &mut egui::Ui, week: &Week, cloud: Cloud) {
     // Ragged right with a gutter: a justified column stretched the hero's
     // letters at 1100x720 and ran it up to the switches.
     let w = (ui.available_width() - STORY_GUTTER).max(0.0);
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_max_width(w);
-        paint_story_body(ui, week);
+        paint_story_body(ui, week, cloud);
     });
 }
 
-fn paint_story_body(ui: &mut egui::Ui, week: &Week) {
+fn paint_story_body(ui: &mut egui::Ui, week: &Week, cloud: Cloud) {
     // A row, so the tag hugs its text.
-    ui.horizontal(|ui| mode_chip(ui, mode_tag(week)));
+    ui.horizontal(|ui| mode_chip(ui, mode_tag(week, cloud)));
     ui.add_space(14.0);
     ui.label(
-        RichText::new(hero(week))
+        RichText::new(hero(week, cloud))
             .font(crate::theme::title_font(32.0))
             .color(crate::theme::fg()),
     );
@@ -324,8 +382,14 @@ fn paint_story_body(ui: &mut egui::Ui, week: &Week) {
             .size(crate::theme::FONT_BODY + 1.0)
             .color(crate::theme::muted()),
     );
-    ui.add_space(28.0);
-    paint_privacy_diagram(ui, week);
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(cloud_line(cloud))
+            .size(crate::theme::FONT_BODY)
+            .color(crate::theme::muted()),
+    );
+    ui.add_space(24.0);
+    paint_privacy_diagram(ui, week, cloud);
 }
 
 /// Seven bars of calls per day, today on the right.
@@ -385,13 +449,17 @@ impl Cabin {
     pub(super) fn ui_settings_privacy(&mut self, ui: &mut egui::Ui) {
         let now = now_ms();
         let week = ledger_week(ui.ctx(), now);
+        let cloud = Cloud {
+            signed_in: self.agent_ready(),
+            local_jobs: self.cfg.local_model && grokhub_agent::route::local::installed(),
+        };
         if ui.available_width() >= TWO_COL_MIN_W {
             ui.columns(2, |cols| {
-                paint_privacy_story(&mut cols[0], &week);
+                paint_privacy_story(&mut cols[0], &week, cloud);
                 self.privacy_switches(&mut cols[1], &week, now);
             });
         } else {
-            paint_privacy_story(ui, &week);
+            paint_privacy_story(ui, &week, cloud);
             ui.add_space(20.0);
             self.privacy_switches(ui, &week, now);
         }
@@ -413,12 +481,8 @@ impl Cabin {
 
     fn privacy_switches(&mut self, ui: &mut egui::Ui, week: &Week, now: u64) {
         let mut local = self.cfg.local_model;
-        let local_hint = if local {
-            "Background tasks run on this PC"
-        } else {
-            "Background tasks use the cloud model"
-        };
-        if crate::cards::settings_toggle(ui, "On-device model", local_hint, &mut local) {
+        let hint = local_hint(local, local && grokhub_agent::route::local::installed());
+        if crate::cards::settings_toggle(ui, "On-device model", hint, &mut local) {
             self.set_local_model(local);
         }
         let mut asks = self.permission_mode == PermissionMode::Ask;
@@ -511,16 +575,28 @@ mod tests {
         assert_eq!(week_initials(NOW), ["T", "F", "S", "S", "M", "T", "W"]);
     }
 
+    const SIGNED_OUT: Cloud = Cloud {
+        signed_in: false,
+        local_jobs: false,
+    };
+    const CLOUD_ONLY: Cloud = Cloud {
+        signed_in: true,
+        local_jobs: false,
+    };
+
     #[test]
     fn the_story_follows_the_ledger() {
         let quiet = Week::Counts([0; 7]);
-        assert_eq!(mode_tag(&quiet), "LOCAL MODE");
-        assert_eq!(hero(&quiet), "Your data stays on this PC.");
+        assert_eq!(mode_tag(&quiet, SIGNED_OUT), "LOCAL MODE");
+        assert_eq!(hero(&quiet, SIGNED_OUT), "Your data stays on this PC.");
         assert_eq!(sent_line(&quiet), "0 calls sent off-device this week");
         assert_eq!(ledger_total(&quiet), "0 CALLS");
         let one = Week::Counts([0, 0, 0, 0, 0, 0, 1]);
-        assert_eq!(mode_tag(&one), "LOCAL FIRST");
-        assert_eq!(hero(&one), "Only what you allow leaves this PC.");
+        assert_eq!(mode_tag(&one, CLOUD_ONLY), "LOCAL FIRST");
+        assert_eq!(
+            hero(&one, CLOUD_ONLY),
+            "Only what you allow leaves this PC."
+        );
         assert_eq!(sent_line(&one), "1 call sent off-device this week");
         assert_eq!(ledger_total(&one), "1 CALL");
         let busy = Week::Counts([3, 0, 0, 0, 0, 2, 7]);
@@ -529,11 +605,54 @@ mod tests {
             sent_line(&Week::Locked),
             "The off-device log is sealed and your keyring is locked."
         );
-        assert_eq!(hero(&Week::Locked), HERO_SENT);
+        assert_eq!(hero(&Week::Locked, SIGNED_OUT), HERO_SENT);
         assert_eq!(ledger_total(&Week::Loading), "—");
     }
 
-    fn texts(week: &Week) -> String {
+    #[test]
+    fn a_quiet_week_is_not_cloud_off_while_the_cloud_is_in_use() {
+        // QA: "Cloud OFF / Your data stays on this PC" next to "Background
+        // tasks use the cloud model". Signed in, the cloud is ready, not off.
+        let quiet = Week::Counts([0; 7]);
+        assert_eq!(mode_tag(&quiet, CLOUD_ONLY), "LOCAL FIRST");
+        assert_eq!(hero(&quiet, CLOUD_ONLY), "Nothing left this PC this week.");
+        assert_eq!(cloud_state(&quiet, CLOUD_ONLY), "READY");
+        assert_eq!(cloud_state(&quiet, SIGNED_OUT), "OFF");
+        assert_eq!(
+            cloud_state(&Week::Counts([0, 0, 0, 0, 0, 0, 2]), CLOUD_ONLY),
+            "ON"
+        );
+        assert_eq!(cloud_state(&Week::Loading, CLOUD_ONLY), "—");
+        assert_eq!(
+            cloud_line(CLOUD_ONLY),
+            "Chat and background tasks send their prompts to Grok in the cloud."
+        );
+        assert_eq!(
+            cloud_line(Cloud {
+                signed_in: true,
+                local_jobs: true
+            }),
+            "Chat sends your messages to Grok. Small background jobs run on this PC; bigger ones use Grok too."
+        );
+        assert_eq!(
+            cloud_line(SIGNED_OUT),
+            "Grok isn't signed in, so nothing can leave this PC."
+        );
+        assert_eq!(
+            local_hint(false, true),
+            "Background tasks use Grok in the cloud"
+        );
+        assert_eq!(
+            local_hint(true, false),
+            "On, but the on-device model isn't installed, so background tasks still use Grok"
+        );
+        assert_eq!(
+            local_hint(true, true),
+            "Small background jobs run on this PC; bigger ones still use Grok"
+        );
+    }
+
+    fn texts(week: &Week, cloud: Cloud) -> String {
         fn walk(shape: &egui::Shape, out: &mut String) {
             match shape {
                 egui::Shape::Text(t) => {
@@ -555,7 +674,7 @@ mod tests {
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                paint_privacy_story(ui, week);
+                paint_privacy_story(ui, week, cloud);
                 paint_ledger(ui, week, NOW);
             });
         });
@@ -568,7 +687,7 @@ mod tests {
 
     #[test]
     fn the_page_paints_the_deck_story() {
-        let quiet = texts(&Week::Counts([0; 7]));
+        let quiet = texts(&Week::Counts([0; 7]), SIGNED_OUT);
         for want in [
             "LOCAL MODE",
             "Your data stays on this PC.",
@@ -584,10 +703,21 @@ mod tests {
         ] {
             assert!(quiet.contains(want), "missing {want:?} in {quiet}");
         }
-        let sent = texts(&Week::Counts([0, 0, 0, 0, 0, 1, 2]));
+        let sent = texts(&Week::Counts([0, 0, 0, 0, 0, 1, 2]), CLOUD_ONLY);
         assert!(sent.contains("\nON\n"), "cloud reads ON: {sent}");
         assert!(sent.contains("3 CALLS"), "{sent}");
         assert!(!sent.contains("\nOFF\n"), "{sent}");
+        let ready = texts(&Week::Counts([0; 7]), CLOUD_ONLY);
+        for want in [
+            "LOCAL FIRST",
+            "Nothing left this PC this week.",
+            "\nREADY\n",
+            "Chat and background tasks send their prompts to Grok in the cloud.",
+        ] {
+            assert!(ready.contains(want), "missing {want:?} in {ready}");
+        }
+        assert!(!ready.contains("\nOFF\n"), "{ready}");
+        assert!(!ready.contains("Your data stays on this PC."), "{ready}");
     }
 
     #[test]
@@ -612,10 +742,11 @@ mod tests {
             // The nav column is 220 px and the body keeps a 40 px gutter.
             assert!(page.width() - 260.0 >= TWO_COL_MIN_W, "{w}x{h}");
         }
+        // The sheet takes 80% of the window under the 40 px titlebar.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
         let sheet = settings_page_rect(screen, false, SettingsSec::Privacy);
-        assert_eq!(sheet.size(), egui::vec2(920.0, 620.0));
-        assert_eq!(sheet.center(), egui::pos2(800.0, 450.0));
+        assert_eq!(sheet.size(), egui::vec2(1280.0, 688.0));
+        assert_eq!(sheet.center(), egui::pos2(800.0, 470.0));
     }
 
     #[test]
