@@ -133,7 +133,7 @@ impl Cabin {
                 Ok(run) => self.finish_achievements(run, now),
                 Err(mpsc::TryRecvError::Empty) => self.sources.ach.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.ach_failed("The achievement check stopped before it finished");
+                    self.ach_failed("The achievement check stopped before it finished", now);
                 }
             }
             return;
@@ -173,7 +173,7 @@ impl Cabin {
 
     fn finish_achievements(&mut self, run: AchRun, now: u64) {
         if let Some(why) = run.error {
-            self.ach_failed(&format!("Achievement check failed: {why}"));
+            self.ach_failed(&format!("Achievement check failed: {why}"), now);
             return;
         }
         // Switched off while it ran: the user's choice wins.
@@ -208,9 +208,13 @@ impl Cabin {
         self.save_ach();
     }
 
-    /// A check Steam didn't answer: try again in hours, not a week.
-    fn ach_failed(&mut self, why: &str) {
-        self.ach_now().failed();
+    /// A check Steam didn't answer: try again in hours, not a week. Nothing
+    /// when the source was switched off while it ran.
+    fn ach_failed(&mut self, why: &str, now: u64) {
+        if !self.ach_now().on {
+            return;
+        }
+        self.ach_now().failed(now);
         let hours = self.ach_now().wait_ms() / (60 * 60 * 1000);
         let when = if hours == 1 {
             "an hour".to_string()
@@ -390,6 +394,10 @@ mod tests {
             "Achievement check failed: Steam's stats pages didn't answer. Trying again in 2 hours."
         );
         assert!(!cabin.ach_now().due(5_000 + hour));
+        // A check that took 3 hours to fail waits from when it failed.
+        cabin.finish_achievements(failed(), 5_000 + 3 * hour);
+        assert!(!cabin.ach_now().due(5_000 + 3 * hour + 1));
+        assert!(cabin.ach_now().due(5_000 + 7 * hour));
         let ok = run_check(&games, FAKE_ID, &mut deck_reply);
         cabin.finish_achievements(ok, 9_000);
         assert_eq!(cabin.ach_now().failures, 0);
