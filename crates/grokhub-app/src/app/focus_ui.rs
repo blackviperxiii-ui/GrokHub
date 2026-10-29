@@ -53,6 +53,9 @@ impl Cabin {
         self.tick_game_companion();
         self.tick_model_drop();
         self.poll_screenshot_offer();
+        if self.focus.shot.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
     }
 
     /// From the UI pass: what the focus helpers paint over the cabin.

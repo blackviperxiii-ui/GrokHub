@@ -40,12 +40,22 @@ pub(super) fn save_screenshot_offer_ledger(ledger: &ScreenshotOfferLedger) {
 /// What says the chip cannot take the screenshot: the attachment tray is full.
 const TRAY_FULL: &str = "The attachment tray is full. Remove one, then tap Explain again.";
 
+/// A loaded screenshot and its tray thumbnail, both made on the worker.
+type ShotLoad = (PlusPick, Option<egui::ColorImage>);
+
 /// The background folder scan and Explain load in flight.
 #[derive(Default)]
 pub(super) struct ShotState {
     scan: Option<mpsc::Receiver<Option<ImageMeta>>>,
-    /// The offer's path and its loading image.
-    explain: Option<(String, mpsc::Receiver<PlusPick>)>,
+    /// The offer's path and its loading image with its tray thumbnail.
+    explain: Option<(String, mpsc::Receiver<ShotLoad>)>,
+}
+
+impl ShotState {
+    /// A scan or an Explain load is still running.
+    pub(super) fn busy(&self) -> bool {
+        self.scan.is_some() || self.explain.is_some()
+    }
 }
 
 impl Cabin {
@@ -60,7 +70,7 @@ impl Cabin {
         }
         if let Some((path, rx)) = self.focus.shot.explain.take() {
             match rx.try_recv() {
-                Ok(pick) => self.finish_screenshot_explain(&path, pick),
+                Ok((pick, thumb)) => self.finish_screenshot_explain(&path, pick, thumb),
                 Err(mpsc::TryRecvError::Empty) => self.focus.shot.explain = Some((path, rx)),
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Couldn't read that screenshot.".into();
@@ -152,17 +162,31 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         let file = PathBuf::from(&path);
         std::thread::spawn(move || {
-            let _ = tx.send(plus_from_path(PlusTarget::Chat, file));
+            let pick = plus_from_path(PlusTarget::Chat, file.clone());
+            let thumb = match &pick {
+                PlusPick::Ready(r) if r.kind == AttachKind::Image => {
+                    super::attach_tray::thumb_for_path(&file)
+                }
+                _ => None,
+            };
+            let _ = tx.send((pick, thumb));
         });
         self.focus.shot.explain = Some((path, rx));
         self.status = "Reading the screenshot…".into();
     }
 
-    fn finish_screenshot_explain(&mut self, path: &str, pick: PlusPick) {
+    fn finish_screenshot_explain(
+        &mut self,
+        path: &str,
+        pick: PlusPick,
+        thumb: Option<egui::ColorImage>,
+    ) {
         match pick {
             PlusPick::Ready(ready) => {
                 let before = self.attach_tray.len();
-                self.apply_plus_ready(PlusTarget::Chat, ready);
+                if ready.kind != AttachKind::Image || ready.image_url.is_some() {
+                    self.stage_plus_ready_chat_thumb(ready, thumb);
+                }
                 if self.attach_tray.len() == before {
                     // Not staged: keep the offer so Explain can be tapped again.
                     if before >= PENDING_ATTACH_MAX {
@@ -252,6 +276,15 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(cabin.attach_tray.len(), 1);
+        let thumb = cabin.attach_tray.rows[0]
+            .thumb
+            .as_ref()
+            .expect("thumb from the worker");
+        assert_eq!(
+            thumb.size,
+            [2, 1],
+            "the worker made the quarter-size tray thumb"
+        );
         assert_eq!(cabin.composer, EXPLAIN_PROMPT);
         assert!(load_screenshot_offer_ledger().pending.is_none());
         let _ = std::fs::remove_dir_all(root);
