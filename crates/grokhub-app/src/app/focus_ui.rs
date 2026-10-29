@@ -24,6 +24,8 @@ pub(super) struct FocusState {
     context_pending: bool,
     /// "Pick up where you left off" for code, the other what-you-were-doing help.
     pub resume: super::code_resume_ui::ResumeState,
+    /// The internet drop log.
+    pub net: super::net_log_ui::NetState,
     /// The game launch companion.
     pub game: super::game_companion_ui::GameUi,
     /// New 3D models in Downloads.
@@ -36,6 +38,7 @@ impl Cabin {
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
+        self.tick_net_log();
         self.tick_game_companion();
         self.tick_model_drop();
     }

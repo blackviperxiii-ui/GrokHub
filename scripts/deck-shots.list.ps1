@@ -40,6 +40,11 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Internet drop log: the daily pattern card on Pulse, using the single
+# GROKHUB_DECK_NAV handler in loadout_home.rs.
+Shot 1600 900 'net-log-1600x900' 'ops-dark' '14' -netLog -nav 'pulse'
+Shot 1100 720 'net-log-1100x720' 'ops-dark' '14' -netLog -nav 'pulse'
+Shot 1100 720 'net-log-1100x720-scrolled' 'ops-dark' '14' -netLog -nav 'pulse' -wheel 12
 # New local models: the catalog upgrade post on top of Pulse; at 1100x720
 # the feed sits under Up next, so that shot scrolls down to it.
 Shot 1600 900 'local-models-1600x900' 'ops-dark' '14' -pulse -localModels -nav 'pulse'
@@ -108,3 +113,10 @@ Shot 1100 720 'game-launch-1100x720' 'ops-dark' '14' -library -pulse -gameLaunch
 # At 1100x720 the feed sits under Up next; scroll down to the post.
 Shot 1100 720 'game-launch-1100x720-scrolled' 'ops-dark' '14' -library -pulse -gameLaunch -nav 'pulse' -wheel 12
 Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord
+# Card 49: Screenshot explain — composer chip (Hangout) and Settings → Behavior.
+# Settings shots rely on GROKHUB_DECK_SETTINGS_SEC=behavior opening Nav::Settings
+# in apply_deck_shot_seed (SendKeys/gear clicks miss on 1600×900 in CI).
+Shot 1600 900 'screenshot-chip-1600x900' 'ops-dark' '02' -screenshotOffer
+Shot 1100 720 'screenshot-chip-1100x720' 'ops-dark' '02' -screenshotOffer
+Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior
+Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior

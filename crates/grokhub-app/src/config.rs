@@ -428,6 +428,9 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
     /// Settings → Behavior: the game launch companion card. Off by default.
     #[serde(default)]
     pub game_companion: bool,
@@ -535,6 +538,9 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    #[serde(default)]
+    pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
     /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
     #[serde(
         default,
@@ -789,6 +795,7 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            net_log: false,
             game_companion: false,
             game_companion_ping: false,
             model_drop: false,
@@ -819,6 +826,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
             pc_health: grokhub_core::PcHealthSettings::default(),
             ask_offers: grokhub_core::AskOfferSettings::default(),
             print_alerts: grokhub_core::PrintAlertsSettings::default(),

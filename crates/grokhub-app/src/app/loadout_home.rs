@@ -850,7 +850,6 @@ pub(super) fn deck_overflow_open() -> bool {
         .unwrap_or(false)
 }
 
-/// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
 pub(super) fn deck_last_chat_mode() -> Option<String> {
     std::env::var("GROKHUB_DECK_LAST_CHAT")
         .ok()
@@ -1134,9 +1133,10 @@ impl Cabin {
             }
         }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
-        // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
-        // (privacy / full-page proofs). No rail click or Ctrl+, — a miss left
-        // Hangout on screen in #958. After last-chat / nav pin so Personality wins.
+        // including `-pinPersonality` / `-pinBehavior`) or
+        // `GROKHUB_DECK_OPEN_SETTINGS=1` (privacy / full-page proofs). No rail
+        // click or Ctrl+, — a miss left Hangout on screen in #958. After
+        // last-chat / nav pin so Personality / Behavior wins.
         if super::settings::pinned_settings_sec().is_some()
             || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
         {

@@ -416,7 +416,7 @@ impl Cabin {
             Slash::Fix => {
                 self.halt_work("Stopped");
                 self.nav = Nav::Settings;
-                self.settings_sec = health_settings_sec();
+                self.settings_sec = settings::health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
