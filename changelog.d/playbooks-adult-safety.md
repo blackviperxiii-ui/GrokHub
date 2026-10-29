@@ -1,0 +1,3 @@
+- 18+ chat keeps your AI account safe: asks that every provider bans (minors, non-consent, real people) are held back before any model call, local ones included, and the voice steers elsewhere in character.
+- Explicit adult turns go only to xAI or this computer's model: Anthropic, Gemini and OpenAI turns go through xAI instead, and OpenRouter keeps its pick with fallbacks off. You get one plain heads-up a session.
+- Adults-only personalities ask once that you are 18 or older and remember it. A profile that already had them on keeps them.

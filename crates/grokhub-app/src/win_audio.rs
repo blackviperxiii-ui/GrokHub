@@ -173,8 +173,10 @@ impl Drop for WaveIn {
 /// Capture `secs` of 24 kHz s16le mono for push-to-talk.
 pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
     let mut mic = WaveIn::start().ok_or_else(|| {
-        "Windows microphone unavailable — check Settings → Privacy → Microphone for GrokHub"
-            .to_string()
+        format!(
+            "Windows microphone unavailable — check Settings → Privacy → Microphone for {}",
+            grokhub_core::brand::product_name()
+        )
     })?;
     let want = (RATE as usize) * 2 * secs.max(1) as usize;
     let mut out = Vec::with_capacity(want);

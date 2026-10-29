@@ -1,0 +1,1 @@
+- Activity Dock in the egui cabin titlebar: running turns, approvals waiting, and scheduled automation runs, matching the shell's Activity Dock.

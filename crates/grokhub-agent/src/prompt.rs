@@ -390,7 +390,7 @@ pub(crate) const PROMPT_GROWTH_BUDGET: usize = 1536;
 /// Bytes this charter and the default voice add over [`TEMPLATE_BYTES_BEFORE`].
 pub(crate) fn prompt_prefix_growth() -> usize {
     let template = template_body().len().saturating_sub(TEMPLATE_BYTES_BEFORE);
-    let voice = grokhub_core::personality::builtin("default")
+    let voice = grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID)
         .prompt_block()
         .len();
     template + voice

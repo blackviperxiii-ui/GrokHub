@@ -41,13 +41,13 @@ pub fn setting_row(
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            paint_control(ui, control);
+            paint_control(ui, label, control);
         });
     })
     .response
 }
 
-fn paint_control(ui: &mut Ui, control: SettingRowControl<'_>) {
+fn paint_control(ui: &mut Ui, label: &str, control: SettingRowControl<'_>) {
     match control {
         SettingRowControl::Switch(on) => {
             let min = Vec2::splat(crate::theme::MIN_HIT);
@@ -55,7 +55,8 @@ fn paint_control(ui: &mut Ui, control: SettingRowControl<'_>) {
         }
         SettingRowControl::Select { selected, labels } => {
             let current = labels.get(*selected).copied().unwrap_or("—");
-            ComboBox::from_id_salt(ui.id().with("select"))
+            // Rows share a parent id, so the label keeps each select apart.
+            ComboBox::from_id_salt(ui.id().with(("select", label)))
                 .selected_text(current)
                 .width(crate::theme::MIN_HIT * 4.0)
                 .show_ui(ui, |ui| {

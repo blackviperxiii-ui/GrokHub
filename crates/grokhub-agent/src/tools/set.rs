@@ -183,12 +183,14 @@ const BACKGROUND_TOOLS: &[&str] = &[
     "search_replace",
     "run_terminal_command",
     "web_fetch",
+    "web_search",
     "kill_command_or_subagent",
     "monitor",
     // Self-manage reads only; writes stay behind TOOLS: declarations.
     "skill_list",
     "connection_list",
     "automation_list",
+    "know_me_tags",
 ];
 
 #[cfg(test)]

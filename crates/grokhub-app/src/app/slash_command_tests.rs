@@ -749,7 +749,8 @@ fn permission_slashes_arm_always_and_set_auto() {
         cabin.permission_mode,
         PermissionMode::AlwaysApprove
     ));
-    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.cfg.permission_mode, "always-approve");
+    assert!(cabin.cfg.always_confirmed);
     assert_eq!(cabin.status, "Permission always-approve");
     assert!(cabin.confirm.is_none());
     cabin.run_slash_line("/always-approve");
@@ -876,7 +877,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
             cabin.status.clear();
             cabin.run_slash_line(line);
             assert_eq!(
-                cabin.status, "Workflows were a grok CLI feature and are not in GrokHub",
+                cabin.status, "Workflows were a grok CLI feature and are not in Loadout",
                 "{line} (thread: {with_thread})"
             );
             assert!(cabin.running, "{line} must not touch the live turn");

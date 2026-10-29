@@ -868,7 +868,10 @@ fn spawn_thread_goal_titles_from_user_words_without_a_model() {
         cabin.goal_rx.is_none() && !cabin.goal_busy,
         "titles must not open a model channel"
     );
-    assert_eq!(cabin.threads[cabin.thread_idx].goal.label, "draw");
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].goal.label,
+        "draw porn comics"
+    );
     assert!(
         cabin.threads[cabin.thread_idx]
             .goal

@@ -179,16 +179,73 @@ pub fn is_news_feed(url: &str) -> bool {
     header_image(url).is_some()
 }
 
-/// The store header art for a Steam news feed's game.
-pub fn header_image(feed_url: &str) -> Option<String> {
-    let id: u32 = feed_url
-        .strip_prefix("https://store.steampowered.com/feeds/news/app/")?
+/// App id from a [`SteamGame::news_feed`] URL.
+pub fn app_id_from_news_feed(url: &str) -> Option<u32> {
+    url.strip_prefix("https://store.steampowered.com/feeds/news/app/")?
         .trim_end_matches('/')
         .parse()
-        .ok()?;
+        .ok()
+}
+
+/// The store header art for a Steam news feed's game.
+pub fn header_image(feed_url: &str) -> Option<String> {
+    let id: u32 = app_id_from_news_feed(feed_url)?;
     Some(format!(
         "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{id}/header.jpg"
     ))
+}
+
+/// Which cover a library tile wants: the tall box art for the grid, or the
+/// wide store header for the detail column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CoverKind {
+    Tall,
+    Wide,
+}
+
+impl CoverKind {
+    /// Steam's file name for this art, in the store CDN and the local cache.
+    pub fn file(self) -> &'static str {
+        match self {
+            CoverKind::Tall => "library_600x900.jpg",
+            CoverKind::Wide => "header.jpg",
+        }
+    }
+}
+
+/// The public store CDN URL for one game's art (no key needed). Newer games
+/// also keep hashed copies, but these plain names still answer.
+pub fn cover_url(app_id: u32, kind: CoverKind) -> String {
+    format!(
+        "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/{}",
+        kind.file()
+    )
+}
+
+/// Art the Steam client already saved on this PC, in
+/// `appcache/librarycache`: the old flat `{id}_library_600x900.jpg` names, or
+/// the newer `{id}/library_600x900.jpg`, sometimes one hashed folder deeper.
+pub fn local_cover(root: &Path, app_id: u32, kind: CoverKind) -> Option<PathBuf> {
+    let cache = root.join("appcache").join("librarycache");
+    let flat = cache.join(format!("{app_id}_{}", kind.file()));
+    if flat.is_file() {
+        return Some(flat);
+    }
+    let dir = cache.join(app_id.to_string());
+    let direct = dir.join(kind.file());
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let mut subs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    subs.sort();
+    subs.into_iter()
+        .map(|d| d.join(kind.file()))
+        .find(|p| p.is_file())
 }
 
 /// Steam's own runtimes and redistributables are not games.
@@ -512,6 +569,41 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covers_come_from_the_store_cdn_or_the_local_library_cache() {
+        assert_eq!(
+            cover_url(570, CoverKind::Tall),
+            "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/library_600x900.jpg"
+        );
+        assert_eq!(
+            cover_url(570, CoverKind::Wide),
+            "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg"
+        );
+        let root = std::env::temp_dir().join(format!("gh-steam-covers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache = root.join("appcache/librarycache");
+        std::fs::create_dir_all(cache.join("20/0b57cb41")).unwrap();
+        std::fs::create_dir_all(cache.join("30")).unwrap();
+        std::fs::write(cache.join("10_library_600x900.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("20/0b57cb41/library_600x900.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("30/header.jpg"), b"x").unwrap();
+        assert_eq!(
+            local_cover(&root, 10, CoverKind::Tall),
+            Some(cache.join("10_library_600x900.jpg"))
+        );
+        assert_eq!(
+            local_cover(&root, 20, CoverKind::Tall),
+            Some(cache.join("20/0b57cb41/library_600x900.jpg"))
+        );
+        assert_eq!(
+            local_cover(&root, 30, CoverKind::Wide),
+            Some(cache.join("30/header.jpg"))
+        );
+        assert_eq!(local_cover(&root, 30, CoverKind::Tall), None);
+        assert_eq!(local_cover(&root, 40, CoverKind::Wide), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     const LIBRARY_LINUX: &str = r#"
 "libraryfolders"

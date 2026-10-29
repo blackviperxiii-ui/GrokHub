@@ -25,7 +25,8 @@ struct IdeasPass {
     reduced: bool,
 }
 
-/// The group mark: an amber diamond on Up next, a hollow one on categories.
+/// The group mark: a filled amber diamond on Up next, a hollow amber one on
+/// categories (deck slides 13 / 15).
 fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
     let c = rect.center();
@@ -36,10 +37,14 @@ fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
         c + egui::vec2(0.0, r),
         c + egui::vec2(-r, 0.0),
     ];
+    let amber = crate::theme::amber();
     let shape = if filled {
-        egui::Shape::convex_polygon(pts, crate::theme::amber(), egui::Stroke::NONE)
+        egui::Shape::convex_polygon(pts, amber, egui::Stroke::NONE)
     } else {
-        egui::Shape::closed_line(pts, egui::Stroke::new(1.5_f32, crate::theme::muted()))
+        egui::Shape::closed_line(
+            pts,
+            egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, amber),
+        )
     };
     ui.painter().add(shape);
 }
@@ -187,7 +192,9 @@ impl Cabin {
                 self.paint_idea_open(ui, &card, &mut pass.act);
             } else {
                 let st = self.pulse_row_state(&card.id);
-                let (a, rect, on_title) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                let why = self.reaction_why(&card);
+                let (a, rect, on_title) =
+                    super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st, why.as_deref());
                 if a.is_some() {
                     pass.pulse_act = a;
                 }
@@ -202,7 +209,7 @@ impl Cabin {
         ui.add_space(IDEA_GAP);
     }
 
-    /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
+    /// "Suggest for you" in the header: ask the model now, or say how to sign in.
     pub(super) fn suggest_ideas_pressed(&mut self) {
         self.suggest_ideas_with(self.agent_ready());
     }
@@ -667,8 +674,13 @@ impl Cabin {
         Ok("Sent to chat".into())
     }
 
-    /// Delete on the Ideas board. The model hears it was turned down.
+    /// Delete on the For You board. The model hears it was turned down unless
+    /// the card was already used (`turned_down` false).
     pub(super) fn delete_idea(&mut self, id: &str) {
+        self.delete_idea_with_feedback(id, true);
+    }
+
+    pub(super) fn delete_idea_with_feedback(&mut self, id: &str, turned_down: bool) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };
@@ -676,19 +688,26 @@ impl Cabin {
             self.persist_updates();
             // Without these a reworded copy, or the same skill from the nightly review, came back.
             grokhub_core::remember_dismissed_source(&mut self.cfg.feed_pulse, &card.source_id);
-            grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
-            self.persist_cfg();
-            if !card.title.is_empty() {
-                let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
-                self.engine_note("ideas", &key, &card.title);
+            if turned_down {
+                grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
+                if !card.title.is_empty() {
+                    let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
+                    self.engine_note("ideas", &key, &card.title);
+                }
             }
+            self.persist_cfg();
             self.drop_idea_thread(card.discuss_thread.as_deref());
-            self.status = "Idea deleted".into();
+            self.status = if turned_down {
+                "Idea deleted".into()
+            } else {
+                "Done.".into()
+            };
         }
         self.forget_idea_view(id);
     }
 
     /// A card's hidden chat goes with the card, along with its Grok Build session.
+    /// Hard-remove (no Recently deleted) — these are not user History chats.
     fn drop_idea_thread(&mut self, thread_id: Option<&str>) {
         let Some(idx) = thread_id.and_then(|tid| {
             self.threads
@@ -697,7 +716,7 @@ impl Cabin {
         }) else {
             return;
         };
-        self.delete_thread_at(idx);
+        self.hard_drop_thread_at(idx);
     }
 
     fn forget_idea_view(&mut self, id: &str) {

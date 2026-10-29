@@ -24,6 +24,8 @@ pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90,
 /// The sign-in line under Suggest ideas.
 const NOTE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xb7, 0x40);
 const COL_MAX_W: f32 = 680.0;
+/// Left and right padding of the Pulse page.
+const PAGE_PAD_X: f32 = 24.0;
 /// Page widths where Pulse changes shape (deck slide 14, pulse-live.html):
 /// two columns from 1100, the 60/40 split from 1500, one column from 720,
 /// and the Feed | Ideas switch below that.
@@ -61,7 +63,7 @@ impl PulseTab {
     pub fn label(self) -> &'static str {
         match self {
             PulseTab::Feed => "Feed",
-            PulseTab::Ideas => "Ideas",
+            PulseTab::Ideas => grokhub_core::pulse::FOR_YOU_LABEL,
         }
     }
 }
@@ -98,13 +100,27 @@ fn tiles(width: f32, min: f32, gap: f32) -> usize {
     }
 }
 
+/// [`layout_at`] for a column with no padding around it.
+#[cfg(test)]
+pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
+    layout_at(page_w, page_w)
+}
+
+/// Pulse inside its page: the breakpoints read the page beside the rail,
+/// padding included, as the deck's container queries do; the columns fill
+/// what's left inside the padding.
+pub(super) fn pulse_page_layout(page_w: f32) -> PulseLayout {
+    layout_at(page_w, page_w - PAGE_PAD_X * 2.0)
+}
+
 /// The fluid Pulse grid, like the reference CSS: Ideas 3fr and Feed 2fr when
 /// wide, 1.35fr and 1fr on laptops, one stacked column on small windows, and
 /// the switch below 720.
-pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
-    let w = page_w.max(0.0);
+fn layout_at(container_w: f32, content_w: f32) -> PulseLayout {
+    let fit_w = container_w.max(0.0);
+    let w = content_w.max(0.0);
     let gap = (w * 0.013).clamp(16.0, 30.0);
-    if w < STACK_MIN_W {
+    if fit_w < STACK_MIN_W {
         let col = w.min(COL_MAX_W);
         return PulseLayout {
             fit: PulseFit::Compact,
@@ -115,7 +131,7 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
             feed_cols: 1,
         };
     }
-    if w < SPLIT_MIN_W {
+    if fit_w < SPLIT_MIN_W {
         return PulseLayout {
             fit: PulseFit::Stacked,
             ideas_w: w,
@@ -125,7 +141,11 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
             feed_cols: tiles(w, STACKED_POST_MIN_W, POST_TILE_GAP),
         };
     }
-    let share = if w >= WIDE_MIN_W { 0.6 } else { 1.35 / 2.35 };
+    let share = if fit_w >= WIDE_MIN_W {
+        0.6
+    } else {
+        1.35 / 2.35
+    };
     let inner = w - gap;
     let ideas_w = inner * share;
     let feed_w = inner - ideas_w;
@@ -136,6 +156,16 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
         gap,
         ideas_cols: tiles(ideas_w, IDEA_TILE_MIN_W, IDEA_TILE_GAP),
         feed_cols: tiles(feed_w, POST_TILE_MIN_W, POST_TILE_GAP),
+    }
+}
+
+/// The header's Suggest control. The one-column page (720-1100) shortens it
+/// to "Suggest", as on deck slide 14.
+pub(super) fn suggest_label(busy: bool, fit: PulseFit) -> &'static str {
+    match (busy, fit) {
+        (true, _) => "Suggesting…",
+        (false, PulseFit::Stacked) => "Suggest",
+        (false, _) => "Suggest for you",
     }
 }
 
@@ -209,6 +239,18 @@ pub(super) enum PulseAct {
     CopyIssue(String),
     RetryNow,
     Source(String, SourceAct),
+    /// More or fewer cards of this one's kind, from the ··· menu.
+    MoreKind(String),
+    LessKind(String),
+    /// A backup reminder's one-tap, by chip id.
+    BackupChip(String),
+    /// Start-my-day brief: run one item's one-tap prompt.
+    DayTap(String),
+    /// Hobby learning-path tip feedback.
+    HobbyDone(String),
+    HobbySkip(String),
+    HobbyTooEasy(String),
+    HobbyTooHard(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,10 +280,11 @@ fn category_tint(cat: PulseCategory) -> egui::Color32 {
 }
 
 /// One fixed color per card type, so the small type word reads at a glance.
+/// Automate is amber on the deck (slides 13 / 15); Do stays bright.
 pub(super) fn type_color(kind: PulseType) -> egui::Color32 {
     match kind {
         PulseType::Do => egui::Color32::from_rgb(0xe7, 0xe9, 0xea),
-        PulseType::Automate => egui::Color32::from_rgb(0x9b, 0x7b, 0xea),
+        PulseType::Automate => crate::theme::amber(),
         PulseType::Learn => egui::Color32::from_rgb(0xf4, 0xb7, 0x40),
         PulseType::Watch => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
         PulseType::Quiet => crate::theme::muted(),
@@ -426,17 +469,46 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
     }
 }
 
-/// The glyph on a dark tile with a dim red rim (deck slide 15).
+/// The glyph on a dark tile with a signal-red rim (deck slides 13 / 15).
 fn icon(ui: &mut egui::Ui, glyph: Glyph, tint: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON, ICON), egui::Sense::hover());
     ui.painter().rect(
         rect,
-        8.0,
+        crate::ui_kit::recipe::BUTTON_RADIUS,
         crate::theme::void_bg(),
-        egui::Stroke::new(1.0_f32, crate::theme::red_dim()),
+        egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, crate::theme::signal_red()),
         egui::StrokeKind::Inside,
     );
     paint_glyph(ui.painter(), rect.shrink(5.0), glyph, tint);
+}
+
+/// Feed | Ideas header tab: amber outline + underline when selected (slide 13).
+fn pulse_header_tab(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    if !crate::theme::is_loadout_paint() {
+        return crate::cards::felt_tab(ui, label, on);
+    }
+    use crate::ui_kit::recipe::{look, paint, state, Mark, Part};
+    let font = egui::FontId::proportional(crate::theme::FONT_BODY);
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let pad = ui.style().spacing.button_padding;
+    let size = egui::vec2((galley.size().x + pad.x * 2.0).max(52.0), 32.0);
+    let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    // Selected uses Accent (amber rim); keep the slide's amber underline too.
+    let mut l = look(Part::Tab, state(resp.hovered(), false, on));
+    if on {
+        l.mark = Mark::Underline;
+    }
+    paint(ui.painter(), rect, &l);
+    ui.painter().galley(
+        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        l.ink,
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
+    resp.clicked()
 }
 
 /// Up to `rows` lines, then an ellipsis.
@@ -470,6 +542,7 @@ fn pulse_menu(
     card: &UpdateCard,
     kind: PulseType,
     feed: bool,
+    why: Option<&str>,
     act: &mut Option<PulseAct>,
 ) {
     let id = card.id.clone();
@@ -549,8 +622,34 @@ fn pulse_menu(
     }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
-    pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
-    pick(ui, "Dismiss", "D", PulseAct::Dismiss(id), act);
+    if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
+        pick(ui, "Not today", "N", PulseAct::NotThis(id.clone()), act);
+        pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    } else {
+        pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
+        pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    }
+    if let Some(why) = why {
+        ui.separator();
+        ui.label(
+            RichText::new("Why am I seeing this?")
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::muted()),
+        );
+        ui.label(
+            RichText::new(why)
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
+        );
+        pick(
+            ui,
+            "More like this",
+            "",
+            PulseAct::MoreKind(id.clone()),
+            act,
+        );
+        pick(ui, "Less like this", "", PulseAct::LessKind(id), act);
+    }
 }
 
 /// The inline Run button's word: Send… on a prepared draft (it parks the hard
@@ -578,17 +677,27 @@ fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
         .size(crate::theme::FONT_TIP)
         .strong()
         .extra_letter_spacing(0.8);
+    use crate::ui_kit::recipe::{look, Part, State, BUTTON_RADIUS};
     let button = match style {
-        Quick::Primary => egui::Button::new(text.color(crate::theme::send_on_ink()))
-            .fill(crate::theme::amber())
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::amber())),
-        Quick::Outline => egui::Button::new(text.color(crate::theme::fg()))
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::signal_red())),
+        Quick::Primary | Quick::Outline => {
+            let state = if style == Quick::Primary {
+                State::Accent
+            } else {
+                State::Default
+            };
+            let l = look(Part::Button, state);
+            egui::Button::new(text.color(l.ink))
+                .fill(l.fill)
+                .stroke(l.stroke)
+        }
         Quick::Quiet => egui::Button::new(text.color(crate::theme::muted())).frame(false),
     };
-    ui.add(button.corner_radius(6.0).min_size(egui::vec2(0.0, 22.0)))
-        .clicked()
+    ui.add(
+        button
+            .corner_radius(BUTTON_RADIUS)
+            .min_size(egui::vec2(0.0, 22.0)),
+    )
+    .clicked()
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
@@ -600,6 +709,7 @@ pub(super) fn paint_pulse_row(
     card: &UpdateCard,
     kind: PulseType,
     st: RowState,
+    why: Option<&str>,
 ) -> (Option<PulseAct>, egui::Rect, bool) {
     let mut act = None;
     let mut title_hover = false;
@@ -672,7 +782,7 @@ pub(super) fn paint_pulse_row(
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 crate::cards::dots_menu(ui, active, |ui| {
-                    pulse_menu(ui, card, kind, false, &mut act)
+                    pulse_menu(ui, card, kind, false, why, &mut act)
                 });
             });
         });
@@ -714,6 +824,10 @@ pub(super) enum FeedPostAct {
     RetryNow,
     /// Save / Not interested / More like this on a source post.
     Source(SourceAct),
+    HobbyDone,
+    HobbySkip,
+    HobbyTooEasy,
+    HobbyTooHard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -771,6 +885,31 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
         }
         if super::change_undo::click_pill(ui, "Don't do this again") {
             act = Some(FeedPostAct::NeverAgain);
+        }
+    });
+    act
+}
+
+/// Done / Skip / Too easy / Too hard on an unanswered hobby learning-path tip.
+fn paint_hobby_path(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    let open = card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered);
+    if !open {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if super::change_undo::click_pill(ui, "Done") {
+            act = Some(FeedPostAct::HobbyDone);
+        }
+        if super::change_undo::click_pill(ui, "Skip") {
+            act = Some(FeedPostAct::HobbySkip);
+        }
+        if super::change_undo::click_pill(ui, "Too easy") {
+            act = Some(FeedPostAct::HobbyTooEasy);
+        }
+        if super::change_undo::click_pill(ui, "Too hard") {
+            act = Some(FeedPostAct::HobbyTooHard);
         }
     });
     act
@@ -859,8 +998,23 @@ pub(super) fn paint_post_body(
     if let Some(done) = paint_done_for_you(ui, card) {
         act = Some(done);
     }
+    if let Some(hobby) = paint_hobby_path(ui, card) {
+        act = Some(hobby);
+    }
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
+    }
+    if grokhub_core::wind_down::is_wind_down_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Sleep the PC")
+    {
+        act = Some(FeedPostAct::Open);
+    }
+    if grokhub_core::local_model_news::is_upgrade_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Open in Settings")
+    {
+        act = Some(FeedPostAct::Open);
     }
     if super::fix_it::is_diagnosis_report_card(card) {
         if let Some(rec) = paint_recording(ui, card) {
@@ -871,6 +1025,33 @@ pub(super) fn paint_post_body(
         act = Some(wait);
     }
     act
+}
+
+/// One-tap buttons under a Start my day Digest.
+fn paint_day_brief_taps(ui: &mut egui::Ui, taps: &[(String, String)]) -> Option<String> {
+    if taps.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (label, prompt) in taps.iter().take(grokhub_core::day_brief::ITEM_CAP) {
+            let btn = ui.add(
+                egui::Button::new(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::fg()),
+                )
+                .frame(false)
+                .min_size(egui::vec2(0.0, 22.0)),
+            );
+            if btn.clicked() {
+                picked = Some(prompt.clone());
+            }
+        }
+    });
+    picked
 }
 
 /// Save, Not interested and More like this under a source post. Save reads Saved
@@ -1030,9 +1211,9 @@ impl Cabin {
         self.poll_pulse_images();
         let frame = egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::symmetric(24, 20));
+            .inner_margin(egui::Margin::symmetric(PAGE_PAD_X as i8, 20));
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
-            let lay = pulse_layout(ui.available_width());
+            let lay = pulse_page_layout(ui.available_width() + PAGE_PAD_X * 2.0);
             self.pulse_view.fit = lay.fit;
             egui::ScrollArea::vertical()
                 .id_salt("pulse-scroll")
@@ -1204,11 +1385,7 @@ impl Cabin {
                         let busy = self.ideas_rx.is_some();
                         let empty = self.pulse_groups(now_ms()).is_empty();
                         if busy || !empty {
-                            let label = if busy {
-                                "Suggesting…"
-                            } else {
-                                "Suggest ideas"
-                            };
+                            let label = suggest_label(busy, self.pulse_view.fit);
                             if crate::cards::ghost_pill(&mut cell, label) && !busy {
                                 self.suggest_ideas_pressed();
                             }
@@ -1218,7 +1395,7 @@ impl Cabin {
                 ui.add_space(6.0);
                 for tab in PulseTab::ORDER.iter().rev() {
                     let on = self.pulse_view.tab == *tab;
-                    if crate::cards::felt_segment(ui, tab.label(), on).clicked() {
+                    if pulse_header_tab(ui, tab.label(), on) {
                         self.pulse_view.tab = *tab;
                         self.pulse_view.scroll_to = Some(*tab);
                     }
@@ -1260,6 +1437,7 @@ impl Cabin {
                 }
             });
         }
+        self.paint_brief_offer(ui);
         ui.add_space(14.0);
     }
 
@@ -1347,11 +1525,13 @@ impl Cabin {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
         let work = self.pulse_open_work();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &skills,
             open_work: &work,
             now_ms: now,
+            reactions: Some(&reactions),
         };
         pc::rank_pulse(&self.updates, &inputs)
     }
@@ -1361,11 +1541,13 @@ impl Cabin {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
         let work = self.pulse_open_work();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &skills,
             open_work: &work,
             now_ms: now,
+            reactions: Some(&reactions),
         };
         pc::group_ideas(&self.updates, &inputs)
     }
@@ -1373,11 +1555,13 @@ impl Cabin {
     /// The Feed view: posts newest first; muted sources stay off.
     pub(super) fn pulse_feed_posts(&mut self, now: u64) -> Vec<UpdateCard> {
         let ledger = self.pulse_ledger();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &[],
             open_work: &[],
             now_ms: now,
+            reactions: Some(&reactions),
         };
         let muted = &self.cfg.feed_pulse.muted_sources;
         let mut posts: Vec<UpdateCard> = pc::feed_posts(&self.updates, &inputs)
@@ -1467,6 +1651,7 @@ impl Cabin {
         let mut act = None;
         let kind = pc::pulse_type(card);
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
+        let why = self.reaction_why(card);
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1493,7 +1678,7 @@ impl Cabin {
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             crate::cards::dots_menu(ui, false, |ui| {
-                                pulse_menu(ui, card, kind, true, &mut act)
+                                pulse_menu(ui, card, kind, true, why.as_deref(), &mut act)
                             });
                         });
                     });
@@ -1513,7 +1698,19 @@ impl Cabin {
                             FeedPostAct::FixIt(id) => PulseAct::FixIt(id),
                             FeedPostAct::RetryNow => PulseAct::RetryNow,
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
+                            FeedPostAct::HobbyDone => PulseAct::HobbyDone(card.id.clone()),
+                            FeedPostAct::HobbySkip => PulseAct::HobbySkip(card.id.clone()),
+                            FeedPostAct::HobbyTooEasy => PulseAct::HobbyTooEasy(card.id.clone()),
+                            FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
                         });
+                    }
+                    if let Some(id) = self.paint_backup_one_taps(ui, card) {
+                        act = Some(PulseAct::BackupChip(id));
+                    }
+                    if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
+                        if let Some(tap) = paint_day_brief_taps(ui, &self.day_brief_taps()) {
+                            act = Some(PulseAct::DayTap(tap));
+                        }
                     }
                 });
             });
@@ -1773,6 +1970,7 @@ impl Cabin {
     // buttons
 
     pub(super) fn apply_pulse_act(&mut self, act: PulseAct) {
+        self.react_to_act(&act);
         match act {
             PulseAct::Run(id) => {
                 self.pulse_run(&id);
@@ -1781,8 +1979,29 @@ impl Cabin {
                 let clock = Self::local_clock();
                 self.pulse_snooze_at(&id, clock.now_ms, clock.hour, clock.minute);
             }
-            PulseAct::Dismiss(id) => self.pulse_dismiss(&id, &Self::local_day()),
-            PulseAct::NotThis(id) => self.pulse_not_this(&id, &Self::local_day()),
+            PulseAct::Dismiss(id) => {
+                if self
+                    .pulse_card(&id)
+                    .is_some_and(|c| grokhub_core::day_brief::is_day_brief_card(&c.source_id))
+                {
+                    self.day_brief_not_today(&id);
+                } else {
+                    self.pulse_dismiss(&id, &Self::local_day());
+                }
+            }
+            PulseAct::NotThis(id) => {
+                if self
+                    .pulse_card(&id)
+                    .is_some_and(|c| grokhub_core::day_brief::is_day_brief_card(&c.source_id))
+                {
+                    self.day_brief_not_today(&id);
+                } else {
+                    self.pulse_not_this(&id, &Self::local_day());
+                }
+            }
+            PulseAct::DayTap(prompt) => {
+                self.send_chat(prompt);
+            }
             PulseAct::Always(id) => self.pulse_always(&id, &Self::local_day()),
             PulseAct::Accept(id) => self.pulse_accept(&id, &Self::local_day()),
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
@@ -1796,9 +2015,24 @@ impl Cabin {
             PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::BackupChip(id) => self.tap_backup_chip(&id),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
+            // Recorded by react_to_act; nothing else to do.
+            PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
+            }
+            PulseAct::HobbyDone(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Done)
+            }
+            PulseAct::HobbySkip(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::Skip)
+            }
+            PulseAct::HobbyTooEasy(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooEasy)
+            }
+            PulseAct::HobbyTooHard(id) => {
+                self.hobby_path_feedback(&id, grokhub_core::PathFeedback::TooHard)
             }
         }
     }
@@ -1827,6 +2061,10 @@ impl Cabin {
     pub(super) fn pulse_run(&mut self, id: &str) -> Option<String> {
         if self.pulse_card(id)?.pulse.proactive.is_some() {
             self.proactive_click(id);
+            return None;
+        }
+        if self.pulse_card(id)?.pulse.print_alert.is_some() {
+            self.print_alert_run(id);
             return None;
         }
         self.pulse_run_line(id)
@@ -1859,21 +2097,37 @@ impl Cabin {
     }
 
     pub(super) fn pulse_remove(&mut self, card: &UpdateCard) {
-        if card.kind == UpdateKind::Idea {
-            self.delete_idea(&card.id);
-        } else {
-            self.dismiss_feed_card(&card.id);
-        }
+        // Not-this / wrong: treat as turned down.
+        self.pulse_remove_dismiss(card, true);
     }
 
     pub(super) fn pulse_dismiss(&mut self, id: &str, day: &str) {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
-        self.pulse_note(&card.title, LedgerReason::Dismiss, day);
-        self.pulse_remove(&card);
-        self.heartbeat_card_dismissed();
-        self.proactive_dismissed(&card);
+        let used_depth = grokhub_core::used_depth(&self.card_prefs, &card);
+        let kind = pc::dismiss_kind(&card, used_depth);
+        self.pulse_note(&card.title, kind.ledger_reason(), day);
+        if kind.counts_negative() {
+            self.nudge_watcher_dismissed(&card);
+            self.ask_offer_dismissed(&card);
+            self.heartbeat_card_dismissed();
+            self.proactive_dismissed(&card);
+            self.pulse_remove_dismiss(&card, true);
+        } else {
+            self.pulse_remove_dismiss(&card, false);
+            self.status = "Done.".into();
+        }
+    }
+
+    /// Remove a Pulse card after dismiss. `turned_down` writes negative topic
+    /// memory; used-then-dismissed cards skip that.
+    pub(super) fn pulse_remove_dismiss(&mut self, card: &UpdateCard, turned_down: bool) {
+        if card.kind == UpdateKind::Idea {
+            self.delete_idea_with_feedback(&card.id, turned_down);
+        } else {
+            self.dismiss_feed_card(&card.id);
+        }
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the
@@ -2285,6 +2539,18 @@ fn kick_pulse_decode(ctx: egui::Context, name: String, path: std::path::PathBuf)
         }
         ctx.request_repaint();
     });
+}
+
+/// Tests: block until no thumb decode is in flight, so the next pass uploads it.
+#[cfg(test)]
+pub(super) fn wait_pulse_decodes() {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        if pulse_tex_gate().lock().is_ok_and(|g| g.inflight.is_empty()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn fetch_agent() -> ureq::Agent {

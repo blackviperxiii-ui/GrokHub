@@ -199,11 +199,13 @@ impl Cabin {
     pub(super) fn tick_feed_pulse(&mut self) {
         let now = now_ms();
         let quiet = self.quiet_now();
+        let brief = self.brief_gate(Self::local_clock().hour, now);
         let pulse = self.cfg.feed_pulse.clone();
-        let want_digest = pulse.digest_on
-            && (pulse.digest_held
-                || pulse.last_digest_ms == 0
-                || now.saturating_sub(pulse.last_digest_ms) >= pulse.digest_ms);
+        let on_clock = brief.unwrap_or(
+            pulse.last_digest_ms == 0
+                || now.saturating_sub(pulse.last_digest_ms) >= pulse.digest_ms,
+        );
+        let want_digest = pulse.digest_on && (pulse.digest_held || on_clock);
         let (user_md, memory_md, soul_md, taste) = if want_digest && !quiet {
             (
                 crate::config::read_memory("USER.md"),
@@ -247,7 +249,11 @@ impl Cabin {
         let tick = tick_feed_pulse(
             &mut self.updates,
             &mut self.cfg.feed_pulse,
-            PulseNow { now_ms: now, quiet },
+            PulseNow {
+                now_ms: now,
+                quiet,
+                brief,
+            },
             material,
         );
         if fed_edition && tick.digest_consumed {
@@ -266,6 +272,10 @@ impl Cabin {
         if tick.pulse_changed || help_changed {
             self.persist_cfg();
         }
+        self.tick_nudge_watchers();
+        self.tick_screenshot_offer();
+        self.tick_ask_offers();
+        self.tick_hobby_paths();
     }
 
     fn digest_taste(&self) -> Vec<TasteNote> {
@@ -488,17 +498,28 @@ impl Cabin {
         self.persist_updates();
     }
 
+    /// The schedule line an Automate offer files: its preview, else its title.
+    fn offer_seed(&self, id: &str) -> String {
+        self.updates
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| {
+                let from_preview = grokhub_core::automate_accept_seed(c);
+                if from_preview.trim().is_empty() {
+                    c.title.clone()
+                } else {
+                    from_preview
+                }
+            })
+            .unwrap_or_default()
+    }
+
     /// The offer opens the schedule box. Add on that page is what saves it.
     fn open_offer_on_automations(&mut self, id: &str) {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
-        let seed = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| c.title.clone())
-            .unwrap_or_default();
+        let seed = self.offer_seed(id);
         self.persist_updates();
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
             self.log_card_use(
@@ -516,12 +537,7 @@ impl Cabin {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
-        let seed = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| c.title.clone())
-            .unwrap_or_default();
+        let seed = self.offer_seed(id);
         self.persist_updates();
         let route = route_schedule(&seed);
         let (depth, did) = if route.is_some() {
@@ -772,7 +788,7 @@ impl Cabin {
                 // A hung ask must not leave the Ideas button on "Thinking…" for good.
                 if now_ms().saturating_sub(self.cfg.feed_pulse.last_ideas_ms) > IDEAS_WAIT_MS {
                     if self.nav == Nav::Pulse {
-                        self.status = "Ideas took too long. Try Suggest ideas again.".into();
+                        self.status = "For You took too long. Try Suggest for you again.".into();
                     }
                 } else {
                     self.ideas_rx = Some((rx, inputs));
@@ -916,11 +932,12 @@ impl Cabin {
         }
     }
 
-    /// Opened, built, discussed, or used before: an X then is not a "no".
+    /// Opened, built, discussed, liked, or used before: an X then is not a "no".
     fn card_touched(&self, card: &UpdateCard) -> bool {
         card.status == UpdateStatus::Opened
             || card.built
             || card.discuss_thread.is_some()
+            || card.reaction == Some(grokhub_core::CardReaction::Up)
             || grokhub_core::used_depth(&self.card_prefs, card) > 0
     }
 
@@ -992,6 +1009,9 @@ impl Cabin {
             Some(UpdateAction::OpenWorkboard) => self.nav = Nav::Workboard,
             Some(UpdateAction::OpenAutomations) => self.nav = Nav::Night,
             Some(UpdateAction::DeepLink { href }) => {
+                if self.open_wind_down_link(&href) || self.open_local_model_link(&href) {
+                    return;
+                }
                 let href = href.trim();
                 if !href.is_empty() {
                     self.status = href.to_string();
@@ -1080,10 +1100,10 @@ pub(super) fn paint_feed_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
     open
 }
 
-/// Ideas tab empty body. Returns true when Suggest ideas is pressed.
+/// For You tab empty body. Returns true when Suggest for you is pressed.
 pub(super) fn paint_ideas_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
-    use grokhub_core::pulse::IDEAS_EMPTY;
-    empty_state(ui, "Ideas", IDEAS_EMPTY, Some("Suggest ideas"))
+    use grokhub_core::pulse::{FOR_YOU_LABEL, IDEAS_EMPTY};
+    empty_state(ui, FOR_YOU_LABEL, IDEAS_EMPTY, Some("Suggest for you"))
 }
 
 #[cfg(test)]

@@ -188,7 +188,10 @@ impl Cabin {
             self.fail_turn_start(&err);
             return true;
         }
-        let (carried, carry_idx) = self.native_carry(last_user);
+        let (mut carried, carry_idx) = self.native_carry(last_user);
+        if let Some(line) = self.take_focus_context() {
+            carried = format!("{line}\n{carried}");
+        }
         let prompted = self
             .acp
             .as_ref()
@@ -538,10 +541,16 @@ impl Cabin {
         self.persist_oauth_secrets();
     }
 
-    pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
+    /// Refresh grok_usage from the open native session. Does not paint — the
+    /// persistent "Native · tokens · pool" bar was removed (usage lives in Settings).
+    pub(super) fn sync_native_usage(&mut self, ui: &mut egui::Ui) {
         let checked_id = ui.id().with("native-usage-sid");
-        let native = self.threads.get(self.thread_idx).is_some();
-        if !native {
+        let sid = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|thread| thread.grok_session.clone())
+            .unwrap_or_default();
+        if sid.is_empty() {
             let checked = ui
                 .data(|data| data.get_temp::<String>(checked_id))
                 .unwrap_or_default();
@@ -550,31 +559,15 @@ impl Cabin {
             }
             return;
         }
-        let sid = self
-            .threads
-            .get(self.thread_idx)
-            .and_then(|thread| thread.grok_session.clone())
-            .unwrap_or_default();
         let checked = ui
             .data(|data| data.get_temp::<String>(checked_id))
             .unwrap_or_default();
-        if !sid.is_empty() && checked != sid {
+        if checked != sid {
             if let Ok(info) = grokhub_agent::load_session(&sid) {
                 self.show_native_usage(&info);
             }
             ui.data_mut(|data| data.insert_temp(checked_id, sid));
         }
-        let label = native_usage_label(&self.grok_usage);
-        let text = if label.is_empty() {
-            "Native".to_string()
-        } else {
-            format!("Native · {label}")
-        };
-        ui.label(
-            egui::RichText::new(text)
-                .size(crate::theme::FONT_TIP)
-                .color(crate::theme::muted()),
-        );
     }
 }
 

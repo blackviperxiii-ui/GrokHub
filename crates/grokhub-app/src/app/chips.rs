@@ -527,6 +527,9 @@ impl Cabin {
     /// (habit / static / stage pool when the LLM row is not ready). A thread
     /// with messages must not clear that pool.
     pub(super) fn composer_chips(&self) -> Vec<QuickChip> {
+        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
+            return super::loadout_home::hangout_quick_chips();
+        }
         let mut chips = self.visible_chips.clone();
         if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
             let gone = grokhub_core::chip_dismissed_for_good(&self.chip_memory, &c)
@@ -540,6 +543,23 @@ impl Cabin {
         }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
+        let mut resume = self.model_chips();
+        resume.extend(self.resume_chips());
+        resume.extend(self.tidy_chips());
+        resume.extend(self.backup_chips());
+        resume.extend(self.radar_chips());
+        resume.extend(self.game_chips());
+        // A clicked resume chip is remembered and can come back as a plain chip.
+        chips.retain(|x| {
+            resume
+                .iter()
+                .all(|r| r.id != x.id && r.value != x.value && r.label != x.label)
+        });
+        chips.splice(0..0, resume);
+        if let Some(c) = self.focus_chip() {
+            chips.retain(|x| x.id != c.id);
+            chips.insert(0, c);
+        }
         chips
     }
 
@@ -560,6 +580,15 @@ impl Cabin {
     }
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
+        // One-shot chips act here and are not learned: replayed later they would mean nothing.
+        // The tidy review chip opens a window; it is not sent or learned either.
+        if self.take_tidy_chip(&chip)
+            || self.take_backup_chip(&chip)
+            || self.take_radar_chip(&chip)
+            || self.take_game_chip(&chip)
+        {
+            return;
+        }
         let hour = Self::chip_hour();
         let mode = if self.cfg.mode.trim().is_empty() {
             "auto"

@@ -218,7 +218,8 @@ pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> O
             // `dpkg --audit` is the read-only check for half-installed packages.
             PackageManager::Apt => ProbeSpec::new(id, "dpkg", &["--audit"]),
             PackageManager::Dnf => ProbeSpec::new(id, "dnf", &["-q", "-C", "check"]),
-            PackageManager::Pacman => ProbeSpec::new(id, "pacman", &["-Qkq"]),
+            // Not `-Qkq`: quiet lists a file it can't read as missing too.
+            PackageManager::Pacman => ProbeSpec::new(id, "pacman", &["-Qk"]),
             PackageManager::Zypper => ProbeSpec::new(id, "zypper", &["--non-interactive", "--no-refresh", "verify", "--dry-run"]).admin(),
         },
         // Read the package lists already on disk; never refresh them.
@@ -613,7 +614,7 @@ mod tests {
         );
         assert_eq!(
             line(ProbeId::PackageHealth, &pacman),
-            Some("pacman -Qkq".into())
+            Some("pacman -Qk".into())
         );
         assert_eq!(
             line(ProbeId::PendingUpdates, &pacman),

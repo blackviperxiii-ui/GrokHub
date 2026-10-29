@@ -792,8 +792,12 @@ impl Cabin {
             }
             ParkSource::Proactive(_) => {
                 if approve {
-                    self.harness.next_origin = Some(hx::Origin::Proactive);
-                    self.start_oneshot(&park.action, None);
+                    if park.tool == grokhub_core::CONTROL_TOOL {
+                        self.execute_print_control(&park.action);
+                    } else {
+                        self.harness.next_origin = Some(hx::Origin::Proactive);
+                        self.start_oneshot(&park.action, None);
+                    }
                 }
             }
             ParkSource::Egress(dest) => {
@@ -2628,8 +2632,8 @@ mod tests {
         );
         assert_eq!(perm_card_eyebrow(&ask("bash", "ls")), "Tool");
         assert_eq!(
-            super::super::settings::DESKTOP_CONTROL_HINT,
-            "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask."
+            super::super::settings::DESKTOP_CONTROL_HINT.as_str(),
+            "Grok can see the screen and use the mouse and keyboard through Loadout. Ask still asks first. Deletes, sends, money and credentials always ask."
         );
         assert_eq!(
             crate::motion::CURSOR_OUTLINE,

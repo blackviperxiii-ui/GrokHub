@@ -62,12 +62,15 @@ fn paint_facts(
         };
         crate::cards::settings_note(
             ui,
-            &format!("Nothing reads it yet: GrokHub has no {what} reader of its own."),
+            &format!(
+                "Nothing reads it yet: {} has no {what} reader of its own.",
+                grokhub_core::brand::product_name()
+            ),
         );
         return false;
     }
     if facts.is_empty() {
-        crate::cards::settings_note(ui, "Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours.");
+        crate::cards::settings_note(ui, &format!("Nothing learned to show. {} reads it on a heartbeat, never on battery or in quiet hours.", grokhub_core::brand::product_name()));
         return false;
     }
     let n = facts.len();

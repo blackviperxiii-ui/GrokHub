@@ -1,0 +1,1 @@
+- Settings → Personality matches slide 19: a card grid with Explicit/Roast tags, a selected detail panel with the sample line, and an amber Talk as button. Adults-only still hides explicit presets.

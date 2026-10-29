@@ -1,0 +1,1 @@
+- Chat: hanging out no longer feels rushed. Casual chat is care-first (stop when the need is met, natural length), the personality sets the reply length there, and the cabin rules tell the assistant to stay present with no task offers or sign-offs. Task turns keep their word caps. The default voice flirts back playfully, PG-13.
