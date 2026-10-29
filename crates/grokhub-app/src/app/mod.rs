@@ -456,9 +456,9 @@ pub struct Cabin {
     mem_name: String,
     mem_body: String,
     mem_cache_at: [u64; 3],
-    /// The save of the memory file just left (`open_memory_file`); exit
-    /// waits for it so typing right before a quit is not lost.
-    mem_leave_save: Option<std::thread::JoinHandle<()>>,
+    /// Saves of the memory files just left (`open_memory_file`) still
+    /// running; exit waits for them so typing right before a quit is not lost.
+    mem_leave_saves: Vec<std::thread::JoinHandle<()>>,
     mem_cache_body: [String; 3],
     last_persist: Instant,
     persist_idle_key: String,
@@ -1114,7 +1114,7 @@ impl Cabin {
             mem_name,
             mem_body,
             mem_cache_at,
-            mem_leave_save: None,
+            mem_leave_saves: Vec::new(),
             mem_cache_body,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
@@ -1598,7 +1598,7 @@ impl Cabin {
             mem_name: String::new(),
             mem_body: String::new(),
             mem_cache_at: [0, 0, 0],
-            mem_leave_save: None,
+            mem_leave_saves: Vec::new(),
             mem_cache_body: [String::new(), String::new(), String::new()],
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
@@ -5122,12 +5122,12 @@ impl eframe::App for Cabin {
         // persist_io: the process exits right after this, and two writers of
         // app.json share one temp file.
         self.persist_svc.flush();
-        // The memory file left last may still be saving; give it up to 2s.
-        if let Some(save) = self.mem_leave_save.take() {
-            let until = Instant::now() + Duration::from_secs(2);
-            while !save.is_finished() && Instant::now() < until {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+        // Memory files just left may still be saving; give them up to 2s.
+        let until = Instant::now() + Duration::from_secs(2);
+        while self.mem_leave_saves.iter().any(|s| !s.is_finished()) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for save in std::mem::take(&mut self.mem_leave_saves) {
             if save.is_finished() {
                 let _ = save.join();
             }

@@ -1265,17 +1265,23 @@ fn open_memory_file_flushes_the_editor_you_left() {
         "switching tabs must not wipe the unsaved line into the next file"
     );
     // Wait for that save itself: a fixed poll ran out on a busy Windows runner.
-    cabin
-        .mem_leave_save
-        .take()
-        .expect("leaving SOUL starts a save")
-        .join()
-        .unwrap();
+    // Leave USER too: both saves stay tracked, not only the newest.
+    cabin.mem_body = "typed user line for the switch".into();
+    cabin.open_memory_file("SOUL.md");
+    let saves = std::mem::take(&mut cabin.mem_leave_saves);
+    assert_eq!(saves.len(), 2, "each tab you left keeps its save handle");
+    for save in saves {
+        save.join().unwrap();
+    }
     assert!(
         crate::config::read_memory("SOUL.md").contains("typed soul line for the switch"),
         "leaving SOUL must flush the unsaved typing"
     );
-    assert_eq!(cabin.mem_name, "USER.md");
+    assert!(
+        crate::config::read_memory("USER.md").contains("typed user line for the switch"),
+        "leaving USER must flush its unsaved typing too"
+    );
+    assert_eq!(cabin.mem_name, "SOUL.md");
     quiet.settle();
 }
 
@@ -1972,7 +1978,7 @@ fn quiet_cabin() -> Cabin {
         mem_name: String::new(),
         mem_body: String::new(),
         mem_cache_at: [0, 0, 0],
-        mem_leave_save: None,
+        mem_leave_saves: Vec::new(),
         mem_cache_body: [String::new(), String::new(), String::new()],
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),
