@@ -1,0 +1,1 @@
+- Pulse's like, dismiss and used lines now live in their own `memory/pulse-ledger.md` instead of crowding MEMORY.md. Lines already in MEMORY.md move over once, and MEMORY.md.prev keeps a copy. The Memory page also offers, once, to remove lines an earlier reflect copied straight from chat into MEMORY.md, showing them first and keeping a copy.

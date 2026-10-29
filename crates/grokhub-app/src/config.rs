@@ -524,6 +524,10 @@ pub struct AppConfig {
     /// First-run Get Started completed (Super Grok OAuth succeeded once).
     #[serde(default)]
     pub get_started_done: bool,
+    /// The one-time offer to remove old raw chat lines from MEMORY.md was
+    /// answered, or there were none.
+    #[serde(default)]
+    pub memory_raw_tidy_done: bool,
     /// The first-run setup wizard was finished or skipped (`setupDone`).
     #[serde(default)]
     pub setup_done: bool,
@@ -835,6 +839,7 @@ impl Default for AppConfig {
             theme_migrated: false,
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
+            memory_raw_tidy_done: false,
             setup_done: false,
             display_name: String::new(),
             profile_picture: String::new(),
@@ -1040,7 +1045,7 @@ pub fn load() -> AppConfig {
 
 const SOUL_SEED: &str = "# Soul\n\nWho this cabin is. Edit this.\n";
 const USER_SEED: &str = "# User\n\nWho you are. Edit this.\n";
-const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
+pub(crate) const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
 
 /// First-run SOUL/USER/MEMORY so Settings → Memory is not three empty editors.
 pub fn ensure_memory_seeds() {

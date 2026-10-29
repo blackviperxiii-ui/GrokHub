@@ -1125,7 +1125,7 @@ mod tests {
         assert_eq!(cabin.cfg.feed_instructions, after);
         assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 0);
         assert_eq!(say.calls.load(Ordering::SeqCst), 1);
-        let memory = crate::config::read_memory("MEMORY.md");
+        let memory = crate::config::read_memory(grokhub_core::pulse::LEDGER_FILE);
         for line in [
             "- [2026-10-04] pulse: liked \"Rust 1.92 ships\" reason=liked",
             "- [2026-10-04] pulse: dismissed \"Crypto prices jump\" reason=not-this",

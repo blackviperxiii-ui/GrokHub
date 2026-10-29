@@ -599,6 +599,7 @@ impl Cabin {
                         "Still the starter template. The cabin fills this in as you chat, or write it here.",
                     );
                 }
+                self.ui_memory_raw_tidy(ui);
                 if !self.reflect_diff.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
@@ -1712,6 +1713,7 @@ impl Cabin {
             }));
         }
         self.mem_name = name.into();
+        self.mem_raw_lines = None;
         let at = config::memory_updated_at(name);
         let Some(i) = Self::mem_file_idx(name) else {
             self.mem_body = config::read_memory(name);

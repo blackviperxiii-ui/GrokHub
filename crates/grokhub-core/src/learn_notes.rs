@@ -305,6 +305,34 @@ pub fn line_key(file: NoteFile, line: &str) -> Option<String> {
     }
 }
 
+/// Lines the old reflect copied into MEMORY.md straight from chat: plain
+/// sentences, not headings, bullets or quotes, and not a line of `seed`
+/// (the starter template). The learning loop writes dated bullets instead.
+pub fn raw_chat_lines(memory_md: &str, seed: &str) -> Vec<String> {
+    let template: Vec<&str> = seed.lines().map(str::trim).collect();
+    let mut out: Vec<String> = Vec::new();
+    for line in memory_md.lines().map(str::trim) {
+        let structured = line.is_empty()
+            || line.starts_with(['#', '-', '*', '>', '|', '`', '+'])
+            || template.contains(&line);
+        if structured || line.len() >= 200 || !is_plain_text(line) {
+            continue;
+        }
+        if crate::learning::is_durable_fact(line) && !out.iter().any(|l| l == line) {
+            out.push(line.to_string());
+        }
+    }
+    out
+}
+
+/// `memory_md` without the lines in `drop` (compared trimmed).
+pub fn without_lines(memory_md: &str, drop: &[String]) -> String {
+    memory_md
+        .split_inclusive('\n')
+        .filter(|l| !drop.iter().any(|d| d == l.trim()))
+        .collect()
+}
+
 /// Whether `doc` is still the first-run template (or empty).
 pub fn is_placeholder(doc: &str) -> bool {
     let body: Vec<&str> = doc
@@ -363,6 +391,25 @@ pub fn apply_notes(doc: &str, file: NoteFile, notes: &[Note], day: &str) -> Memo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_raw_chat_lines_are_found_and_only_they_are_dropped() {
+        let seed = "# Memory\n\nLong-term notes.\n";
+        let memory = "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\nI prefer the harbor light on at night\n> a quote I kept\nI prefer the harbor light on at night\nhello\n";
+        let raw = raw_chat_lines(memory, seed);
+        assert_eq!(
+            raw,
+            vec!["I prefer the harbor light on at night".to_string()]
+        );
+        assert_eq!(
+            without_lines(memory, &raw),
+            "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\n> a quote I kept\nhello\n"
+        );
+        assert!(
+            raw_chat_lines(seed, seed).is_empty(),
+            "the template alone has nothing to tidy"
+        );
+    }
 
     fn note(msg: &str) -> Option<(NoteFile, String, String)> {
         note_from_message(msg).map(|n| (n.file, n.key, n.text))

@@ -1980,6 +1980,7 @@ fn quiet_cabin() -> Cabin {
         mem_cache_at: [0, 0, 0],
         mem_leave_saves: Vec::new(),
         mem_cache_body: [String::new(), String::new(), String::new()],
+        mem_raw_lines: None,
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),
         persist_rx: None,

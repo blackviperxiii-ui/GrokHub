@@ -195,6 +195,7 @@ mod local_pick_ui;
 mod local_probe;
 mod local_signals;
 mod marketplace_ui;
+mod memory_tidy;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
@@ -460,6 +461,8 @@ pub struct Cabin {
     /// running; exit waits for them so typing right before a quit is not lost.
     mem_leave_saves: Vec<std::thread::JoinHandle<()>>,
     mem_cache_body: [String; 3],
+    /// Old chat lines in the open MEMORY.md (`memory_tidy`), worked out once per open.
+    mem_raw_lines: Option<Vec<String>>,
     last_persist: Instant,
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
@@ -1116,6 +1119,7 @@ impl Cabin {
             mem_cache_at,
             mem_leave_saves: Vec::new(),
             mem_cache_body,
+            mem_raw_lines: None,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
@@ -1600,6 +1604,7 @@ impl Cabin {
             mem_cache_at: [0, 0, 0],
             mem_leave_saves: Vec::new(),
             mem_cache_body: [String::new(), String::new(), String::new()],
+            mem_raw_lines: None,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
