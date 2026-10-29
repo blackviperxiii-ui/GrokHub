@@ -1,0 +1,1 @@
+- Chips: picking or dismissing a suggestion built from your chat, draft, chat title or a model reply no longer saves its text to `chips.json` (only an opaque key and counts). Older saved text is cleared on load, and that cleanup is now always written back.
