@@ -132,7 +132,7 @@ impl Cabin {
             let label = if tagged_here {
                 id.label().to_string()
             } else {
-                format!("{} (no Know me tag yet)", id.label())
+                not_noticed_label(id.label())
             };
             if ui
                 .checkbox(
@@ -148,9 +148,22 @@ impl Cabin {
     }
 }
 
+/// A hobby nothing on this PC (apps, game library) points to yet, in plain words.
+fn not_noticed_label(hobby: &str) -> String {
+    format!("{hobby} (not seen on this PC yet)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unseen_hobby_says_so_in_plain_words() {
+        assert_eq!(
+            not_noticed_label("Woodworking"),
+            "Woodworking (not seen on this PC yet)"
+        );
+    }
 
     #[test]
     fn settings_default_off_and_tick_posts_nothing() {
