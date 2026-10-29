@@ -428,6 +428,9 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: weekly Downloads cleanup suggestions. Off by default.
+    #[serde(default)]
+    pub downloads_tidy: bool,
     /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
     #[serde(default)]
     pub backup_nudge: bool,
@@ -800,6 +803,7 @@ impl Default for AppConfig {
             composer_autocomplete: false,
             focus_help: false,
             resume_code: false,
+            downloads_tidy: false,
             code_folders: Vec::new(),
             backup_nudge: false,
             important_folders: Vec::new(),

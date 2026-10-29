@@ -1444,6 +1444,53 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "finish_wind_down",
+        grokhub_core::wind_down::Offer::Late { idle_min: 45 }.card(
+            &grokhub_core::LocalClock {
+                now_ms: now,
+                weekday: 3,
+                hour: 2,
+                minute: 0,
+            },
+            grokhub_core::wind_down::Voice::Plain,
+        ),
+        "Sleep the PC",
+    ));
+    rows.push((
+        "finish_achievements",
+        grokhub_core::steam_achievements::Nudge {
+            app_id: 1145360,
+            game: "Hades".into(),
+            kind: grokhub_core::steam_achievements::Kind::Close,
+            done: 48,
+            total: 50,
+            left: vec![grokhub_core::steam_achievements::Left {
+                name: "Is There No Escape?".into(),
+                percent: Some(21.4),
+            }],
+        }
+        .card(now),
+        "Hades",
+    ));
+    rows.push((
+        "take_tidy_scan",
+        grokhub_core::downloads_tidy::card(
+            &[grokhub_core::downloads_tidy::Finding {
+                file: grokhub_core::downloads_tidy::FileInfo {
+                    path: "/home/user/Downloads/old.iso".into(),
+                    name: "old.iso".into(),
+                    bytes: 900 * 1024 * 1024,
+                    modified_ms: 0,
+                },
+                kind: grokhub_core::downloads_tidy::Kind::BigArchive,
+                why: "Not touched in 60 days".into(),
+            }],
+            now,
+        )
+        .expect("tidy card"),
+        "Downloads",
+    ));
+    rows.push((
         "show_backup_reminder",
         grokhub_core::backup_nudge::Reminder {
             lines: vec!["my-app has 2 commits on feat-x not pushed for 4 days.".into()],

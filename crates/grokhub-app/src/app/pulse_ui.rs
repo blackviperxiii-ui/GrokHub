@@ -1004,6 +1004,12 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
+    if grokhub_core::wind_down::is_wind_down_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Sleep the PC")
+    {
+        act = Some(FeedPostAct::Open);
+    }
     if grokhub_core::local_model_news::is_upgrade_card(card)
         && card.status != grokhub_core::UpdateStatus::Dismissed
         && super::change_undo::click_pill(ui, "Open in Settings")
