@@ -1478,3 +1478,38 @@ fn chat_find_bar_paints_and_steps_with_the_arrows() {
     assert!(app.find.open);
     assert_eq!(app.find.label(), "2 of 2");
 }
+
+#[test]
+fn tab_plus_shows_the_new_chat_as_a_selected_tab() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("tab-plus");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut cabin = Cabin::quiet_cabin(vec![spoke("Harbor plan", 100)], 0);
+    assert_eq!(cabin.chat_tab_indices(), vec![0]);
+
+    cabin.new_thread(false);
+    let fresh = cabin.thread_idx;
+    assert_ne!(fresh, 0, "+ opens a new draft beside the spoken chat");
+    assert!(cabin.messages.is_empty(), "the new draft starts empty");
+    let tabs = cabin.chat_tab_indices();
+    assert_eq!(tabs.len(), 2, "the empty draft is a tab: {tabs:?}");
+    assert!(tabs.contains(&0) && tabs.contains(&fresh), "{tabs:?}");
+    assert_eq!(cabin.chat_tab_title(fresh), "New chat");
+    assert_eq!(cabin.chat_tab_title(0), "Harbor plan");
+
+    // History still hides the empty draft; only the strip shows it.
+    assert_eq!(history_row_titles(&cabin), ["Harbor plan"]);
+
+    // A second + reuses the same draft instead of stacking tabs.
+    cabin.new_thread(false);
+    assert_eq!(cabin.thread_idx, fresh);
+    assert_eq!(cabin.chat_tab_indices().len(), 2);
+
+    // An empty draft that is not open stays off the strip.
+    cabin.switch_thread(0);
+    assert_eq!(cabin.chat_tab_indices(), vec![0]);
+    let _ = std::fs::remove_dir_all(&root);
+}

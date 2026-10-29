@@ -467,10 +467,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
     if ($pulse -and -not $nav) {
-        # Pulse is the fourth icon on the 40 px rail, at every window size. The chat
-        # tab strip under the titlebar pushes the rail down 37 px.
+        # Pulse is the fourth icon on the 40 px rail, at every window size. The rail
+        # runs the full height beside the chat tab strip, so it sits at the same
+        # spot on every page.
         [void][DeckWin]::SetForegroundWindow($hwnd)
-        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 218)
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         # Let the click land before the cursor moves: a queued click that lands
