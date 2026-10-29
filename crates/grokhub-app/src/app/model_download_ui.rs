@@ -170,6 +170,12 @@ impl Cabin {
     }
 
     pub(super) fn start_model_download(&mut self, m: &'static LocalModel) {
+        #[cfg(test)]
+        {
+            // Tests never reach Hugging Face or the real models folder.
+            tests::STARTED.with(|s| s.borrow_mut().push(m.id));
+        }
+        #[cfg(not(test))]
         self.start_model_download_with(m, models_dir(), Box::new(HfFetch));
     }
 
@@ -443,6 +449,12 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    thread_local! {
+        /// Models `start_model_download` was asked for in this test thread.
+        pub(super) static STARTED: std::cell::RefCell<Vec<&'static str>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
     #[test]
     fn the_confirm_names_the_size_and_the_free_disk() {
         let e4b = ls::local_models()
@@ -558,6 +570,21 @@ mod tests {
         frame(&mut app, Some(not_now));
         assert_eq!(app.setup.confirm_dl, None);
         assert!(app.setup.dl.is_none());
+        assert!(
+            STARTED.with(|s| s.borrow().is_empty()),
+            "Not now downloads nothing"
+        );
+
+        // Ask again, and this time the confirm's own button downloads.
+        let texts = frame(&mut app, None);
+        frame(
+            &mut app,
+            Some(at(&texts, &format!("Download Confirm Model ({size})"))),
+        );
+        let texts = frame(&mut app, None);
+        frame(&mut app, Some(at(&texts, &format!("Download {size}"))));
+        assert_eq!(app.setup.confirm_dl, None);
+        assert_eq!(STARTED.with(|s| s.take()), vec!["confirm-test-model"]);
     }
 
     struct FakeHf(Vec<u8>);

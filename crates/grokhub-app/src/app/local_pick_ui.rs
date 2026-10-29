@@ -46,18 +46,26 @@ pub(super) fn choice_short(m: &LocalModel, suggested: Option<&LocalModel>) -> St
 
 /// The model the dropdown starts on: the one picked this session, the one
 /// running, the hardware's suggestion, then the smallest model, never the
-/// biggest one just because the catalog lists it first.
+/// biggest one just because the catalog lists it first. A CPU that can't run
+/// any local model (`cpu_runs_local` false: no AVX) gets no fallback at all.
 pub(super) fn default_choice(
     picked: Option<&str>,
     installed: Option<&Installed>,
     suggested: Option<&'static LocalModel>,
+    cpu_runs_local: bool,
 ) -> Option<&'static LocalModel> {
     picked
         .or(installed.map(|r| r.id.as_str()))
         .and_then(ls::model_by_id)
         .filter(|m| !m.is_drafter)
         .or(suggested)
-        .or_else(grokhub_core::local_picker::smallest)
+        .or_else(|| {
+            if cpu_runs_local {
+                grokhub_core::local_picker::smallest()
+            } else {
+                None
+            }
+        })
 }
 
 impl Cabin {
@@ -75,6 +83,7 @@ impl Cabin {
             self.setup.choice.as_deref(),
             self.setup.installed.as_ref(),
             suggested,
+            ls::CpuSimd::detect() != ls::CpuSimd::NoAvx,
         )?;
         let all = choices();
         let labels: Vec<String> = all.iter().map(|m| choice_label(m, suggested)).collect();
@@ -178,24 +187,31 @@ mod tests {
             bytes: 1,
         };
         assert_eq!(
-            default_choice(None, Some(&running), Some(a)).map(|m| m.id),
+            default_choice(None, Some(&running), Some(a), true).map(|m| m.id),
             Some(b.id)
         );
         assert_eq!(
-            default_choice(Some(a.id), Some(&running), None).map(|m| m.id),
+            default_choice(Some(a.id), Some(&running), None, true).map(|m| m.id),
             Some(a.id)
         );
         assert_eq!(
-            default_choice(None, None, Some(b)).map(|m| m.id),
+            default_choice(None, None, Some(b), true).map(|m| m.id),
             Some(b.id)
         );
         // No hardware suggestion: the smallest model, not the catalog's first.
         let small = grokhub_core::local_picker::smallest().unwrap();
         assert_eq!(
-            default_choice(None, None, None).map(|m| m.id),
+            default_choice(None, None, None, true).map(|m| m.id),
             Some(small.id)
         );
         assert!(small.run_mb < a.run_mb, "{} vs {}", small.name, a.name);
+        // No AVX: nothing local can run, so nothing is offered.
+        assert_eq!(default_choice(None, None, None, false).map(|m| m.id), None);
+        assert_eq!(
+            default_choice(Some(a.id), None, None, false).map(|m| m.id),
+            Some(a.id),
+            "a model picked by hand still shows"
+        );
         assert_eq!(
             choice_short(a, Some(a)),
             format!(
@@ -210,7 +226,7 @@ mod tests {
             ..running
         };
         assert_eq!(
-            default_choice(None, Some(&old), Some(b)).map(|m| m.id),
+            default_choice(None, Some(&old), Some(b), true).map(|m| m.id),
             Some(b.id)
         );
     }
