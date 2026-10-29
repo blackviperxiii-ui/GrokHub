@@ -60,10 +60,7 @@ pub(super) fn health_settings_sec() -> SettingsSec {
 pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
     static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
     super::loadout_home::launch_pin(&PIN, || {
-        match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
-            .ok()
-            .as_deref()
-            .map(str::trim)
+        match super::loadout_home::deck_switch("GROKHUB_DECK_SETTINGS_SEC")
             .map(|s| s.to_ascii_lowercase())
             .as_deref()
         {

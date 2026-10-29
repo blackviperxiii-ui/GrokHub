@@ -1,0 +1,1 @@
+- Deck screenshot switches (`GROKHUB_DECK_*`) only work in a screenshot run. A stray `GROKHUB_DECK_WIND_DOWN` no longer fakes an idle PC or opens the sleep confirm in a real cabin. One helper reads them, once per run.
