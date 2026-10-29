@@ -1277,6 +1277,8 @@ fn pulse_offers_the_off_helpers_once_each() {
         cabin.status,
         "Late-night wind-down is on. Turn it off in Settings › Behavior."
     );
+    // The switch rolls back, so the offer and Settings still read it as off.
+    assert!(!cabin.wind_down_on());
     std::fs::remove_dir_all(&file).unwrap();
     cabin.set_wind_on(false);
     quiet.settle();
