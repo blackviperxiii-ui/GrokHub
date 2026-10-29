@@ -85,6 +85,9 @@ pub(super) struct PickerState {
     /// The preset id and what its card shows.
     pub shown: Option<(String, TryState)>,
     pub rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
+    /// Stops the running Try it's model call when it times out or a new
+    /// Try it replaces it, so repeated clicks never pile up calls.
+    pub cancel: Option<grokhub_agent::CancelToken>,
     /// Built-ins, then the user's own. Read when Settings or the switch first needs them
     /// and again after every save or delete.
     pub presets: Vec<Personality>,
@@ -124,8 +127,13 @@ fn try_it_input(p: &Personality) -> Vec<grokhub_agent::InputItem> {
         .collect()
 }
 
-/// Runs one Try it on its route. Off the UI thread.
-fn run_try_it(route: TryRoute, p: &Personality) -> Result<String, String> {
+/// Runs one Try it on its route. Off the UI thread. `cancel` stops a
+/// provider or local call; a Grok call ends at its own timeout.
+fn run_try_it(
+    route: TryRoute,
+    p: &Personality,
+    cancel: &grokhub_agent::CancelToken,
+) -> Result<String, String> {
     match route {
         TryRoute::Xai(key) => grok_chat(
             &key,
@@ -151,7 +159,7 @@ fn run_try_it(route: TryRoute, p: &Personality) -> Result<String, String> {
                 &req,
                 grokhub_agent::route::providers::CALL_DATA,
                 &format!("try-it:{}", grokhub_core::now_ms()),
-                &grokhub_agent::CancelToken::new(),
+                cancel,
             )
             .map(|out| out.text)
             .map_err(|e| e.to_string())
@@ -163,13 +171,9 @@ fn run_try_it(route: TryRoute, p: &Personality) -> Result<String, String> {
                 .map(|(_, t)| t)
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            grokhub_agent::route::local::serve(
-                "chat:quick",
-                &text,
-                &grokhub_agent::CancelToken::new(),
-            )
-            .map(|out| out.text)
-            .map_err(|e| e.to_string())
+            grokhub_agent::route::local::serve("chat:quick", &text, cancel)
+                .map(|out| out.text)
+                .map_err(|e| e.to_string())
         }
     }
 }
@@ -569,14 +573,28 @@ impl Cabin {
                 .then(|| (id.to_string(), TryState::Failed(TRY_IT_NO_PROVIDER.into())));
             return;
         };
+        self.start_try_it(id, route);
+    }
+
+    fn start_try_it(&mut self, id: &str, route: TryRoute) {
         let p = personality::lookup(&presets_dir(), id);
         let (tx, rx) = mpsc::channel();
         let id = id.to_string();
+        self.cancel_try_it();
+        let cancel = grokhub_agent::CancelToken::new();
+        self.picker.cancel = Some(cancel.clone());
         self.picker.shown = Some((id.clone(), TryState::Running(std::time::Instant::now())));
         self.picker.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send((id, run_try_it(route, &p)));
+            let _ = tx.send((id, run_try_it(route, &p, &cancel)));
         });
+    }
+
+    /// Stop the Try it in flight, if any: its reply would be dropped anyway.
+    fn cancel_try_it(&mut self) {
+        if let Some(cancel) = self.picker.cancel.take() {
+            cancel.cancel();
+        }
     }
 
     fn poll_try_it(&mut self) {
@@ -587,12 +605,14 @@ impl Cabin {
             if let Some((id, TryState::Running(at))) = self.picker.shown.clone() {
                 if let Some(state) = try_timed_out(at.elapsed()) {
                     self.picker.rx = None;
+                    self.cancel_try_it();
                     self.picker.shown = Some((id, state));
                 }
             }
             return;
         };
         self.picker.rx = None;
+        self.picker.cancel = None;
         let state = match out {
             Ok(text) if !text.trim().is_empty() => TryState::Reply(text.trim().to_string()),
             Ok(_) => TryState::Failed("The model sent an empty reply.".into()),
@@ -1872,8 +1892,12 @@ mod tests {
         let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
         cabin.picker.shown = Some(("pirate".into(), TryState::Running(long_ago)));
         cabin.picker.rx = Some(rx);
+        let call = grokhub_agent::CancelToken::new();
+        cabin.picker.cancel = Some(call.clone());
         cabin.poll_try_it();
         assert!(cabin.picker.rx.is_none());
+        assert!(call.is_cancelled(), "the model call stops with the timeout");
+        assert!(cabin.picker.cancel.is_none());
         assert_eq!(
             cabin.picker.shown,
             Some((
@@ -1881,6 +1905,19 @@ mod tests {
                 TryState::Failed("No reply after 45 seconds. Try again.".into())
             ))
         );
+    }
+
+    #[test]
+    fn a_new_try_it_cancels_the_one_it_replaces() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        let first = grokhub_agent::CancelToken::new();
+        cabin.picker.cancel = Some(first.clone());
+        // A provider nobody added: the worker fails at once, nothing is sent.
+        cabin.start_try_it("pirate", TryRoute::Provider("openrouter/vendor/x".into()));
+        assert!(first.is_cancelled(), "the replaced call is stopped");
+        let second = cabin.picker.cancel.clone().expect("the new call's token");
+        assert!(!second.is_cancelled());
+        assert!(cabin.picker.rx.is_some());
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- Personality "Try it" stops its model call when it times out or when you click Try it again, so repeated clicks no longer pile up provider or local model calls in the background, and a provider call now ends at the 45-second limit.
