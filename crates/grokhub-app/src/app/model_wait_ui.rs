@@ -221,7 +221,7 @@ impl Cabin {
 
 /// A turn that waits for a model (or the network) and resumes on its own.
 fn is_waiting_turn(text: &str) -> bool {
-    text.contains(*NO_ROUTE_MSG) || text.contains(OFFLINE_NO_LOCAL_MSG)
+    text.contains(NO_ROUTE_MSG) || text.contains(OFFLINE_NO_LOCAL_MSG)
 }
 
 /// The note when a turn kept while offline gets its answer.
@@ -300,10 +300,10 @@ mod tests {
         app.live_mut()
             .push(("user".into(), "Summarize inbox".into()));
         // A budget pause is not a wait: nothing is remembered to resume.
-        app.apply_job_fail(*grokhub_agent::route::budget::BUDGET_PAUSE_MSG);
+        app.apply_job_fail(grokhub_agent::route::budget::BUDGET_PAUSE_MSG);
         assert_eq!(app.harness.router.wait.paused_turn, None);
         app.chat_job_thread = Some(app.visible_thread_id());
-        app.apply_job_fail(&format!("protocol error: {}", *NO_ROUTE_MSG));
+        app.apply_job_fail(&format!("protocol error: {NO_ROUTE_MSG}"));
         assert_eq!(
             app.harness.router.wait.paused_turn,
             Some(app.visible_thread_id())

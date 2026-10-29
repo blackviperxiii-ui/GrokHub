@@ -204,7 +204,7 @@ fn on_user_version(
     record_outside_edit(config_dir, target, OUTSIDE_EDIT)?;
     if file_hash(target)? != base {
         return Err(format!(
-            "{what} changed since this tweak was proposed, so it was not applied; {product} proposes again on your version", product = grokhub_core::brand::product_name()
+            "{what} changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
         ));
     }
     Ok(())
@@ -235,10 +235,7 @@ fn propose_row(config_dir: &Path, key: &str, tweak: &Tweak, now: u64) -> Result<
         Vec::new()
     } else {
         parse_policy(&before).map_err(|e| {
-            format!(
-                "Your policy file is ignored ({e}), so {product} won't write over it",
-                product = grokhub_core::brand::product_name()
-            )
+            format!("Your policy file is ignored ({e}), so GrokHub won't write over it")
         })?
     };
     match user.iter_mut().find(|r| r.key() == key) {
@@ -653,7 +650,7 @@ mod tests {
         };
         assert_eq!(
             propose(&root, &tweak, 1).unwrap_err(),
-            "Your playbook Fix this PC changed since this tweak was proposed, so it was not applied; Loadout proposes again on your version"
+            "Your playbook Fix this PC changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
         );
         assert_eq!(
             file(&path).as_deref(),
@@ -710,7 +707,7 @@ mod tests {
             3,
         )
         .unwrap_err();
-        assert_eq!(err, "Your policy file changed since this tweak was proposed, so it was not applied; Loadout proposes again on your version");
+        assert_eq!(err, "Your policy file changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version");
         assert_eq!(file(&ppath).as_deref(), Some(hand.as_str()));
         let p = ChangeLedger::load_kind(&root, ChangeKind::Policy);
         assert_eq!(
@@ -740,23 +737,23 @@ mod tests {
             policy_text(&[row]).unwrap()
         };
         let cases: Vec<(&str, String, &str)> = vec![
-            (pb, text.replace(restore, ""), "Loadout never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"),
+            (pb, text.replace(restore, ""), "GrokHub never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"),
             (
                 pb,
                 text.replace("\n[[phase.step]]\nname = \"Re-check with the same probe\"\n", "\n"),
-                "Loadout never removes the \"Re-check with the same probe\" step from Fix this PC on its own",
+                "GrokHub never removes the \"Re-check with the same probe\" step from Fix this PC on its own",
             ),
-            (pb, text.replace(backup, "backup = \"\""), "Loadout never empties the back-up or check of Fix this PC on its own"),
+            (pb, text.replace(backup, "backup = \"\""), "GrokHub never empties the back-up or check of Fix this PC on its own"),
             (
                 pb,
                 text.replace(reinstall, &format!("{reinstall}tier = \"safe\"\n")),
-                "Loadout never lowers the care of Fix this PC on its own: \"On Arch: reinstall packages with missing files\" was risky, asks first",
+                "GrokHub never lowers the care of Fix this PC on its own: \"On Arch: reinstall packages with missing files\" was risky, asks first",
             ),
-            ("policy:repair-critical", critical, "Loadout never lowers the repair × critical row on its own"),
-            ("policy:approval-critical", String::new(), "Loadout never changes the gate on its own"),
-            ("playbook:hard-class-steps", String::new(), "Loadout never changes the hard-class list on its own"),
-            ("playbook:honesty", String::new(), "Loadout never changes the honesty rules on its own"),
-            ("playbook:canary", String::new(), "Loadout never changes the evaluator and rollback on its own"),
+            ("policy:repair-critical", critical, "GrokHub never lowers the repair × critical row on its own"),
+            ("policy:approval-critical", String::new(), "GrokHub never changes the gate on its own"),
+            ("playbook:hard-class-steps", String::new(), "GrokHub never changes the hard-class list on its own"),
+            ("playbook:honesty", String::new(), "GrokHub never changes the honesty rules on its own"),
+            ("playbook:canary", String::new(), "GrokHub never changes the evaluator and rollback on its own"),
             ("skill:weekly-report", String::new(), "only a policy row or a playbook is tuned here"),
         ];
         let n = cases.len();
@@ -1061,7 +1058,7 @@ mod tests {
         let tweak = weekly(&root, &client, Some(&ask)).brain.expect("parsed");
         assert_eq!(
             apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap_err(),
-            "Loadout never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"
+            "GrokHub never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"
         );
         assert!(read_versions(&root).is_empty(), "no trial");
         assert!(!root.join("playbooks").exists(), "nothing written");

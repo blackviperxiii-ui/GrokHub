@@ -260,20 +260,10 @@ fn settings_drops_cabin_tabs() {
 }
 
 #[test]
-fn about_heading_opens_about_with_the_build() {
-    // QA: the About heading opened a panel titled "Update" with no version.
+fn about_section_opens_update() {
     assert_eq!(
         super::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::About
-    );
-    let about = include_str!("settings.rs")
-        .split("SettingsSec::About => {")
-        .nth(1)
-        .and_then(|s| s.split("SettingsSec::Defaults => {").next())
-        .expect("About arm");
-    assert!(
-        about.contains("crate::update::build_detail_line()"),
-        "About shows the version and build: {about}"
+        super::SettingsSec::Update
     );
 }
 
@@ -299,11 +289,11 @@ fn general_section_opens_account() {
 }
 
 #[test]
-fn settings_defaults_section() {
+fn settings_cabin_defaults_section() {
     let settings = include_str!("settings.rs");
     assert!(
-        settings.contains("(SettingsSec::Defaults, \"Defaults\")"),
-        "Defaults is a Settings section"
+        settings.contains("(SettingsSec::Defaults, \"Cabin defaults\")"),
+        "Cabin defaults is a Settings section"
     );
     let defaults = settings
         .split("SettingsSec::Defaults => {")
@@ -332,21 +322,6 @@ fn settings_defaults_section() {
         cards.contains("pub fn session_row(") && cards.contains("(\"always-approve\", \"Always\")"),
         "composer pills stay the live session controls, including Always"
     );
-}
-
-#[test]
-fn appearance_applies_without_a_save_action() {
-    assert!(!super::settings::settings_save_visible(
-        super::SettingsSec::Appearance
-    ));
-    assert!(super::settings::settings_save_visible(
-        super::SettingsSec::Account
-    ));
-}
-
-#[test]
-fn home_api_key_hint_points_to_defaults() {
-    assert!(include_str!("pages.rs").contains("or add an API key in Settings → Defaults."));
 }
 
 #[test]
@@ -615,7 +590,7 @@ fn settings_section_titles_match_the_page() {
     ));
     assert!(matches!(
         super::settings::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::About
+        super::SettingsSec::Update
     ));
 }
 

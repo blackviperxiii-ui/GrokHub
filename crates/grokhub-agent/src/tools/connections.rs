@@ -207,7 +207,7 @@ fn add_inner(
             .is_allow()
             {
                 return Err(format!(
-                    "{dest} is a new host for {product}. Grant it in Settings, Privacy before a connection can reach it. Nothing was added.", product = grokhub_core::brand::product_name()
+                    "{dest} is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."
                 ));
             }
             entry.insert("url".into(), json!(url));
@@ -414,7 +414,7 @@ mod tests {
         assert!(out.failed);
         assert_eq!(
             out.text,
-            "weather.example.com is a new host for Loadout. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."
+            "weather.example.com is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."
         );
         let out = ctx_run(
             &root,

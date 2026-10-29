@@ -64,7 +64,9 @@ const DECK_PICK_ENV: &str = "GROKHUB_DECK_LIBRARY_PICK";
 /// The view on first open: the deck shot's pick, else the first game.
 fn first_view() -> LibraryView {
     LibraryView {
-        picked: super::loadout_home::deck_switch(DECK_PICK_ENV).and_then(|v| v.parse().ok()),
+        picked: std::env::var(DECK_PICK_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse().ok()),
         ..Default::default()
     }
 }
@@ -333,10 +335,7 @@ impl Cabin {
                 self.library_header(ui, &mut view);
                 ui.add_space(16.0);
                 let shown = filter_games(&games, view.tab, &view.query, &objective);
-                if view
-                    .picked
-                    .is_none_or(|p| !games.iter().any(|g| g.app_id == p))
-                {
+                if view.picked.is_none_or(|p| !games.iter().any(|g| g.app_id == p)) {
                     view.picked = games.first().map(|g| g.app_id);
                 }
                 let full = ui.available_width();
@@ -359,8 +358,7 @@ impl Cabin {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(detail_w);
-                            if let Some(game) = games.iter().find(|g| Some(g.app_id) == view.picked)
-                            {
+                            if let Some(game) = games.iter().find(|g| Some(g.app_id) == view.picked) {
                                 self.library_detail(ui, game, mission.as_ref());
                             }
                         },
@@ -542,20 +540,13 @@ mod tests {
     #[test]
     fn a_deck_shot_opens_library_on_its_picked_game() {
         let before = std::env::var(DECK_PICK_ENV).ok();
-        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var(DECK_PICK_ENV);
         assert_eq!(first_view().picked, None, "the first game by default");
         std::env::set_var(DECK_PICK_ENV, " 1086940 ");
         assert_eq!(first_view().picked, Some(1086940));
-        std::env::remove_var("GROKHUB_DECK_SHOT");
-        assert_eq!(first_view().picked, None, "ignored outside a deck shot");
         match before {
             Some(v) => std::env::set_var(DECK_PICK_ENV, v),
             None => std::env::remove_var(DECK_PICK_ENV),
-        }
-        if let Some(v) = before_shot {
-            std::env::set_var("GROKHUB_DECK_SHOT", v);
         }
     }
 
@@ -643,5 +634,18 @@ mod tests {
         assert_eq!(cabin.nav_id(), "library");
         cabin.set_nav_id("skills");
         assert_eq!(cabin.nav, Nav::Skills);
+    }
+
+    #[test]
+    fn library_empty_state_hides_filters_and_offers_open_steam_action() {
+        let src = cabin_src();
+        let lib = fn_src(&src, "ui_library");
+        assert!(
+            lib.contains("empty_state")
+                && lib.contains("No Steam library")
+                && lib.contains("Open Steam")
+                && lib.contains("steam://"),
+            "Library empty state must offer one clear action and hide filters: {lib}"
+        );
     }
 }

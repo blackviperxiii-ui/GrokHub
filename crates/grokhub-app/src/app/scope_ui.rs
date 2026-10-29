@@ -1,4 +1,4 @@
-//! Spike-4b: Settings → Permissions, "What Loadout can read". One row per
+//! Spike-4b: Settings → Permissions, "What GrokHub can read". One row per
 //! learning scope from Spike-4a, every one off until the user allows it.
 //!
 //! A scope grant is written only here, from a pointer click on Allow
@@ -17,7 +17,7 @@ use grokhub_agent::harness as hx;
 pub(super) static SCOPES_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| format!("What {} can read", grokhub_core::brand::product_name()));
 /// SB-09: the screen's setting is named in quotes, with where it lives.
-pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let Grok control the desktop\" in Settings → Defaults.";
+pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults.";
 /// Browsers the history row offers: (scope id, name the user reads).
 pub(super) const BROWSERS: &[(&str, &str)] = &[
     ("firefox", "Firefox"),
@@ -368,10 +368,7 @@ impl Cabin {
                     self.harness.scope_folder.clear();
                 }
                 self.status = if grokhub_agent::indexers::has_reader(scope) {
-                    format!(
-                        "{label} allowed. {} learns from it on this computer. Revoke it here any time.",
-                        grokhub_core::brand::product_name()
-                    )
+                    format!("{label} allowed. {} learns from it on this computer. Revoke it here any time.", grokhub_core::brand::product_name())
                 } else {
                     format!("{label} allowed. Nothing reads it yet. Revoke it here any time.")
                 };
@@ -502,17 +499,17 @@ mod tests {
     #[test]
     fn the_screen_setting_is_quoted_with_its_place() {
         assert!(SCOPES_NOTE.ends_with(
-            "Screen access is \"Let Grok control the desktop\" in Settings → Defaults."
+            "Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults."
         ));
         let settings = include_str!("settings.rs");
-        assert!(settings.contains("SettingsSec::Defaults => \"Defaults\""));
+        assert!(settings.contains("SettingsSec::Defaults => \"Cabin defaults\""));
         let defaults = settings
             .split("SettingsSec::Defaults => {")
             .nth(1)
-            .expect("Defaults section");
+            .expect("Cabin defaults section");
         assert!(
             defaults.contains("\"Let Grok control the desktop\""),
-            "the switch lives in Defaults"
+            "the switch lives in Cabin defaults"
         );
     }
 }

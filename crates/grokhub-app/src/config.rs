@@ -431,11 +431,6 @@ pub struct AppConfig {
     /// Settings → Behavior: weekly Downloads cleanup suggestions. Off by default.
     #[serde(default)]
     pub downloads_tidy: bool,
-    /// Pulse offers to turn on an off-by-default helper (wind-down, Downloads
-    /// tidy) that the user said "Not now" to. Each is offered until it's
-    /// turned on or dismissed.
-    #[serde(default)]
-    pub helper_offers_dismissed: Vec<String>,
     /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
     #[serde(default)]
     pub backup_nudge: bool,
@@ -809,7 +804,6 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
-            helper_offers_dismissed: Vec::new(),
             code_folders: Vec::new(),
             backup_nudge: false,
             important_folders: Vec::new(),

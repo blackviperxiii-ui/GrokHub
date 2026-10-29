@@ -100,28 +100,6 @@ fn tiles(width: f32, min: f32, gap: f32) -> usize {
     }
 }
 
-/// The line over the Feed, counted from the same posts the Feed paints. With
-/// posts showing it counts them, plus what a check is doing right now; a
-/// "nothing to check" note never sits over cards. With no posts, the empty
-/// state below says so, and only a live note shows here. `live` is whether a
-/// source check or summary is still running; a finished one's note is old news.
-pub(super) fn feed_header(note: &str, live: bool, shown: usize) -> Option<String> {
-    let note = note.trim();
-    let busy = live && !note.is_empty() && note != super::pulse_sources_ui::NOTHING_TO_CHECK;
-    if shown == 0 {
-        return busy.then(|| note.to_string());
-    }
-    let count = format!(
-        "{shown} {} on Pulse",
-        if shown == 1 { "post" } else { "posts" }
-    );
-    Some(if busy {
-        format!("{count} · {note}")
-    } else {
-        count
-    })
-}
-
 /// [`layout_at`] for a column with no padding around it.
 #[cfg(test)]
 pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
@@ -1460,7 +1438,6 @@ impl Cabin {
             });
         }
         self.paint_brief_offer(ui);
-        self.ui_helper_offers(ui);
         ui.add_space(14.0);
     }
 
@@ -1626,10 +1603,9 @@ impl Cabin {
         let now = now_ms();
         let posts = self.pulse_feed_posts(now);
         self.kick_pulse_images(&posts);
-        let live = self.sources_busy();
-        if let Some(line) = feed_header(&self.sources.note, live, posts.len()) {
+        if !self.sources.note.is_empty() {
             ui.label(
-                RichText::new(line)
+                RichText::new(&self.sources.note)
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
             );
@@ -2790,43 +2766,5 @@ mod pulse_tex_tests {
             None => std::env::remove_var("GROKHUB_CONFIG"),
         }
         let _ = std::fs::remove_dir_all(&root);
-    }
-}
-
-#[cfg(test)]
-mod feed_header_tests {
-    use super::*;
-
-    #[test]
-    fn the_feed_header_counts_the_posts_it_shows() {
-        let nothing = "Nothing to check yet. Add an interest or a source.";
-        // Cards on screen: counted, never "nothing to check".
-        assert_eq!(
-            feed_header(nothing, false, 3).as_deref(),
-            Some("3 posts on Pulse")
-        );
-        assert_eq!(
-            feed_header("", false, 1).as_deref(),
-            Some("1 post on Pulse")
-        );
-        // A live check rides along with the count.
-        assert_eq!(
-            feed_header("Checking 4 sources…", true, 2).as_deref(),
-            Some("2 posts on Pulse · Checking 4 sources…")
-        );
-        // Empty Pulse: the empty state says so; only a live note shows up here.
-        assert_eq!(feed_header(nothing, false, 0), None);
-        assert_eq!(feed_header("", false, 0), None);
-        assert_eq!(
-            feed_header("Checking 4 sources…", true, 0).as_deref(),
-            Some("Checking 4 sources…")
-        );
-        // A finished run's result or error stays on the Sources panel, not here.
-        let done = "Checked 4 sources. 2 new.";
-        assert_eq!(
-            feed_header(done, false, 2).as_deref(),
-            Some("2 posts on Pulse")
-        );
-        assert_eq!(feed_header(done, false, 0), None);
     }
 }

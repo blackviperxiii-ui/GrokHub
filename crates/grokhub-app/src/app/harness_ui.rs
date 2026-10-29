@@ -2434,7 +2434,7 @@ mod tests {
         cabin.harness_turn_end("I clicked Save and it worked.", turn);
         let repair = cabin.harness.repair.clone().expect("retry turn queued");
         assert!(
-            repair.starts_with("Loadout's check: `click` changed nothing on screen"),
+            repair.starts_with("GrokHub's check: `click` changed nothing on screen"),
             "{repair}"
         );
         assert!(

@@ -34,46 +34,14 @@ const GRID_GAP: f32 = 10.0;
 const CARD_MIN_W: f32 = 170.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
-/// A Try it that has not answered by then shows a timeout instead of spinning.
-const TRY_IT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
-/// Signed out with no provider or local model: the neutral line where Try it sits.
-pub(super) const TRY_IT_SIGN_IN: &str = "Sign in or add a provider to hear a sample.";
-const TRY_IT_SIGN_IN_LINK: &str = "Open Account";
-const TRY_IT_NO_PROVIDER: &str =
-    "Your provider needs its key and permission first. Check Settings, then try again.";
 /// Slots build.rs watches under `assets/personalities/<id>/`.
 const PHOTO_SLOTS: u8 = 5;
 const _: u8 = PHOTO_SLOTS;
 
-/// ctx key for [`ShownFace`].
-const SHOWN_FACE: &str = "personality-shown-face";
-
-/// The shown personality, as the face painters need it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ShownFace {
-    /// Nyx and Viper wear the companion art; every other voice shows its letter.
-    pub art: bool,
-    pub name: String,
-}
-
-/// This frame's shown personality. Before the first publish it is the companion.
-pub(super) fn shown_face(ctx: &egui::Context) -> ShownFace {
-    ctx.data(|d| d.get_temp::<ShownFace>(egui::Id::new(SHOWN_FACE)))
-        .unwrap_or_else(|| ShownFace {
-            art: true,
-            name: grokhub_core::brand::companion_name().to_string(),
-        })
-}
-
-/// Nyx and her Viper outfit are drawn; other voices have no art yet.
-pub(super) fn wears_companion_art(id: &str) -> bool {
-    id == personality::DEFAULT_ID || id == "viper"
-}
-
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TryState {
-    Running(std::time::Instant),
+    Running,
     Reply(String),
     Failed(String),
 }
@@ -98,90 +66,6 @@ pub(super) struct PickerState {
     pub age_check: bool,
     /// Card under the pointer; the Selected panel follows this when set.
     pub hover: Option<String>,
-    /// The chat's centred personality picker is showing.
-    pub switch_open: bool,
-}
-
-/// Where a Try it goes: the same place your chats do.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum TryRoute {
-    /// The provider model you picked for your chats (`<provider>/<model>`).
-    Provider(String),
-    /// Grok, with this bearer.
-    Xai(String),
-    /// The model on this computer.
-    Local,
-}
-
-/// The sample request, ready for a provider or the local model.
-fn try_it_input(p: &Personality) -> Vec<grokhub_agent::InputItem> {
-    personality::try_it_messages(p)
-        .into_iter()
-        .map(|(role, text)| grokhub_agent::InputItem::Message {
-            role,
-            content: vec![grokhub_agent::ContentPart::InputText(text)],
-        })
-        .collect()
-}
-
-/// Runs one Try it on its route. Off the UI thread.
-fn run_try_it(route: TryRoute, p: &Personality) -> Result<String, String> {
-    match route {
-        TryRoute::Xai(key) => grok_chat(
-            &key,
-            model_for_mode("fast"),
-            &personality::try_it_messages(p),
-            None,
-            None,
-        ),
-        TryRoute::Provider(model) => {
-            let req = grokhub_agent::ResponsesRequest {
-                model: model.clone(),
-                effort: None,
-                input: try_it_input(p),
-                conversation_id: format!("try-it-{}", p.id),
-                tools: Vec::new(),
-                hosted_search: false,
-                call_timeout: Some(TRY_IT_TIMEOUT),
-            };
-            grokhub_agent::route::providers::call_model(
-                &crate::config::config_dir(),
-                &model,
-                None,
-                &req,
-                grokhub_agent::route::providers::CALL_DATA,
-                &format!("try-it:{}", grokhub_core::now_ms()),
-                &grokhub_agent::CancelToken::new(),
-            )
-            .map(|out| out.text)
-            .map_err(|e| e.to_string())
-        }
-        TryRoute::Local => {
-            // The local model takes one user turn: the voice rules ride in front.
-            let text = personality::try_it_messages(p)
-                .into_iter()
-                .map(|(_, t)| t)
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            grokhub_agent::route::local::serve(
-                "chat:quick",
-                &text,
-                &grokhub_agent::CancelToken::new(),
-            )
-            .map(|out| out.text)
-            .map_err(|e| e.to_string())
-        }
-    }
-}
-
-/// What a Try it still running after `elapsed` becomes.
-fn try_timed_out(elapsed: std::time::Duration) -> Option<TryState> {
-    (elapsed >= TRY_IT_TIMEOUT).then(|| {
-        TryState::Failed(format!(
-            "No reply after {} seconds. Try again.",
-            TRY_IT_TIMEOUT.as_secs()
-        ))
-    })
 }
 
 /// Deck shots (`scripts/deck-shots.ps1`) set this to open with the 18+ check
@@ -190,7 +74,7 @@ const DECK_AGE_CHECK_ENV: &str = "GROKHUB_DECK_AGE_CHECK";
 
 /// The 18+ check deck shot is running.
 pub(super) fn deck_age_check() -> bool {
-    super::loadout_home::deck_switch_is(DECK_AGE_CHECK_ENV, "1")
+    std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1")
 }
 
 /// The picker a window starts with: the 18+ row only for that deck shot.
@@ -305,34 +189,15 @@ impl Cabin {
         personality::visible(&self.picker.presets, self.cfg.explicit_personalities)
     }
 
-    /// The one personality every surface shows (titlebar, chat welcome, companion
-    /// dock): the open chat's pick in Chat, else the default.
-    pub(super) fn shown_personality_id(&self) -> String {
-        if self.nav == Nav::Chat {
+    pub(super) fn titlebar_personality_label(&mut self) -> String {
+        let presets = self.presets_now();
+        let id = if self.nav == Nav::Chat {
             self.open_chat_personality()
         } else {
             self.allowed_id(shown_id(self.cfg.personality.trim()))
-        }
-    }
-
-    pub(super) fn shown_personality(&mut self) -> Personality {
-        let presets = self.presets_now();
-        personality::find(&presets, &self.shown_personality_id())
-    }
-
-    pub(super) fn titlebar_personality_label(&mut self) -> String {
-        self.shown_personality().name
-    }
-
-    /// Hands this frame's shown personality to the painters that have no cabin
-    /// (the companion face on replies, the welcome and the Hangout header).
-    pub(super) fn publish_shown_personality(&mut self, ctx: &egui::Context) {
-        let p = self.shown_personality();
-        let face = ShownFace {
-            art: wears_companion_art(&p.id),
-            name: p.name,
+                .to_string()
         };
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(SHOWN_FACE), face));
+        personality::find(&presets, &id).name
     }
 
     /// The personality the open chat shows in its header.
@@ -521,49 +386,23 @@ impl Cabin {
         self.status = format!("Deleted {name}");
     }
 
-    /// Where a Try it goes now, in the order chats use: your provider model while its
-    /// key and grant are there, then Grok, then the model on this computer.
-    pub(super) fn try_route(&mut self) -> Option<TryRoute> {
-        let pick = self.cfg.provider_model.trim().to_string();
-        if let Some((pid, _)) = grokhub_core::model_registry::split_provider_model(&pick) {
-            let usable = grokhub_agent::route::providers::usable(
-                &crate::config::config_dir(),
-                grokhub_agent::route::providers::CALL_DATA,
-            );
-            if usable.iter().any(|u| u == pid) {
-                return Some(TryRoute::Provider(pick));
-            }
-        }
-        if self.llm_ready() {
-            return Some(TryRoute::Xai(self.bearer()));
-        }
-        (self.cfg.local_model && grokhub_agent::route::local::installed())
-            .then_some(TryRoute::Local)
-    }
-
-    /// Cheap per-frame check for the Selected card: is there anywhere a Try it could go?
-    /// [`Self::try_route`] makes the real choice on click.
-    pub(super) fn can_try(&self) -> bool {
-        !self.cfg.provider_model.trim().is_empty()
-            || self.llm_ready()
-            || (self.cfg.local_model && grokhub_agent::route::local::installed())
-    }
-
     fn try_personality(&mut self, id: &str) {
-        let Some(route) = self.try_route() else {
-            // Signed out: the card shows the sign-in line, never a red failure.
-            // A provider pick without its key or grant says what is missing.
-            self.picker.shown = (!self.cfg.provider_model.trim().is_empty())
-                .then(|| (id.to_string(), TryState::Failed(TRY_IT_NO_PROVIDER.into())));
+        if !self.llm_ready() {
+            self.picker.shown = Some((
+                id.to_string(),
+                TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into()),
+            ));
             return;
-        };
-        let p = personality::lookup(&presets_dir(), id);
+        }
+        let key = self.bearer();
+        let model = model_for_mode("fast").to_string();
+        let messages = personality::try_it_messages(&personality::lookup(&presets_dir(), id));
         let (tx, rx) = mpsc::channel();
         let id = id.to_string();
-        self.picker.shown = Some((id.clone(), TryState::Running(std::time::Instant::now())));
+        self.picker.shown = Some((id.clone(), TryState::Running));
         self.picker.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send((id, run_try_it(route, &p)));
+            let _ = tx.send((id, grok_chat(&key, &model, &messages, None, None)));
         });
     }
 
@@ -572,18 +411,12 @@ impl Cabin {
             return;
         };
         let Ok((id, out)) = rx.try_recv() else {
-            if let Some((id, TryState::Running(at))) = self.picker.shown.clone() {
-                if let Some(state) = try_timed_out(at.elapsed()) {
-                    self.picker.rx = None;
-                    self.picker.shown = Some((id, state));
-                }
-            }
             return;
         };
         self.picker.rx = None;
         let state = match out {
             Ok(text) if !text.trim().is_empty() => TryState::Reply(text.trim().to_string()),
-            Ok(_) => TryState::Failed("The model sent an empty reply.".into()),
+            Ok(_) => TryState::Failed("Grok sent an empty reply.".into()),
             Err(err) => TryState::Failed(err),
         };
         self.picker.shown = Some((id, state));
@@ -654,7 +487,6 @@ impl Cabin {
             .filter(|id| presets.iter().any(|p| p.id == *id))
             .unwrap_or(focus.clone());
         let showcased = personality::find(&presets, &showcase_id);
-        let can_try = self.can_try();
         let mut act_on: Option<CardAct> = None;
         let mut hover_id: Option<String> = None;
         let avail_raw = ui.available_width().max(1.0);
@@ -700,7 +532,6 @@ impl Cabin {
                 &showcased,
                 showcased.id == current,
                 tried.as_ref(),
-                can_try,
                 detail_w,
             ) {
                 *act_on = Some(act);
@@ -769,7 +600,6 @@ impl Cabin {
             Some(CardAct::Try(id)) => self.try_personality(&id),
             Some(CardAct::Duplicate(id)) => self.duplicate_personality(&id),
             Some(CardAct::Edit(id)) => self.edit_personality(&id),
-            Some(CardAct::SignIn) => self.settings_sec = SettingsSec::Account,
             None => {}
         }
     }
@@ -894,160 +724,69 @@ impl Cabin {
         }
     }
 
-    /// Titlebar, left of the session menu: the open chat's personality. A click opens
-    /// the centred picker.
+    /// Titlebar, left of the session menu: the open chat's personality and a menu to switch it.
     pub(super) fn paint_personality_switch(&mut self, ui: &mut egui::Ui) {
         if self.nav != Nav::Chat {
             return;
         }
-        let name = self.titlebar_personality_label();
+        let open = self.open_chat_personality();
+        let presets = self.presets_now();
+        let now = personality::find(&presets, &open);
         let resp = ui.add(
             egui::Button::new(
-                RichText::new(name.as_str())
+                RichText::new(now.name.as_str())
                     .size(crate::theme::FONT_META)
                     .color(crate::theme::muted()),
             )
             .frame(false),
         );
         let resp = crate::theme::pointing(resp).on_hover_text("Personality for this chat");
+        let id = ui.make_persistent_id("personality-switch");
         if resp.clicked() {
-            self.picker.switch_open = true;
+            egui::Popup::toggle_id(ui.ctx(), id);
         }
-    }
-
-    /// The Loadout PERSONALITY pill: in a chat it opens the picker for that chat,
-    /// anywhere else Settings › Personality.
-    pub(super) fn open_personality_pill(&mut self) {
-        if self.nav == Nav::Chat {
-            self.picker.switch_open = true;
-        } else {
-            self.nav = Nav::Settings;
-            self.settings_sec = SettingsSec::Personality;
-        }
-    }
-
-    /// The chat's personality picker: centred on the window, presets wrapping in rows.
-    pub(super) fn ui_personality_sheet(&mut self, ctx: &egui::Context) {
-        if !self.picker.switch_open {
-            return;
-        }
-        if self.nav != Nav::Chat {
-            self.picker.switch_open = false;
-            return;
-        }
-        let open = self.open_chat_personality();
-        let presets = self.presets_now();
         let default = shown_id(&self.cfg.personality).to_string();
         let mut pick: Option<String> = None;
         let mut make_default = false;
-        let mut all = false;
-        let mut close = false;
-        let width = sheet_width(ctx.content_rect().width());
-        let modal = egui::Modal::new(egui::Id::new("personality-sheet"))
-            .backdrop_color(egui::Color32::from_black_alpha(153))
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::elevated())
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
-                    .corner_radius(16.0)
-                    .inner_margin(egui::Margin::same(22)),
-            )
-            .show(ctx, |ui| {
-                ui.set_width(width);
-                ui.label(
-                    RichText::new(SHEET_TITLE)
-                        .font(crate::theme::title_font(22.0))
-                        .color(crate::theme::fg()),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(SHEET_HINT)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::muted()),
-                );
-                ui.add_space(14.0);
+        egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
+            .open_memory(None)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+            .align(egui::RectAlign::BOTTOM_END)
+            .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+            .show(|ui| {
+                ui.set_min_width(200.0);
                 egui::ScrollArea::vertical()
-                    .id_salt("personality-sheet-list")
-                    .max_height((ctx.content_rect().height() * 0.5).max(160.0))
+                    .max_height(360.0)
                     .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                            for p in &presets {
-                                let label = chip_label(p, &default);
-                                let chip = egui::Button::selectable(
-                                    p.id == open,
-                                    RichText::new(label).size(crate::theme::FONT_META),
-                                )
-                                .corner_radius(20.0)
-                                .min_size(egui::vec2(0.0, 32.0));
-                                if crate::theme::pointing(ui.add(chip))
-                                    .on_hover_text(p.description.as_str())
-                                    .clicked()
-                                {
-                                    pick = Some(p.id.clone());
-                                }
+                        for p in &presets {
+                            let mut label = p.name.clone();
+                            if p.id == default && p.id != personality::DEFAULT_ID {
+                                label.push_str(" (default)");
                             }
-                        });
-                    });
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    let differs = open != default;
-                    if ui
-                        .add_enabled(differs, egui::Button::new("Make default"))
-                        .clicked()
-                    {
-                        make_default = true;
-                    }
-                    if crate::cards::ghost_pill(ui, "All personalities") {
-                        all = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Close") {
-                            close = true;
+                            if p.explicit {
+                                label.push_str(" · Explicit");
+                            }
+                            if ui.selectable_label(p.id == open, label).clicked() {
+                                pick = Some(p.id.clone());
+                            }
                         }
                     });
-                });
+                ui.separator();
+                let differs = open != default;
+                if ui
+                    .add_enabled(differs, egui::Button::new("Make default").frame(false))
+                    .clicked()
+                {
+                    make_default = true;
+                }
             });
-        if modal.should_close() {
-            close = true;
-        }
         if let Some(id) = pick {
             self.set_chat_personality(&id);
-            close = true;
         }
         if make_default {
             self.make_chat_personality_default();
-            close = true;
-        }
-        if all {
-            self.nav = Nav::Settings;
-            self.settings_sec = SettingsSec::Personality;
-            close = true;
-        }
-        if close {
-            self.picker.switch_open = false;
         }
     }
-}
-
-const SHEET_TITLE: &str = "Personality for this chat";
-const SHEET_HINT: &str = "How replies sound here. Make default uses it for every new chat.";
-
-/// The picker's width: room for three or four chips a row, inside the window.
-fn sheet_width(window_w: f32) -> f32 {
-    (window_w - 80.0).clamp(240.0, 560.0)
-}
-
-/// A chip in the picker: the name, then (default) and Explicit tags.
-fn chip_label(p: &Personality, default: &str) -> String {
-    let mut label = p.name.clone();
-    if p.id == default && p.id != personality::DEFAULT_ID {
-        label.push_str(" (default)");
-    }
-    if p.explicit {
-        label.push_str(" · Explicit");
-    }
-    label
 }
 
 enum CardAct {
@@ -1056,7 +795,6 @@ enum CardAct {
     Try(String),
     Duplicate(String),
     Edit(String),
-    SignIn,
 }
 
 /// How many grid columns fit in `width` (slide 19 is four-up when wide).
@@ -1103,14 +841,14 @@ fn talk_label(name: &str) -> String {
 }
 
 /// First letter of the display name for the card avatar.
-pub(super) fn initial_letter(name: &str) -> char {
+fn initial_letter(name: &str) -> char {
     name.chars()
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('?')
 }
 
-pub(super) fn paint_letter_tile(ui: &mut egui::Ui, letter: char, size: f32, hot: bool) {
+fn paint_letter_tile(ui: &mut egui::Ui, letter: char, size: f32, hot: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let radius = (size * 0.27).clamp(6.0, 18.0);
     let fill = if hot {
@@ -1303,7 +1041,6 @@ fn paint_detail_panel(
     p: &Personality,
     in_use: bool,
     tried: Option<&TryState>,
-    can_try: bool,
     width: f32,
 ) -> Option<CardAct> {
     let mut act = None;
@@ -1397,7 +1134,7 @@ fn paint_detail_panel(
             }
             if !loadout {
                 match tried {
-                    Some(TryState::Running(_)) => {
+                    Some(TryState::Running) => {
                         ui.add_space(8.0);
                         ui.label(
                             RichText::new("Trying…")
@@ -1453,23 +1190,10 @@ fn paint_detail_panel(
             }
             // Slide 19 has no Try it / Duplicate on the Selected card.
             if !loadout {
-                if !can_try {
-                    ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(TRY_IT_SIGN_IN)
-                                .size(crate::theme::FONT_META)
-                                .color(crate::theme::muted()),
-                        );
-                        if ui.link(TRY_IT_SIGN_IN_LINK).clicked() {
-                            act = Some(CardAct::SignIn);
-                        }
-                    });
-                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    let busy = matches!(tried, Some(TryState::Running(_)));
-                    if !busy && can_try && crate::cards::ghost_pill(ui, "Try it") {
+                    let busy = matches!(tried, Some(TryState::Running));
+                    if !busy && crate::cards::ghost_pill(ui, "Try it") {
                         act = Some(CardAct::Try(p.id.clone()));
                     }
                     if p.custom {
@@ -1561,24 +1285,15 @@ mod tests {
     #[test]
     fn a_deck_shot_opens_with_the_18_plus_check_showing() {
         let before = std::env::var(DECK_AGE_CHECK_ENV).ok();
-        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var(DECK_AGE_CHECK_ENV);
         assert!(!first_picker().age_check, "never shown on a normal start");
         std::env::set_var(DECK_AGE_CHECK_ENV, " 1 ");
         assert!(first_picker().age_check);
-        std::env::remove_var("GROKHUB_DECK_SHOT");
-        assert!(!first_picker().age_check, "ignored outside a deck shot");
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::set_var(DECK_AGE_CHECK_ENV, "0");
         assert!(!first_picker().age_check);
         match before {
             Some(v) => std::env::set_var(DECK_AGE_CHECK_ENV, v),
             None => std::env::remove_var(DECK_AGE_CHECK_ENV),
-        }
-        match before_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
     }
 
@@ -1767,236 +1482,19 @@ mod tests {
     }
 
     #[test]
-    fn try_it_signed_out_stays_neutral_with_a_sign_in_link() {
+    fn try_it_without_sign_in_says_so_on_the_card() {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         cabin.cfg.api_key.clear();
         cabin.secrets = Default::default();
-        cabin.cfg.provider_model.clear();
-        cabin.cfg.local_model = false;
-        assert!(!cabin.can_try());
-        assert_eq!(cabin.try_route(), None);
-        // Nothing turns red: no failure is stored, and nothing runs.
-        cabin.try_personality("pirate");
-        assert_eq!(cabin.picker.shown, None);
-        assert!(cabin.picker.rx.is_none());
-
-        // The Selected card shows the neutral line and its link, not "Try it failed".
-        let _paint = crate::theme::hold_paint_test();
-        let texts = detail_texts(&cabin, false);
-        assert!(texts.iter().any(|t| t == TRY_IT_SIGN_IN), "{texts:?}");
-        assert!(texts.iter().any(|t| t == "Open Account"), "{texts:?}");
-        assert!(
-            !texts.iter().any(|t| t.contains("Try it failed")),
-            "{texts:?}"
-        );
-        assert!(!texts.iter().any(|t| t == "Try it"), "{texts:?}");
-        // Signed in, the Try it pill is back and the line is gone.
-        let texts = detail_texts(&cabin, true);
-        assert!(texts.iter().any(|t| t == "Try it"), "{texts:?}");
-        assert!(!texts.iter().any(|t| t == TRY_IT_SIGN_IN), "{texts:?}");
-    }
-
-    /// Every text on the classic Selected card for Pirate.
-    fn detail_texts(_cabin: &Cabin, can_try: bool) -> Vec<String> {
-        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
-            match shape {
-                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                _ => {}
-            }
-        }
-        crate::theme::set_paint_palette(crate::theme::PaintPalette::ClassicDark);
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts_on(&ctx);
-        let p = personality::builtin("pirate");
-        let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
-            let _ = paint_detail_panel(ui, &p, false, None, can_try, 320.0);
-        });
-        let mut texts = Vec::new();
-        for c in &out.shapes {
-            walk(&c.shape, &mut texts);
-        }
-        texts
-    }
-
-    #[test]
-    fn try_it_goes_where_chats_go() {
-        let (_lock, _root, mut cabin) = cabin_with_chat();
-        cabin.cfg.api_key.clear();
-        cabin.secrets = Default::default();
-        cabin.cfg.local_model = false;
-        // A provider pick without its key or grant says what is missing.
-        cabin.cfg.provider_model = "openrouter/vendor/model-x".into();
-        assert!(cabin.can_try());
-        assert_eq!(cabin.try_route(), None);
         cabin.try_personality("pirate");
         assert_eq!(
             cabin.picker.shown,
             Some((
                 "pirate".to_string(),
-                TryState::Failed(TRY_IT_NO_PROVIDER.into())
+                TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into())
             ))
         );
-        // With a console key, an unusable provider pick falls back to Grok.
-        cabin.cfg.api_key = "sk-abcdefghijklmnopqrstuv".into();
-        assert_eq!(
-            cabin.try_route(),
-            Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
-        );
-    }
-
-    #[test]
-    fn a_try_it_with_no_reply_times_out_instead_of_spinning() {
-        assert_eq!(try_timed_out(std::time::Duration::from_secs(44)), None);
-        assert_eq!(
-            try_timed_out(std::time::Duration::from_secs(45)),
-            Some(TryState::Failed(
-                "No reply after 45 seconds. Try again.".into()
-            ))
-        );
-        // The poll turns a stale Running into that line and drops the channel.
-        let (_lock, _root, mut cabin) = cabin_with_chat();
-        let (_tx, rx) = mpsc::channel();
-        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        cabin.picker.shown = Some(("pirate".into(), TryState::Running(long_ago)));
-        cabin.picker.rx = Some(rx);
-        cabin.poll_try_it();
         assert!(cabin.picker.rx.is_none());
-        assert_eq!(
-            cabin.picker.shown,
-            Some((
-                "pirate".to_string(),
-                TryState::Failed("No reply after 45 seconds. Try again.".into())
-            ))
-        );
-    }
-
-    #[test]
-    fn a_switch_changes_the_titlebar_welcome_face_and_dock_together() {
-        let (_lock, _root, mut cabin) = cabin_with_chat();
-        cabin.nav = Nav::Chat;
-        let ctx = egui::Context::default();
-        cabin.publish_shown_personality(&ctx);
-        assert_eq!(cabin.titlebar_personality_label(), "Nyx");
-        assert_eq!(
-            shown_face(&ctx),
-            ShownFace {
-                art: true,
-                name: "Nyx".into()
-            }
-        );
-        let nyx = cabin.shown_personality();
-        assert_eq!(
-            super::super::loadout_home::dock_title(&nyx.id, &nyx.name),
-            "Companion · docked"
-        );
-
-        cabin.set_chat_personality("pirate");
-        cabin.publish_shown_personality(&ctx);
-        assert_eq!(cabin.titlebar_personality_label(), "Pirate");
-        assert_eq!(
-            shown_face(&ctx),
-            ShownFace {
-                art: false,
-                name: "Pirate".into()
-            }
-        );
-        let now = cabin.shown_personality();
-        assert_eq!(
-            super::super::loadout_home::dock_title(&now.id, &now.name),
-            "Pirate · docked"
-        );
-        // The other chat still shows the default everywhere.
-        cabin.thread_idx = 1;
-        assert_eq!(cabin.shown_personality_id(), "nyx");
-    }
-
-    #[test]
-    fn the_chat_picker_is_centred_and_wraps() {
-        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
-            match shape {
-                egui::Shape::Text(t) => {
-                    out.push((t.galley.job.text.clone(), shape.visual_bounding_rect()))
-                }
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                _ => {}
-            }
-        }
-        let (_lock, _root, mut cabin) = cabin_with_chat();
-        cabin.nav = Nav::Chat;
-        let _paint = crate::theme::hold_paint_test();
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts_on(&ctx);
-        let (w, h) = (1280.0, 800.0);
-        let raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(w, h),
-            )),
-            ..Default::default()
-        };
-        // The Loadout pill in a chat opens the picker, not Settings.
-        cabin.open_personality_pill();
-        assert!(cabin.picker.switch_open);
-        assert_eq!(cabin.nav, Nav::Chat);
-        let mut texts = Vec::new();
-        for frame in 0..3 {
-            let mut raw = raw.clone();
-            raw.time = Some(frame as f64 / 10.0);
-            let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_personality_sheet(ui.ctx()));
-            texts.clear();
-            for c in &out.shapes {
-                walk(&c.shape, &mut texts);
-            }
-        }
-        let at = |name: &str| {
-            texts
-                .iter()
-                .find(|(t, _)| t == name)
-                .map(|(_, r)| *r)
-                .unwrap_or_else(|| panic!("{name} missing: {texts:?}"))
-        };
-        let title = at(SHEET_TITLE);
-        let close = at("Close");
-        // Centred: the sheet's left edge (title) and right edge (Close) sit evenly
-        // about the window's middle.
-        let mid = (title.left() + close.right()) / 2.0;
-        assert!((mid - w / 2.0).abs() < 30.0, "sheet centre {mid}");
-        // Wrapping: the presets take more than one row, all inside the sheet.
-        let rows: std::collections::BTreeSet<i32> = [
-            "Nyx",
-            "Genie",
-            "Pirate",
-            "Hype Coach",
-            "Sarcastic Sidekick",
-            "Noir Detective",
-            "Surfer",
-            "Shakespearean Bard",
-            "Butler",
-        ]
-        .iter()
-        .filter_map(|n| texts.iter().find(|(t, _)| t == n))
-        .map(|(_, r)| r.top().round() as i32)
-        .collect();
-        assert!(rows.len() >= 2, "presets wrap: {rows:?}");
-        for (t, r) in &texts {
-            assert!(
-                r.right() <= close.right() + 1.0,
-                "{t} spills past the sheet"
-            );
-        }
-        // Picking a chip switches this chat and closes the sheet.
-        cabin.picker.switch_open = false;
-        cabin.open_personality_pill();
-        cabin.set_chat_personality("pirate");
-        assert_eq!(cabin.titlebar_personality_label(), "Pirate");
-        // Outside Chat the pill still opens Settings › Personality.
-        cabin.nav = Nav::Home;
-        cabin.picker.switch_open = false;
-        cabin.open_personality_pill();
-        assert!(!cabin.picker.switch_open);
-        assert_eq!(cabin.nav, Nav::Settings);
-        assert_eq!(cabin.settings_sec, SettingsSec::Personality);
     }
 
     #[test]

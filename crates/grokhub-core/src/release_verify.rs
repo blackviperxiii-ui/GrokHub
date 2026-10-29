@@ -231,10 +231,7 @@ impl Refusal {
         match self {
             Self::NoRelease => "no release on this channel yet".into(),
             Self::NoAsset => "the release has no build for this computer".into(),
-            Self::BadUrl => format!(
-                "the download link isn't from {product}'s GitHub releases",
-                product = crate::brand::product_name()
-            ),
+            Self::BadUrl => "the download link isn't from GrokHub's GitHub releases".into(),
             Self::NoSums => "the release has no SHA256SUMS".into(),
             Self::NoSignature => "the release isn't signed".into(),
             Self::BadSignature => "signature didn't verify".into(),

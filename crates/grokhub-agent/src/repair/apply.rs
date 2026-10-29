@@ -44,9 +44,7 @@ pub const STEP_OK: &str = "STEP_OK";
 /// What Grok Build replies when a step didn't.
 pub const STEP_FAILED: &str = "STEP_FAILED";
 /// Apply with nobody at the computer.
-pub static UNATTENDED: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    grokhub_core::brand::filled("Fixing needs you at the computer, so I didn't change anything. Open {product} and press Fix it yourself.")
-});
+pub const UNATTENDED: &str = "Fixing needs you at the computer, so I didn't change anything. Open GrokHub and press Fix it yourself.";
 
 /// Who is asking, and where spans go.
 pub struct ApplyCtx<'a> {
@@ -135,7 +133,7 @@ impl ApplyRun {
             why.to_string()
         };
         if !ctx.attended {
-            return Err(refuse(*UNATTENDED));
+            return Err(refuse(UNATTENDED));
         }
         if plan.runnable() == 0 {
             return Err(refuse(
@@ -475,8 +473,8 @@ pub fn gb_prompt(command: &str, n: usize, total: usize, elevated: bool) -> Strin
         ""
     };
     format!(
-        "{product} fix, step {n} of {total}. Run exactly this one command in the terminal, once, and nothing else: {command}\n\
-         Don't change it or add other commands.{admin} When it finishes, reply with one line: {STEP_OK} if it worked, or {STEP_FAILED} and the reason.", product = grokhub_core::brand::product_name()
+        "GrokHub fix, step {n} of {total}. Run exactly this one command in the terminal, once, and nothing else: {command}\n\
+         Don't change it or add other commands.{admin} When it finishes, reply with one line: {STEP_OK} if it worked, or {STEP_FAILED} and the reason."
     )
 }
 

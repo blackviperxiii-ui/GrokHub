@@ -174,9 +174,9 @@ impl Drive {
             names.extend(gaps.names());
             return Verdict::Blocked(format!(
                 "Not done: {} {} still open. I stopped after {STALL_LIMIT} re-plans without progress, so none of it is marked done. \
-If this needs something {product} can't do yet, I can note it as a feature request instead.",
+If this needs something GrokHub can't do yet, I can note it as a feature request instead.",
                 names.join(", "),
-                if names.len() == 1 { "is" } else { "are" }, product = grokhub_core::brand::product_name()
+                if names.len() == 1 { "is" } else { "are" }
             ));
         }
         let mut note = String::new();
@@ -190,7 +190,7 @@ If this needs something {product} can't do yet, I can note it as a feature reque
             let first = first.trim_matches('"');
             note.push_str(&format!(
                 "You stopped again without progress. Take a different approach for \"{first}\" (another tool, another route or a smaller sub-step), or mark it cancelled with the reason. \
-If {product} has no way to do it, mark it cancelled, say so once in plain words and offer a next step. Don't add checklist items for tools the ask doesn't need. ", product = grokhub_core::brand::product_name()
+If GrokHub has no way to do it, mark it cancelled, say so once in plain words and offer a next step. Don't add checklist items for tools the ask doesn't need. "
             ));
         }
         if !open.is_empty() {
@@ -334,7 +334,7 @@ mod tests {
         }
         assert_eq!(
             drive.check(&now, 1),
-            Verdict::Blocked("Not done: \"check ports\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something Loadout can't do yet, I can note it as a feature request instead.".into())
+            Verdict::Blocked("Not done: \"check ports\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.".into())
         );
     }
 
@@ -394,7 +394,7 @@ mod tests {
         assert!(matches!(&verdicts[2], Verdict::Push(n) if n.starts_with("You stopped again")));
         assert_eq!(
             verdicts[3],
-            Verdict::Blocked("Not done: \"check pulse\", \"check diagnose\" are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something Loadout can't do yet, I can note it as a feature request instead.".into())
+            Verdict::Blocked("Not done: \"check pulse\", \"check diagnose\" are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.".into())
         );
         // Finishing one item while adding another is progress, not churn.
         let mut drive = Drive::new(&[]);

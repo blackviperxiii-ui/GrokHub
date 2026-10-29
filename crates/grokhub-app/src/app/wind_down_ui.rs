@@ -24,12 +24,11 @@ pub(super) struct WindDownState {
 }
 
 fn deck_check() -> bool {
-    super::loadout_home::deck_switch(DECK_ENV)
-        .is_some_and(|v| matches!(v.as_str(), "1" | "confirm"))
+    std::env::var(DECK_ENV).is_ok_and(|v| matches!(v.trim(), "1" | "confirm"))
 }
 
 fn deck_confirm() -> bool {
-    super::loadout_home::deck_switch_is(DECK_ENV, "confirm")
+    std::env::var(DECK_ENV).is_ok_and(|v| v.trim() == "confirm")
 }
 
 /// 2 AM, 45 min idle, nothing running.
@@ -96,15 +95,10 @@ impl Cabin {
             .get_or_insert_with(|| wd::load(&crate::config::config_dir()))
     }
 
-    /// False (with the error in the status line) when the write failed.
-    fn save_wind(&mut self) -> bool {
+    fn save_wind(&mut self) {
         let tracker = self.wind_now().clone();
-        match wd::save(&crate::config::config_dir(), &tracker) {
-            Ok(()) => true,
-            Err(err) => {
-                self.status = err;
-                false
-            }
+        if let Err(err) = wd::save(&crate::config::config_dir(), &tracker) {
+            self.status = err;
         }
     }
 
@@ -216,30 +210,15 @@ impl Cabin {
         };
     }
 
-    pub(super) fn wind_down_on(&mut self) -> bool {
-        self.wind_now().on
-    }
-
-    /// False when the switch couldn't be saved; the status says why and the
-    /// switch stays as it was, so nothing acts on a change that isn't on disk.
-    pub(super) fn set_wind_on(&mut self, on: bool) -> bool {
-        let before = self.wind_now().clone();
+    fn set_wind_on(&mut self, on: bool) {
         if on {
             self.wind_now().on = true;
-        } else {
-            self.wind_now().turn_off();
-        }
-        if !self.save_wind() {
-            *self.wind_now() = before;
-            return false;
-        }
-        // Only a saved switch drops the in-flight read or the last one.
-        if on {
             self.focus.wind.last_read = None;
         } else {
+            self.wind_now().turn_off();
             self.focus.wind.rx = None;
         }
-        true
+        self.save_wind();
     }
 
     /// Settings → Behavior: the wind-down toggle.
@@ -259,28 +238,6 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_deck_switch_needs_a_deck_shot() {
-        let _lock = crate::config::hold_test_config();
-        let before = std::env::var(DECK_ENV).ok();
-        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var(DECK_ENV, "confirm");
-        std::env::remove_var("GROKHUB_DECK_SHOT");
-        assert!(!deck_check(), "a stray switch never fakes an idle PC");
-        assert!(!deck_confirm(), "nor opens the sleep confirm");
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        assert!(deck_check());
-        assert!(deck_confirm());
-        match before {
-            Some(v) => std::env::set_var(DECK_ENV, v),
-            None => std::env::remove_var(DECK_ENV),
-        }
-        match before_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
-        }
-    }
 
     fn late() -> LocalClock {
         LocalClock {
@@ -362,29 +319,5 @@ mod tests {
         cabin.tick_wind_down();
         assert!(cabin.focus.wind.rx.is_none());
         assert!(cabin.focus.wind.last_read.is_none());
-    }
-
-    #[test]
-    fn a_switch_that_cannot_be_saved_keeps_the_running_read() {
-        let _g = crate::config::hold_test_config();
-        let mut cabin = Cabin::quiet_for_test();
-        assert!(cabin.set_wind_on(true));
-        let (_tx, rx) = mpsc::channel();
-        cabin.focus.wind.rx = Some(rx);
-        let read_at = Instant::now();
-        cabin.focus.wind.last_read = Some(read_at);
-        let file = crate::config::config_dir().join(grokhub_core::wind_down::FILE_NAME);
-        let _ = std::fs::remove_file(&file);
-        std::fs::create_dir_all(&file).unwrap();
-
-        assert!(!cabin.set_wind_on(false));
-        assert!(cabin.wind_down_on(), "the switch stays on");
-        assert!(cabin.focus.wind.rx.is_some(), "the in-flight read is kept");
-        assert!(!cabin.set_wind_on(true));
-        assert_eq!(cabin.focus.wind.last_read, Some(read_at));
-
-        std::fs::remove_dir_all(&file).unwrap();
-        assert!(cabin.set_wind_on(false));
-        assert!(cabin.focus.wind.rx.is_none(), "a saved off drops the read");
     }
 }

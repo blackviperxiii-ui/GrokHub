@@ -39,5 +39,3 @@ id_rsa*
 auth.json
 secrets.json
 credentials.json
-
-__pycache__/

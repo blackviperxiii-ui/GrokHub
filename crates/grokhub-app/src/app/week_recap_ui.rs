@@ -273,7 +273,7 @@ mod tests {
         assert!(details.contains("grokhub · 5 commits"), "{details}");
         assert!(details.contains("## Prints made"), "{details}");
         assert!(details.contains("## Disk freed"), "{details}");
-        assert!(details.contains("## Top Loadout tasks"), "{details}");
+        assert!(details.contains("## Top GrokHub tasks"), "{details}");
         assert!(!details.contains("/home/"), "{details}");
         assert!(share_path().is_file(), "share png written");
         let png = std::fs::read(share_path()).expect("png");
@@ -303,7 +303,7 @@ mod tests {
         assert!(!details.contains("## Projects touched"), "{details}");
         assert!(!details.contains("## Prints made"), "{details}");
         assert!(!details.contains("## Disk freed"), "{details}");
-        assert!(details.contains("## Top Loadout tasks"), "{details}");
+        assert!(details.contains("## Top GrokHub tasks"), "{details}");
 
         // Pure helpers still match gather shape.
         assert_eq!(cabin.week_recap_games(now), Vec::<GamePlayed>::new());

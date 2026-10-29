@@ -317,10 +317,7 @@ pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
 pub fn merge_put_snapshot(local: Option<&Value>, snap: Value) -> Result<Value, String> {
     let kind = snap.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     if kind != HUB_KIND {
-        return Err(format!(
-            "Not a {product} hub snapshot.",
-            product = crate::brand::product_name()
-        ));
+        return Err("Not a GrokHub hub snapshot.".into());
     }
     Ok(match (local, crate::hub_sync::is_hub_snapshot(&snap)) {
         (Some(local_v), true) => {

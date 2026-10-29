@@ -56,10 +56,8 @@ pub fn lock_check(p: &Playbook) -> Result<(), String> {
         match repair_hit(&step.run) {
             HardHit::Floor(f) => {
                 return Err(format!(
-                    "step \"{}\" runs a command {product} never runs ({})",
-                    step.name,
-                    f.reason,
-                    product = grokhub_core::brand::product_name()
+                    "step \"{}\" runs a command GrokHub never runs ({})",
+                    step.name, f.reason
                 ));
             }
             HardHit::Class(c) if step.tier_in(phase) != Tier::Risky => {
@@ -304,7 +302,7 @@ mod tests {
     fn a_playbook_can_never_mark_a_hard_class_or_floor_action_safe() {
         assert_eq!(
             parse(&with_step("risky", "mkfs.ext4 /dev/sdb1")).unwrap_err(),
-            "step \"Do it\" runs a command Loadout never runs (hard floor: mkfs)"
+            "step \"Do it\" runs a command GrokHub never runs (hard floor: mkfs)"
         );
         assert_eq!(
             parse(&with_step("safe", "rm -rf ~/Downloads/old")).unwrap_err(),
@@ -471,7 +469,7 @@ mod tests {
         assert_eq!(
             problems,
             vec![
-                "bad.toml: step \"Do it\" runs a command Loadout never runs (hard floor: mkfs)"
+                "bad.toml: step \"Do it\" runs a command GrokHub never runs (hard floor: mkfs)"
                     .to_string(),
                 "other.toml: its id is `mine`; name the file mine.toml".to_string(),
             ]
@@ -916,7 +914,7 @@ mod tests {
         );
         assert_eq!(
             parse(&mkfs).unwrap_err(),
-            "step \"On Arch: install pending updates\" runs a command Loadout never runs (hard floor: mkfs)"
+            "step \"On Arch: install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
         );
         let wrong = linux.replacen("probe = \"memory\"", "probe = \"volumes\"", 1);
         assert_eq!(

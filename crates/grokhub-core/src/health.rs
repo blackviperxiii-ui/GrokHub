@@ -17,17 +17,15 @@ pub struct HealthInput {
     pub last_dream: Option<(String, String)>,
 }
 
-pub static NO_DREAM_LINE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    crate::brand::filled("Last dream: none yet. {product} dreams once a night after the review, in memory repo mode.")
-});
+pub const NO_DREAM_LINE: &str =
+    "Last dream: none yet. GrokHub dreams once a night after the review, in memory repo mode.";
 
 fn updates_line(h: &HealthInput) -> String {
     match h.cabin_update.as_deref() {
         None => "Updates: none pending.".into(),
         Some(v) => format!(
-            "Updates: {product} {} is ready. Run /update.",
-            v.trim_start_matches('v'),
-            product = crate::brand::product_name()
+            "Updates: GrokHub {} is ready. Run /update.",
+            v.trim_start_matches('v')
         ),
     }
 }
@@ -49,7 +47,7 @@ fn services_lines(h: &HealthInput) -> String {
 
 fn dream_line(h: &HealthInput) -> String {
     let Some((date, report)) = &h.last_dream else {
-        return (*NO_DREAM_LINE).into();
+        return NO_DREAM_LINE.into();
     };
     let c = what_changed::from_dream(report);
     if c.is_empty() {
@@ -106,7 +104,7 @@ mod tests {
         };
         assert_eq!(
             health_block(&h),
-            "Health\n\nUpdates: Loadout 2.10.99 is ready. Run /update.\nServices: 2 of 6 failed\n- xAI auth missing — Connect Grok OAuth in Settings\n- MCP github: error, timed out\nLast dream: 2026-10-08, 1 merged, 1 retired."
+            "Health\n\nUpdates: GrokHub 2.10.99 is ready. Run /update.\nServices: 2 of 6 failed\n- xAI auth missing — Connect Grok OAuth in Settings\n- MCP github: error, timed out\nLast dream: 2026-10-08, 1 merged, 1 retired."
         );
         assert_eq!(health_status(&h), "Health: 1 update · 2 failed");
     }
@@ -119,7 +117,7 @@ mod tests {
         };
         assert_eq!(
             health_block(&h),
-            "Health\n\nUpdates: none pending.\nServices: all 4 ok.\nLast dream: none yet. Loadout dreams once a night after the review, in memory repo mode."
+            "Health\n\nUpdates: none pending.\nServices: all 4 ok.\nLast dream: none yet. GrokHub dreams once a night after the review, in memory repo mode."
         );
         assert_eq!(health_status(&h), "Health: no updates · services ok");
         let quiet = HealthInput {
@@ -133,7 +131,7 @@ mod tests {
         };
         assert_eq!(
             health_block(&quiet),
-            "Health\n\nUpdates: Loadout 2.12.0 is ready. Run /update.\nServices: all 4 ok.\nLast dream: 2026-10-07, nothing changed."
+            "Health\n\nUpdates: GrokHub 2.12.0 is ready. Run /update.\nServices: all 4 ok.\nLast dream: 2026-10-07, nothing changed."
         );
         assert_eq!(health_status(&quiet), "Health: 1 update · services ok");
     }

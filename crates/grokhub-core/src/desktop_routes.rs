@@ -548,7 +548,7 @@ pub fn apply_desk_request(
     }
     if gate.halted {
         backend.release_input();
-        return DeskResponse::fail(id, *HALT_MSG, true);
+        return DeskResponse::fail(id, HALT_MSG, true);
     }
     if req.is_input() && backend.is_locked() {
         backend.release_input();
@@ -659,7 +659,7 @@ pub fn probe_desktop(backend: &mut dyn DesktopBackend, gate: CallGate) -> Result
     }
     if gate.halted {
         backend.release_input();
-        return Err((*HALT_MSG).to_string());
+        return Err(HALT_MSG.to_string());
     }
     if backend.is_locked() {
         backend.release_input();

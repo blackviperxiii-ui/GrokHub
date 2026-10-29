@@ -233,8 +233,8 @@ pub fn verdict_line(drafter: &str, v: &Verdict) -> String {
         )
     } else {
         format!(
-            "{drafter} made replies {:.1}× as fast with {accepted}% of its guesses kept, so {product} left it off.",
-            v.gain, product = crate::brand::product_name()
+            "{drafter} made replies {:.1}× as fast with {accepted}% of its guesses kept, so GrokHub left it off.",
+            v.gain
         )
     }
 }

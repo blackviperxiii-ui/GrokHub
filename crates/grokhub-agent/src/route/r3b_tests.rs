@@ -1331,7 +1331,7 @@ fn openrouter_keeps_its_pick_for_explicit_turns_and_banned_asks_never_leave() {
     assert_eq!(bodies[0]["provider"], json!({ "allow_fallbacks": false }));
     let held = bodies[1].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
-    assert!(held.contains("Loadout held this message back"), "{held}");
+    assert!(held.contains("GrokHub held this message back"), "{held}");
     assert_eq!(bodies[2]["provider"], serde_json::Value::Null);
     let _ = std::fs::remove_dir_all(dir);
 }

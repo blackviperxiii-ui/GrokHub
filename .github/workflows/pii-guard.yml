@@ -18,11 +18,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Block personal info
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ -n "$BASE_REF" ]; then
-            python3 scripts/pii-guard/pii_guard.py "origin/$BASE_REF"
+          if [ -n "${{ github.base_ref }}" ]; then
+            python3 scripts/pii-guard/pii_guard.py "origin/${{ github.base_ref }}"
           else
             python3 scripts/pii-guard/pii_guard.py
           fi

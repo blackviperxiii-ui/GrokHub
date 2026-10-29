@@ -78,7 +78,7 @@ pub fn store_label(path: &Path) -> String {
     } else if name.ends_with(".md") || name.ends_with(".sealed") {
         format!("Memory note {name}")
     } else if name.is_empty() {
-        format!("A {product} file", product = crate::brand::product_name())
+        "A GrokHub file".to_string()
     } else {
         format!("File {name}")
     }

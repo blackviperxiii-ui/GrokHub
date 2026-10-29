@@ -154,18 +154,6 @@ impl HomeEditDraft {
     }
 }
 
-/// Catalog note for a module whose data isn't wired up yet.
-const NOT_BUILT: &str = "Not built yet: shows a placeholder card for now";
-
-/// Catalog row text in plain words: what's in the slot, or which sizes fit.
-fn catalog_title(name: &str, sizes: &[ModuleSize], in_slot: bool) -> String {
-    if in_slot {
-        return format!("{name} · in this slot");
-    }
-    let sizes: Vec<_> = sizes.iter().map(|s| s.label()).collect();
-    format!("{name} · fits {}", sizes.join(", "))
-}
-
 impl Cabin {
     pub(in crate::app) fn ui_home_edit(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.home_edit.take() else {
@@ -364,8 +352,21 @@ impl Cabin {
                                                 for m in list {
                                                     let in_slot = draft.slot_module(draft.selected)
                                                         == Some(m.id);
-                                                    let title =
-                                                        catalog_title(m.name, m.sizes, in_slot);
+                                                    let sizes: String = m
+                                                        .sizes
+                                                        .iter()
+                                                        .map(|s| match s {
+                                                            ModuleSize::Large => "L",
+                                                            ModuleSize::Medium => "M",
+                                                            ModuleSize::Small => "S",
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        .join(" ");
+                                                    let title = if in_slot {
+                                                        format!("{} · IN SLOT", m.name)
+                                                    } else {
+                                                        format!("{} · {sizes}", m.name)
+                                                    };
                                                     let resp = ui.add_sized(
                                                         egui::vec2(ui.available_width(), 36.0),
                                                         egui::Button::new(title).selected(in_slot),
@@ -383,7 +384,7 @@ impl Cabin {
                                                         == grokhub_core::home::DataStatus::New
                                                     {
                                                         ui.label(
-                                                            RichText::new(NOT_BUILT)
+                                                            RichText::new("Coming soon")
                                                                 .size(crate::theme::TYPE_CAPTION)
                                                                 .color(crate::theme::muted()),
                                                         );
@@ -445,28 +446,5 @@ impl Cabin {
         } else {
             self.home_edit = Some(draft);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_rows_use_plain_words() {
-        let all = [ModuleSize::Large, ModuleSize::Medium, ModuleSize::Small];
-        assert_eq!(
-            catalog_title("Storage", &all, false),
-            "Storage · fits Large, Medium, Small"
-        );
-        assert_eq!(
-            catalog_title("Up next", &[ModuleSize::Small], false),
-            "Up next · fits Small"
-        );
-        assert_eq!(
-            catalog_title("Storage", &all, true),
-            "Storage · in this slot"
-        );
-        assert_eq!(NOT_BUILT, "Not built yet: shows a placeholder card for now");
     }
 }

@@ -308,8 +308,8 @@ pub fn automation_cap_refusal(config_dir: &Path, now_ms: u64) -> Option<String> 
         .count();
     (made >= SELF_AUTOMATION_WEEK_CAP).then(|| {
         format!(
-            "Not added: {product} already made {SELF_AUTOMATION_WEEK_CAP} automations on its own this week. \
-             Keep one from its Work-tree row, or add this one yourself on the Automations page.", product = grokhub_core::brand::product_name()
+            "Not added: GrokHub already made {SELF_AUTOMATION_WEEK_CAP} automations on its own this week. \
+             Keep one from its Work-tree row, or add this one yourself on the Automations page."
         )
     })
 }
@@ -422,7 +422,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err,
-            "this automation holds a secret, so Loadout won't keep or change it"
+            "this automation holds a secret, so GrokHub won't keep or change it"
         );
         assert_eq!(fs::read(&path).unwrap(), before, "the write never ran");
         assert!(!root.join("changes/automations").exists(), "no kept copy");
@@ -477,19 +477,19 @@ mod tests {
         for (file, why) in [
             (
                 root.join("harness").join("hard-class.json"),
-                "Refused: Loadout never changes harness policy on its own.",
+                "Refused: GrokHub never changes harness policy on its own.",
             ),
             (
                 root.join("consent.jsonl"),
-                "Refused: Loadout never changes the consent store on its own.",
+                "Refused: GrokHub never changes the consent store on its own.",
             ),
             (
                 root.join("app.json"),
-                "Refused: Loadout never changes the Access settings on its own.",
+                "Refused: GrokHub never changes the Access settings on its own.",
             ),
             (
                 root.join("home").join(".grok").join("mcp.json"),
-                "Refused: the Grok CLI home (~/.grok) is not Loadout's to change.",
+                "Refused: the Grok CLI home (~/.grok) is not GrokHub's to change.",
             ),
         ] {
             let target = McpFile {
@@ -548,7 +548,7 @@ mod tests {
         assert_eq!(
             automation_cap_refusal(&root, at + 1).as_deref(),
             Some(
-                "Not added: Loadout already made 2 automations on its own this week. \
+                "Not added: GrokHub already made 2 automations on its own this week. \
                  Keep one from its Work-tree row, or add this one yourself on the Automations page."
             )
         );

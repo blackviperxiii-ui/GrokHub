@@ -279,8 +279,7 @@ fn push_capped(out: &mut String, label: &str, raw: &str) {
 
 /// System prompt for the quiet Balanced review. Cabin-real verbs only.
 pub fn review_system_prompt() -> &'static str {
-    crate::brand::filled(
-        "You are {product}'s nightly cabin review. Read the digest and propose only \
+    "You are GrokHub's nightly cabin review. Read the digest and propose only \
      things this Linux cabin can actually do. Allowed verbs: Grok Build tools \
      (bash, files, grep, web), workboard cards, Imagine stills (no video), \
      computer-use (Grok looks at and drives the desktop), GitHub MCP if configured. \
@@ -302,8 +301,7 @@ pub fn review_system_prompt() -> &'static str {
      on a schedule), never both for the same thing. \
      Propose at most 2 of each kind. Skip anything already \
      listed as existing. SUGGEST_SKILL_PATCH only for an existing skill name. \
-     If nothing useful, output nothing.",
-    )
+     If nothing useful, output nothing."
 }
 
 /// Patch an existing `SKILL.md` from the nightly review. Not a Suggested tile.

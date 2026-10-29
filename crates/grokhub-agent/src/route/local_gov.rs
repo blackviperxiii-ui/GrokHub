@@ -206,10 +206,9 @@ pub fn may_start(now_ms: u64) -> Result<(), String> {
         .map(|g| !g.breaker.allows(now_ms))
         .unwrap_or(false);
     if open {
-        return Err(format!(
-            "the local model server kept stopping, so {product} paused it for 30 minutes",
-            product = grokhub_core::brand::product_name()
-        ));
+        return Err(
+            "the local model server kept stopping, so GrokHub paused it for 30 minutes".into(),
+        );
     }
     Ok(())
 }

@@ -376,10 +376,10 @@ pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
     let throttled = !summary.throttles.is_empty();
 
     if throttled || hot_gpu || hot_cpu {
-        tips.push(format!(
-            "Check the fan curve in your OEM/vendor tool — {product} never changes fans or clocks.",
-            product = crate::brand::product_name()
-        ));
+        tips.push(
+            "Check the fan curve in your OEM/vendor tool — GrokHub never changes fans or clocks."
+                .into(),
+        );
         tips.push("Blow dust out of heatsinks and make sure intake vents are clear.".into());
     }
     if hot_gpu
@@ -552,9 +552,7 @@ pub fn summary_card(summary: &SessionSummary, now_ms: u64) -> UpdateCard {
             why.push_str(tip);
         }
     }
-    why.push_str(crate::brand::filled(
-        "\n{product} never changes fans, clocks, or drivers.",
-    ));
+    why.push_str("\nGrokHub never changes fans, clocks, or drivers.");
     card.why = Some(why);
     card.pulse = PulseMeta {
         category: Some("gaming".into()),

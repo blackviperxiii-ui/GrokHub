@@ -626,9 +626,8 @@ fn keep_version(
         };
         if redacted != text {
             return Err(format!(
-                "this {} holds a secret, so {product} won't keep or change it",
-                kind.as_str(),
-                product = grokhub_core::brand::product_name()
+                "this {} holds a secret, so GrokHub won't keep or change it",
+                kind.as_str()
             ));
         }
     }
@@ -801,26 +800,17 @@ const GUARDED_DIRS: &[(&str, &str)] = &[
 pub fn scope_guard(config_dir: &Path, file: &Path) -> Result<(), String> {
     let parts = path_key(file);
     if parts.iter().any(|p| p == ".grok") {
-        return Err(format!(
-            "the Grok CLI home (~/.grok) is not {product}'s to change",
-            product = grokhub_core::brand::product_name()
-        ));
+        return Err("the Grok CLI home (~/.grok) is not GrokHub's to change".into());
     }
     let name = parts.last().map(String::as_str).unwrap_or("");
     if let Some((_, why)) = GUARDED_FILES.iter().find(|(f, _)| *f == name) {
-        return Err(format!(
-            "{product} never changes {why} on its own",
-            product = grokhub_core::brand::product_name()
-        ));
+        return Err(format!("GrokHub never changes {why} on its own"));
     }
     let root = path_key(config_dir);
     if parts.len() > root.len() && parts[..root.len()] == root[..] {
         let first = parts[root.len()].as_str();
         if let Some((_, why)) = GUARDED_DIRS.iter().find(|(d, _)| *d == first) {
-            return Err(format!(
-                "{product} never changes {why} on its own",
-                product = grokhub_core::brand::product_name()
-            ));
+            return Err(format!("GrokHub never changes {why} on its own"));
         }
     }
     Ok(())
@@ -1197,13 +1187,10 @@ pub fn accept_change(
 ) -> Result<Change, String> {
     let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let ledger = ChangeLedger::load_kind(config_dir, kind);
-    let open = ledger.open_self_change(name).cloned().ok_or_else(|| {
-        format!(
-            "No change by {product} to keep on {}",
-            kind.id_of(name),
-            product = grokhub_core::brand::product_name()
-        )
-    })?;
+    let open = ledger
+        .open_self_change(name)
+        .cloned()
+        .ok_or_else(|| format!("No change by GrokHub to keep on {}", kind.id_of(name)))?;
     let mut change = new_change_for(
         kind,
         &open.id,

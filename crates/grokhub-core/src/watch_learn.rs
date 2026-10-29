@@ -15,17 +15,15 @@ pub const MAX_STEPS: usize = 12;
 /// Characters kept per step description.
 pub const MAX_STEP_CHARS: usize = 200;
 
-static SYSTEM_PROMPT: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    crate::brand::filled(concat!(
-        "You are {product}'s watch-and-learn extractor. You get stills from a short ",
-        "screen recording, in order, and the user's note. The user is showing you ",
-        "how to do a task; list the steps they took, in order, one per line, ",
-        "numbered, at most 12. Say only what the stills show. Do not invent clicks ",
-        "or menus that are not visible. Never write secrets or typed passwords into ",
-        "a step — write \"enter your password\" (or similar) instead of a value. ",
-        "Do not take or suggest automatic actions; the user decides."
-    ))
-});
+const SYSTEM_PROMPT: &str = concat!(
+    "You are GrokHub's watch-and-learn extractor. You get stills from a short ",
+    "screen recording, in order, and the user's note. The user is showing you ",
+    "how to do a task; list the steps they took, in order, one per line, ",
+    "numbered, at most 12. Say only what the stills show. Do not invent clicks ",
+    "or menus that are not visible. Never write secrets or typed passwords into ",
+    "a step — write \"enter your password\" (or similar) instead of a value. ",
+    "Do not take or suggest automatic actions; the user decides."
+);
 
 /// One watched step with the approval class SC1 would assign on replay.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +43,7 @@ pub fn steps_messages(note: &str, secs: u64, stills: usize) -> Vec<(String, Stri
         note
     };
     vec![
-        ("system".into(), (*SYSTEM_PROMPT).into()),
+        ("system".into(), SYSTEM_PROMPT.into()),
         (
             "user".into(),
             format!(

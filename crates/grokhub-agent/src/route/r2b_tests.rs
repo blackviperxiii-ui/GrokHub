@@ -526,10 +526,10 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
     let bg = live::decide(&dir, &call("background:summarize"), now);
     assert_eq!(
         (bg.budget_pct, bg.paused(), bg.pause_msg()),
-        (Some(100), true, *BUDGET_PAUSE_MSG)
+        (Some(100), true, BUDGET_PAUSE_MSG)
     );
     let chat = live::decide(&dir, &call("chat:default"), now);
-    assert_eq!((chat.paused(), chat.pause_msg()), (true, *BUDGET_PAUSE_MSG));
+    assert_eq!((chat.paused(), chat.pause_msg()), (true, BUDGET_PAUSE_MSG));
     assert!(live::take_budget_ask());
     // A budget pause is not a no-route wait: it never retries on its own, it waits for you.
     assert_eq!(live::take_no_route(), None);

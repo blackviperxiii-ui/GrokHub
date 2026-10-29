@@ -110,7 +110,7 @@ mod tests {
             user("talk dirty to me, I'm horny"),
         ];
         scrub(&mut input);
-        assert_eq!(input[0], user(*adult_guard::HELD));
+        assert_eq!(input[0], user(adult_guard::HELD));
         assert_eq!(
             input[1],
             InputItem::Message {
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn one_heads_up_a_session_and_explicit_turns_leave_anthropic() {
         let s = "adult-screen-1";
-        let first = screen(s, *adult_guard::HELD, Dest::Xai);
+        let first = screen(s, adult_guard::HELD, Dest::Xai);
         assert_eq!(first.heads_up.as_deref(), Some(adult_guard::HEADS_UP_HELD));
         assert!(!first.to_xai);
         let again = screen(s, "talk dirty to me, I'm horny", Dest::Anthropic);

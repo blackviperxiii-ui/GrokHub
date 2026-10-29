@@ -229,7 +229,7 @@ pub fn unavailable_reason() -> String {
 /// The chat line for an offline turn that waits for the network.
 pub fn offline_pause_text(reason: &str) -> String {
     format!(
-        "{OFFLINE_NO_LOCAL_MSG}: {reason}. {product} keeps your message and answers it once you're back online.", product = grokhub_core::brand::product_name()
+        "{OFFLINE_NO_LOCAL_MSG}: {reason}. GrokHub keeps your message and answers it once you're back online."
     )
 }
 

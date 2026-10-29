@@ -658,8 +658,8 @@ pub fn alert_card(result: &AlertResult, now_ms: u64) -> UpdateCard {
     }
     card.why = Some(why);
     card.details = Some(format!(
-        "{}\n\nControls require the approval card before {product} sends pause/cancel/resume to the printer.",
-        body, product = crate::brand::product_name()
+        "{}\n\nControls require the approval card before GrokHub sends pause/cancel/resume to the printer.",
+        body
     ));
     card.pulse = PulseMeta {
         category: Some("maker".into()),

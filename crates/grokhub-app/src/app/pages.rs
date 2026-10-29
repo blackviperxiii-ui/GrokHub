@@ -2,13 +2,8 @@
 
 use super::*;
 
-/// The card after a send was refused while signed out.
-const SEND_SIGNIN_TITLE: &str = "Sign in to send this message";
-const SEND_SIGNIN_HINT: &str =
-    "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
-const NATIVE_SIGNIN_NOTE: &str =
-    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
+const NATIVE_SIGNIN_NOTE: &str = "Sign in with Grok in Settings → Account, or add an API key.";
 
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
@@ -637,15 +632,11 @@ impl Cabin {
 
     /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
     pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
-        if self.has_key() || self.imagine_native.tokens.is_some() {
-            self.signin_card = false;
-            return;
-        }
-        if self.signin_card {
-            self.ui_send_signin_card(ui);
-            return;
-        }
-        if super::loadout_home::proof_shot_requested() || self.ui_wants_get_started() {
+        if super::loadout_home::proof_shot_requested()
+            || self.has_key()
+            || self.imagine_native.tokens.is_some()
+            || self.ui_wants_get_started()
+        {
             return;
         }
         ui.horizontal(|ui| {
@@ -653,34 +644,6 @@ impl Cabin {
             if crate::cards::ghost_pill(ui, "Settings") {
                 self.nav = Nav::Settings;
             }
-        });
-    }
-
-    /// Shown after a send was refused for want of a sign-in. The typed text
-    /// stays in the composer, so signing in here and pressing Enter sends it.
-    fn ui_send_signin_card(&mut self, ui: &mut egui::Ui) {
-        let busy = self.oauth_start_rx.is_some() || self.oauth_poll_rx.is_some();
-        let pending = self
-            .oauth_pending
-            .as_ref()
-            .map(|p| format!("Approve {} at {}", p.user_code, p.verification_uri));
-        crate::ui_kit::card_frame(ui, crate::ui_kit::CardVariant::Signal, true, |ui| {
-            ui.label(
-                RichText::new(SEND_SIGNIN_TITLE)
-                    .size(crate::theme::FONT_BODY)
-                    .strong()
-                    .color(crate::theme::fg()),
-            );
-            crate::cards::settings_note(ui, pending.as_deref().unwrap_or(SEND_SIGNIN_HINT));
-            ui.horizontal(|ui| {
-                if pending.is_none() && !busy && crate::cards::white_pill(ui, "Sign in") {
-                    self.start_oauth();
-                }
-                if crate::cards::ghost_pill(ui, "Add an API key") {
-                    self.nav = Nav::Settings;
-                    self.settings_sec = SettingsSec::Account;
-                }
-            });
         });
     }
 

@@ -147,7 +147,7 @@ fn a_24_gb_gpu_recommends_muse_glimmer_but_preselects_31b() {
     assert!(muse.optional && !muse.preselected);
     assert_eq!(
         muse.reason,
-        "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: Loadout never picks it for you."
+        "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: GrokHub never picks it for you."
     );
 }
 

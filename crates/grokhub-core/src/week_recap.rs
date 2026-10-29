@@ -159,11 +159,7 @@ impl WeekRecap {
             out.push_str("## Disk freed\n\n");
             out.push_str(&format!("- {d}\n\n"));
         }
-        section_lines(
-            &mut out,
-            crate::brand::filled("Top {product} tasks"),
-            &self.tasks,
-        );
+        section_lines(&mut out, "Top GrokHub tasks", &self.tasks);
         out.push_str("## Next week\n\n");
         match &self.suggestion {
             Some(s) => out.push_str(&format!("- {s}\n\n")),
@@ -880,7 +876,7 @@ mod tests {
         assert!(!md.contains("## Projects touched"), "{md}");
         assert!(!md.contains("## Prints made"), "{md}");
         assert!(!md.contains("## Disk freed"), "{md}");
-        assert!(md.contains("## Top Loadout tasks"), "{md}");
+        assert!(md.contains("## Top GrokHub tasks"), "{md}");
     }
 
     #[test]

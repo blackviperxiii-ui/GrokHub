@@ -72,11 +72,8 @@ fn desktop_name(text: &str) -> Option<String> {
 fn fact(id: &str, name: &str, launches: &BTreeMap<String, u32>) -> Fact {
     let mut line = format!("Installed app: {name}");
     match launches.get(id) {
-        Some(1) => line.push_str(grokhub_core::brand::filled(" · opened once from {product}")),
-        Some(n) => line.push_str(&format!(
-            " · opened {n} times from {product}",
-            product = grokhub_core::brand::product_name()
-        )),
+        Some(1) => line.push_str(" · opened once from GrokHub"),
+        Some(n) => line.push_str(&format!(" · opened {n} times from GrokHub")),
         None => {}
     }
     Fact {
@@ -175,11 +172,11 @@ mod tests {
         ]);
         assert_eq!(
             fact("firefox.desktop", "Firefox", &launches).line,
-            "Installed app: Firefox · opened 3 times from Loadout"
+            "Installed app: Firefox · opened 3 times from GrokHub"
         );
         assert_eq!(
             fact("gimp.desktop", "GIMP", &launches).line,
-            "Installed app: GIMP · opened once from Loadout"
+            "Installed app: GIMP · opened once from GrokHub"
         );
         assert_eq!(
             fact("vlc.desktop", "VLC", &launches).line,

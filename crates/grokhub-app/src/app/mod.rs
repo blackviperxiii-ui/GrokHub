@@ -131,7 +131,6 @@ use std::time::{Duration, Instant};
 mod acp;
 mod amr_memory;
 mod chat_kick;
-mod helper_offers_ui;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;
@@ -290,7 +289,7 @@ enum Nav {
     Settings,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSec {
     Account,
     Privacy,
@@ -486,9 +485,6 @@ pub struct Cabin {
     hands_attach: bool,
     eyes_attach: bool,
     speak_next: bool,
-    /// A send was refused while signed out: the composer kept the text and
-    /// the inline sign-in card shows until a sign-in or a sent turn.
-    signin_card: bool,
     verify_ok_turn: bool,
     verify_chip: String,
     reflect_diff: String,
@@ -1133,7 +1129,6 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
-            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),
@@ -1607,7 +1602,6 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
-            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),
@@ -5385,20 +5379,16 @@ impl eframe::App for Cabin {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
-        self.publish_shown_personality(&ctx);
         self.ui_titlebar(ui);
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
-            // The rail goes first so it runs the full height on every page and
-            // its icons don't move when the Chat tab strip appears.
-            self.ui_sidebar(ui);
             // Chat tabs only in Chat — never on modular Home.
             if self.page_nav() == Nav::Chat {
                 self.ui_chat_tabs(ui);
             }
+            self.ui_sidebar(ui);
             self.ui_settings_menu(&ctx);
-            self.ui_personality_sheet(&ctx);
 
             if self.cfg.dock_panels && self.dock_covers_page() {
                 self.ui_docked_main(ui);

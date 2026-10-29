@@ -98,7 +98,7 @@ impl ModelClient for FakeModel {
             cost_in_usd_ticks: 10,
             cached_tokens: 0,
         };
-        if system == (*JUDGE_SYSTEM) {
+        if system == JUDGE_SYSTEM {
             let n = {
                 let mut calls = self.judge_calls.lock().unwrap();
                 calls.push(req.clone());
@@ -882,7 +882,7 @@ fn twenty_clicks_that_change_nothing_replan_every_five_quietly_and_verify() {
     let told: Vec<usize> = nows(&r.model)
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.contains(&format!("Loadout's check: {REPLAN_NOTE}")))
+        .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
     assert_eq!(
@@ -1400,7 +1400,7 @@ fn a_reject_with_no_finding_replans_with_the_reason_and_later_verifies() {
     let next = r.model.worker_calls.lock().unwrap()[2].clone();
     assert!(
         first_text(&next, 2).contains(&format!(
-            "Loadout's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved"
+            "GrokHub's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved"
         )),
         "{}",
         first_text(&next, 2)
@@ -1590,7 +1590,7 @@ fn a_save_button_that_does_nothing_replans_on_the_third_click_and_steps_up_for_t
     let told: Vec<usize> = nows(&r.model)
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.contains(&format!("Loadout's check: {REPLAN_NOTE}")))
+        .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
     assert_eq!(
@@ -1663,7 +1663,7 @@ fn an_identical_failing_click_replans_on_the_second_try() {
         )]
     );
     assert!(first_text(&r.model.worker_calls.lock().unwrap()[2], 2)
-        .contains(&format!("Loadout's check: {REPLAN_NOTE}")));
+        .contains(&format!("GrokHub's check: {REPLAN_NOTE}")));
 }
 
 #[test]

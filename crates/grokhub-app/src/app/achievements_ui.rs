@@ -70,7 +70,7 @@ fn run_check(
 }
 
 fn deck_check() -> bool {
-    super::loadout_home::deck_switch_is(DECK_ENV, "1")
+    std::env::var(DECK_ENV).is_ok_and(|v| v.trim() == "1")
 }
 
 /// Canned replies for the deck shot: Hades two from 100%.

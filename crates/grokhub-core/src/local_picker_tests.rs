@@ -111,7 +111,7 @@ fn a_cpu_without_avx_hides_local_ai() {
     assert_eq!(tier(&p), "T0");
     assert_eq!(
         why(&picks, "Gemma 4 E2B"),
-        "This CPU has no AVX, so local AI is off and Loadout uses the cloud."
+        "This CPU has no AVX, so local AI is off and GrokHub uses the cloud."
     );
 }
 
@@ -250,7 +250,7 @@ fn a_24_gb_gpu_gets_31b_and_offers_muse_glimmer_without_picking_it() {
     assert_eq!(tier(&p), "T4");
     assert_eq!(
         why(&picks, "Muse Glimmer 30B"),
-        "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: Loadout never picks it for you."
+        "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: GrokHub never picks it for you."
     );
 }
 

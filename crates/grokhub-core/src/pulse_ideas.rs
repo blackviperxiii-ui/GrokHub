@@ -86,9 +86,8 @@ pub fn save_state(path: &std::path::Path, state: &IdeasState) -> Result<(), Stri
     crate::pulse_writer::write_atomic(path, &raw)
 }
 
-static RULES: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    crate::brand::filled("You suggest ideas for one person's Pulse in {product}, a desktop assistant on their own computer. \
-{product} can run commands and edit files, search the web, schedule automations, keep notes and drafts, and make images.
+const RULES: &str = "You suggest ideas for one person's Pulse in GrokHub, a desktop assistant on their own computer. \
+GrokHub can run commands and edit files, search the web, schedule automations, keep notes and drafts, and make images.
 
 Write at most 4 ideas, personal first: each one must come from their goals, topics, recent chats or feed posts below. \
 No generic tips. If nothing fits, return [].
@@ -98,11 +97,10 @@ Reply with only a JSON array. Each item:
  \"description\": one line in your own voice that starts with \"I can\", at most 140 characters,
  \"emoji\": one emoji for its topic,
  \"category\": one of productivity, financial, shopping, relationships, health,
- \"action\": the exact message to send {product} to do it}
+ \"action\": the exact message to send GrokHub to do it}
 
 Put the most personal ideas first. Do not repeat or overlap anything under Existing ideas or Turned down. \
-When More like this lists ideas, write new ones in the same spirit.")
-});
+When More like this lists ideas, write new ones in the same spirit.";
 
 /// What one run may look at. Every list is optional.
 #[derive(Debug, Clone, Default)]
@@ -152,7 +150,7 @@ pub fn idea_messages(input: &IdeaInput) -> Option<Vec<(String, String)>> {
     push_list(&mut user, "Existing ideas", input.existing, 20);
     push_list(&mut user, "Turned down", input.turned_down, TURNED_DOWN_MAX);
     Some(vec![
-        ("system".into(), (*RULES).into()),
+        ("system".into(), RULES.into()),
         ("user".into(), user.trim_start().to_string()),
     ])
 }

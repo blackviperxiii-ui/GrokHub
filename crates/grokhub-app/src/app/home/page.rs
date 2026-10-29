@@ -9,10 +9,8 @@ use super::edit::HomeEditDraft;
 use super::paint::{paint_module, ModuleAction};
 
 const PAGE_PAD: f32 = 24.0;
-/// Chips + composer height before the first frame measures it.
-const COMPOSE_H: f32 = 140.0;
+const COMPOSE_H: f32 = 112.0;
 const DRAFT_ID: &str = "home-mission-draft";
-const COMPOSE_H_ID: &str = "home-mission-compose-h";
 
 /// Default Home chips (Mission Control preset).
 pub(in crate::app) const HOME_CHIPS: [&str; 4] = [
@@ -37,12 +35,7 @@ impl Cabin {
                 self.home_header(ui, done);
                 ui.add_space(GAP);
                 let w = ui.available_width();
-                let compose_id = egui::Id::new(COMPOSE_H_ID);
-                let compose_h = ui
-                    .ctx()
-                    .data(|d| d.get_temp::<f32>(compose_id))
-                    .unwrap_or(COMPOSE_H);
-                let body_h = (ui.available_height() - compose_h).max(240.0);
+                let body_h = (ui.available_height() - COMPOSE_H).max(240.0);
                 let origin = ui.cursor().min;
                 let placed = place_slots((0.0, 0.0, w, body_h), &self.home_layout);
                 let edit_btn = egui::Rect::from_min_size(
@@ -70,44 +63,45 @@ impl Cabin {
                     egui::vec2(w, body_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("home-mission-body")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                // Reserve exactly the grid's height up front: the slots
-                                // paint into child uis that don't move the cursor, so the
-                                // body only scrolls when the modules really overflow.
-                                let bottom = placed.iter().map(|p| p.y + p.h).fold(0.0, f32::max);
-                                let (area, _) = ui.allocate_exact_size(
-                                    egui::vec2(w, bottom),
-                                    egui::Sense::hover(),
-                                );
-                                let base = area.min;
-                                for slot in &placed {
-                                    let rect = egui::Rect::from_min_size(
-                                        egui::pos2(base.x + slot.x, base.y + slot.y),
-                                        egui::vec2(slot.w, slot.h),
+                        if crate::app::loadout_home::deck_home_mc_shot() {
+                            ui.set_min_height(body_h);
+                            self.paint_mission_control_body(ui, w, body_h);
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .id_salt("home-mission-body")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let base = ui.cursor().min;
+                                    for slot in &placed {
+                                        let rect = egui::Rect::from_min_size(
+                                            egui::pos2(base.x + slot.x, base.y + slot.y),
+                                            egui::vec2(slot.w, slot.h),
+                                        );
+                                        let Some(id) = slot.module_id.as_deref() else {
+                                            continue;
+                                        };
+                                        ui.scope_builder(
+                                            egui::UiBuilder::new().max_rect(rect),
+                                            |ui| {
+                                                ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                                                ui.set_min_size(rect.size());
+                                                actions
+                                                    .extend(paint_module(self, ui, id, slot.size));
+                                            },
+                                        );
+                                    }
+                                    // Reserve scroll height for absolute placements.
+                                    let bottom =
+                                        placed.iter().map(|p| p.y + p.h).fold(body_h, f32::max);
+                                    ui.allocate_exact_size(
+                                        egui::vec2(w, bottom),
+                                        egui::Sense::hover(),
                                     );
-                                    let Some(id) = slot.module_id.as_deref() else {
-                                        continue;
-                                    };
-                                    let mut child =
-                                        ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                                    let ui = &mut child;
-                                    ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-                                    ui.set_min_size(rect.size());
-                                    actions.extend(paint_module(self, ui, id, slot.size));
-                                }
-                            });
+                                });
+                        }
                     },
                 );
-                let top = ui.cursor().min.y;
                 self.home_compose(ui, &mut actions);
-                // Measure the real chips + composer so the grid above never
-                // pushes the composer border past the window bottom.
-                let used = ui.cursor().min.y - top;
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(compose_id, used.ceil()));
             });
 
         for act in actions {

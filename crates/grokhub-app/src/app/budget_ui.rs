@@ -287,7 +287,7 @@ impl Cabin {
             BudgetCard::Eighty => (
                 BUDGET_EYEBROW,
                 budget::EIGHTY_CARD.into(),
-                "Settings → Defaults has the cap.",
+                "Settings → Cabin defaults has the cap.",
                 "OK",
                 "Change cap",
             ),

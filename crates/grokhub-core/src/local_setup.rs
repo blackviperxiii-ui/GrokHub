@@ -210,7 +210,7 @@ pub fn suggestion_line(hw: &Hardware) -> String {
 
 pub fn suggestion_line_for(hw: &Hardware, simd: CpuSimd) -> String {
     if simd == CpuSimd::NoAvx {
-        return format!("This CPU has no AVX, so no on-device model can run here. {product} uses the cloud; you can skip this.", product = crate::brand::product_name());
+        return "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this.".into();
     }
     match suggest_for(hw, simd) {
         Some(m) => format!(
@@ -392,7 +392,7 @@ mod tests {
         );
         assert_eq!(
             suggestion_line_for(&hw("", 0, 32_768, 225_280), CpuSimd::NoAvx),
-            "This CPU has no AVX, so no on-device model can run here. Loadout uses the cloud; you can skip this."
+            "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this."
         );
     }
 

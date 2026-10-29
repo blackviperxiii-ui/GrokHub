@@ -107,9 +107,13 @@ pub(super) fn launch_pin<T: Copy + Send + Sync>(cell: &'static OnceLock<T>, read
 }
 
 fn pinned_mood() -> Option<Mood> {
-    deck_switch("GROKHUB_DECK_MOOD")
-        .as_deref()
-        .and_then(parse_mood)
+    static PIN: OnceLock<Option<Mood>> = OnceLock::new();
+    launch_pin(&PIN, || {
+        std::env::var("GROKHUB_DECK_MOOD")
+            .ok()
+            .as_deref()
+            .and_then(parse_mood)
+    })
 }
 
 /// Words in a tool title that mean looking after the PC itself.
@@ -177,16 +181,6 @@ pub(super) fn mood_for(viper: bool, tool: Option<&str>, gaming: bool) -> Mood {
         Mood::Gaming
     } else {
         Mood::HangingOut
-    }
-}
-
-/// The dock card's caption: the deck's "Companion · docked" for Nyx, else
-/// the voice that is docked, so a switch shows here too.
-pub(super) fn dock_title(id: &str, name: &str) -> String {
-    if id == grokhub_core::personality::DEFAULT_ID {
-        "Companion · docked".into()
-    } else {
-        format!("{} · docked", name.trim())
     }
 }
 
@@ -295,6 +289,15 @@ pub(super) struct PcTile {
     pub value: String,
 }
 
+/// Mission-control PC panel tile (slide 09): optional meter bar and warn rim.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LoadoutStatTile {
+    pub label: &'static str,
+    pub value: String,
+    pub meter: Option<f32>,
+    pub warn: bool,
+}
+
 fn gb(mb: u64) -> String {
     format!("{} GB", (mb + 512) / 1024)
 }
@@ -357,6 +360,131 @@ pub(super) fn pc_tile_list(p: &LocalProfile) -> Vec<PcTile> {
         });
     }
     tiles
+}
+
+/// Six-tile PC loadout for Mission Control (deck slide 09).
+pub(super) fn pc_mission_loadout_tiles(p: &LocalProfile) -> Vec<LoadoutStatTile> {
+    if deck_home_mc_shot() {
+        return vec![
+            LoadoutStatTile {
+                label: "GPU driver",
+                value: "Update".into(),
+                meter: None,
+                warn: true,
+            },
+            LoadoutStatTile {
+                label: "GPU temp",
+                value: "68°".into(),
+                meter: Some(0.62),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "CPU temp",
+                value: "61°".into(),
+                meter: Some(0.55),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Storage",
+                value: "1.2 TB".into(),
+                meter: Some(0.40),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "RAM",
+                value: "32 GB".into(),
+                meter: Some(0.34),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Startup apps",
+                value: "4 trimmed".into(),
+                meter: None,
+                warn: false,
+            },
+        ];
+    }
+    let gpu = p
+        .gpus
+        .iter()
+        .find(|g| !g.integrated)
+        .or_else(|| p.gpus.first());
+    let driver = gpu
+        .map(|g| g.driver.trim())
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
+    let (gpu_temp, gpu_meter) = thermal_degree(p.thermal, 68);
+    let (cpu_temp, cpu_meter) = thermal_degree(p.thermal, 61);
+    let storage = if p.ram_mb > 0 && p.free_disk_mb > 0 {
+        gb(p.ram_mb.saturating_add(p.free_disk_mb))
+    } else if p.free_disk_mb > 0 {
+        gb(p.free_disk_mb)
+    } else {
+        "—".into()
+    };
+    let storage_meter = if p.free_disk_mb > 0 && p.ram_mb > 0 {
+        Some((p.free_disk_mb as f32 / (p.ram_mb + p.free_disk_mb) as f32).clamp(0.05, 0.95))
+    } else {
+        None
+    };
+    let ram = if p.ram_mb > 0 {
+        gb(p.ram_mb)
+    } else {
+        "—".into()
+    };
+    let ram_meter = p
+        .free_ram_mb
+        .filter(|_| p.ram_mb > 0)
+        .map(|f| 1.0 - (f as f32 / p.ram_mb as f32).clamp(0.05, 0.95));
+    vec![
+        LoadoutStatTile {
+            label: "GPU driver",
+            value: driver.clone().unwrap_or_else(|| "Update".into()),
+            meter: None,
+            warn: driver.is_none(),
+        },
+        LoadoutStatTile {
+            label: "GPU temp",
+            value: gpu_temp,
+            meter: gpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "CPU temp",
+            value: cpu_temp,
+            meter: cpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Storage",
+            value: storage,
+            meter: storage_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "RAM",
+            value: ram,
+            meter: ram_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Startup apps",
+            value: "—".into(),
+            meter: None,
+            warn: false,
+        },
+    ]
+}
+
+fn thermal_degree(t: Thermal, nominal_c: u8) -> (String, Option<f32>) {
+    let (label, meter) = match t {
+        Thermal::Unknown => ("—".to_string(), None),
+        Thermal::Nominal => (format!("{nominal_c}°"), Some(0.45)),
+        Thermal::Fair => (format!("{}", nominal_c.saturating_add(4)), Some(0.62)),
+        Thermal::Serious => (format!("{}", nominal_c.saturating_add(12)), Some(0.78)),
+        Thermal::Critical => (format!("{}", nominal_c.saturating_add(20)), Some(0.92)),
+    };
+    (label, meter)
 }
 
 fn deck_mission_control_profile() -> LocalProfile {
@@ -599,12 +727,6 @@ pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle>
 
 /// Paint the circular companion face into `size`×`size`.
 pub(super) fn paint_companion_face(ui: &mut egui::Ui, size: f32) {
-    let shown = super::personality_ui::shown_face(ui.ctx());
-    if !shown.art {
-        let letter = super::personality_ui::initial_letter(&shown.name);
-        super::personality_ui::paint_letter_tile(ui, letter, size, true);
-        return;
-    }
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if let Some(tex) = companion_face(ui.ctx()) {
         ui.painter().image(
@@ -653,9 +775,10 @@ fn paint_wave(ui: &mut egui::Ui, live: bool) {
 /// Cabin thread id for Windows deck shots (`scripts/deck-shots.ps1`).
 pub(crate) const DECK_THREAD_ID: &str = "deck-hangout";
 
-/// Windows deck screenshots (`scripts/deck-shots.ps1`) set `GROKHUB_DECK_SHOT=1`.
+/// Windows deck screenshots (`scripts/deck-shots.ps1`) set `GROKHUB_DECK_SHOT=1`;
+/// mood shots may also set `GROKHUB_DECK_MOOD`.
 pub(super) fn deck_shot_requested() -> bool {
-    deck_shot_env()
+    deck_shot_env() || pinned_mood().is_some()
 }
 
 /// Windows web_search proof shots (`scripts/web-search-shots.ps1`).
@@ -677,42 +800,13 @@ fn deck_shot_env() -> bool {
     })
 }
 
-/// A deck screenshot switch (`GROKHUB_DECK_TABS` and the rest), trimmed,
-/// empty as `None`. Honored only in a proof-shot launch (`GROKHUB_DECK_SHOT=1`,
-/// or `GROKHUB_WEB_SEARCH_SHOT=1`, which pins a Settings section), so a stray
-/// variable can't fake an idle PC or open a sheet in a real cabin. Read once
-/// per run, like [`launch_pin`].
-pub(super) fn deck_switch(var: &'static str) -> Option<String> {
-    if !proof_shot_requested() {
-        return None;
-    }
-    let read = || {
-        std::env::var(var)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-    if cfg!(test) {
-        return read();
-    }
-    static READ: OnceLock<Mutex<std::collections::HashMap<&'static str, Option<String>>>> =
-        OnceLock::new();
-    let mut seen = READ
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    seen.entry(var).or_insert_with(read).clone()
-}
-
-/// True when the deck switch `var` is set to exactly `value`.
-pub(super) fn deck_switch_is(var: &'static str, value: &str) -> bool {
-    deck_switch(var).as_deref() == Some(value)
-}
-
 /// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`), trimmed and
 /// lowercased so the shot never depends on a synthetic click landing.
 fn deck_nav() -> Option<String> {
-    deck_switch("GROKHUB_DECK_NAV").map(|v| v.to_ascii_lowercase())
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
 }
 
 /// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
@@ -720,8 +814,7 @@ pub(super) fn deck_nav_home_pinned() -> bool {
     deck_shot_env() && deck_nav().as_deref() == Some("home")
 }
 
-/// Home deck shots read a seeded PC profile; the page itself is the same
-/// module grid a fresh profile gets.
+/// Windows home-mc deck pairs must match slide 09 (layout A), not the modular grid.
 pub(super) fn deck_home_mc_shot() -> bool {
     deck_nav_home_pinned()
 }
@@ -744,19 +837,23 @@ pub(super) fn web_search_settings_shot() -> bool {
 
 /// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
 pub(super) fn deck_tab_count() -> Option<usize> {
-    deck_switch("GROKHUB_DECK_TABS")
+    std::env::var("GROKHUB_DECK_TABS")
+        .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&n| n >= 3)
 }
 
 /// When set, the tab strip paints the overflow menu open for HARD DONE shots.
 pub(super) fn deck_overflow_open() -> bool {
-    deck_switch("GROKHUB_DECK_OVERFLOW").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    std::env::var("GROKHUB_DECK_OVERFLOW")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 pub(super) fn deck_last_chat_mode() -> Option<String> {
-    deck_switch("GROKHUB_DECK_LAST_CHAT")
-        .map(|v| v.to_ascii_lowercase())
+    std::env::var("GROKHUB_DECK_LAST_CHAT")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| v == "home" || v == "chat")
 }
 
@@ -815,7 +912,7 @@ fn deck_transcript() -> Vec<(String, String)> {
 }
 
 fn deck_chat_is_joke() -> bool {
-    deck_switch_is("GROKHUB_DECK_CHAT", "joke")
+    std::env::var("GROKHUB_DECK_CHAT").is_ok_and(|v| v.trim() == "joke")
 }
 
 fn joke_transcript() -> Vec<(String, String)> {
@@ -995,7 +1092,7 @@ impl Cabin {
         // Slide 10's chat-first layout has no Activity popover or pending Ask
         // over the snapshot column.
         // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
-        let activity_off = deck_switch_is("GROKHUB_DECK_ACTIVITY", "0");
+        let activity_off = std::env::var("GROKHUB_DECK_ACTIVITY").is_ok_and(|v| v.trim() == "0");
         if !deck_chat_is_joke() && !self.cfg.chat_objectives && !activity_off {
             self.seed_activity_dock_for_deck();
         }
@@ -1044,7 +1141,7 @@ impl Cabin {
         // click or Ctrl+, — a miss left Hangout on screen in #958. After
         // last-chat / nav pin so Personality / Behavior wins.
         if super::settings::pinned_settings_sec().is_some()
-            || deck_switch_is("GROKHUB_DECK_OPEN_SETTINGS", "1")
+            || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
         {
             self.set_nav_id("settings");
         }
@@ -1182,16 +1279,14 @@ impl Cabin {
     }
 
     fn dock_companion(&mut self, ui: &mut egui::Ui) {
-        let shown = self.shown_personality();
-        let name = shown.name.as_str();
-        let art_on = super::personality_ui::wears_companion_art(&shown.id);
+        let name = grokhub_core::brand::companion_name();
         let live = self.voice_is_on();
         let mood = self.companion_mood();
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 diamond(ui, true);
-                ui.label(caption(&dock_title(&shown.id, name)));
+                ui.label(caption("Companion · docked"));
             });
             ui.add_space(crate::theme::SPACING_4);
             let w = ui.available_width();
@@ -1199,14 +1294,7 @@ impl Cabin {
                 ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
             ui.painter()
                 .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
-            if !art_on {
-                let side = (art.height() * 0.5).min(art.width());
-                let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
-                ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
-                    let letter = super::personality_ui::initial_letter(name);
-                    super::personality_ui::paint_letter_tile(ui, letter, side, true);
-                });
-            } else if let Some(tex) = companion_texture(ui.ctx(), mood) {
+            if let Some(tex) = companion_texture(ui.ctx(), mood) {
                 egui::Image::from_texture(&tex)
                     .uv(cover_uv(tex.size(), art.size()))
                     .corner_radius(crate::theme::RADIUS_SM)
@@ -1261,7 +1349,7 @@ impl Cabin {
             .app
             .as_ref()
             .is_some_and(|a| a.category == grokhub_core::focus_app::FocusCategory::Gaming);
-        mood_for(self.shown_personality_id() == "viper", tool, gaming)
+        mood_for(self.personality_id() == "viper", tool, gaming)
     }
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
@@ -1497,6 +1585,63 @@ pub(super) fn pc_tile_grid(ui: &mut egui::Ui, tiles: &[PcTile]) {
     }
 }
 
+/// Mission-control PC grid (slide 09): six tiles with optional meters; driver tile can warn.
+pub(super) fn pc_mission_tile_grid(ui: &mut egui::Ui, tiles: &[LoadoutStatTile]) {
+    use crate::ui_kit::recipe;
+    let gap = crate::theme::SPACING_8;
+    let w = (ui.available_width() - gap) / 2.0;
+    for row in tiles.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for t in row {
+                let (stroke, ink) = if t.warn {
+                    (
+                        recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
+                        crate::theme::amber(),
+                    )
+                } else {
+                    (
+                        egui::Stroke::new(1.0, crate::theme::border()),
+                        crate::theme::fg(),
+                    )
+                };
+                egui::Frame::NONE
+                    .fill(crate::theme::void_bg())
+                    .stroke(stroke)
+                    .corner_radius(recipe::BUTTON_RADIUS)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 16.0 - stroke.width * 2.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(caption(t.label));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&t.value)
+                                        .size(crate::theme::TYPE_LABEL)
+                                        .strong()
+                                        .color(ink),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&t.value);
+                            if let Some(frac) = t.meter {
+                                let (bar, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 6.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(bar, 2.0, crate::theme::selected());
+                                let mut fill = bar;
+                                fill.set_width(bar.width() * frac.clamp(0.0, 1.0));
+                                ui.painter().rect_filled(fill, 2.0, crate::theme::amber());
+                            }
+                        });
+                    });
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1592,6 +1737,28 @@ mod tests {
             .map(|t| (t.label, t.value))
             .collect();
         assert_eq!(tiles, vec![("Disk free", "420 GB".to_string())]);
+    }
+
+    #[test]
+    fn pc_mission_loadout_deck_shows_six_slide_nine_tiles() {
+        let prev = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        let p = deck_mission_control_profile();
+        let tiles = pc_mission_loadout_tiles(&p);
+        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles[0].label, "GPU driver");
+        assert_eq!(tiles[0].value, "Update");
+        assert!(tiles[0].warn);
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
     }
 
     #[test]

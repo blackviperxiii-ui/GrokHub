@@ -15,8 +15,6 @@ pub(super) const TAB_MIN_W: f32 = 96.0;
 pub(super) const TAB_MAX_W: f32 = 180.0;
 /// Trailing chrome reserved for + / overflow / tools.
 const TRAILING_CHROME_W: f32 = 96.0;
-/// Label on the open draft's tab before its first message.
-const NEW_CHAT_TAB: &str = "New chat";
 
 impl Cabin {
     /// Loadout tab strip: even-fit tabs, overflow menu, deck tokens.
@@ -134,19 +132,6 @@ impl Cabin {
                                 open_search = true;
                                 ui.close();
                             }
-                            if !hidden.is_empty() {
-                                ui.menu_button(format!("More chats ({})", hidden.len()), |ui| {
-                                    for &pos in &hidden {
-                                        let i = listed[pos];
-                                        let full = self.thread_rail_title(i);
-                                        let short = grokhub_core::display_tab_title(&full);
-                                        if ui.button(&short).on_hover_text(&full).clicked() {
-                                            act = Some(TabAct::Switch(i));
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            }
                             ui.separator();
                             ui.menu_button("Archived", |ui| {
                                 if archived.is_empty() {
@@ -213,32 +198,12 @@ impl Cabin {
         }
     }
 
-    pub(super) fn chat_tab_indices(&self) -> Vec<usize> {
+    fn chat_tab_indices(&self) -> Vec<usize> {
         let live_empty = self.messages.is_empty();
-        let mut listed: Vec<usize> =
-            threads::chat_section_indices(&self.threads, Some(self.thread_idx), live_empty)
-                .into_iter()
-                .filter(|&i| !threads::is_background_history_title(&self.thread_rail_title(i)))
-                .collect();
-        // History hides empty drafts, but the open one is a tab: "+" must show it.
-        // Only the empty draft: a project chat with messages stays in its project.
-        if live_empty
-            && live_draft_tab(&self.threads, self.thread_idx, &listed)
-            && !threads::is_background_history_title(&self.thread_rail_title(self.thread_idx))
-        {
-            listed.push(self.thread_idx);
-        }
-        listed
-    }
-
-    /// The open empty draft reads "New chat" until its first message names it.
-    pub(super) fn chat_tab_title(&self, i: usize) -> String {
-        let full = self.thread_rail_title(i);
-        if i == self.thread_idx && self.messages.is_empty() && full == "Chat" {
-            NEW_CHAT_TAB.to_string()
-        } else {
-            full
-        }
+        threads::chat_section_indices(&self.threads, Some(self.thread_idx), live_empty)
+            .into_iter()
+            .filter(|&i| !threads::is_background_history_title(&self.thread_rail_title(i)))
+            .collect()
     }
 
     fn chat_tab_order(&self, listed: &[usize]) -> Vec<usize> {
@@ -271,7 +236,7 @@ impl Cabin {
             );
             return act;
         }
-        let full = self.chat_tab_title(i);
+        let full = self.thread_rail_title(i);
         let title = grokhub_core::display_tab_title(&full);
         let pinned = self.threads.get(i).is_some_and(|t| t.pinned);
         let selected = i == self.thread_idx;
@@ -378,19 +343,6 @@ impl Cabin {
     }
 }
 
-/// The open thread is an empty draft the History filter left out. It still
-/// gets a tab, unless it is archived, in the trash, or a background run.
-fn live_draft_tab(all: &[ChatThread], live: usize, listed: &[usize]) -> bool {
-    let Some(t) = all.get(live) else {
-        return false;
-    };
-    !listed.contains(&live)
-        && !t.background
-        && !t.scratch
-        && !threads::is_archived(t)
-        && !threads::is_deleted(t)
-}
-
 /// How many tabs fit at [`TAB_MIN_W`], always keeping the active tab in view.
 fn split_visible_tabs(
     order: &[usize],
@@ -420,32 +372,7 @@ fn split_visible_tabs(
     (visible, hidden)
 }
 
-/// Labels already fitted, keyed by text, font size and width. Every tab is
-/// fitted every frame, and a fit is a binary search of text layouts.
-type FitKey = (String, u32, u32);
-thread_local! {
-    static FITTED: std::cell::RefCell<std::collections::HashMap<FitKey, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-const FITTED_CAP: usize = 256;
-
 fn ellipsize_to_width(ui: &mut egui::Ui, text: &str, font: &egui::FontId, max_w: f32) -> String {
-    let key = (text.to_string(), font.size.to_bits(), max_w.round() as u32);
-    if let Some(hit) = FITTED.with(|c| c.borrow().get(&key).cloned()) {
-        return hit;
-    }
-    let shown = fit_label(ui, text, font, max_w.round());
-    FITTED.with(|c| {
-        let mut c = c.borrow_mut();
-        if c.len() >= FITTED_CAP {
-            c.clear();
-        }
-        c.insert(key, shown.clone());
-    });
-    shown
-}
-
-fn fit_label(ui: &mut egui::Ui, text: &str, font: &egui::FontId, max_w: f32) -> String {
     if max_w <= 8.0 {
         return "…".into();
     }

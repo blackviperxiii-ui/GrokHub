@@ -71,7 +71,7 @@ fn three_failed_starts_open_the_crash_breaker() {
     start_failed(2_000);
     assert_eq!(
         may_start(3_000),
-        Err("the local model server kept stopping, so Loadout paused it for 30 minutes".into())
+        Err("the local model server kept stopping, so GrokHub paused it for 30 minutes".into())
     );
     assert_eq!(may_start(2_000 + 1_800_000), Ok(()));
     reset_for_test();
@@ -97,7 +97,7 @@ fn the_breaker_stops_starting_a_server_that_keeps_dying_without_leaking_a_reques
     }
     assert_eq!(
         crate::route::local_sidecar::acquire(&dir).err(),
-        Some("the local model server kept stopping, so Loadout paused it for 30 minutes".into())
+        Some("the local model server kept stopping, so GrokHub paused it for 30 minutes".into())
     );
     assert_eq!(in_flight(), 0, "a failed start holds no request guard");
     assert_eq!(crate::route::local_sidecar::global_pid(), None);

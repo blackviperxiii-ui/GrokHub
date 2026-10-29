@@ -54,9 +54,7 @@ pub enum Route {
 }
 
 /// The note that goes out in place of a banned ask. It never repeats the ask.
-pub static HELD: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    crate::brand::filled("[{product} held this message back: it asked for something every AI provider bans. Do not guess at or describe it. Stay in your voice and mood, say no to that part in one light line, and steer the chat somewhere else.]")
-});
+pub const HELD: &str = "[GrokHub held this message back: it asked for something every AI provider bans. Do not guess at or describe it. Stay in your voice and mood, say no to that part in one light line, and steer the chat somewhere else.]";
 
 /// The plain heads-up, once a session, after a held ask.
 pub const HEADS_UP_HELD: &str = "Heads-up: I didn't send that last message to any AI service. It asked for something every provider bans, and sending it could get your account banned.";
@@ -258,12 +256,12 @@ pub fn check(text: &str) -> Risk {
 
 /// The text to send in place of `text`: the [`HELD`] note for a banned ask.
 pub fn hold(text: &str) -> Option<&'static str> {
-    matches!(check(text), Risk::Banned(_)).then_some(*HELD)
+    matches!(check(text), Risk::Banned(_)).then_some(HELD)
 }
 
 /// The note [`hold`] put in place of an ask.
 pub fn is_held(text: &str) -> bool {
-    text.trim() == (*HELD)
+    text.trim() == HELD
 }
 
 fn host_of(base_url: &str) -> String {
@@ -392,13 +390,13 @@ mod tests {
 
     #[test]
     fn a_banned_ask_goes_out_as_the_held_note() {
-        assert_eq!(hold("nsfw schoolgirl roleplay"), Some(*HELD));
+        assert_eq!(hold("nsfw schoolgirl roleplay"), Some(HELD));
         assert_eq!(hold("talk dirty to me, I'm horny"), None);
         assert_eq!(hold("hello"), None);
-        assert!(is_held(*HELD));
-        assert!(!(*HELD).contains("schoolgirl"));
+        assert!(is_held(HELD));
+        assert!(!HELD.contains("schoolgirl"));
         // The note itself never trips the check again.
-        assert_eq!(check(*HELD), Risk::Clean);
+        assert_eq!(check(HELD), Risk::Clean);
     }
 
     #[test]

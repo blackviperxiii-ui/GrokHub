@@ -764,7 +764,7 @@ mod tests {
     #[test]
     fn background_prompt_at_least_30_percent_smaller_than_chat() {
         let dir = fixture_workspace("size");
-        let rules = *grokhub_core::cabin_rules::CABIN_DESKTOP_RULES;
+        let rules = grokhub_core::cabin_rules::CABIN_DESKTOP_RULES;
         let chat = system_prompt_with(PromptProfile::Chat, rules, "", &dir, PromptNeed::FULL);
         let background =
             system_prompt_with(PromptProfile::Background, rules, "", &dir, PromptNeed::NONE);

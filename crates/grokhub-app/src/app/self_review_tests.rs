@@ -318,7 +318,7 @@ fn the_weekly_pass_posts_at_most_five_cards_with_numbers_and_refuses_a_consent_t
         (findings[0].target.as_str(), findings[0].detail.as_str()),
         (
             "consent.jsonl",
-            "Loadout never changes the consent store on its own"
+            "GrokHub never changes the consent store on its own"
         )
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -1130,8 +1130,8 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
     assert_eq!(
         refused,
         vec![
-            "Loadout never changes harness policy on its own".to_string(),
-            "Loadout never changes the honesty rules on its own".to_string()
+            "GrokHub never changes harness policy on its own".to_string(),
+            "GrokHub never changes the honesty rules on its own".to_string()
         ]
     );
     let plain = cabin.chat_rules();

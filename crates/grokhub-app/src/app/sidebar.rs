@@ -185,8 +185,7 @@ impl Cabin {
 
     fn paint_loadout_titlebar_pills(&mut self, ui: &mut egui::Ui) {
         let name = self.titlebar_personality_label();
-        let week = super::privacy_page::ledger_week(ui.ctx(), now_ms());
-        let sent = crate::theme::titlebar_sent_label(week.total());
+        let sent = crate::theme::titlebar_sent_label(self.titlebar_egress_bytes());
         for (label, red_ring) in [
             (format!("PERSONALITY · {}", name.to_ascii_uppercase()), true),
             (sent, false),
@@ -212,9 +211,15 @@ impl Cabin {
                 egui::StrokeKind::Outside,
             );
             if red_ring && pill.clicked() {
-                self.open_personality_pill();
+                self.nav = Nav::Settings;
+                self.settings_sec = SettingsSec::Personality;
             }
         }
+    }
+
+    fn titlebar_egress_bytes(&self) -> u64 {
+        // Egress lines carry no payload sizes; the deck chip shows 0 B until byte totals exist.
+        0
     }
 
     fn toggle_maximize(&mut self, ctx: &egui::Context) {
