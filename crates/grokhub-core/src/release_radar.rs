@@ -261,7 +261,10 @@ pub fn scan(
     get: &mut dyn FnMut(&str) -> Result<String, String>,
 ) -> Result<Vec<Upcoming>, String> {
     let mut out: Vec<Upcoming> = Vec::new();
-    let mut asked: BTreeSet<u32> = BTreeSet::new();
+    // Store lookups by id, kept for the whole check: the same app can come
+    // up for several seeds and be dropped for one but kept for another.
+    let mut looked: BTreeMap<u32, Option<Details>> = BTreeMap::new();
+    let mut posted: BTreeSet<u32> = BTreeSet::new();
     let mut reached = false;
     let mut last_err = String::new();
     for (seed_id, seed_name) in seeds.iter().take(SEEDS_PER_CHECK) {
@@ -273,6 +276,7 @@ pub fn scan(
                     candidates.extend(
                         d.dlc
                             .iter()
+                            .filter(|id| !owned.contains(id))
                             .take(LOOKUPS_PER_SEED)
                             .map(|id| (*id, Kind::Dlc)),
                     );
@@ -289,7 +293,9 @@ pub fn scan(
                     parse_search(&body)
                         .into_iter()
                         .filter(|(id, name)| {
-                            *id != *seed_id && name.to_ascii_lowercase().starts_with(&lower)
+                            *id != *seed_id
+                                && !owned.contains(id)
+                                && name.to_ascii_lowercase().starts_with(&lower)
                         })
                         .take(LOOKUPS_PER_SEED)
                         .map(|(id, _)| (id, Kind::Sequel)),
@@ -297,19 +303,22 @@ pub fn scan(
             }
         }
         for (id, kind) in candidates {
-            if owned.contains(&id) || !asked.insert(id) {
+            if posted.contains(&id) {
                 continue;
             }
-            let Ok(body) = get(&details_url(id)) else {
-                continue;
-            };
-            let Some(d) = parse_details(&body, id) else {
+            let looked_up = looked.entry(id).or_insert_with(|| {
+                get(&details_url(id))
+                    .ok()
+                    .and_then(|body| parse_details(&body, id))
+            });
+            let Some(d) = looked_up.clone() else {
                 continue;
             };
             let Some(kind) = classify(kind, &d, *seed_id) else {
                 continue;
             };
             if d.coming_soon {
+                posted.insert(id);
                 out.push(Upcoming {
                     app_id: id,
                     date_ms: release_day_ms(&d.date_text),
@@ -374,9 +383,10 @@ pub struct Radar {
     pub posted: BTreeSet<u32>,
     #[serde(default)]
     pub reminders: BTreeMap<u32, Reminder>,
-    /// Where the next check starts in the seed list, so every game gets a turn.
+    /// The game the next check starts from, so every game gets a turn. An app
+    /// id, not a position: the list is rebuilt and re-sorted every day.
     #[serde(default)]
-    pub seed_cursor: usize,
+    pub next_seed: Option<u32>,
 }
 
 impl Radar {
@@ -400,22 +410,28 @@ impl Radar {
         out
     }
 
-    /// The next `SEEDS_PER_CHECK` seeds, going round the list one check at a
-    /// time so games past the first few are asked about on later days.
-    pub fn next_seeds(&mut self, seeds: &[(u32, String)]) -> Vec<(u32, String)> {
+    /// The next `SEEDS_PER_CHECK` seeds from `next_seed` (the top of the list
+    /// when that game is gone), and the game the check after starts from.
+    /// Going round one check at a time, games past the first few are asked
+    /// about on later days. Set `next_seed` only once the check worked, so a
+    /// failed one is tried again.
+    pub fn seed_batch(&self, seeds: &[(u32, String)]) -> (Vec<(u32, String)>, Option<u32>) {
         if seeds.is_empty() {
-            return Vec::new();
+            return (Vec::new(), None);
         }
-        let start = self.seed_cursor % seeds.len();
+        let start = self
+            .next_seed
+            .and_then(|id| seeds.iter().position(|(seed, _)| *seed == id))
+            .unwrap_or(0);
         let take = SEEDS_PER_CHECK.min(seeds.len());
-        self.seed_cursor = (start + take) % seeds.len();
-        seeds
+        let batch = seeds
             .iter()
             .cycle()
             .skip(start)
             .take(take)
             .cloned()
-            .collect()
+            .collect();
+        (batch, Some(seeds[(start + take) % seeds.len()].0))
     }
 
     pub fn remind(&mut self, u: &Upcoming) -> bool {
@@ -696,23 +712,82 @@ mod tests {
             "owned wishlist entry 3 is dropped"
         );
         let mut radar = Radar::default();
-        let ids = |r: &mut Radar| {
-            r.next_seeds(&seeds)
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect::<Vec<_>>()
+        // Each check that worked saves where the next one starts.
+        let check = |r: &mut Radar, seeds: &[(u32, String)]| {
+            let (batch, next) = r.seed_batch(seeds);
+            r.next_seed = next;
+            batch.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
         };
-        assert_eq!(ids(&mut radar), vec![1, 50, 2, 51, 3, 4]);
-        assert_eq!(ids(&mut radar), vec![5, 6, 7, 8, 1, 50]);
-        assert_eq!(radar.seed_cursor, 2);
-        assert_eq!(ids(&mut radar), vec![2, 51, 3, 4, 5, 6]);
+        assert_eq!(check(&mut radar, &seeds), vec![1, 50, 2, 51, 3, 4]);
+        assert_eq!(radar.next_seed, Some(5));
+        assert_eq!(check(&mut radar, &seeds), vec![5, 6, 7, 8, 1, 50]);
+        // A check that failed does not save, so the same games are asked again.
+        let (retry, _) = radar.seed_batch(&seeds);
+        assert_eq!(
+            retry.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2, 51, 3, 4, 5, 6]
+        );
+        // Playtime re-sorted the library overnight: the next check still
+        // starts at game 2, wherever it moved.
+        let resorted = interleave_seeds(named(&[8, 7, 2, 1, 3, 4, 5, 6]), named(&[50, 51]));
+        assert_eq!(check(&mut radar, &resorted), vec![2, 1, 3, 4, 5, 6]);
+        // The game it would start from left the list: start from the top.
+        radar.next_seed = Some(99);
+        assert_eq!(check(&mut radar, &seeds), vec![1, 50, 2, 51, 3, 4]);
         let few = named(&[9, 10]);
         assert_eq!(
-            radar.next_seeds(&few).len(),
-            2,
+            check(&mut radar, &few),
+            vec![9, 10],
             "a short list is asked once each"
         );
-        assert!(radar.next_seeds(&[]).is_empty());
+        assert_eq!(radar.seed_batch(&[]), (Vec::new(), None));
+    }
+
+    #[test]
+    fn a_hit_dropped_for_one_game_still_posts_as_dlc_for_its_own() {
+        let mut store = store();
+        store.insert(
+            search_url("Star Forge"),
+            serde_json::json!({ "items": [{ "id": 300, "name": "Star Forge Builder Kit" }] })
+                .to_string(),
+        );
+        store.insert(
+            details_url(300),
+            typed(
+                300,
+                "Star Forge Builder Kit",
+                "dlc",
+                Some(400),
+                &[],
+                true,
+                "Coming soon",
+            ),
+        );
+        store.insert(
+            details_url(400),
+            details(400, "Kit Builder", &[300], false, ""),
+        );
+        let mut fetched = Vec::new();
+        let mut get = |url: &str| {
+            fetched.push(url.to_string());
+            store.get(url).cloned().ok_or_else(|| "404".to_string())
+        };
+        let seeds = [
+            (100, "Star Forge".to_string()),
+            (400, "Kit Builder".to_string()),
+        ];
+        let found = scan(&seeds, &BTreeSet::from([100, 103, 400]), &mut get).unwrap();
+        let kit: Vec<_> = found.iter().filter(|u| u.app_id == 300).collect();
+        assert_eq!(kit.len(), 1);
+        assert_eq!(
+            (kit[0].kind, kit[0].base.as_str()),
+            (Kind::Dlc, "Kit Builder")
+        );
+        assert_eq!(
+            fetched.iter().filter(|u| **u == details_url(300)).count(),
+            1,
+            "looked up once, judged per game"
+        );
     }
 
     #[test]
