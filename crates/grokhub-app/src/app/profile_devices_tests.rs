@@ -327,3 +327,60 @@ fn profile_name_clips_at_sixty_four() {
     assert_eq!(clipped.chars().count(), 64);
     assert_eq!(clipped, "a".repeat(64));
 }
+
+#[test]
+fn devices_signed_out_send_task_shows_explanation_and_signin_link() {
+    let mut quiet = QuietCabin::boot("devices-signed-out");
+    let cabin = &mut quiet.cabin;
+    assert!(!cabin.has_key());
+    cabin.set_nav_id("devices");
+    assert_eq!(cabin.nav, Nav::Devices);
+
+    let src = cabin_src();
+    let devices = fn_src(&src, "ui_devices");
+    assert!(
+        devices.contains("has_key()")
+            && devices.contains("Sign in with Grok in Settings")
+            && devices.contains("set_nav_id(\"settings\")"),
+        "Devices page must disable task send when signed out with a reason and sign-in link: {devices}"
+    );
+}
+
+#[test]
+fn session_menu_hidden_when_no_session() {
+    let mut quiet = QuietCabin::boot("no-session-menu");
+    let cabin = &mut quiet.cabin;
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.threads[cabin.thread_idx]
+        .grok_session
+        .as_deref()
+        .unwrap_or("")
+        .is_empty());
+
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput::default();
+    let mut menu_rect = egui::Rect::EVERYTHING;
+    let _ = crate::theme::test_pass(&ctx, raw, |ui| {
+        menu_rect = cabin.paint_session_actions_menu(ui);
+    });
+    assert_eq!(
+        menu_rect,
+        egui::Rect::NOTHING,
+        "the session menu must be hidden when there is no active session"
+    );
+}
+
+#[test]
+fn library_empty_state_hides_filters_and_offers_open_steam_action() {
+    let src = include_str!("library_ui.rs")
+        .replace("\r\n", "\n")
+        .replace("pub(super) ", "");
+    let lib = fn_src(&src, "ui_library");
+    assert!(
+        lib.contains("empty_state")
+            && lib.contains("No Steam library")
+            && lib.contains("Open Steam")
+            && lib.contains("steam://"),
+        "Library empty state must offer one clear action and hide filters: {lib}"
+    );
+}

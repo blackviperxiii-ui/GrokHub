@@ -534,6 +534,10 @@ fn selecting_plan_leaves_the_title_and_sets_plan() {
 fn session_menu_sits_left_of_minimize() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("menu-place");
+    let mut thread = crate::threads::ChatThread::new("Menu", false);
+    thread.grok_session = Some("sess".into());
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
     let ctx = egui::Context::default();
     let raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(

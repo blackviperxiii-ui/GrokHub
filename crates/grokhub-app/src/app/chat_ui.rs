@@ -2709,6 +2709,15 @@ impl Cabin {
 
     /// Compact, Copy session, Export, Archive. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
+        let has_session = !self.messages.is_empty()
+            || self
+                .threads
+                .get(self.thread_idx)
+                .and_then(|t| t.grok_session.as_deref())
+                .is_some_and(|s| !s.trim().is_empty());
+        if !has_session {
+            return egui::Rect::NOTHING;
+        }
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
             .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
         let placed = resp.rect;

@@ -160,7 +160,11 @@ function pulseFixture(req, res) {
   const kind = url.pathname.slice("/pulse/".length);
   let type = "text/html";
   let body = null;
-  if (kind === "source" && asked.includes("hn.algolia.com")) {
+  let askedHost = "";
+  try {
+    askedHost = new URL(asked).hostname;
+  } catch {}
+  if (kind === "source" && (askedHost === "hn.algolia.com" || askedHost.endsWith(".hn.algolia.com"))) {
     type = "application/json";
     body = JSON.stringify({
       hits: [
