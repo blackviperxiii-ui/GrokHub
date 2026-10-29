@@ -212,8 +212,7 @@ impl Cabin {
                 egui::StrokeKind::Outside,
             );
             if red_ring && pill.clicked() {
-                self.nav = Nav::Settings;
-                self.settings_sec = SettingsSec::Personality;
+                self.open_personality_pill();
             }
         }
     }
