@@ -259,8 +259,12 @@ pub fn cluster_asks(entries: &[AskLogEntry], now_ms: u64) -> Vec<AskCluster> {
             continue;
         }
         // Peak hour by counting each ask toward its hour (± tolerance).
+        // Ties go to the hour with the most exact asks, so asks all at 19
+        // peak at 19, not at the 18 that also has them all within tolerance.
         let mut hour_scores = [0u32; 24];
+        let mut exact = [0u32; 24];
         for m in &members {
+            exact[(m.hour % 24) as usize] += 1;
             for h in 0u32..24 {
                 if hour_distance(m.hour, h) <= HOUR_TOLERANCE {
                     hour_scores[h as usize] += 1;
@@ -270,7 +274,7 @@ pub fn cluster_asks(entries: &[AskLogEntry], now_ms: u64) -> Vec<AskCluster> {
         let (peak_hour, peak_score) = hour_scores
             .iter()
             .enumerate()
-            .max_by_key(|(h, score)| (*score, std::cmp::Reverse(*h)))
+            .max_by_key(|(h, score)| (**score, exact[*h], std::cmp::Reverse(*h)))
             .map(|(h, s)| (h as u32, *s))
             .unwrap_or((0, 0));
 
@@ -530,6 +534,29 @@ mod tests {
         assert!(c.count >= OFFER_MIN_COUNT);
         assert!(c.peak_hour == 19 || c.peak_hour == 20);
         assert!(c.example.to_ascii_lowercase().contains("patch"));
+    }
+
+    #[test]
+    fn asks_all_at_one_hour_peak_at_that_hour() {
+        let asks = vec![
+            entry("check the game patch notes", 19, 0),
+            entry("check tonight's patch notes please", 19, 1),
+            entry("check patch notes for the update", 19, 2),
+        ];
+        let now = asks[2].at_ms + HOUR_MS;
+        let clusters = cluster_asks(&asks, now);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].peak_hour, 19);
+        assert_eq!(
+            offer_preview(&clusters[0]),
+            "every day at 7pm, check patch notes for the update"
+        );
+        // Pulse paints the offer's own question, not a rewritten "I can" line.
+        let card = build_offer_card(&clusters[0], now);
+        assert_eq!(
+            crate::pulse::i_can_title(&card),
+            "You ask this most evenings around 7 PM, want me to do it automatically?"
+        );
     }
 
     #[test]
