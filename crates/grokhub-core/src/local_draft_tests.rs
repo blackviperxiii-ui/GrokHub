@@ -160,7 +160,7 @@ fn the_bench_keeps_a_drafter_at_40_percent_and_10_percent_faster() {
     assert!(!flat.keep);
     assert_eq!(
         verdict_line("Gemma 4 E2B", &flat),
-        "Gemma 4 E2B made replies 1.1× as fast with 75% of its guesses kept, so GrokHub left it off."
+        "Gemma 4 E2B made replies 1.1× as fast with 75% of its guesses kept, so Loadout left it off."
     );
     // Faster, but under 40% accepted.
     let wild = judge(

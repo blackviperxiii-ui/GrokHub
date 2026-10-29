@@ -128,7 +128,7 @@ pub fn pick_input<'a>(
     }
     if inputs.is_empty() {
         return Err(format!(
-            "GrokHub couldn't list your inputs, so it can't pick \"{want}\". Run /audiocheck on its own to check the default input."
+            "{product} couldn't list your inputs, so it can't pick \"{want}\". Run /audiocheck on its own to check the default input.", product = crate::brand::product_name()
         ));
     }
     let loose = |s: &str| s.to_lowercase().replace(['_', '-', '.'], " ");
@@ -494,7 +494,9 @@ pub fn audio_report(
             let mute = if d.muted { "muted" } else { "not muted" };
             text.push_str(&format!("Input: {}{volume}, {mute}\n", d.label()));
         }
-        None => text.push_str("Input: the default input (GrokHub couldn't list devices here)\n"),
+        None => text.push_str(crate::brand::filled(
+            "Input: the default input ({product} couldn't list devices here)\n",
+        )),
     }
     text.push_str(&format!(
         "Clip: {:.1} s, peak {:.1} dBFS, average {:.1} dBFS, {:.1}% at full scale, {}, {}\n",
@@ -672,7 +674,7 @@ mod tests {
         assert_eq!(pick_input(&[], ""), Ok(None));
         assert!(pick_input(&[], "yeti")
             .unwrap_err()
-            .starts_with("GrokHub couldn't list your inputs"));
+            .starts_with("Loadout couldn't list your inputs"));
     }
 
     #[test]
@@ -876,7 +878,7 @@ mod tests {
         assert_eq!(fine.summary, "No problems found.");
         assert!(fine
             .text
-            .contains("Input: the default input (GrokHub couldn't list devices here)\n"));
+            .contains("Input: the default input (Loadout couldn't list devices here)\n"));
         assert!(fine.text.contains("\nNo problems found.\n"));
         assert!(!fine.text.contains("Outputs:"));
     }

@@ -2934,7 +2934,7 @@ mod tests {
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { output, .. }
-                if output.contains(grokhub_core::desktop_mcp::HALT_MSG)
+                if output.contains(*grokhub_core::desktop_mcp::HALT_MSG)
         )));
 
         let lock_script = Script {

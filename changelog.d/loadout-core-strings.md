@@ -1,0 +1,1 @@
+- Help text, slash hints, Pulse and health notes, update hints, and the prompts the cabin sends to the model now name the product "Loadout" instead of "GrokHub". Paths, keychain entries and update URLs keep the internal name.
