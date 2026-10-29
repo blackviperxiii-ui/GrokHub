@@ -1436,6 +1436,19 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "finish_wind_down",
+        grokhub_core::wind_down::Offer::Late { idle_min: 45 }.card(
+            &grokhub_core::LocalClock {
+                now_ms: now,
+                weekday: 3,
+                hour: 2,
+                minute: 0,
+            },
+            grokhub_core::wind_down::Voice::Plain,
+        ),
+        "Sleep the PC",
+    ));
+    rows.push((
         "finish_achievements",
         grokhub_core::steam_achievements::Nudge {
             app_id: 1145360,

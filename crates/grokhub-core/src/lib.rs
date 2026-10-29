@@ -155,6 +155,7 @@ pub mod week_recap;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;
+pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;

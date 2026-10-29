@@ -302,11 +302,13 @@ function Write-ModelDrop([string]$root) {
 # $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
 # home, pulse or library) instead of a rail click; the cabin closes the
 # seeded Activity list over every pinned page.
+# $windDown turns the wind-down reminder on with a fixed 2 AM idle machine
+# (GROKHUB_DECK_WIND_DOWN); 'confirm' also opens the Sleep the PC sheet.
 # $achievements turns the achievement nudges on and runs the weekly check on
 # canned Steam replies (GROKHUB_DECK_ACHIEVEMENTS), for slide 14.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -389,6 +391,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Write-Utf8 (Join-Path $cfg 'pulse-steam-achievements.json') '{"on":true,"lastCheckMs":0}'
         $env:GROKHUB_DECK_ACHIEVEMENTS = '1'
     } else { Remove-Item Env:GROKHUB_DECK_ACHIEVEMENTS -ErrorAction SilentlyContinue }
+    if ($windDown) {
+        Write-Utf8 (Join-Path $cfg 'wind-down.json') '{"on":true}'
+        $env:GROKHUB_DECK_WIND_DOWN = $windDown
+    } else { Remove-Item Env:GROKHUB_DECK_WIND_DOWN -ErrorAction SilentlyContinue }
     if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'

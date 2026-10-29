@@ -247,6 +247,7 @@ mod threads_nav;
 mod voice;
 mod web_search_ui;
 mod week_recap_ui;
+mod wind_down_ui;
 mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;

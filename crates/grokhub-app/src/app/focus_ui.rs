@@ -24,6 +24,8 @@ pub(super) struct FocusState {
     context_pending: bool,
     /// "Pick up where you left off" for code, the other what-you-were-doing help.
     pub resume: super::code_resume_ui::ResumeState,
+    /// The late-night wind-down reminder.
+    pub wind: super::wind_down_ui::WindDownState,
     /// Downloads tidy suggestions and their review.
     pub tidy: super::downloads_tidy_ui::TidyState,
     /// Backup and unpushed-work reminders.
@@ -42,6 +44,7 @@ impl Cabin {
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
+        self.tick_wind_down();
         self.tick_downloads_tidy();
         self.tick_backup();
         self.tick_net_log();
