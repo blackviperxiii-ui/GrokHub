@@ -163,13 +163,13 @@ pub fn append_ask(ledger: &mut AskOfferLedger, text: &str, hour: u32, weekday: u
     let Some(line) = may_log_ask(text) else {
         return;
     };
-    // Same line in the same hour: keep the newest stamp only.
-    if let Some(prev) = ledger
-        .entries
-        .iter_mut()
-        .rev()
-        .find(|e| e.hour == hour % 24 && e.text.eq_ignore_ascii_case(&line))
-    {
+    // Same line in the same hour of the same day: keep the newest stamp only.
+    // The same ask at that hour on another day is a new occurrence.
+    if let Some(prev) = ledger.entries.iter_mut().rev().find(|e| {
+        e.hour == hour % 24
+            && at_ms.abs_diff(e.at_ms) < HOUR_MS
+            && e.text.eq_ignore_ascii_case(&line)
+    }) {
         prev.at_ms = at_ms;
         prev.weekday = weekday.min(6);
         return;
@@ -659,6 +659,45 @@ mod tests {
         assert!(may_log_ask("/help").is_none());
         assert!(may_log_ask("install the nvidia driver").is_none());
         assert!(may_log_ask("ok").is_none());
+    }
+
+    #[test]
+    fn the_same_ask_at_the_same_hour_on_three_days_counts_three_times() {
+        let mut ledger = AskOfferLedger::default();
+        let day0 = 1_800_000_000_000u64 - 1_800_000_000_000 % DAY_MS + 19 * HOUR_MS;
+        append_ask(&mut ledger, "check patch notes tonight", 19, 1, day0);
+        // Asked again ten minutes later: still one occurrence.
+        append_ask(
+            &mut ledger,
+            "check patch notes tonight",
+            19,
+            1,
+            day0 + 10 * 60_000,
+        );
+        append_ask(
+            &mut ledger,
+            "check patch notes tonight",
+            19,
+            2,
+            day0 + DAY_MS,
+        );
+        append_ask(
+            &mut ledger,
+            "check patch notes tonight",
+            19,
+            3,
+            day0 + 2 * DAY_MS,
+        );
+        let stamps: Vec<u64> = ledger.entries.iter().map(|e| e.at_ms).collect();
+        assert_eq!(
+            stamps,
+            vec![day0 + 10 * 60_000, day0 + DAY_MS, day0 + 2 * DAY_MS]
+        );
+        let clusters = cluster_asks(&ledger.entries, day0 + 2 * DAY_MS + HOUR_MS);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].count, 3);
+        assert_eq!(clusters[0].peak_hour, 19);
+        assert_eq!(clusters[0].kind, OfferKind::Automation);
     }
 
     #[test]
