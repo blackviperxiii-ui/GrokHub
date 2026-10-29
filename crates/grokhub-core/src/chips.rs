@@ -253,9 +253,11 @@ pub fn empty_chip_memory() -> ChipMemory {
 }
 
 pub fn chip_memory_key(chip: &QuickChip) -> String {
+    // Model chips put their label in the id (`llm-0-Fix the blen`).
     if chip.id.starts_with("learn-")
         || chip.id.starts_with("recent-")
         || chip.id.starts_with("pred-habit")
+        || chip.id.starts_with("llm-")
     {
         value_key(&chip.value, chip.kind)
     } else {
@@ -540,6 +542,28 @@ pub fn detect_chip_stage(chat: &[(String, String)], last_failed: bool) -> ChipSt
     ChipStage::Default
 }
 
+/// A context tag as stored on a habit: the draft part dropped. Tags are
+/// matched against the draft-free fingerprint, and older tags carried up to
+/// 24 raw draft characters (which may hold `+`) up to the `h{n}` hour bit.
+fn tag_without_draft(tag: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_draft = false;
+    for part in tag.split('+') {
+        if part.starts_with("d:") {
+            in_draft = true;
+            continue;
+        }
+        let hour_bit =
+            part.len() == 2 && part.starts_with('h') && part.as_bytes()[1].is_ascii_digit();
+        if in_draft && !hour_bit {
+            continue;
+        }
+        in_draft = false;
+        out.push(part);
+    }
+    out.join("+")
+}
+
 pub fn context_fingerprint(
     chat: &[(String, String)],
     draft: &str,
@@ -577,9 +601,12 @@ pub fn context_fingerprint(
     if c.incomplete {
         bits.push("todo".into());
     }
-    let draft_bit: String = draft.trim().chars().take(24).collect();
-    if !draft_bit.is_empty() {
-        bits.push(format!("d:{draft_bit}"));
+    // An opaque draft digest: the fingerprint still changes as the draft
+    // does, but no draft text rides along into a stored context tag.
+    let draft = normalize_chip_value(draft);
+    if !draft.is_empty() {
+        let hex = hex::encode(Sha256::digest(draft.as_bytes()));
+        bits.push(format!("d:{}", &hex[..8]));
     }
     bits.push(format!("h{}", hour / 6));
     let mode_bit = mode.trim().to_ascii_lowercase();
@@ -1403,9 +1430,9 @@ fn upsert_hit(
             h.last_dismissed_at = now_ms;
         }
         h.dismisses = h.dismisses.saturating_add(dismiss_delta);
-        if let Some(tag) = context_tag {
-            if !h.context_tags.iter().any(|t| t == tag) {
-                h.context_tags.insert(0, tag.to_string());
+        if let Some(tag) = context_tag.map(tag_without_draft) {
+            if !h.context_tags.contains(&tag) {
+                h.context_tags.insert(0, tag);
                 h.context_tags.truncate(12);
             }
         }
@@ -1432,7 +1459,9 @@ fn upsert_hit(
                 },
                 successes: 0,
                 failures: 0,
-                context_tags: context_tag.map(|t| vec![t.to_string()]).unwrap_or_default(),
+                context_tags: context_tag
+                    .map(|t| vec![tag_without_draft(t)])
+                    .unwrap_or_default(),
                 dismisses: dismiss_delta,
                 dismiss_hours: if dismiss_delta > 0 {
                     bump_hour(&[], hour)
@@ -1471,6 +1500,27 @@ fn record_transition(memory: &mut ChipMemory, from: Option<String>, to: String) 
     memory.last_chip_key = Some(to);
 }
 
+/// Chat chips whose text is built from the chat, the draft, the thread
+/// title or a model reply. Catalog chips (`empty-brief`, `ctx-draw`) are
+/// fixed strings and keep theirs.
+const CHAT_TEXT_CHIP_IDS: &[&str] = &[
+    "llm-", "learn-", "recent-", "prev-", "pred-", "last-", "topic-",
+];
+
+fn chip_text_from_chat(id: &str) -> bool {
+    CHAT_TEXT_CHIP_IDS.iter().any(|p| id.starts_with(p))
+}
+
+/// The label and value a chip leaves in chips.json. A Chat chip built from
+/// chat text keeps neither; its opaque key carries the habit.
+fn stored_text(chip: &QuickChip) -> (&str, &str) {
+    if chip.kind == ChipKind::Chat && chip_text_from_chat(&chip.id) {
+        ("", "")
+    } else {
+        (&chip.label, &chip.value)
+    }
+}
+
 pub fn remember_chip_click(
     memory: &mut ChipMemory,
     chip: &QuickChip,
@@ -1480,11 +1530,12 @@ pub fn remember_chip_click(
 ) {
     let key = chip_memory_key(chip);
     let from = memory.last_chip_key.clone();
+    let (label, value) = stored_text(chip);
     upsert_hit(
         memory,
         key.clone(),
-        &chip.label,
-        &chip.value,
+        label,
+        value,
         chip.kind,
         1,
         0,
@@ -1509,18 +1560,9 @@ pub fn chip_dismissed_for_good(memory: &ChipMemory, chip: &QuickChip) -> bool {
 
 pub fn remember_chip_dismiss(memory: &mut ChipMemory, chip: &QuickChip, now_ms: u64, hour: u8) {
     let key = chip_memory_key(chip);
+    let (label, value) = stored_text(chip);
     upsert_hit(
-        memory,
-        key,
-        &chip.label,
-        &chip.value,
-        chip.kind,
-        0,
-        0,
-        1,
-        None,
-        now_ms,
-        hour,
+        memory, key, label, value, chip.kind, 0, 0, 1, None, now_ms, hour,
     );
 }
 
@@ -2359,38 +2401,49 @@ fn prune_retired_host_hits(mem: &mut ChipMemory) -> bool {
     mem.hits.len() != before
 }
 
-/// One-time (idempotent) scrub: drop any habit whose key was built from raw
-/// chat/shell text. Catalog `id:…` and opaque `*:v1:hex` keys stay.
+/// Idempotent scrub: drop any habit whose key was built from raw chat/shell
+/// text or a model chip's label (`id:llm-…`), and clear the text older Chat
+/// chip clicks stored. Catalog `id:…` and opaque `*:v1:hex` keys stay.
+/// True when anything changed, nested transition rows included.
 pub fn scrub_chat_text_chip_keys(mem: &mut ChipMemory) -> bool {
-    let before_hits = mem.hits.len();
-    let before_last = mem.last_chip_key.clone();
-    let before_transitions = mem.transitions.len();
-    let before_version = mem.version;
+    let before = mem.clone();
+    let embeds = |k: &str| chip_key_embeds_chat_text(k) || k.starts_with("id:llm-");
 
-    mem.hits.retain(|h| !chip_key_embeds_chat_text(&h.key));
+    mem.hits.retain(|h| !embeds(&h.key));
+    // Older clicks stored chat-built chip text; hashed Chat keys only ever
+    // came from such chips.
+    for h in mem.hits.iter_mut().filter(|h| {
+        h.kind == ChipKind::Chat && h.key.strip_prefix("id:").is_none_or(chip_text_from_chat)
+    }) {
+        h.label.clear();
+        h.value.clear();
+    }
+    // Older context tags carried raw draft text.
+    for h in &mut mem.hits {
+        let mut tags: Vec<String> = Vec::new();
+        for tag in h.context_tags.iter().map(|t| tag_without_draft(t)) {
+            if !tag.is_empty() && !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+        h.context_tags = tags;
+    }
     let keys: std::collections::HashSet<String> = mem.hits.iter().map(|h| h.key.clone()).collect();
     mem.transitions.retain(|from, dests| {
-        if chip_key_embeds_chat_text(from) {
+        if embeds(from) {
             return false;
         }
-        dests.retain(|to, _| keys.contains(to) && !chip_key_embeds_chat_text(to));
+        dests.retain(|to, _| keys.contains(to) && !embeds(to));
         !dests.is_empty()
     });
-    if mem
-        .last_chip_key
-        .as_ref()
-        .is_some_and(|k| chip_key_embeds_chat_text(k))
-    {
+    if mem.last_chip_key.as_deref().is_some_and(embeds) {
         mem.last_chip_key = None;
     }
     if mem.version < CHIP_MEMORY_VERSION {
         mem.version = CHIP_MEMORY_VERSION;
     }
 
-    mem.hits.len() != before_hits
-        || mem.last_chip_key != before_last
-        || mem.transitions.len() != before_transitions
-        || mem.version != before_version
+    *mem != before
 }
 
 fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
@@ -3184,6 +3237,71 @@ mod tests {
         }
     }
 
+    /// Every chip any row offers, clicked and dismissed, twice over (the
+    /// second round includes learned and predicted chips): no word from the
+    /// chat, the draft, the title or a model chip reaches chips.json.
+    #[test]
+    fn clicking_and_dismissing_every_chip_stores_no_chat_text() {
+        const MARK: &str = "zephyrquill";
+        let chats = [
+            vec![
+                msg("user", "fix the zephyrquill parser"),
+                msg(
+                    "assistant",
+                    "Error: zephyrquill panicked at src/main.rs\n```rust\nfn zephyrquill() {}\n```",
+                ),
+            ],
+            vec![
+                msg("user", "plan the zephyrquill launch"),
+                msg(
+                    "assistant",
+                    "Here is a plan for zephyrquill. Want me to start?",
+                ),
+                msg("user", "draft the zephyrquill announcement"),
+                msg("assistant", "Done. I'll check the zephyrquill page next."),
+            ],
+        ];
+        let drafts = [
+            "",
+            "fix zephyrquill login",
+            "add zephyrquill export",
+            "zephyrquill",
+        ];
+        let llm = vec![chip(
+            "llm-0-Zephyrquill",
+            "Zephyrquill next",
+            "Do the zephyrquill step next.",
+            ChipKind::Chat,
+            90.0,
+            "Suggested from this chat",
+        )];
+        let mut mem = ChipMemory::default();
+        let mut seen = 0;
+        for round in 0..2 {
+            for chat in &chats {
+                for draft in drafts {
+                    let snapshot = mem.clone();
+                    let mut inp = input(chat, draft, &snapshot, &[], &llm);
+                    inp.thread_title = "zephyrquill notes";
+                    inp.max = 30;
+                    let chips = build_quick_chips(inp);
+                    // The tag the app passes on a real click.
+                    let tag = context_fingerprint(chat, draft, false, 21, "auto");
+                    for c in chips.iter().filter(|c| c.kind == ChipKind::Chat) {
+                        seen += 1;
+                        remember_chip_click(&mut mem, c, Some(&tag), 1_000 + round, 21);
+                        if round == 1 {
+                            remember_chip_dismiss(&mut mem, c, 2_000, 21);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen > 20, "only {seen} chat chips offered");
+        let json = serde_json::to_string(&mem).unwrap().to_ascii_lowercase();
+        assert!(!json.contains(MARK), "{json}");
+    }
+
     #[test]
     fn empty_stage_offers_cabin_chips() {
         let mem = ChipMemory::default();
@@ -3783,6 +3901,140 @@ mod tests {
             .values()
             .all(|d| d.keys().all(|k| !chip_key_embeds_chat_text(k))));
         assert_eq!(mem.version, CHIP_MEMORY_VERSION);
+        assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
+    }
+
+    /// A scrub that only empties a row's inner destinations, or only clears
+    /// stored chip text, still reports a change so `load_chips` saves it.
+    #[test]
+    fn context_tags_keep_no_draft_text() {
+        let fp = context_fingerprint(&[], "fix zephyrquill login", false, 21, "auto");
+        assert_eq!(fp, "empty+d:a665f15e+h3+m:auto");
+        assert_eq!(tag_without_draft(&fp), "empty+h3+m:auto");
+        assert_eq!(
+            tag_without_draft("code+d:fix zephyr+quill h3x+h3+m:chat"),
+            "code+h3+m:chat"
+        );
+
+        let mut mem = ChipMemory {
+            version: CHIP_MEMORY_VERSION,
+            ..ChipMemory::default()
+        };
+        let brief = chip(
+            "empty-brief",
+            "Cabin brief",
+            "Give me a short cabin brief.",
+            ChipKind::Chat,
+            10.0,
+            "",
+        );
+        remember_chip_click(&mut mem, &brief, Some(&fp), 1_000, 21);
+        assert_eq!(
+            mem.hits[0].context_tags,
+            vec!["empty+h3+m:auto".to_string()]
+        );
+
+        mem.hits[0].context_tags = vec![
+            "code+d:fix zephyrquill+h3+m:chat".into(),
+            "code+h3+m:chat".into(),
+            "d:zephyrquill".into(),
+        ];
+        assert!(scrub_chat_text_chip_keys(&mut mem));
+        assert_eq!(mem.hits[0].context_tags, vec!["code+h3+m:chat".to_string()]);
+        assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
+    }
+
+    #[test]
+    fn scrub_reports_inner_row_and_text_only_changes() {
+        let hit = |key: &str, label: &str, value: &str, kind: ChipKind| ChipHit {
+            key: key.into(),
+            label: label.into(),
+            value: value.into(),
+            kind,
+            uses: 1,
+            typed_uses: 0,
+            picks: 1,
+            last_used_at: 1,
+            hour_hits: vec![0; 24],
+            successes: 0,
+            failures: 0,
+            context_tags: vec![],
+            dismisses: 0,
+            dismiss_hours: vec![0; 24],
+            last_dismissed_at: 0,
+        };
+        let mut mem = ChipMemory {
+            version: CHIP_MEMORY_VERSION,
+            ..ChipMemory::default()
+        };
+        mem.hits = vec![
+            hit(
+                "id:ctx-connect",
+                "Connect Grok",
+                "__nav:settings",
+                ChipKind::Nav,
+            ),
+            hit(
+                "id:empty-brief",
+                "Cabin brief",
+                "Give me a short cabin brief.",
+                ChipKind::Chat,
+            ),
+            hit(
+                "id:ctx-draw",
+                "Draw a logo",
+                "Draw a logo for the project.",
+                ChipKind::Chat,
+            ),
+        ];
+        let row = mem.transitions.entry("id:ctx-connect".into()).or_default();
+        row.insert("id:empty-brief".into(), 2);
+        row.insert("chat:fix the harbor parser".into(), 1);
+        assert!(scrub_chat_text_chip_keys(&mut mem), "inner row change");
+        assert_eq!(
+            mem.transitions["id:ctx-connect"].keys().collect::<Vec<_>>(),
+            vec!["id:empty-brief"]
+        );
+        assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
+
+        mem.hits.push(hit(
+            "id:prev-0",
+            "Fix the harbor",
+            "fix the harbor parser",
+            ChipKind::Chat,
+        ));
+        mem.hits.push(hit(
+            "chat:v1:0123456789abcdef",
+            "Harbor",
+            "plan the harbor launch",
+            ChipKind::Chat,
+        ));
+        mem.hits.push(hit(
+            "id:llm-0-Harbornext",
+            "Harbor next",
+            "do the harbor step",
+            ChipKind::Chat,
+        ));
+        assert!(scrub_chat_text_chip_keys(&mut mem), "text-only change");
+        let rows: Vec<_> = mem
+            .hits
+            .iter()
+            .map(|h| (h.key.as_str(), h.label.as_str(), h.value.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("id:ctx-connect", "Connect Grok", "__nav:settings"),
+                (
+                    "id:empty-brief",
+                    "Cabin brief",
+                    "Give me a short cabin brief."
+                ),
+                ("id:ctx-draw", "Draw a logo", "Draw a logo for the project."),
+                ("id:prev-0", "", ""),
+                ("chat:v1:0123456789abcdef", "", ""),
+            ]
+        );
         assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
     }
 
