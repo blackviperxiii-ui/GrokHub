@@ -1990,6 +1990,7 @@ fn quiet_cabin() -> Cabin {
         hands_attach: false,
         eyes_attach: false,
         speak_next: false,
+        signin_card: false,
         verify_ok_turn: false,
         verify_chip: String::new(),
         reflect_diff: String::new(),
