@@ -42,10 +42,13 @@ fn save_ledger(ledger: &PrintAlertsLedger) {
     }
 }
 
+/// No redirects: `egress_ok` checks only the printer URL, so a redirect
+/// could send the request (and its API key) off the LAN.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(pa::DISCOVER_TIMEOUT_MS))
         .timeout_read(Duration::from_millis(2_000))
+        .redirects(0)
         .build()
 }
 
@@ -74,6 +77,9 @@ fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<Str
         req = req.set("X-Api-Key", key);
     }
     let resp = req.call().ok()?;
+    if !(200..300).contains(&resp.status()) {
+        return None;
+    }
     let mut body = String::new();
     resp.into_reader()
         .take(512 * 1024)
@@ -489,6 +495,10 @@ impl Cabin {
             if let Some(alert) = pa::observe(&settings, &mut ledger, &key, &status, now) {
                 let mut card = alert_card(&alert, now);
                 if alert.camera_enabled {
+                    let base = base_url(&saved.endpoint);
+                    let query = format!("{base}{}", pa::webcam_query_path(saved.kind));
+                    status.camera_path = get_json(&agent, &query, saved.api_key.as_deref())
+                        .and_then(|body| pa::parse_webcam_path(saved.kind, &body));
                     if let Some(path) = status.camera_path.as_deref() {
                         let snap = format!("{}{path}", base_url(&saved.endpoint));
                         // Prefer a reachable snapshot URL; cabin never embeds credentials.
@@ -603,6 +613,34 @@ mod tests {
     use grokhub_core::print_alerts::{
         alert_card, observe, parse_moonraker_status, AlertKind, PrintAlertsSettings, PrintState,
     };
+
+    #[test]
+    fn printer_requests_never_follow_a_redirect() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/landed\r\n\
+                 Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            let _ = stream.write_all(reply.as_bytes());
+            listener
+        });
+        let url = format!("http://127.0.0.1:{port}/api/job");
+        let got = get_json(&agent(), &url, Some("sk-abcdefghijklmnopqrstuv"));
+        assert_eq!(got, None, "a 302 is not a printer reply");
+        let listener = served.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().map(|_| ()).map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::WouldBlock),
+            "the redirect was followed"
+        );
+    }
 
     #[test]
     fn discover_targets_include_loopback_and_cap_lan() {

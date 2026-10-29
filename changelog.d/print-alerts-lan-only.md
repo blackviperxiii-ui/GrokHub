@@ -1,0 +1,1 @@
+- Print alerts: printer requests no longer follow redirects, so they can't be sent off your network, and a print card only shows a camera snapshot when the printer reports a webcam.
