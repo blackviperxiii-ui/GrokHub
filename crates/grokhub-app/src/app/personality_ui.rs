@@ -1701,6 +1701,10 @@ mod tests {
         assert!(src.contains("GROKHUB_DECK_SETTINGS_SEC"));
         assert!(src.contains("pinned_settings_sec"));
         assert!(src.contains("settings_modal_size"));
+        assert!(
+            src.contains("Some(\"behavior\")"),
+            "Behavior pin for Screenshot explain deck shots"
+        );
         assert!(src.contains("settings_page_rect"));
         let shots = include_str!("../../../../scripts/deck-shots.list.ps1");
         assert!(shots.contains("-pinPersonality") || shots.contains("-personality"));
@@ -1709,12 +1713,21 @@ mod tests {
         assert!(shots.contains("personality-1920x1080"));
         assert!(shots.contains("personality-900x720"));
         assert!(shots.contains("slide-19") || shots.contains("'19'"));
+        assert!(shots.contains("screenshot-chip-1600x900"));
+        assert!(shots.contains("screenshot-settings-1600x900"));
+        assert!(shots.contains("-pinBehavior") || shots.contains("pinBehavior"));
+        assert!(shots.contains("-screenshotOffer") || shots.contains("screenshotOffer"));
         // Slide 19 must not rely on a rail click (missed → Hangout in #958).
         assert!(
             shots.contains("GROKHUB_DECK_SETTINGS_SEC opens Settings at")
                 || !shots
                     .contains("personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt"),
             "personality slide 19 shots open Settings via env, not clickAt"
+        );
+        let seed = include_str!("loadout_home.rs");
+        assert!(
+            seed.contains("pinned_settings_sec") && seed.contains("Nav::Settings"),
+            "deck seed must open Settings when GROKHUB_DECK_SETTINGS_SEC is set"
         );
     }
 }
