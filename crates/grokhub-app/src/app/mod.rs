@@ -131,6 +131,7 @@ use std::time::{Duration, Instant};
 mod acp;
 mod amr_memory;
 mod chat_kick;
+mod helper_offers_ui;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;

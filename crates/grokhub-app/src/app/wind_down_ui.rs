@@ -211,7 +211,11 @@ impl Cabin {
         };
     }
 
-    fn set_wind_on(&mut self, on: bool) {
+    pub(super) fn wind_down_on(&mut self) -> bool {
+        self.wind_now().on
+    }
+
+    pub(super) fn set_wind_on(&mut self, on: bool) {
         if on {
             self.wind_now().on = true;
             self.focus.wind.last_read = None;
