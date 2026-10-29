@@ -348,8 +348,10 @@ impl Nudge {
                 names.join(", ")
             ),
             Kind::Rare => format!(
-                "You have {} of {}. Steam's community guides are free.",
-                self.done, self.total
+                "You have {} of {}. Next: {}. Steam's community guides are free.",
+                self.done,
+                self.total,
+                names.join(", ")
             ),
         }
     }
@@ -521,7 +523,7 @@ mod tests {
         );
         assert_eq!(
             n.body(),
-            "You have 16 of 20. Steam's community guides are free."
+            "You have 16 of 20. Next: Feat 17 (0.4% of players). Steam's community guides are free."
         );
         // Half done with the same rare one left: no nudge.
         assert_eq!(pick(10, "Fake Quest", &list(10, 20), &r), None);
