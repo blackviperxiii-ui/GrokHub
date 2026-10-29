@@ -1,0 +1,1 @@
+- Settings: clarify private-data recovery, point API-key setup to Defaults, and make Appearance previews easier to see.

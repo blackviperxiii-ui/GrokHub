@@ -14,7 +14,7 @@ pub const KEYFRAMES: usize = 6;
 pub const NOTE_CHARS: usize = 60;
 
 pub const CONSENT_OFF: &str =
-    "Screen recording is off. Turn it on in Settings → Cabin defaults → Screen recording, then try again.";
+    "Screen recording is off. Turn it on in Settings → Defaults → Screen recording, then try again.";
 pub const ALREADY_RECORDING: &str = "Already recording. Stop it first.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

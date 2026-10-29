@@ -16,7 +16,7 @@ pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
 pub(super) const RULES_HEAD: &str = "Command rules";
 /// Under "Leaving this computer" in Settings → Permissions.
 pub(super) static PRIVACY_NOTE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!("Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The grok CLI's own traffic, when a Google connector runs through it, is outside {}. /privacy shows what left.", grokhub_core::brand::product_name())
+    format!("Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The Grok CLI's own traffic, when a Google connector runs through it, is outside {}. /privacy shows what left.", grokhub_core::brand::product_name())
 });
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
 /// The one user-facing name for the hub sync data (SY-02). Logs and files keep
@@ -117,11 +117,11 @@ pub(super) const TRY_AGAIN: &str = "Try again";
 /// SB-01: the hover on every disabled pill while private data is locked.
 pub(super) fn lock_hover(why: &hx::Locked) -> &'static str {
     match why {
-        hx::Locked::Unavailable => "Locked: keyring unavailable",
-        hx::Locked::Missing => "Locked: key missing from your keyring",
-        hx::Locked::WrongKey => "Locked: your keyring holds a different key",
-        hx::Locked::Busy => "Locked: another window is setting up the key",
-        hx::Locked::Unwritable => "Locked: the config folder can't be written",
+        hx::Locked::Unavailable => "Private data is unavailable",
+        hx::Locked::Missing => "Private data key is missing",
+        hx::Locked::WrongKey => "Private data key doesn't match",
+        hx::Locked::Busy => "Private data is being prepared",
+        hx::Locked::Unwritable => "Private data can't be saved",
     }
 }
 
@@ -132,17 +132,20 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
     let name = hx::keyring_name_for(os);
     match why {
         hx::Locked::Unavailable => match os {
-            hx::KeyringOs::Linux => "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again.".into(),
+            hx::KeyringOs::Linux => "Unlock or start your system password store, then choose Try again.".into(),
             hx::KeyringOs::Windows => {
-                "Turn on Windows Credential Manager (Services → Credential Manager), then Try again.".into()
+                "Turn on Windows Credential Manager (Services → Credential Manager), then choose Try again.".into()
             }
-            hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then Try again.".into(),
+            hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then choose Try again.".into(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("Put this data's {} key back in your {name}, then Try again.", grokhub_core::brand::product_name())
+            format!("Restore this data's key in your {name}, then choose Try again.")
         }
-        hx::Locked::Busy => "Wait a moment for the other window, then Try again.".into(),
-        hx::Locked::Unwritable => format!("Check that {}'s config folder can be written, then Try again.", grokhub_core::brand::product_name()),
+        hx::Locked::Busy => "Wait a moment for the other window, then choose Try again.".into(),
+        hx::Locked::Unwritable => format!(
+            "Allow {} to write its settings folder, then choose Try again.",
+            grokhub_core::brand::product_name()
+        ),
     }
 }
 
@@ -150,20 +153,19 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
 pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> String {
     let step = match why {
         hx::Locked::Unavailable => match os {
-            hx::KeyringOs::Linux => "unlock or start GNOME Keyring or KWallet".to_string(),
+            hx::KeyringOs::Linux => "unlock or start your system password store".to_string(),
             hx::KeyringOs::Windows => "turn on Windows Credential Manager".to_string(),
             hx::KeyringOs::MacOs => "unlock your macOS Keychain".to_string(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
             format!(
-                "put this data's {} key back in your {}",
-                grokhub_core::brand::product_name(),
+                "restore this data's key in your {}",
                 hx::keyring_name_for(os)
             )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
         hx::Locked::Unwritable => format!(
-            "check that {}'s config folder can be written",
+            "allow {} to write its settings folder",
             grokhub_core::brand::product_name()
         ),
     };
@@ -238,7 +240,7 @@ pub(super) fn privacy_report(
         out.push(format!("- Off: {}", off.join(" · ")));
     }
     out.push(format!(
-        "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults ({})",
+        "- Screen: \"Let Grok control the desktop\" in Settings → Defaults ({})",
         if desktop_control { "on" } else { "off" }
     ));
     if ledger.unreadable() > 0 {
@@ -316,7 +318,7 @@ pub(super) fn privacy_report(
         ));
     }
     out.push(String::new());
-    out.push(format!("Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()));
+    out.push(format!("Not watched here: the Grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()));
     out.join("\n")
 }
 
@@ -421,7 +423,7 @@ impl Cabin {
         }
         self.harness.scope_note = None;
         self.harness.lock_retry_at = Some(now_ms());
-        self.status = "Checking your keyring…".into();
+        self.status = "Checking private data access…".into();
     }
 
     /// Paired computers the hub would serve a share to.
@@ -451,7 +453,8 @@ impl Cabin {
         // Spike-4b: a send that can't be logged doesn't go, so a locked or
         // still-opening ledger stops here with one plain line.
         if ledger.pending() {
-            self.status = "Sync waits for your keyring. Try /sync again in a moment.".into();
+            self.status =
+                "Sync is waiting for private data access. Try /sync again in a moment.".into();
             return;
         }
         if let Some(why) = private_lock(&crate::config::config_dir(), &ledger, false) {
@@ -557,7 +560,7 @@ impl Cabin {
                 });
             });
             if checking {
-                crate::cards::settings_note(ui, "Checking your keyring…");
+                crate::cards::settings_note(ui, "Checking private data access…");
             } else if let Some(at) = self.harness.lock_retry_at {
                 let ago = grokhub_core::pulse::ago_label(at, now_ms());
                 crate::cards::settings_note(ui, &format!("Still locked. Checked {ago}."));
@@ -568,9 +571,9 @@ impl Cabin {
                 self.retry_keyring();
             }
         } else if checking {
-            crate::cards::settings_note(ui, "Checking your keyring…");
+            crate::cards::settings_note(ui, "Checking private data access…");
         } else if self.harness.lock_retry_at.take().is_some() {
-            self.status = "Your keyring answered. Private data is open again.".into();
+            self.status = "Private data is available again.".into();
         }
         let locked = lock.as_ref().map(lock_hover);
         let granted = self
@@ -874,13 +877,13 @@ mod tests {
                 "",
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
-                "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
+                "- Screen: \"Let Grok control the desktop\" in Settings → Defaults (off)",
                 "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
                 "",
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
-                "Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else Loadout sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
+                &format!("Not watched here: the Grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()),
             ]
             .join("\n")
         );
@@ -905,9 +908,7 @@ mod tests {
         assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(
-            got.contains(
-                "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (on)"
-            ),
+            got.contains("- Screen: \"Let Grok control the desktop\" in Settings → Defaults (on)"),
             "{got}"
         );
         assert!(
@@ -1133,19 +1134,19 @@ mod tests {
         let u = hx::Locked::Unavailable;
         assert_eq!(
             lock_next_step(&u, Linux),
-            "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again."
+            "Unlock or start your system password store, then choose Try again."
         );
         assert_eq!(
             lock_next_step(&u, Windows),
-            "Turn on Windows Credential Manager (Services → Credential Manager), then Try again."
+            "Turn on Windows Credential Manager (Services → Credential Manager), then choose Try again."
         );
         assert_eq!(
             lock_next_step(&u, MacOs),
-            "Unlock your macOS Keychain (Keychain Access → login), then Try again."
+            "Unlock your macOS Keychain (Keychain Access → login), then choose Try again."
         );
         assert_eq!(
             lock_next_step_short(&u, Linux),
-            "Next: unlock or start GNOME Keyring or KWallet, then Try again in Settings → Permissions."
+            "Next: unlock or start your system password store, then Try again in Settings → Permissions."
         );
         assert_eq!(hx::keyring_name_for(Windows), "Windows Credential Manager");
         assert_eq!(hx::keyring_name_for(MacOs), "macOS Keychain");
@@ -1165,7 +1166,7 @@ mod tests {
             }
             for os in [Linux, Windows, MacOs] {
                 assert!(
-                    lock_next_step(why, os).ends_with("then Try again."),
+                    lock_next_step(why, os).ends_with("then choose Try again."),
                     "{os:?}: {why:?}"
                 );
                 assert!(lock_next_step_short(why, os)
