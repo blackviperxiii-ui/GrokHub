@@ -115,31 +115,43 @@ impl Cabin {
 
     /// One sample. A launch of a library game fetches its news off the UI thread.
     fn note_running(&mut self, running: Option<u32>, now: u64) {
-        let Some(event) = self.focus.game.watch.note(running) else {
+        let events = self.focus.game.watch.note(running);
+        if events.is_empty() {
             return;
-        };
+        }
         let library = self.steam_library(now).1.to_vec();
         let find = |id: u32| library.iter().find(|g| g.app_id == id).cloned();
-        match event {
-            Launch::Started(id) => {
-                let Some(game) = find(id) else {
-                    return;
-                };
-                self.focus.game.playing = Some(game.clone());
-                self.focus.game.ended = None;
-                self.chip_paint_key.clear();
-                let note = gc::load_notes(&notes_dir()).get(id).map(str::to_string);
-                let (tx, rx) = mpsc::channel();
-                self.focus.game.news_rx = Some(rx);
-                std::thread::spawn(move || {
-                    let news = read_news(&game);
-                    let _ = tx.send(Companion { game, news, note });
-                });
-            }
-            Launch::Ended(id) => {
-                self.focus.game.playing = None;
-                self.focus.game.ended = find(id).map(|g| (g, now));
-                self.chip_paint_key.clear();
+        for event in events {
+            match event {
+                Launch::Started(id) => {
+                    let Some(game) = find(id) else {
+                        continue;
+                    };
+                    self.focus.game.playing = Some(game.clone());
+                    // A game switched away from keeps its note offer.
+                    if self
+                        .focus
+                        .game
+                        .ended
+                        .as_ref()
+                        .is_some_and(|(g, _)| g.app_id == id)
+                    {
+                        self.focus.game.ended = None;
+                    }
+                    self.chip_paint_key.clear();
+                    let note = gc::load_notes(&notes_dir()).get(id).map(str::to_string);
+                    let (tx, rx) = mpsc::channel();
+                    self.focus.game.news_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let news = read_news(&game);
+                        let _ = tx.send(Companion { game, news, note });
+                    });
+                }
+                Launch::Ended(id) => {
+                    self.focus.game.playing = None;
+                    self.focus.game.ended = find(id).map(|g| (g, now));
+                    self.chip_paint_key.clear();
+                }
             }
         }
     }
@@ -156,19 +168,31 @@ impl Cabin {
         }
     }
 
-    /// Guides and a note while a game runs; a note offer once it closes.
+    /// Guides and a note while a game runs; a note offer once it closes, also
+    /// while the next game runs after a direct switch.
     pub(super) fn game_chips(&self) -> Vec<QuickChip> {
         if !self.cfg.game_companion {
             return Vec::new();
         }
         let state = &self.focus.game;
-        let chips = match (&state.playing, &state.ended) {
-            (Some(game), _) => gc::chips(game, false),
-            (None, Some((game, at))) if now_ms().saturating_sub(*at) < NOTE_OFFER_MS => {
+        let offer = match &state.ended {
+            Some((game, at))
+                if now_ms().saturating_sub(*at) < NOTE_OFFER_MS
+                    && state
+                        .playing
+                        .as_ref()
+                        .is_none_or(|p| p.app_id != game.app_id) =>
+            {
                 gc::chips(game, true)
             }
             _ => Vec::new(),
         };
+        let mut chips = state
+            .playing
+            .as_ref()
+            .map(|game| gc::chips(game, false))
+            .unwrap_or_default();
+        chips.extend(offer);
         chips
             .into_iter()
             .filter(|c| !self.chip_dismissed.iter().any(|d| d == &c.id))
@@ -369,6 +393,58 @@ mod tests {
         cabin.cfg.game_companion = false;
         cabin.focus.game.playing = Some(game(7, "Hades"));
         assert!(cabin.game_chips().is_empty());
+    }
+
+    #[test]
+    fn a_direct_switch_closes_the_old_game_and_keeps_its_note_offer() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.game_companion = true;
+        cabin.sources.steam = super::super::steam_ui::SteamState::for_test(
+            vec![game(7, "Hades"), game(8, "Celeste")],
+            1_000,
+        );
+        cabin.focus.game.watch = LaunchWatch {
+            current: Some(7),
+            primed: true,
+        };
+        cabin.focus.game.playing = Some(game(7, "Hades"));
+        // Straight to a game outside the library: Hades still closes.
+        cabin.note_running(Some(99), 2_000);
+        assert!(cabin.focus.game.playing.is_none());
+        assert_eq!(
+            cabin
+                .focus
+                .game
+                .ended
+                .as_ref()
+                .map(|(g, at)| (g.app_id, *at)),
+            Some((7, 2_000))
+        );
+        cabin.focus.game.ended = Some((game(7, "Hades"), now_ms()));
+        cabin.focus.game.playing = Some(game(8, "Celeste"));
+        let chips: Vec<(String, String)> = cabin
+            .game_chips()
+            .into_iter()
+            .map(|c| (c.id, c.label))
+            .collect();
+        assert_eq!(
+            chips,
+            vec![
+                (
+                    "game:guides:8".to_string(),
+                    "Top guides for Celeste".to_string()
+                ),
+                ("game:note:8".to_string(), "Note for Celeste".to_string()),
+                (
+                    "game:note:7".to_string(),
+                    "Leave a note for next time".to_string()
+                ),
+            ]
+        );
+        // Relaunching the same game drops its own offer.
+        cabin.focus.game.playing = Some(game(7, "Hades"));
+        let labels: Vec<String> = cabin.game_chips().into_iter().map(|c| c.label).collect();
+        assert_eq!(labels, vec!["Top guides for Hades", "Note for Hades"]);
     }
 
     #[test]

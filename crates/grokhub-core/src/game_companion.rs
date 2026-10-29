@@ -60,7 +60,8 @@ pub enum Launch {
     Ended(u32),
 }
 
-/// Turns "what is running now" samples into start and end events.
+/// Turns "what is running now" samples into start and end events. A direct
+/// switch from one game to another ends the first before starting the next.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LaunchWatch {
     pub current: Option<u32>,
@@ -70,16 +71,15 @@ pub struct LaunchWatch {
 }
 
 impl LaunchWatch {
-    pub fn note(&mut self, running: Option<u32>) -> Option<Launch> {
+    pub fn note(&mut self, running: Option<u32>) -> Vec<Launch> {
         let was = std::mem::replace(&mut self.current, running);
         if !std::mem::replace(&mut self.primed, true) || was == running {
-            return None;
+            return Vec::new();
         }
-        match (was, running) {
-            (_, Some(id)) => Some(Launch::Started(id)),
-            (Some(id), None) => Some(Launch::Ended(id)),
-            (None, None) => None,
-        }
+        was.map(Launch::Ended)
+            .into_iter()
+            .chain(running.map(Launch::Started))
+            .collect()
     }
 }
 
@@ -170,13 +170,17 @@ impl Companion {
             &self.body(),
             now_ms,
         );
-        let href = self
+        // Open goes to the guides; the newest news item is the card's
+        // "Read at" link, so both stay one tap away.
+        card.citations = self
             .news
-            .as_ref()
-            .and_then(|n| n.first())
+            .iter()
+            .flatten()
             .map(|(_, url)| url.clone())
-            .unwrap_or_else(|| guides_url(self.game.app_id));
-        card.action = Some(UpdateAction::DeepLink { href });
+            .collect();
+        card.action = Some(UpdateAction::DeepLink {
+            href: guides_url(self.game.app_id),
+        });
         card
     }
 }
@@ -281,12 +285,17 @@ mod tests {
     #[test]
     fn the_watch_sees_starts_and_ends_but_not_a_game_already_running() {
         let mut w = LaunchWatch::default();
-        assert_eq!(w.note(Some(1)), None, "running before the cabin started");
-        assert_eq!(w.note(Some(1)), None);
-        assert_eq!(w.note(None), Some(Launch::Ended(1)));
-        assert_eq!(w.note(None), None);
-        assert_eq!(w.note(Some(2)), Some(Launch::Started(2)));
-        assert_eq!(w.note(Some(3)), Some(Launch::Started(3)));
+        assert_eq!(w.note(Some(1)), vec![], "running before the cabin started");
+        assert_eq!(w.note(Some(1)), vec![]);
+        assert_eq!(w.note(None), vec![Launch::Ended(1)]);
+        assert_eq!(w.note(None), vec![]);
+        assert_eq!(w.note(Some(2)), vec![Launch::Started(2)]);
+        assert_eq!(
+            w.note(Some(3)),
+            vec![Launch::Ended(2), Launch::Started(3)],
+            "a direct switch closes the old game first"
+        );
+        assert_eq!(w.note(None), vec![Launch::Ended(3)]);
     }
 
     #[test]
@@ -334,8 +343,13 @@ mod tests {
         assert_eq!(
             card.action,
             Some(UpdateAction::DeepLink {
-                href: "https://store.steampowered.com/news/6".into()
-            })
+                href: "https://steamcommunity.com/app/548430/guides/?browsefilter=toprated".into()
+            }),
+            "the guides stay reachable when there is news"
+        );
+        assert_eq!(
+            card.citations,
+            vec!["https://store.steampowered.com/news/6".to_string()]
         );
         let none = Companion {
             news: Some(Vec::new()),
@@ -349,6 +363,7 @@ mod tests {
                 href: guides_url(548430)
             })
         );
+        assert!(none.companion_card(5).citations.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
