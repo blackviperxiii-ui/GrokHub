@@ -1264,9 +1264,17 @@ fn open_memory_file_flushes_the_editor_you_left() {
         !cabin.mem_body.contains("typed soul line"),
         "switching tabs must not wipe the unsaved line into the next file"
     );
-    wait_for("leaving SOUL must flush the unsaved typing", || {
-        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch")
-    });
+    // Wait for that save itself: a fixed poll ran out on a busy Windows runner.
+    cabin
+        .mem_leave_save
+        .take()
+        .expect("leaving SOUL starts a save")
+        .join()
+        .unwrap();
+    assert!(
+        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch"),
+        "leaving SOUL must flush the unsaved typing"
+    );
     assert_eq!(cabin.mem_name, "USER.md");
     quiet.settle();
 }
@@ -1964,6 +1972,7 @@ fn quiet_cabin() -> Cabin {
         mem_name: String::new(),
         mem_body: String::new(),
         mem_cache_at: [0, 0, 0],
+        mem_leave_save: None,
         mem_cache_body: [String::new(), String::new(), String::new()],
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),

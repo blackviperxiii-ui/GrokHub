@@ -1703,12 +1703,12 @@ impl Cabin {
             // Capture the config directory now, like the other scheduled saves:
             // looking it up when the thread runs can land in another directory.
             let dir = config::config_dir();
-            std::thread::spawn(move || {
+            self.mem_leave_save = Some(std::thread::spawn(move || {
                 let _pin = pin_scheduled_dir(dir);
                 if config::read_memory(&leaving) != body {
                     let _ = config::write_memory(&leaving, &body);
                 }
-            });
+            }));
         }
         self.mem_name = name.into();
         let at = config::memory_updated_at(name);
