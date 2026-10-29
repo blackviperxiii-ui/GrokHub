@@ -72,6 +72,7 @@ pub mod day_brief;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
+pub mod learn_notes;
 pub mod learning;
 pub mod local_discover;
 pub mod local_draft;
@@ -523,8 +524,8 @@ pub use redact::{
     forget_topic, is_plain_text, redact_held_secrets, redact_secret_words, redact_secrets,
 };
 pub use reflect::{
-    fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect,
-    surgical_memory_edit, MemoryEdit, IDLE_REFLECT_MS,
+    fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect, MemoryEdit,
+    IDLE_REFLECT_MS,
 };
 pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from,

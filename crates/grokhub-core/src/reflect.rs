@@ -17,38 +17,6 @@ pub fn restore_memory_prev(_current: &str, prev: &str) -> String {
     prev.to_string()
 }
 
-/// Append each new fact once. Second run with the same additions is a no-op.
-pub fn surgical_memory_edit(current: &str, additions: &[String]) -> MemoryEdit {
-    let mut next = current.to_string();
-    if !next.is_empty() && !next.ends_with('\n') {
-        next.push('\n');
-    }
-    let mut added = Vec::new();
-    for raw in additions {
-        let fact = raw.trim();
-        if fact.is_empty() || !is_plain_text(fact) {
-            continue;
-        }
-        let already = next.lines().any(|l| l.trim().eq_ignore_ascii_case(fact));
-        if already {
-            continue;
-        }
-        next.push_str(fact);
-        next.push('\n');
-        added.push(fact.to_string());
-    }
-    let diff = if added.is_empty() {
-        String::new()
-    } else {
-        added
-            .iter()
-            .map(|f| format!("+ {f}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    MemoryEdit { next, diff }
-}
-
 pub fn fact_candidates(messages: &[(String, String)]) -> Vec<String> {
     fact_candidates_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
 }
@@ -82,13 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn append_once_and_restore() {
-        let first = surgical_memory_edit("", &["prefer nvim".into()]);
-        assert!(first.next.contains("prefer nvim"));
-        assert!(!first.diff.is_empty());
-        let second = surgical_memory_edit(&first.next, &["prefer nvim".into()]);
-        assert_eq!(second.next, first.next);
-        assert!(second.diff.is_empty());
+    fn restore_idle_and_fact_candidates() {
         assert_eq!(restore_memory_prev("new", "old"), "old");
         assert!(should_idle_reflect(IDLE_REFLECT_MS, false, IDLE_REFLECT_MS));
         assert!(!should_idle_reflect(IDLE_REFLECT_MS, true, IDLE_REFLECT_MS));

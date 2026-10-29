@@ -93,32 +93,32 @@ use grokhub_core::{
     skill_follow_block, skill_from_suggestion, skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair, state_for_disk,
     stretch_saved_skill, strip_thinking, suggestions_from_sessions, summarize_trajectory,
-    summarize_write, surgical_memory_edit, take_ui_text, teachable_steps, theme_label,
-    thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
-    thought_shows_acts, thought_shows_label, thread_host_receipts, thread_host_receipts_from,
-    toggle_pin, token_delta, tool_display_title, tool_group_label, tool_status_failed,
-    tool_status_running, top_habit_labels, topics_from_turns, trajectory_jsonl_line,
-    transcribe_route, trim_result_bodies_in_place, turn_needs_timeline, uid, unified_diff_cite,
-    unknown_cabin_slash, update_check_due, update_chip_label, update_cmds_for_host_in,
-    update_wipes_config, upsert_assistant_turn, upsert_bound, upsert_inflight_card, usage_line,
-    user_pref_facts, verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
-    visible_tree, visible_turn_count, visible_turn_count_from, voice_mode_label,
-    voice_state_after_ptt_stt, voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict,
-    wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
-    BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
-    ChipThread, ComposerEnter, ComposerGo, DeviceCodeStart, DigestLine, GreetingInput, GrokLoop,
-    HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, HubSnapshot,
-    HubState, ImagineKind, ImagineSpec, ImagineToolboxDock, ImagineWall, InhabitBundle,
-    KanbanColumn, LearningState, LiveBlock, LiveKind, LocalClock, MemoryEdit, PermKey, PlusAct,
-    PlusTarget, Policy, PresenceFrame, ProjectKind, ProjectMenuAct, ProjectNode, PttLine,
-    QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord, ScheduleRoute, SkillMd, Slash,
-    SlashHit, SuggestionStore, ThoughtFold, ThreadReuseView, ThreadTab, TranscribeRoute,
-    UpdatePending, UsageDay, VerifyResult, VoiceState, WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y,
-    CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
-    CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
-    IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
-    PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP,
-    THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
+    summarize_write, take_ui_text, teachable_steps, theme_label, thought_body_key,
+    thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts,
+    thought_shows_label, thread_host_receipts, thread_host_receipts_from, toggle_pin, token_delta,
+    tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
+    top_habit_labels, topics_from_turns, trajectory_jsonl_line, transcribe_route,
+    trim_result_bodies_in_place, turn_needs_timeline, uid, unified_diff_cite, unknown_cabin_slash,
+    update_check_due, update_chip_label, update_cmds_for_host_in, update_wipes_config,
+    upsert_assistant_turn, upsert_bound, upsert_inflight_card, usage_line, user_pref_facts,
+    verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs, visible_tree,
+    visible_turn_count, visible_turn_count_from, voice_mode_label, voice_state_after_ptt_stt,
+    voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict, wall_gif_from_generation,
+    worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard, BoardStatus, ChatKind,
+    ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory, ChipThread,
+    ComposerEnter, ComposerGo, DeviceCodeStart, DigestLine, GreetingInput, GrokLoop, HeartbeatAct,
+    HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, HubSnapshot, HubState,
+    ImagineKind, ImagineSpec, ImagineToolboxDock, ImagineWall, InhabitBundle, KanbanColumn,
+    LearningState, LiveBlock, LiveKind, LocalClock, PermKey, PlusAct, PlusTarget, Policy,
+    PresenceFrame, ProjectKind, ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp,
+    ReviewDigest, RewindRecord, ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore,
+    ThoughtFold, ThreadReuseView, ThreadTab, TranscribeRoute, UpdatePending, UsageDay,
+    VerifyResult, VoiceState, WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
+    CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX,
+    CONTEXT_BUDGET_TOKENS, FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS,
+    IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS,
+    RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
+    TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
 #[cfg(test)]
 use grokhub_core::{chip_suggest_prompt, parse_llm_chips};
@@ -132,6 +132,7 @@ mod acp;
 mod amr_memory;
 mod chat_kick;
 mod helper_offers_ui;
+mod learn_notes_ui;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;
@@ -864,7 +865,13 @@ pub struct Cabin {
     recall_rx: Option<mpsc::Receiver<String>>,
     sync_rx: Option<mpsc::Receiver<(String, Vec<HubMemoryFile>)>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
-    reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
+    reflect_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
+    /// The USER/SOUL/MEMORY lines a finished turn is writing.
+    learn_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
+    /// Turn notes waiting for the write or reflect in flight to finish.
+    learn_pending: Vec<grokhub_core::learn_notes::Note>,
+    /// A reflect asked for while a turn's notes were being written.
+    reflect_after_learn: bool,
     /// The one-time AMR import ran this session (AMR mode only).
     amr_imported: bool,
     /// The local day the AMR dream ran or was skipped (Halt), this session.
@@ -1446,6 +1453,9 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -1913,6 +1923,9 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -2303,6 +2316,7 @@ impl Cabin {
             grokhub_core::note_part(&mut self.learning, "chat", &key, &learned.why);
             noted = true;
         }
+        let mut user_facts = Vec::new();
         for line in assistant.lines() {
             let Some(fact) = line.trim().strip_prefix("USER_FACT:") else {
                 continue;
@@ -2310,8 +2324,10 @@ impl Cabin {
             let fact = fact.trim();
             if (8..200).contains(&fact.len()) && !grokhub_core::echoes_source(fact, &user) {
                 facts.push(fact.to_string());
+                user_facts.push(fact.to_string());
             }
         }
+        self.learn_from_turn(&user, &user_facts);
         if facts.is_empty() && !noted {
             return;
         }
@@ -4362,6 +4378,12 @@ impl Cabin {
             self.status = "Reflecting…".into();
             return;
         }
+        if self.learn_rx.is_some() {
+            // A turn's notes are being written; reflect on top of them.
+            self.reflect_after_learn = true;
+            self.status = "Reflecting…".into();
+            return;
+        }
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         let facts = if job.is_none() || job == Some(vis.as_str()) {
@@ -4387,19 +4409,16 @@ impl Cabin {
         }
         let name = self.mem_name.clone();
         let body = self.mem_body.clone();
-        std::thread::spawn(move || {
-            if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
-                let _ = config::write_memory(&name, &body);
-            }
-        });
         if self.amr_on() {
+            std::thread::spawn(move || {
+                if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
             // Single write: the facts become nodes, not insights or MEMORY.md lines.
             self.run_reflect_amr(&facts);
             return;
         }
-        let mem_name = self.mem_name.clone();
-        let mem_body = self.mem_body.clone();
-        let writes_user = self.policy().writes_user_md() && !self.cfg.dream_model;
         let propose_user = self.policy().writes_user_md() && self.cfg.dream_model;
         let prefs = if propose_user {
             user_pref_facts(&facts)
@@ -4411,21 +4430,25 @@ impl Cabin {
         } else {
             None
         };
+        // Only what the chat teaches is written: facts about the user, the
+        // agent's corrections, and asks to remember. With the dream model on,
+        // user facts are proposed for review instead of written.
+        let user_ok = self.policy().writes_user_md() && !propose_user;
+        let notes: Vec<_> = learn_notes_ui::notes_from(&facts, &[])
+            .into_iter()
+            .filter(|n| user_ok || n.file != grokhub_core::learn_notes::NoteFile::User)
+            .collect();
+        let day = Self::local_day();
         let chat_source = format!("chat:{vis}");
         let (tx, rx) = mpsc::channel();
         self.reflect_rx = Some(rx);
         self.status = "Reflecting…".into();
         std::thread::spawn(move || {
-            let current = if mem_name == "MEMORY.md" {
-                mem_body.clone()
-            } else {
-                config::read_memory("MEMORY.md")
-            };
-            let edit = surgical_memory_edit(&current, &facts);
-            if !edit.diff.is_empty() {
-                let next = edit.next.clone();
-                let _ = config::write_memory("MEMORY.md", &next);
+            // Save the open SOUL editor first, so the notes land on top of it.
+            if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
+                let _ = config::write_memory(&name, &body);
             }
+            let writes = learn_notes_ui::write_notes(&notes, &day, Some((name, body)));
             if let Some(store) = propose_store {
                 for pref in &prefs {
                     let _ = grokhub_core::amr::stage_core_line(
@@ -4443,29 +4466,7 @@ impl Cabin {
                     );
                 }
             }
-            let user_edit = if writes_user {
-                let prefs = user_pref_facts(&facts);
-                if prefs.is_empty() {
-                    None
-                } else {
-                    let user = if mem_name == "USER.md" {
-                        mem_body
-                    } else {
-                        config::read_memory("USER.md")
-                    };
-                    let ue = surgical_memory_edit(&user, &prefs);
-                    if ue.diff.is_empty() {
-                        None
-                    } else {
-                        let next = ue.next.clone();
-                        let _ = config::write_memory("USER.md", &next);
-                        Some(ue)
-                    }
-                }
-            } else {
-                None
-            };
-            let _ = tx.send((edit, user_edit));
+            let _ = tx.send(writes);
         });
     }
 
@@ -4474,58 +4475,46 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok((edit, user_edit)) => {
-                let mut wrote = !edit.diff.is_empty();
-                // AMR reflect sends an empty `next`: the lines went to the memory repo.
-                let amr = wrote && edit.next.is_empty();
-                if amr {
-                    self.reflect_diff = edit.diff;
-                } else if wrote {
-                    self.reflect_diff = edit.diff;
-                    if let Some(i) = Self::mem_file_idx("MEMORY.md") {
-                        self.mem_cache_at[i] = config::memory_updated_at("MEMORY.md");
-                        if self.mem_name == "MEMORY.md" {
-                            self.mem_cache_body[i] = edit.next.clone();
-                            self.mem_body = edit.next;
-                        } else {
-                            self.mem_cache_body[i] = edit.next;
-                        }
-                    } else if self.mem_name == "MEMORY.md" {
-                        self.mem_body = edit.next;
+            Ok(writes) => {
+                if let Some(diff) = writes.amr_diff {
+                    let wrote = !diff.is_empty();
+                    if wrote {
+                        self.reflect_diff = diff;
                     }
+                    self.status = if wrote {
+                        "Reflected into the memory repo".into()
+                    } else {
+                        "Reflect: nothing new".into()
+                    };
+                    return;
                 }
-                if let Some(ue) = user_edit {
-                    if self.reflect_diff.is_empty() {
-                        self.reflect_diff = ue.diff;
-                    }
-                    if let Some(i) = Self::mem_file_idx("USER.md") {
-                        self.mem_cache_at[i] = config::memory_updated_at("USER.md");
-                        if self.mem_name == "USER.md" {
-                            self.mem_cache_body[i] = ue.next.clone();
-                            self.mem_body = ue.next;
-                        } else {
-                            self.mem_cache_body[i] = ue.next;
-                        }
-                    } else if self.mem_name == "USER.md" {
-                        self.mem_body = ue.next;
-                    }
-                    wrote = true;
-                }
-                self.status = if amr {
-                    "Reflected into the memory repo".into()
-                } else if wrote {
-                    "Reflected MEMORY.md".into()
-                } else {
+                let names: Vec<&str> = writes.files.iter().map(|(n, _)| *n).collect();
+                self.status = if names.is_empty() {
                     "Reflect: nothing new".into()
+                } else {
+                    format!("Reflected {}", names.join(", "))
                 };
+                let diffs: Vec<String> = writes
+                    .files
+                    .iter()
+                    .map(|(n, e)| format!("{n}\n{}", e.diff))
+                    .collect();
+                if !diffs.is_empty() {
+                    self.reflect_diff = diffs.join("\n");
+                }
+                for (name, edit) in writes.files {
+                    self.adopt_memory_write(name, edit.next);
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.reflect_rx = Some(rx);
+                return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.status = "Reflect failed".into();
             }
         }
+        self.start_learn_write();
     }
 
     fn run_skill_verify(&mut self) {
@@ -5206,6 +5195,7 @@ impl eframe::App for Cabin {
         self.poll_sync();
         self.poll_inhabit();
         self.poll_reflect();
+        self.poll_learn();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_single();
@@ -5318,6 +5308,7 @@ impl eframe::App for Cabin {
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
+                || self.learn_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.grok_p_rx.is_some()
