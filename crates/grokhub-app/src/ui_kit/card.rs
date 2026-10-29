@@ -2,6 +2,8 @@
 
 use eframe::egui::{Color32, Frame, Margin, Response, Sense, Stroke, Ui};
 
+use super::recipe::{Part, State};
+
 /// Visual treatment for [`card_frame`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CardVariant {
@@ -19,8 +21,8 @@ pub enum CardVariant {
 fn card_stroke(variant: CardVariant) -> Stroke {
     match variant {
         CardVariant::Outlined => Stroke::new(1.0, crate::theme::border()),
-        CardVariant::Signal => Stroke::new(1.0, crate::theme::red_dim()),
-        CardVariant::SignalHot => Stroke::new(1.5, crate::theme::signal_red()),
+        CardVariant::Signal => super::recipe::look(Part::Card, State::Default).stroke,
+        CardVariant::SignalHot => super::recipe::look(Part::Card, State::Hover).stroke,
         CardVariant::Default | CardVariant::Subtle | CardVariant::Interactive => Stroke::NONE,
     }
 }
@@ -42,7 +44,10 @@ pub fn card_frame(
         | CardVariant::Signal
         | CardVariant::SignalHot => crate::theme::kit_shadow(crate::theme::ShadowLevel::None),
     };
-    let radius = crate::theme::RADIUS_LG;
+    let radius = match variant {
+        CardVariant::Signal | CardVariant::SignalHot => super::recipe::CARD_RADIUS,
+        _ => crate::theme::RADIUS_LG,
+    };
     let mut prepared = Frame {
         fill: base_fill,
         stroke,
@@ -86,8 +91,8 @@ fn card_fill(variant: CardVariant, enabled: bool) -> Color32 {
         CardVariant::Default | CardVariant::Interactive => crate::theme::elevated(),
         CardVariant::Subtle => crate::theme::surface(),
         CardVariant::Outlined => crate::theme::elevated(),
-        CardVariant::Signal => crate::theme::raised(),
-        CardVariant::SignalHot => crate::theme::hover(),
+        CardVariant::Signal => super::recipe::look(Part::Card, State::Default).fill,
+        CardVariant::SignalHot => super::recipe::look(Part::Card, State::Hover).fill,
     };
     if enabled {
         base
@@ -144,7 +149,7 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         assert_eq!(
             card_stroke(CardVariant::Signal),
-            Stroke::new(1.0, crate::theme::OPS_RED_DIM)
+            Stroke::new(1.5, crate::theme::OPS_SIGNAL_RED)
         );
         assert_eq!(
             card_stroke(CardVariant::SignalHot),

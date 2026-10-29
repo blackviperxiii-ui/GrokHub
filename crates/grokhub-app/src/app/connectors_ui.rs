@@ -244,7 +244,8 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
 /// Settings → Connectors.
 pub(super) fn unknown_connector_fact(id: &str, tool: &str) -> String {
     format!(
-        "CONNECTOR_RESULT (facts only):\n{id} {tool}: GrokHub has no {id} connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there."
+        "CONNECTOR_RESULT (facts only):\n{id} {tool}: {} has no {id} connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there.",
+        grokhub_core::brand::product_name()
     )
 }
 
@@ -587,7 +588,7 @@ mod tests {
     fn an_unknown_connector_points_at_settings_connectors() {
         assert_eq!(
             unknown_connector_fact("slack", "post_message"),
-            "CONNECTOR_RESULT (facts only):\nslack post_message: GrokHub has no slack connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there."
+            "CONNECTOR_RESULT (facts only):\nslack post_message: Loadout has no slack connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there."
         );
         assert_eq!(
             unknown_connector_status("slack"),

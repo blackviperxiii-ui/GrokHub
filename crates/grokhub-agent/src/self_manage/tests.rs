@@ -30,7 +30,7 @@ fn native(g: &Gate, name: &str, args: &serde_json::Value) -> Decision {
 #[test]
 fn class_table_names_every_tool_once() {
     let names: Vec<&str> = SELF_TOOLS.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names.len(), 17);
+    assert_eq!(names.len(), 18);
     let schema_names: Vec<String> = mcp_tools()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
@@ -57,6 +57,7 @@ fn class_table_names_every_tool_once() {
             ("automation_disable", "soft"),
             ("automation_delete", "delete"),
             ("pulse_steam", "soft"),
+            ("know_me_tags", "read"),
         ]
     );
     for t in native_schemas() {
@@ -388,16 +389,24 @@ fn skill_disable_and_enable_move_the_folder_and_log_each_move() {
         .unwrap(),
         v1
     );
-    assert_eq!(run_with(&ctx, "skill_list", &json!({})).text, "no skills");
+    let listed = run_with(&ctx, "skill_list", &json!({})).text;
+    assert!(
+        listed.contains("qa-walkthrough:") && listed.contains("[builtin]"),
+        "builtins always list: {listed}"
+    );
+    assert!(
+        !listed.contains("board:"),
+        "disabled cabin skill stays off the list: {listed}"
+    );
     // Heading-only SKILL.md (no YAML frontmatter) must not appear in skill_list —
     // the `skill` tool rejects those as unknown skill.
     let bare = root.join("skills").join("bare-import").join("SKILL.md");
     std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
     std::fs::write(&bare, "# Bare Import\n\n## Steps\n1. Do a thing\n").unwrap();
-    assert_eq!(
-        run_with(&ctx, "skill_list", &json!({})).text,
-        "no skills",
-        "skill_list must not advertise frontmatter-less imports"
+    let listed = run_with(&ctx, "skill_list", &json!({})).text;
+    assert!(
+        !listed.contains("bare-import"),
+        "skill_list must not advertise frontmatter-less imports: {listed}"
     );
     let _ = std::fs::remove_dir_all(bare.parent().unwrap());
     let back = run_with(&ctx, "skill_enable", &json!({ "name": "board" }));
@@ -434,10 +443,10 @@ fn read_skill_loads_frontmatter_less_skills_for_modify() {
     let bare = root.join("skills").join("bare-import").join("SKILL.md");
     std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
     std::fs::write(&bare, "# Bare Import\n\n## Steps\n1. Do a thing\n").unwrap();
-    assert_eq!(
-        run_with(&ctx, "skill_list", &json!({})).text,
-        "no skills",
-        "skill_list still hides frontmatter-less imports"
+    let listed = run_with(&ctx, "skill_list", &json!({})).text;
+    assert!(
+        listed.contains("[builtin]") && !listed.contains("bare-import"),
+        "skill_list still hides frontmatter-less imports: {listed}"
     );
     let mod_bare = run_with(
         &ctx,
@@ -660,5 +669,34 @@ fn pulse_steam_saves_the_toggle_and_mutes_and_reports_them() {
         Err("Steam is not installed on this computer, so there is no library to use.".into())
     );
     assert_eq!(grokhub_core::steam::load_prefs(&root).on, Some(false));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn know_me_tags_reports_the_saved_tags_with_their_source() {
+    use grokhub_core::know_me::{self, KnowMe, Signal, Tag};
+    let root = dir("know-me");
+    let ctx = SelfCtx::new(&root);
+    let off = run_with(&ctx, "know_me_tags", &json!({}));
+    assert_eq!(
+        (off.failed, off.text.as_str()),
+        (
+            false,
+            "Know me is off. The user can turn it on in Settings → Pulse."
+        )
+    );
+    let state = KnowMe {
+        on: true,
+        tags: vec![Tag {
+            tag: "dev: Rust".into(),
+            signal: Signal::Dev,
+            topic: Some("Rust".into()),
+        }],
+        ..Default::default()
+    };
+    know_me::save(&root.join(know_me::FILE_NAME), &state).unwrap();
+    let on = run_with(&ctx, "grokhub-self__know_me_tags", &json!({}));
+    assert_eq!(on.text, "Know me tags:\n- dev: Rust (from Dev tools)");
+    assert!(is_read("know_me_tags"));
     let _ = std::fs::remove_dir_all(root);
 }

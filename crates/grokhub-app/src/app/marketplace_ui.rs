@@ -141,7 +141,7 @@ pub(super) fn grok_google_steps(name: &str) -> [String; 3] {
     [
         "Run grok in a terminal and open /mcps.".to_string(),
         format!("Press i on {name} and sign in with your Google account."),
-        "GrokHub can use it then.".to_string(),
+        format!("{} can use it then.", grokhub_core::brand::product_name()),
     ]
 }
 
@@ -557,7 +557,7 @@ mod tests {
             grok_google_steps("Gmail")[1],
             "Press i on Gmail and sign in with your Google account."
         );
-        assert_eq!(grok_google_steps("Gmail")[2], "GrokHub can use it then.");
+        assert_eq!(grok_google_steps("Gmail")[2], "Loadout can use it then.");
     }
 
     #[test]

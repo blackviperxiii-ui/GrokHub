@@ -377,6 +377,10 @@ pub struct TasteNote {
 pub struct PulseNow {
     pub now_ms: u64,
     pub quiet: bool,
+    /// The brief's hour gate (`crate::rhythm::Rhythm::brief_gate`). `None`:
+    /// the digest's own interval decides. `Some(true)`: post now.
+    /// `Some(false)`: wait for the brief hour.
+    pub brief: Option<bool>,
 }
 
 /// Memory, the brief, returned links, and explicit taste. No transcript dump.
@@ -1406,8 +1410,11 @@ pub fn tick_feed_pulse(
             }
         }
     }
-    let digest_due = pulse.digest_on
-        && (pulse.digest_held || due(pulse.last_digest_ms, pulse.digest_ms, now.now_ms));
+    let on_clock = match now.brief {
+        None => due(pulse.last_digest_ms, pulse.digest_ms, now.now_ms),
+        Some(at_brief_hour) => at_brief_hour,
+    };
+    let digest_due = pulse.digest_on && (pulse.digest_held || on_clock);
     if digest_due && now.quiet {
         if !pulse.digest_held {
             pulse.digest_held = true;
@@ -3905,6 +3912,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 1_000,
                 quiet: true,
+                brief: None,
             },
             material("", &[], &[]),
         );
@@ -3918,6 +3926,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 1_000 + DEFAULT_QUIET_RELEASE_MS,
                 quiet: false,
+                brief: None,
             },
             material("", &[], &[]),
         );
@@ -3950,6 +3959,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 100,
                 quiet: true,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -3964,6 +3974,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 200,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -3986,6 +3997,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 300,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("more F1", &links, &[]), edition),
         );
@@ -3998,6 +4010,46 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "the digest no longer posts a template idea beside it"
         );
         assert!(visible_updates(&cards).is_empty());
+    }
+
+    #[test]
+    fn a_brief_hour_holds_the_digest_until_that_hour() {
+        let links = links_from_research("see https://news.example/f1 today");
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "Race weekend",
+            body: "Qualifying is on Saturday. https://news.example/f1",
+        };
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse {
+            last_expiry_ms: 1,
+            expiry_ms: 10_000,
+            last_quiet_release_ms: 1,
+            quiet_release_ms: 10_000,
+            ..FeedPulse::default()
+        };
+        let at = |brief| PulseNow {
+            now_ms: 50,
+            quiet: false,
+            brief: Some(brief),
+        };
+        let waiting = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            at(false),
+            with_edition(material("F1", &links, &[]), edition),
+        );
+        assert!(!waiting.digest_posted && !waiting.digest_needs_lookup);
+        assert_eq!(pulse.last_digest_ms, 0);
+        let posted = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            at(true),
+            with_edition(material("F1", &links, &[]), edition),
+        );
+        assert!(posted.digest_posted);
+        assert_eq!(pulse.last_digest_ms, 50);
     }
 
     #[test]
@@ -4024,6 +4076,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 50,
                 quiet: false,
+                brief: None,
             },
             with_edition(
                 material("more F1 https://evil.example/phish", &links, &[]),
@@ -4050,6 +4103,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 50,
                 quiet: false,
+                brief: None,
             },
             material("pay the invoice for me", &[], &[]),
         );
@@ -4394,6 +4448,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 80,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -4416,6 +4471,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 20,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -4446,6 +4502,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 30,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("more F1", &links, &taste), edition),
         );
@@ -4478,6 +4535,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 5_000,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -4943,6 +5001,28 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Keys file",
             ),
             (
+                "alert_card",
+                crate::print_alerts::alert_card(
+                    &crate::print_alerts::AlertResult {
+                        kind: crate::print_alerts::AlertKind::Finished,
+                        printer_key: "k1".into(),
+                        status: crate::print_alerts::PrinterStatus {
+                            name: "Shop K2".into(),
+                            kind: crate::print_alerts::PrinterKind::Moonraker,
+                            state: crate::print_alerts::PrintState::Complete,
+                            progress_pct: Some(100.0),
+                            eta_secs: None,
+                            filename: Some("bracket.gcode".into()),
+                            message: None,
+                            camera_path: None,
+                        },
+                        camera_enabled: false,
+                    },
+                    at,
+                ),
+                "Shop K2",
+            ),
+            (
                 "automation_failed_card",
                 automation_failed_card("a1", "Nightly backup", "The disk is full.", at),
                 "Nightly backup",
@@ -5043,6 +5123,95 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "proactive_card",
                 proactive_card(&standup, ProactiveRoute::Prepare, at),
                 "standup prep",
+            ),
+            (
+                "nudge_watcher_card",
+                crate::nudge_watchers::nudge_watcher_card(
+                    &crate::nudge_watchers::detect_gpu_driver(
+                        &crate::nudge_watchers::WatcherSnapshot {
+                            gpu: Some(crate::nudge_watchers::GpuDriverSnap {
+                                gpu_name: "Test GPU".into(),
+                                installed: "1.0".into(),
+                                offered: "2.0".into(),
+                                download_url: "https://example.com/driver".into(),
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("gpu fixture"),
+                    at,
+                ),
+                "Test GPU",
+            ),
+            (
+                "summary_card",
+                {
+                    let mut session = None;
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at,
+                            cpu_temp_c: Some(70.0),
+                            gpu_temp_c: Some(75.0),
+                            cpu_util_pct: Some(40),
+                            gpu_util_pct: Some(85),
+                            cpu_clock_mhz: Some(4000),
+                            gpu_clock_mhz: Some(1800),
+                            game_label: Some("Hades".into()),
+                        },
+                        at,
+                    );
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at + 70_000,
+                            cpu_temp_c: Some(72.0),
+                            gpu_temp_c: Some(78.0),
+                            cpu_util_pct: Some(42),
+                            gpu_util_pct: Some(88),
+                            cpu_clock_mhz: Some(4100),
+                            gpu_clock_mhz: Some(1850),
+                            game_label: Some("Hades".into()),
+                        },
+                        at + 70_000,
+                    );
+                    crate::pc_health::summary_card(
+                        &crate::pc_health::summarize(
+                            session.as_ref().expect("session"),
+                            at + 70_000,
+                        ),
+                        at,
+                    )
+                },
+                "Hades",
+            ),
+            (
+                "build_offer_card",
+                crate::ask_offers::build_offer_card(
+                    &crate::ask_offers::AskCluster {
+                        key: "patch-note@h19".into(),
+                        example: "check patch notes".into(),
+                        count: 3,
+                        peak_hour: 19,
+                        weekday_share_pct: 40,
+                        kind: crate::ask_offers::OfferKind::Automation,
+                    },
+                    at,
+                ),
+                "patch notes",
+            ),
+            (
+                "hobby_path_card",
+                crate::hobby_paths::hobby_path_card(
+                    crate::hobby_paths::HobbyId::Rust,
+                    crate::hobby_paths::next_step(
+                        crate::hobby_paths::HobbyId::Rust,
+                        &crate::hobby_paths::HobbyProgress::default(),
+                    )
+                    .expect("rust step"),
+                    at,
+                ),
+                "Rust",
             ),
         ];
         let links = [CitedLink {
@@ -5177,6 +5346,43 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let upcoming = crate::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: crate::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        };
+        rows.push((
+            "radar_card",
+            upcoming.radar_card(at),
+            "Fake Quest: Frontier",
+        ));
+        let reminder = crate::release_radar::Reminder {
+            name: "Fake Quest: Frontier".into(),
+            date_ms: 1,
+        };
+        rows.push((
+            "out_today_card",
+            crate::release_radar::out_today_card(9, &reminder, at),
+            "Fake Quest: Frontier",
+        ));
+        let companion = crate::game_companion::Companion {
+            game: crate::steam::SteamGame {
+                app_id: 548430,
+                name: "Deep Rock Galactic".into(),
+                last_played: 1,
+                playtime_min: 600,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        };
+        rows.push((
+            "companion_card",
+            companion.companion_card(at),
+            "Deep Rock Galactic",
+        ));
         rows
     }
 
@@ -5515,6 +5721,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 10,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("the harbor", &[], &[]), edition),
         );

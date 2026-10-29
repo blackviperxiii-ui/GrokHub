@@ -1,0 +1,1 @@
+- Pulse: once a day at your usual active hour (or first open), a Start my day Digest pulls together resume, watchers, game sales, and one next step — empty sections stay hidden; each line has a one-tap; Not today dismisses the whole brief.

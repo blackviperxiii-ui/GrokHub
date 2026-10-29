@@ -177,6 +177,7 @@ fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
 fn spike3a_adds_no_nav_page() {
     // Exhaustive on purpose: a new page fails to compile here.
     let pages = [
+        Nav::Home,
         Nav::Chat,
         Nav::Devices,
         Nav::Memory,
@@ -184,6 +185,8 @@ fn spike3a_adds_no_nav_page() {
         Nav::Pulse,
         Nav::Imagine,
         Nav::Skills,
+        Nav::Library,
+        Nav::Objectives,
         Nav::Night,
         Nav::History,
         Nav::Journal,
@@ -194,6 +197,7 @@ fn spike3a_adds_no_nav_page() {
     let named: Vec<&str> = pages
         .iter()
         .map(|nav| match nav {
+            Nav::Home => "home",
             Nav::Chat => "chat",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
@@ -201,6 +205,8 @@ fn spike3a_adds_no_nav_page() {
             Nav::Pulse => "pulse",
             Nav::Imagine => "imagine",
             Nav::Skills => "skills",
+            Nav::Library => "library",
+            Nav::Objectives => "objectives",
             Nav::Night => "night",
             Nav::History => "history",
             Nav::Journal => "journal",
@@ -209,7 +215,7 @@ fn spike3a_adds_no_nav_page() {
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 13);
+    assert_eq!(named.len(), 16);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     std::env::set_var("GROKHUB_CONFIG", &root);

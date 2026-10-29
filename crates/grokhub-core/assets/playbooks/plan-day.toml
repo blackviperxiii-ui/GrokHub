@@ -1,0 +1,50 @@
+# GrokHub playbook: one day plan, nothing booked on its own.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "plan-day"
+name = "Plan the day"
+summary = "Build one clear day plan from what the user said. Never book, schedule, or send anything automatically."
+
+checklist = ["one plan drafted", "nothing booked automatically"]
+backup = "Nothing is changed until a booking step: keep the drafted plan in the reply so it can be revised."
+verify = "There is exactly one plan in the reply, and no calendar event, invite or reminder was created on its own."
+rollback = "If a booking was made by mistake, cancel or delete it once approved and say so."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task", "question"]
+domain = ["planning"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Gather what is already fixed today (meetings, deadlines) and what must fit"
+
+[[phase]]
+name = "Plan"
+tier = "safe"
+
+[[phase.step]]
+name = "Draft one plan for the day in order; times are suggestions only"
+
+[[phase.step]]
+name = "Stop after that one plan; do not book or send anything on your own"
+
+[[phase]]
+name = "Book"
+tier = "risky"
+
+[[phase.step]]
+name = "Create a calendar event, invite or reminder only after approval — never book automatically"

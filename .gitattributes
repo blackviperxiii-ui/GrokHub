@@ -1,0 +1,3 @@
+# Union-merge append-only lists that no Rust compiler reads, so two changes
+# that each add a line both keep theirs. Never use this for source code.
+scripts/deck-shots.list.ps1 merge=union

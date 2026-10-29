@@ -837,6 +837,7 @@ mod tests {
     #[test]
     fn the_episode_adds_no_nav_variant_or_page() {
         let all = [
+            Nav::Home,
             Nav::Chat,
             Nav::Devices,
             Nav::Memory,
@@ -844,6 +845,8 @@ mod tests {
             Nav::Pulse,
             Nav::Imagine,
             Nav::Skills,
+            Nav::Library,
+            Nav::Objectives,
             Nav::Night,
             Nav::History,
             Nav::Journal,
@@ -854,13 +857,16 @@ mod tests {
         // No wildcard: a new Nav variant fails to compile here.
         for n in all {
             match n {
-                Nav::Chat
+                Nav::Home
+                | Nav::Chat
                 | Nav::Devices
                 | Nav::Memory
                 | Nav::Workboard
                 | Nav::Pulse
                 | Nav::Imagine
                 | Nav::Skills
+                | Nav::Library
+                | Nav::Objectives
                 | Nav::Night
                 | Nav::History
                 | Nav::Journal
@@ -869,6 +875,6 @@ mod tests {
                 | Nav::Settings => {}
             }
         }
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 16);
     }
 }

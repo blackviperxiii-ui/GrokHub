@@ -138,8 +138,10 @@ pub(super) fn memory_dream_text(config_dir: &std::path::Path) -> String {
     use grokhub_core::what_changed as wc;
     match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
         Some((_, text)) => wc::with_block(&wc::from_dream(&text), &text),
-        None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode."
-            .into(),
+        None => format!(
+            "No dream yet. {} dreams once a night after the review, in memory repo mode.",
+            grokhub_core::brand::product_name()
+        ),
     }
 }
 

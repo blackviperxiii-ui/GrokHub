@@ -9,11 +9,11 @@
 
 id = "code-dev"
 name = "Code changes"
-summary = "Read the code and run the tests before editing, change one thing at a time, and run the build and tests after each change."
+summary = "Reproduce first, make the smallest change, prove it with tests, then give a short summary."
 
-checklist = ["read before edit", "it builds", "tests pass"]
+checklist = ["reproduced", "smallest change", "tests pass", "summary given"]
 backup = "Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own."
-verify = "After each change, build and run the tests that cover it; a change is done only when they pass."
+verify = "After each change, build and run the tests that cover it; a change is done only when they pass and a short summary is ready."
 rollback = "Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed."
 give_up = [
   "a hard approval was refused",
@@ -26,12 +26,15 @@ intent = ["task", "repair"]
 domain = ["code"]
 
 [[phase]]
-name = "Look"
+name = "Reproduce"
 tier = "read_only"
 
 [[phase.step]]
 name = "See what is already changed"
 run = "git status"
+
+[[phase.step]]
+name = "Reproduce the failure or the ask before editing anything"
 
 [[phase.step]]
 name = "Read the files and the tests around the change"
@@ -44,7 +47,7 @@ name = "Change"
 tier = "safe"
 
 [[phase.step]]
-name = "Make one small edit at a time"
+name = "Make the smallest edit that fixes it"
 
 [[phase.step]]
 name = "Add or update a test for the change"
@@ -52,12 +55,18 @@ name = "Add or update a test for the change"
 [[phase.step]]
 name = "Build and run the tests after each edit"
 
+[[phase.step]]
+name = "Give a short summary of the change and how it was checked"
+
 [[phase]]
 name = "Bigger changes"
 tier = "risky"
 
 [[phase.step]]
 name = "Delete files or folders the change no longer needs"
+
+[[phase.step]]
+name = "Before ship or release: load qa-walkthrough (and av-qa-walkthrough when audio, video, capture or streaming changed); before done run a verification step; multi-step work keeps follow-through"
 
 [[phase.step]]
 name = "Push, publish or deploy the change"

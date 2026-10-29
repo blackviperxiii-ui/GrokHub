@@ -32,20 +32,7 @@ fn sync_writes_a_local_hub_snapshot() {
     assert!(cabin.sync_rx.is_some());
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
-    // Windows ACL + antivirus can make the sync worker's first secrets/app.json
-    // writes take longer than a tight 2s poll. Wait for the channel, not a wall clock.
-    let start = std::time::Instant::now();
-    let budget = std::time::Duration::from_secs(8);
-    while cabin.sync_rx.is_some() && start.elapsed() < budget {
-        cabin.poll_sync();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(
-        cabin.sync_rx.is_none(),
-        " /sync must land the hub snapshot; status={:?} after {:?}",
-        cabin.status,
-        start.elapsed()
-    );
+    wait_sync(&mut cabin);
     // SY-03: one result line in the chat; the pane stays on Chat.
     assert!(matches!(cabin.nav, Nav::Chat), "nav={:?}", cabin.nav);
     assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
@@ -110,11 +97,20 @@ fn pair_test_peer(cabin: &Cabin, id: &str) {
 }
 
 fn wait_sync(cabin: &mut Cabin) {
+    // Sync waits for the full snapshot's disk writes before egress. Drain that
+    // FIFO job first so Windows ACL/antivirus latency doesn't consume the poll budget.
+    cabin.persist_svc.flush();
     let start = std::time::Instant::now();
     while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(8) {
         cabin.poll_sync();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    assert!(
+        cabin.sync_rx.is_none(),
+        "/sync must land the hub snapshot; status={:?} after {:?}",
+        cabin.status,
+        start.elapsed()
+    );
 }
 
 // Spike-4a: chats and memory to a not-yet-granted destination are hard Send.
@@ -398,7 +394,7 @@ fn permissions_page_groups_trust_rows_and_rules_with_a_ghost_revoke() {
     };
     let order = [
         "Leaving this computer",
-        super::privacy_ui::PRIVACY_NOTE,
+        super::privacy_ui::PRIVACY_NOTE.as_str(),
         "Sync to paired computers",
         "Allow",
         "Command rules",
@@ -578,8 +574,10 @@ fn aged_slash_results_never_render_in_the_thought_frame() {
         let mut drawn = false;
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                drawn =
-                    super::chat_ui::paint_chat_block_with(ui, view, true, true, fold, true).drawn;
+                drawn = super::chat_ui::paint_chat_block_with(
+                    ui, view, true, true, fold, true, false, 1,
+                )
+                .drawn;
             });
         });
         let mut texts: Vec<(String, bool)> = Vec::new();
@@ -690,7 +688,7 @@ fn aged_model_reasoning_still_collapses() {
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 painted = Some(super::chat_ui::paint_chat_block_with(
-                    ui, thought, true, true, fold, true,
+                    ui, thought, true, true, fold, true, false, 1,
                 ));
             });
         });
@@ -863,7 +861,7 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
     let ys: Vec<f32> = [
         "Leaving this computer",
         "Sync to paired computers",
-        "What GrokHub can read",
+        "What Loadout can read",
         super::scope_ui::SCOPES_NOTE,
         "Files in a folder",
         "Installed apps",
@@ -899,11 +897,11 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
     );
     assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
     assert!(
-        p.has("Off. Not read yet: GrokHub has no calendar reader, so allowing it reads nothing today."),
+        p.has("Off. Not read yet: Loadout has no calendar reader, so allowing it reads nothing today."),
         "plain hints"
     );
     assert!(
-        p.has("Off. Not read yet: GrokHub has no mail reader, so allowing it reads nothing today."),
+        p.has("Off. Not read yet: Loadout has no mail reader, so allowing it reads nothing today."),
         "the hint says mail is not read yet"
     );
     // SB-04: the folder row offers the native dialog next to the typed path.
@@ -948,7 +946,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
     assert_eq!(
         cabin.status,
-        "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time."
+        "Installed apps allowed. Loadout learns from it on this computer. Revoke it here any time."
     );
     let ledger = hx::ConsentLedger::load(&root);
     let g = ledger
@@ -974,7 +972,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
         .iter()
         .any(|t| t.0.starts_with("On since ") && t.0.ends_with("how often you open them.")));
     assert!(
-        p.has("Off. Not read yet: GrokHub has no mail reader, so allowing it reads nothing today.")
+        p.has("Off. Not read yet: Loadout has no mail reader, so allowing it reads nothing today.")
     );
 
     // A folder: typed, then clicked. Home itself is refused even with a click.
@@ -992,14 +990,14 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
             p.has(&cabin.status),
             "the refusal shows in Settings, not only on the hidden status line"
         );
-        assert!(p.at(&cabin.status).y > p.at("What GrokHub can read").y);
+        assert!(p.at(&cabin.status).y > p.at("What Loadout can read").y);
     }
     cabin.harness.scope_folder = "/srv/notes/".into();
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
     assert_eq!(
         cabin.status,
-        "Files in notes allowed. GrokHub learns from it on this computer. Revoke it here any time."
+        "Files in notes allowed. Loadout learns from it on this computer. Revoke it here any time."
     );
     assert!(cabin.harness.scope_folder.is_empty());
     // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
@@ -1418,7 +1416,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
     }
     assert_eq!(report.matches("Grants").count(), 1, "one heading: {report}");
     assert!(
-        !report.contains(super::scope_ui::SCOPES_HEAD),
+        !report.contains(super::scope_ui::SCOPES_HEAD.as_str()),
         "no second grants heading: {report}"
     );
     assert!(

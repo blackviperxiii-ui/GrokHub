@@ -605,7 +605,7 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
     assert_eq!(sent.len(), 1, "{sent:?}");
     let body = &sent[0].body;
     assert!(
-        body.contains("Earlier in this chat (before GrokHub ran it natively):"),
+        body.contains("Earlier in this chat (before Loadout ran it natively):"),
         "{body}"
     );
     assert!(body.contains("User: plan the harbor walk"), "{body}");
@@ -684,7 +684,7 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
     assert_eq!(sent.len(), 1, "{sent:?}");
     let body = &sent[0].body;
     assert!(
-        body.contains("Earlier in this chat (before GrokHub ran it natively):"),
+        body.contains("Earlier in this chat (before Loadout ran it natively):"),
         "{body}"
     );
     assert!(body.contains("User: plan the harbor walk"), "{body}");

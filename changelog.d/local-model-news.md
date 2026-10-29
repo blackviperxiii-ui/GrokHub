@@ -1,0 +1,1 @@
+- Pulse can suggest a bigger local model when one in GrokHub's checked catalog now fits this PC, with a button that opens the model picker on it, and can link new official GGUF releases on Hugging Face that would fit with headroom. Opt-in under Settings → Pulse → Sources; it checks once a week, and only catalog models download.

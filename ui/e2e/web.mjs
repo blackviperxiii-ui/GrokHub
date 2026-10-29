@@ -263,7 +263,7 @@ async function main() {
     check(STATE.loved, "Love never reached the desktop");
     console.log("pulse: post with its image shown, Love sent");
 
-    await page.getByRole("button", { name: "Ideas", exact: true }).click();
+    await page.getByRole("button", { name: "For You", exact: true }).click();
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
     await idea.getByRole("button", { name: "More" }).click();
     const items = await idea.getByRole("menuitem").allTextContents();

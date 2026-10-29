@@ -500,8 +500,8 @@ pub fn tier_meta(id: &str) -> ModelMeta {
         context_length: Some(ctx_cap().max(c.context)),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
-        // `serve` returns empty `calls` today — never claim tools from eval pass rate.
-        tool_calling: Some(false),
+        // Chat turns can return OpenAI-compatible tool_calls (web_search / web_fetch).
+        tool_calling: Some(true),
         prices: Prices {
             prompt: Some(0),
             cached: Some(0),
@@ -552,6 +552,32 @@ pub trait LocalRuntime: Send + Sync {
     ) -> Result<String, String> {
         let _ = (messages, on_delta);
         Err("local chat is not available on this runtime".into())
+    }
+
+    /// Chat with function tools (cabin web_search / web_fetch). Default falls
+    /// back to plain [`chat_stream`] and returns no tool calls.
+    fn chat_tools(
+        &self,
+        req: &crate::client::ResponsesRequest,
+        cancel: &CancelToken,
+    ) -> Result<TurnOutput, String> {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        let (text, _) = super::live::last_user_text(&req.input);
+        let mut deltas = String::new();
+        let out = self.chat_stream(
+            &[ChatMessage {
+                role: "user".into(),
+                content: text,
+            }],
+            &mut |d| deltas.push_str(d),
+        )?;
+        let text = if out.is_empty() { deltas } else { out };
+        Ok(TurnOutput {
+            text,
+            ..Default::default()
+        })
     }
 }
 
@@ -665,6 +691,38 @@ const CLASS_LABELS: &[&str] = &["routine", "needs_attention", "sensitive"];
 /// background step first waits (up to [`HEAVY_WAIT`]) for RampUp; Stop ends the wait.
 pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput, ClientError> {
     serve_within(class, text, HEAVY_WAIT, cancel)
+}
+
+/// Chat path that keeps function tools (cabin `web_search` / `web_fetch`) so the
+/// agent loop can run them and round-trip results. Background classes stay
+/// text-only via [`serve`].
+pub fn serve_request(
+    class: &str,
+    req: &crate::client::ResponsesRequest,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    let (text, _) = super::live::last_user_text(&req.input);
+    let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
+    if !matches!(class_norm, "chat:quick" | "chat:default" | "desktop:soft") {
+        return serve(class, &text, cancel);
+    }
+    let tokens = (text.len() as u64).div_ceil(4);
+    if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
+        match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
+            None => return Err(ClientError::Cancelled),
+            Some(Level::Unload) => {
+                return Err(ClientError::Protocol(LOCAL_PAUSED_MSG.into()));
+            }
+            Some(_) => {}
+        }
+    }
+    let Some(rt) = runtime() else {
+        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+    };
+    if req.tools.is_empty() {
+        return serve_within(class, &text, HEAVY_WAIT, cancel);
+    }
+    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
 }
 
 pub(crate) fn serve_within(

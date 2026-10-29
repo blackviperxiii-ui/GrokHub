@@ -10,13 +10,15 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::route::{local_autoconfig, local_gov, local_sidecar};
+use grokhub_agent::route::{local_autoconfig, local_gov, local_sidecar, local_spec};
 use grokhub_core::local_discover::{self, FoundModel, Source};
 use grokhub_core::local_governor::{Level, Rules};
 use grokhub_core::local_picker::{self, BenchCache, Bucket, CpuSimd, Memory, Pick, Profile};
 use grokhub_core::local_profile::{self as lp, Gpu};
 use grokhub_core::local_setup::{self as ls, LocalModel};
 use serde::{Deserialize, Serialize};
+
+use crate::local_engine::{self, DraftOffer, DraftProgress, EngineInfo};
 
 pub const FILE: &str = "local_ai.json";
 
@@ -231,6 +233,19 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// Manual draft On/Off/Auto → the sidecar's draft preference.
+pub fn apply_draft_pref(config: &LocalAiConfig) {
+    if config.mode != Mode::Manual {
+        local_spec::prefer_draft(None);
+        return;
+    }
+    match config.manual.draft.as_str() {
+        "on" => local_spec::prefer_draft(Some(true)),
+        "off" => local_spec::prefer_draft(Some(false)),
+        _ => local_spec::prefer_draft(None),
+    }
+}
+
 /// Saves the choices and the governor's rules, and applies the overrides.
 pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
@@ -238,6 +253,7 @@ pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let rules = serde_json::to_string_pretty(&config.rules()).map_err(|e| e.to_string())?;
     write(&config_dir.join("local").join("governor.json"), &rules)?;
     local_autoconfig::set_overrides(config.overrides());
+    apply_draft_pref(config);
     Ok(())
 }
 
@@ -538,6 +554,14 @@ pub struct LocalAiView {
     pub picker: Picker,
     pub limits: Vec<String>,
     pub max_threads: u32,
+    /// Pinned llama.cpp install: Get engine when missing.
+    pub engine: EngineInfo,
+    /// Catalog draft pair for the selected model, when not on disk yet.
+    pub draft_offer: Option<DraftOffer>,
+    /// Every catalog model that still needs its draft pair installed.
+    pub draft_offers: Vec<DraftOffer>,
+    /// In-flight draft download, when one is running.
+    pub draft_progress: Option<DraftProgress>,
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
@@ -699,6 +723,7 @@ pub fn max_threads() -> u32 {
 /// Everything the page shows. Runs the hardware readers.
 pub fn view(config_dir: &Path) -> LocalAiView {
     let config = load(config_dir).clamped(max_threads());
+    apply_draft_pref(&config);
     let machine = read_machine(config_dir);
     let p = machine.profile();
     let bench = BenchCache::new();
@@ -712,9 +737,18 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         local_gov::level(),
         local_gov::reason(),
     );
+    let selected = if config.local_model.selected.is_empty() {
+        picker.selected.as_str()
+    } else {
+        config.local_model.selected.as_str()
+    };
     let env = |k: &str| std::env::var(k).ok();
     LocalAiView {
         limits: limits(&machine, std::env::consts::OS, &env),
+        engine: local_engine::engine_info(config_dir),
+        draft_offer: local_engine::draft_offer(config_dir, selected),
+        draft_offers: local_engine::draft_offers(config_dir),
+        draft_progress: local_engine::draft_progress(),
         config,
         status,
         picker,
@@ -743,7 +777,10 @@ pub fn speed_test(config_dir: &Path) -> Result<String, String> {
     if local_sidecar::resolve_paths(config_dir).is_none() {
         return Err("Set up a local engine and model first, then run the speed test.".into());
     }
-    grokhub_agent::route::local_bench::run_for_ui()
+    let out = grokhub_agent::route::local_bench::run_for_ui()?;
+    // The bench clears the in-memory force flag; put Manual draft back.
+    apply_draft_pref(&load(config_dir));
+    Ok(out)
 }
 
 /// Saves the page's choices, clamped, and reads the page again.
