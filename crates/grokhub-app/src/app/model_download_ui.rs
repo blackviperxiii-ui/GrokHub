@@ -7,6 +7,7 @@
 //! (`local_draft`) offers it as a second download into `models/drafters/`;
 //! it is never fetched on its own and never replaces the model GrokHub runs.
 
+#[cfg(not(test))]
 use std::io::Read;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
@@ -61,9 +62,12 @@ pub(super) fn drafter_done_status(m: &LocalModel) -> String {
     )
 }
 
-/// Hugging Face over HTTPS. A download carries none of your data.
+/// Hugging Face over HTTPS. A download carries none of your data. Tests
+/// record starts instead, so it is built only outside them.
+#[cfg(not(test))]
 struct HfFetch;
 
+#[cfg(not(test))]
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
@@ -72,6 +76,7 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+#[cfg(not(test))]
 impl Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
         crate::xai::egress_ok(url, &[])?;
@@ -177,6 +182,63 @@ impl Cabin {
         }
         #[cfg(not(test))]
         self.start_model_download_with(m, models_dir(), Box::new(HfFetch));
+    }
+
+    /// `start_model_download` for a draft model, into its own folder.
+    fn start_drafter_download(&mut self, d: &'static LocalModel) {
+        #[cfg(test)]
+        {
+            tests::STARTED.with(|s| s.borrow_mut().push(d.id));
+        }
+        #[cfg(not(test))]
+        self.start_model_download_with(d, drafters_dir(), Box::new(HfFetch));
+    }
+
+    /// The first click on a fresh download: ask, with the drive's free space
+    /// read now rather than at launch.
+    fn ask_download(&mut self, m: &'static LocalModel) {
+        self.setup.confirm_dl = Some(m.id);
+        self.setup.confirm_free_mb = free_disk_now();
+    }
+
+    /// The confirm for `m` when its Download was clicked once: the size and
+    /// free disk, then Download or Not now. `false` when `m` isn't asking.
+    fn ui_download_confirm(
+        &mut self,
+        ui: &mut egui::Ui,
+        m: &'static LocalModel,
+        drafter: bool,
+    ) -> bool {
+        if self.setup.confirm_dl != Some(m.id) {
+            return false;
+        }
+        let free = self
+            .setup
+            .confirm_free_mb
+            .or(self.setup.hw.as_ref().map(|hw| hw.free_disk_mb));
+        let (line, fits) = download_confirm(m, free);
+        crate::cards::settings_note(ui, &line);
+        ui.horizontal(|ui| {
+            if fits
+                && crate::cards::white_pill(
+                    ui,
+                    &format!("Download {}", ls::size_label(m.download_mb)),
+                )
+            {
+                self.setup.confirm_dl = None;
+                self.setup.confirm_free_mb = None;
+                if drafter {
+                    self.start_drafter_download(m);
+                } else {
+                    self.start_model_download(m);
+                }
+            }
+            if crate::cards::ghost_pill(ui, "Not now") {
+                self.setup.confirm_dl = None;
+                self.setup.confirm_free_mb = None;
+            }
+        });
+        true
     }
 
     pub(super) fn start_model_download_with(
@@ -304,24 +366,7 @@ impl Cabin {
         };
         // A fresh download asks once, with its size and the free disk; a resume
         // was already agreed to.
-        if part.is_none() && self.setup.confirm_dl == Some(m.id) {
-            let free = self.setup.hw.as_ref().map(|hw| hw.free_disk_mb);
-            let (line, fits) = download_confirm(m, free);
-            crate::cards::settings_note(ui, &line);
-            ui.horizontal(|ui| {
-                if fits
-                    && crate::cards::white_pill(
-                        ui,
-                        &format!("Download {}", ls::size_label(m.download_mb)),
-                    )
-                {
-                    self.setup.confirm_dl = None;
-                    self.start_model_download(m);
-                }
-                if crate::cards::ghost_pill(ui, "Not now") {
-                    self.setup.confirm_dl = None;
-                }
-            });
+        if part.is_none() && self.ui_download_confirm(ui, m, false) {
             return;
         }
         ui.horizontal(|ui| {
@@ -329,7 +374,7 @@ impl Cabin {
                 if part.is_some() {
                     self.start_model_download(m);
                 } else {
-                    self.setup.confirm_dl = Some(m.id);
+                    self.ask_download(m);
                 }
             }
             if part.is_some() && crate::cards::ghost_pill(ui, "Discard") {
@@ -375,7 +420,12 @@ impl Cabin {
             return;
         };
         crate::cards::settings_note(ui, &drafter_offer_line(d));
-        let label = match md::partial_bytes(&drafters_dir(), d) {
+        let part = md::partial_bytes(&drafters_dir(), d);
+        // The draft model is a download too: same size and free-disk check.
+        if part.is_none() && self.ui_download_confirm(ui, d, true) {
+            return;
+        }
+        let label = match part {
             Some(b) => format!(
                 "Resume {} ({})",
                 d.name,
@@ -387,7 +437,11 @@ impl Cabin {
             ),
         };
         if crate::cards::ghost_pill(ui, &label) {
-            self.start_model_download_with(d, drafters_dir(), Box::new(HfFetch));
+            if part.is_some() {
+                self.start_drafter_download(d);
+            } else {
+                self.ask_download(d);
+            }
         }
     }
 
@@ -420,6 +474,22 @@ impl Cabin {
 
 /// The confirm line before a download, and whether it fits on the drive.
 /// `free_mb` is `None` until the hardware read lands (or when it failed).
+/// Free disk on the drive that holds the models folder, read now. Tests use
+/// `tests::FREE_NOW` instead of the CI runner's disk.
+fn free_disk_now() -> Option<u64> {
+    #[cfg(test)]
+    {
+        tests::FREE_NOW.with(|f| f.get())
+    }
+    #[cfg(not(test))]
+    {
+        // The models folder may not exist yet; its nearest existing parent is on the same drive.
+        let dir = models_dir();
+        let at = dir.ancestors().find(|p| p.is_dir())?;
+        super::setup_wizard::free_disk_mb(at)
+    }
+}
+
 pub(super) fn download_confirm(m: &LocalModel, free_mb: Option<u64>) -> (String, bool) {
     let size = ls::size_label(m.download_mb);
     match free_mb.filter(|f| *f > 0) {
@@ -453,6 +523,9 @@ mod tests {
         /// Models `start_model_download` was asked for in this test thread.
         pub(super) static STARTED: std::cell::RefCell<Vec<&'static str>> =
             const { std::cell::RefCell::new(Vec::new()) };
+        /// What `free_disk_now` reads in this test thread.
+        pub(super) static FREE_NOW: std::cell::Cell<Option<u64>> =
+            const { std::cell::Cell::new(None) };
     }
 
     #[test]
@@ -585,6 +658,138 @@ mod tests {
         frame(&mut app, Some(at(&texts, &format!("Download {size}"))));
         assert_eq!(app.setup.confirm_dl, None);
         assert_eq!(STARTED.with(|s| s.take()), vec!["confirm-test-model"]);
+    }
+
+    /// One headless frame of `paint`, clicking at `click` first; the painted
+    /// text with where it landed.
+    fn paint_frame(
+        ctx: &egui::Context,
+        click: Option<egui::Pos2>,
+        paint: impl FnMut(&mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.job.text.clone(), shape.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        if let Some(at) = click {
+            raw.events = vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+        }
+        let out = crate::theme::test_pass(ctx, raw, paint);
+        let mut texts = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut texts);
+        }
+        texts
+    }
+
+    fn centre_of(texts: &[(String, egui::Rect)], want: &str) -> egui::Pos2 {
+        texts
+            .iter()
+            .find(|(t, _)| t == want)
+            .map(|(_, r)| r.center())
+            .unwrap_or_else(|| panic!("{want} missing: {texts:?}"))
+    }
+
+    #[test]
+    fn the_confirm_reads_the_free_disk_when_it_opens() {
+        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
+        let mut app = Cabin::quiet_for_test();
+        // Launch saw plenty of room; the drive has since filled up.
+        app.setup.hw = Some(ls::Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 16_384,
+            free_disk_mb: 200_000,
+        });
+        FREE_NOW.with(|f| f.set(Some(1_000)));
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let size = ls::size_label(e2b.download_mb);
+        let texts = paint_frame(&ctx, None, |ui| app.ui_download_button(ui, e2b));
+        let first = centre_of(&texts, &format!("Download {} ({size})", e2b.name));
+        paint_frame(&ctx, Some(first), |ui| app.ui_download_button(ui, e2b));
+        FREE_NOW.with(|f| f.set(None));
+        assert_eq!(app.setup.confirm_free_mb, Some(1_000));
+        let texts = paint_frame(&ctx, None, |ui| app.ui_download_button(ui, e2b));
+        let want = format!(
+            "{} needs {} free, and this drive has 1000 MB. Free up space or pick a smaller model.",
+            e2b.name,
+            ls::size_label(ls::disk_needed_mb(e2b))
+        );
+        assert!(texts.iter().any(|(t, _)| *t == want), "{texts:?}");
+        assert!(
+            !texts.iter().any(|(t, _)| *t == format!("Download {size}")),
+            "no Download when it won't fit: {texts:?}"
+        );
+        // Not now forgets the reading, so the next ask reads again.
+        paint_frame(&ctx, Some(centre_of(&texts, "Not now")), |ui| {
+            app.ui_download_button(ui, e2b)
+        });
+        assert_eq!(app.setup.confirm_free_mb, None);
+        assert!(STARTED.with(|s| s.take()).is_empty());
+    }
+
+    #[test]
+    fn a_draft_model_asks_before_it_downloads_too() {
+        let g12 = ls::model_by_id("gemma-4-12b-it-q4_k_m").expect("12B");
+        // The test home has no draft model yet, so the 12B is offered one.
+        let d = ld::offer(g12.file, &drafters_dir()).expect("a draft model for the 12B");
+        assert_eq!(md::partial_bytes(&drafters_dir(), d), None);
+        let mut app = Cabin::quiet_for_test();
+        FREE_NOW.with(|f| f.set(Some(500_000)));
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let size = ls::size_label(d.download_mb);
+        let offer = |app: &mut Cabin, click| {
+            paint_frame(&ctx, click, |ui| app.ui_drafter_offer_for(ui, g12.file))
+        };
+        let texts = offer(&mut app, None);
+        let install = centre_of(&texts, &format!("Install and run draft model ({size})"));
+        offer(&mut app, Some(install));
+        FREE_NOW.with(|f| f.set(None));
+        assert_eq!(app.setup.confirm_dl, Some(d.id));
+        assert!(
+            STARTED.with(|s| s.borrow().is_empty()),
+            "one click only asks"
+        );
+        let texts = offer(&mut app, None);
+        let ask = format!(
+            "Download {} ({size})? This drive has 488.3 GB free.",
+            d.name
+        );
+        assert!(texts.iter().any(|(t, _)| *t == ask), "{texts:?}");
+        offer(
+            &mut app,
+            Some(centre_of(&texts, &format!("Download {size}"))),
+        );
+        assert_eq!(app.setup.confirm_dl, None);
+        assert_eq!(STARTED.with(|s| s.take()), vec![d.id]);
     }
 
     struct FakeHf(Vec<u8>);
