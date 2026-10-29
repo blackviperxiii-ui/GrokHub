@@ -24,7 +24,7 @@ pub const SNOOZE_DAYS: u64 = 3;
 /// Files looked at (by modified time) under one important folder.
 const WALK_MAX: usize = 20_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackupTool {
     Timeshift,
     Snapper,
@@ -142,6 +142,10 @@ pub struct NudgeState {
     pub snoozed_until_ms: u64,
     #[serde(default)]
     pub last_shown_ms: u64,
+    /// The reminder on the Pulse post, so its one-taps come back after a
+    /// restart. Snooze clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reminder: Option<Reminder>,
 }
 
 impl NudgeState {
@@ -168,7 +172,7 @@ pub fn save(config_dir: &Path, state: &NudgeState) -> Result<(), String> {
 }
 
 /// One reminder: what is at risk, and the one-taps that help.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reminder {
     pub lines: Vec<String>,
     /// The repo to push: (path, branch).
@@ -234,7 +238,8 @@ pub fn reminder(
                     t.tool.name(),
                     plural(days(now_ms - t.last_ms), "day")
                 ),
-                _ => format!("{name} changed and no backup tool was found."),
+                Some(t) => format!("{name} changed and {} has no snapshots yet.", t.tool.name()),
+                None => format!("{name} changed and no backup tool was found."),
             });
         }
     }
@@ -417,6 +422,29 @@ mod tests {
             reminder(&[], &[], &old_only, NOW).unwrap().lines,
             vec!["No Snapper snapshot for 15 days.".to_string()]
         );
+        let never = [ToolRun {
+            tool: BackupTool::FileHistory,
+            last_ms: 0,
+        }];
+        assert_eq!(
+            reminder(&[], &folders[..1], &never, NOW).unwrap().lines,
+            vec!["Documents changed and File History has no snapshots yet.".to_string()],
+            "a tool with no snapshot is not 'no tool'"
+        );
+    }
+
+    #[test]
+    fn the_reminder_round_trips_through_the_state_file() {
+        let dir = tmp("state");
+        let mut state = NudgeState {
+            last_shown_ms: NOW,
+            ..Default::default()
+        };
+        state.reminder = reminder(&[repo("my-app", 2, 4)], &[], &[], NOW);
+        state.reminder.as_mut().unwrap().tool = Some(BackupTool::Snapper);
+        save(&dir, &state).unwrap();
+        assert_eq!(load(&dir), state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
