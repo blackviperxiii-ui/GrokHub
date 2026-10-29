@@ -8,7 +8,9 @@ Modes (argv[1]):
 
 Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID (Notion API 2025-09-03 data source id),
 GITHUB_TOKEN, GITHUB_REPOSITORY, CARDS_PROJECT (default GrokHub),
-COPILOT_ASSIGN_TOKEN (optional user token; GITHUB_TOKEN may not assign Copilot).
+COPILOT_ASSIGN_TOKEN (optional user token; GITHUB_TOKEN may not assign Copilot),
+JULES_API_KEY (optional; Jules sessions are started through the Jules API,
+the 'jules' label alone does not start Jules).
 """
 import json
 import os
@@ -174,6 +176,74 @@ def assign_copilot(number):
         return False
 
 
+JULES = "https://jules.googleapis.com/v1alpha"
+JULES_MARK = "<!-- jules-session: "
+JULES_DONE = {"COMPLETED", "FAILED", "CANCELLED", "STATE_UNSPECIFIED"}
+
+
+def jules(path, method="GET", body=None):
+    return req(JULES + path, method, body, {"X-Goog-Api-Key": os.environ["JULES_API_KEY"]})
+
+
+def jules_active():
+    source = f"sources/github/{REPO}"
+    active, token = 0, ""
+    for _ in range(10):
+        res = jules("/sessions?pageSize=100" + (f"&pageToken={token}" if token else ""))
+        for s in res.get("sessions", []):
+            if (s.get("sourceContext") or {}).get("source") == source and s.get("state") not in JULES_DONE:
+                active += 1
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return active
+
+
+def start_jules_sessions(open_prs):
+    """Start one Jules session per open 'jules' issue that has none, cap 2."""
+    if not os.environ.get("JULES_API_KEY"):
+        print("JULES_API_KEY is not set; Jules sessions skipped.")
+        return
+    if REPO.split("/")[-1].lower() == "genesis":
+        return
+    try:
+        busy = max(jules_active(), coder_load(open_prs, {})["jules"])
+    except RuntimeError as e:
+        print(f"jules list failed: {e}")
+        return
+    issues = gh_all(f"/repos/{REPO}/issues?state=open&labels=jules&sort=created&direction=asc")
+    for issue in issues:
+        if "pull_request" in issue:
+            continue
+        comments = gh_all(f"/repos/{REPO}/issues/{issue['number']}/comments")
+        if any(JULES_MARK in (c.get("body") or "") for c in comments):
+            continue
+        if busy >= CAP:
+            print(f"jules at cap {CAP}; #{issue['number']} left queued")
+            return
+        body = issue.get("body") or ""
+        if "## Rules" not in body:
+            body += "\n\n" + RULES
+        prompt = (f"Implement GitHub issue #{issue['number']} in {REPO}: {issue['title']}\n\n{body}\n\n"
+                  f"Open one PR against beta whose body says Closes #{issue['number']}.")
+        try:
+            sess = jules("/sessions", "POST", {
+                "prompt": prompt[:30000],
+                "title": f"#{issue['number']} {issue['title']}"[:200],
+                "sourceContext": {"source": f"sources/github/{REPO}",
+                                  "githubRepoContext": {"startingBranch": "beta"}},
+                "automationMode": "AUTO_CREATE_PR",
+            })
+        except RuntimeError as e:
+            print(f"jules session failed for #{issue['number']}: {e}")
+            return
+        sid = sess.get("id") or sess.get("name", "").split("/")[-1]
+        gh(f"/repos/{REPO}/issues/{issue['number']}/comments", "POST",
+           {"body": f"Started Jules session `{sid}` (base beta).\n\n{JULES_MARK}{sid} -->"})
+        print(f"#{issue['number']} -> jules session {sid}")
+        busy += 1
+
+
 def dispatch_claude(number):
     try:
         gh(f"/repos/{REPO}/actions/workflows/claude.yml/dispatches", "POST",
@@ -216,6 +286,7 @@ def sync():
         if coder == "claude":
             dispatch_claude(issue["number"])
         set_card(card["id"], "Doing", issue["html_url"])
+    start_jules_sessions(open_prs)
     # Sweep: closed-as-completed card issues whose card is not Done yet.
     for pid, issue in closed_issues.items():
         if issue.get("state_reason") == "completed":
@@ -253,6 +324,8 @@ def done():
 
 if __name__ == "__main__":
     if not os.environ.get("NOTION_TOKEN"):
-        print("NOTION_TOKEN is not set; nothing to do.")
+        print("NOTION_TOKEN is not set; Notion steps skipped.")
+        if (sys.argv[1:] or ["sync"])[0] == "sync" and os.environ.get("JULES_API_KEY"):
+            start_jules_sessions(gh_all(f"/repos/{REPO}/pulls?state=open"))
         sys.exit(0)
     {"sync": sync, "done": done}[sys.argv[1] if len(sys.argv) > 1 else "sync"]()
