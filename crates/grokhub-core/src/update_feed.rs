@@ -5144,6 +5144,48 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Test GPU",
             ),
             (
+                "summary_card",
+                {
+                    let mut session = None;
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at,
+                            cpu_temp_c: Some(70.0),
+                            gpu_temp_c: Some(75.0),
+                            cpu_util_pct: Some(40),
+                            gpu_util_pct: Some(85),
+                            cpu_clock_mhz: Some(4000),
+                            gpu_clock_mhz: Some(1800),
+                            game_label: Some("Hades".into()),
+                        },
+                        at,
+                    );
+                    crate::pc_health::note_sample(
+                        &mut session,
+                        crate::SensorSample {
+                            at_ms: at + 70_000,
+                            cpu_temp_c: Some(72.0),
+                            gpu_temp_c: Some(78.0),
+                            cpu_util_pct: Some(42),
+                            gpu_util_pct: Some(88),
+                            cpu_clock_mhz: Some(4100),
+                            gpu_clock_mhz: Some(1850),
+                            game_label: Some("Hades".into()),
+                        },
+                        at + 70_000,
+                    );
+                    crate::pc_health::summary_card(
+                        &crate::pc_health::summarize(
+                            session.as_ref().expect("session"),
+                            at + 70_000,
+                        ),
+                        at,
+                    )
+                },
+                "Hades",
+            ),
+            (
                 "build_offer_card",
                 crate::ask_offers::build_offer_card(
                     &crate::ask_offers::AskCluster {
@@ -5304,6 +5346,28 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let upcoming = crate::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: crate::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        };
+        rows.push((
+            "radar_card",
+            upcoming.radar_card(at),
+            "Fake Quest: Frontier",
+        ));
+        let reminder = crate::release_radar::Reminder {
+            name: "Fake Quest: Frontier".into(),
+            date_ms: 1,
+        };
+        rows.push((
+            "out_today_card",
+            crate::release_radar::out_today_card(9, &reminder, at),
+            "Fake Quest: Frontier",
+        ));
         let companion = crate::game_companion::Companion {
             game: crate::steam::SteamGame {
                 app_id: 548430,

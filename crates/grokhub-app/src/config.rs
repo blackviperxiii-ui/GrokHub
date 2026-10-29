@@ -534,6 +534,12 @@ pub struct AppConfig {
     /// Settings → Behavior → Screenshot explain (Command Centre card 49).
     #[serde(default)]
     pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
+    pub pc_health: grokhub_core::PcHealthSettings,
     /// Settings → Behavior: offer to automate repeated local asks.
     #[serde(
         default,
@@ -812,6 +818,7 @@ impl Default for AppConfig {
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
             screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
             ask_offers: grokhub_core::AskOfferSettings::default(),
             print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
@@ -1235,6 +1242,24 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
     }
 
     #[test]

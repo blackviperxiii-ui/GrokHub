@@ -47,7 +47,7 @@ fn open_steam_id(dir: &Path) -> Option<u64> {
 }
 
 /// One keyless GET through the source fetcher (public-only, egress-guarded).
-fn get(url: &str) -> Result<String, String> {
+pub(super) fn get(url: &str) -> Result<String, String> {
     let req = SourceReq {
         kind: SourceKind::Rss,
         url: url.to_string(),
@@ -104,7 +104,7 @@ fn run_check(
 }
 
 impl Cabin {
-    fn wish_now(&mut self) -> &mut Wishlist {
+    pub(super) fn wish_now(&mut self) -> &mut Wishlist {
         self.sources
             .wish
             .list
