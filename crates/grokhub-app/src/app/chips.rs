@@ -545,6 +545,7 @@ impl Cabin {
         polish_chip_hints(&mut chips, &self.composer);
         let mut resume = self.model_chips();
         resume.extend(self.resume_chips());
+        resume.extend(self.tidy_chips());
         resume.extend(self.backup_chips());
         resume.extend(self.radar_chips());
         resume.extend(self.game_chips());
@@ -580,7 +581,11 @@ impl Cabin {
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
         // One-shot chips act here and are not learned: replayed later they would mean nothing.
-        if self.take_backup_chip(&chip) || self.take_radar_chip(&chip) || self.take_game_chip(&chip)
+        // The tidy review chip opens a window; it is not sent or learned either.
+        if self.take_tidy_chip(&chip)
+            || self.take_backup_chip(&chip)
+            || self.take_radar_chip(&chip)
+            || self.take_game_chip(&chip)
         {
             return;
         }

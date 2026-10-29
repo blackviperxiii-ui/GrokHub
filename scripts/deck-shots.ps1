@@ -182,6 +182,35 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Downloads tidy: an installer for an app with a Start Menu shortcut, a big
+# old ISO (a sized empty file), an archive already extracted, and two copies
+# of one PDF, all dated back so they count as old.
+function Seed-Tidy([string]$root) {
+    $dl = Join-Path $root 'Downloads'
+    $menu = Join-Path $root 'AppData\Microsoft\Windows\Start Menu\Programs'
+    New-Item -ItemType Directory -Force -Path $dl, $menu, (Join-Path $dl 'photos') | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $menu 'Discord.lnk'), [byte[]]@())
+    $pdf = New-Object byte[] (3MB)
+    (New-Object Random 7).NextBytes($pdf)
+    $files = @(
+        @('DiscordSetup.exe', 90MB, 20),
+        @('ubuntu-24.04-desktop-amd64.iso', 600MB, 45),
+        @('photos.zip', 40MB, 2),
+        @('report.pdf', 0, 10),
+        @('report (1).pdf', 0, 9),
+        @('notes.txt', 1KB, 1)
+    )
+    foreach ($f in $files) {
+        $path = Join-Path $dl $f[0]
+        if ($f[0] -like 'report*') {
+            [IO.File]::WriteAllBytes($path, $pdf)
+        } else {
+            $fs = [IO.File]::Create($path)
+            $fs.SetLength($f[1])
+            $fs.Close()
+        }
+        (Get-Item $path).LastWriteTime = (Get-Date).AddDays(-$f[2])
+    }
 # Backup reminder: a repo under code\my-app whose last two commits, from four
 # days ago, were never pushed to its (local, bare) upstream.
 function Seed-Backup([string]$root) {
@@ -275,7 +304,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -294,6 +323,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($tidy) {
+        Seed-Tidy $root
+        $app.downloadsTidy = $true
+        $env:GROKHUB_DECK_TIDY = $tidy
+    } else { Remove-Item Env:GROKHUB_DECK_TIDY -ErrorAction SilentlyContinue }
     if ($backup) {
         $app.backupNudge = $true
         $app.codeFolders = @(Seed-Backup $root)

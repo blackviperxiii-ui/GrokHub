@@ -125,3 +125,10 @@ Shot 1600 900 'screenshot-chip-1600x900' 'ops-dark' '02' -screenshotOffer
 Shot 1100 720 'screenshot-chip-1100x720' 'ops-dark' '02' -screenshotOffer
 Shot 1600 900 'screenshot-settings-1600x900' 'ops-dark' '07' -pinBehavior
 Shot 1100 720 'screenshot-settings-1100x720' 'ops-dark' '07' -pinBehavior
+# Downloads tidy: the suggestion card on Pulse, then the review with its approval.
+Shot 1600 900 'tidy-1600x900' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
+Shot 1100 720 'tidy-1100x720' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'tidy-1100x720-scrolled' 'ops-dark' '14' -tidy 'card' -nav 'pulse' -wheel 12
+Shot 1600 900 'tidy-approve-1600x900' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
+Shot 1100 720 'tidy-approve-1100x720' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
