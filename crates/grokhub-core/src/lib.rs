@@ -135,6 +135,7 @@ pub mod slash;
 pub mod ssrf;
 pub mod state;
 pub mod steam;
+pub mod steam_achievements;
 pub mod steam_wishlist;
 pub mod stream;
 pub mod systems_brief;

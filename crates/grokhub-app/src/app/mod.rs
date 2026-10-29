@@ -139,6 +139,7 @@ mod persist;
 mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod achievements_ui;
 mod activity_dock;
 mod ask_offers_ui;
 mod attach_tray;

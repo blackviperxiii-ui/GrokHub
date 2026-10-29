@@ -40,6 +40,10 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Achievement nudges: the close-to-100% post on top of Pulse; at 1100x720
+# the feed sits under Up next, so that shot scrolls down to it.
+Shot 1600 900 'achievements-1600x900' 'ops-dark' '14' -pulse -achievements -nav 'pulse'
+Shot 1100 720 'achievements-1100x720-scrolled' 'ops-dark' '14' -pulse -achievements -nav 'pulse' -wheel 12
 # Backup reminders: the unpushed-work post on top of Pulse.
 Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup -nav 'pulse'
 Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup -nav 'pulse'
