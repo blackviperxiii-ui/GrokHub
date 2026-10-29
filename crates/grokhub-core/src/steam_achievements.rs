@@ -393,8 +393,10 @@ impl Tracker {
         }
     }
 
-    /// Steam didn't answer the check that started at `last_check_ms`.
-    pub fn failed(&mut self) {
+    /// Steam didn't answer a check that ended at `now_ms`; the retry wait
+    /// counts from then, not from when the check started.
+    pub fn failed(&mut self, now_ms: u64) {
+        self.last_check_ms = now_ms;
         self.failures = self.failures.saturating_add(1);
     }
 
@@ -596,14 +598,17 @@ mod tests {
             last_check_ms: 1_000,
             ..Default::default()
         };
-        t.failed();
+        t.failed(1_000);
         assert_eq!(t.wait_ms(), hour);
         assert!(!t.due(1_000 + hour - 1));
         assert!(t.due(1_000 + hour));
-        t.failed();
+        // A check that hangs for 3 hours still waits 2 more after it fails.
+        t.failed(1_000 + 3 * hour);
         assert_eq!(t.wait_ms(), 2 * hour);
+        assert!(!t.due(1_000 + 5 * hour - 1));
+        assert!(t.due(1_000 + 5 * hour));
         for _ in 0..10 {
-            t.failed();
+            t.failed(1_000);
         }
         assert_eq!(t.wait_ms(), 12 * hour, "capped well inside a day");
         assert!(t.due(1_000 + 12 * hour));
