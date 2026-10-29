@@ -116,7 +116,8 @@ impl Locked {
         let name = keyring_name_for(os);
         match self {
             Self::Unavailable => format!(
-                "Your private data is locked because Loadout can't access your {name}. Nothing was deleted."
+                "Your private data is locked because {product} can't access your {name}. Nothing was deleted.",
+                product = grokhub_core::brand::product_name()
             ),
             Self::Missing => {
                 format!(
@@ -126,8 +127,8 @@ impl Locked {
             Self::WrongKey => format!(
                 "Your private data is locked because the key in your {name} doesn't match. Nothing was deleted."
             ),
-            Self::Busy => "Your private data is temporarily unavailable while another Loadout window sets up access. Try again in a moment.".into(),
-            Self::Unwritable => "Loadout couldn't save your private data because its folder isn't writable. Nothing was saved as plain text.".into(),
+            Self::Busy => grokhub_core::brand::filled("Your private data is temporarily unavailable while another {product} window sets up access. Try again in a moment.").into(),
+            Self::Unwritable => grokhub_core::brand::filled("{product} couldn't save your private data because its folder isn't writable. Nothing was saved as plain text.").into(),
         }
     }
 

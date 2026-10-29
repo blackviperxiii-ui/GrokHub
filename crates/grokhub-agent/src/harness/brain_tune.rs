@@ -204,7 +204,7 @@ fn on_user_version(
     record_outside_edit(config_dir, target, OUTSIDE_EDIT)?;
     if file_hash(target)? != base {
         return Err(format!(
-            "{what} changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
+            "{what} changed since this tweak was proposed, so it was not applied; {product} proposes again on your version", product = grokhub_core::brand::product_name()
         ));
     }
     Ok(())
@@ -235,7 +235,10 @@ fn propose_row(config_dir: &Path, key: &str, tweak: &Tweak, now: u64) -> Result<
         Vec::new()
     } else {
         parse_policy(&before).map_err(|e| {
-            format!("Your policy file is ignored ({e}), so GrokHub won't write over it")
+            format!(
+                "Your policy file is ignored ({e}), so {product} won't write over it",
+                product = grokhub_core::brand::product_name()
+            )
         })?
     };
     match user.iter_mut().find(|r| r.key() == key) {
@@ -650,7 +653,7 @@ mod tests {
         };
         assert_eq!(
             propose(&root, &tweak, 1).unwrap_err(),
-            "Your playbook Fix this PC changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
+            "Your playbook Fix this PC changed since this tweak was proposed, so it was not applied; Loadout proposes again on your version"
         );
         assert_eq!(
             file(&path).as_deref(),
@@ -707,7 +710,7 @@ mod tests {
             3,
         )
         .unwrap_err();
-        assert_eq!(err, "Your policy file changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version");
+        assert_eq!(err, "Your policy file changed since this tweak was proposed, so it was not applied; Loadout proposes again on your version");
         assert_eq!(file(&ppath).as_deref(), Some(hand.as_str()));
         let p = ChangeLedger::load_kind(&root, ChangeKind::Policy);
         assert_eq!(

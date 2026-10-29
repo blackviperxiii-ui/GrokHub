@@ -1,0 +1,1 @@
+- Agent messages (Cua Driver, sudo prompt, budget and offline pauses, private-data locks, self-managed skill and automation tools, update source-folder hints) now name the product "Loadout".

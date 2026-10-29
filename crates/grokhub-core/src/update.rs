@@ -357,8 +357,9 @@ fn resolve_channel_tip(source: &Path, channel: Channel) -> Result<String, String
 pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option<String>, String> {
     if !is_grokhub_source(source) {
         return Err(format!(
-            "{product} can't find its source folder (~/{product} or ~/.config/{product}/source).",
-            product = crate::brand::product_name()
+            "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
+            product = crate::brand::product_name(),
+            id = crate::brand::INTERNAL_ID
         ));
     }
     let want = channel.branch();
@@ -481,8 +482,9 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
         return Err(format!(
-            "{product} can't find its source folder (~/{product} or ~/.config/{product}/source).",
-            product = crate::brand::product_name()
+            "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
+            product = crate::brand::product_name(),
+            id = crate::brand::INTERNAL_ID
         ));
     }
     let want = channel.branch();

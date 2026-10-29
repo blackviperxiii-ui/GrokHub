@@ -98,7 +98,7 @@ Reply with only a JSON array. Each item:
  \"description\": one line in your own voice that starts with \"I can\", at most 140 characters,
  \"emoji\": one emoji for its topic,
  \"category\": one of productivity, financial, shopping, relationships, health,
- \"action\": the exact message to send GrokHub to do it}
+ \"action\": the exact message to send {product} to do it}
 
 Put the most personal ideas first. Do not repeat or overlap anything under Existing ideas or Turned down. \
 When More like this lists ideas, write new ones in the same spirit.")

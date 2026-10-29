@@ -305,7 +305,7 @@ fn apply_writes_the_restore_point_span_before_the_first_mutating_span() {
     assert_eq!(command, "resolvectl flush-caches");
     assert!(!approved);
     assert!(
-        prompt.starts_with("GrokHub fix, step 1 of 2. Run exactly this one command"),
+        prompt.starts_with("Loadout fix, step 1 of 2. Run exactly this one command"),
         "{prompt}"
     );
     assert!(run.step_finished("ran it\nSTEP_OK"));
@@ -676,7 +676,7 @@ fn apply_refuses_in_an_unattended_context() {
         )]),
     )
     .unwrap_err();
-    assert_eq!(err, UNATTENDED);
+    assert_eq!(err, *UNATTENDED);
     assert_eq!(tools(&dir), vec![(APPLY_TOOL.into(), "deny".into())]);
     assert!(!dir.join("rewind").exists(), "no backup, no step");
 }
