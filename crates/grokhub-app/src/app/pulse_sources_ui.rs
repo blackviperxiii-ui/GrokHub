@@ -15,9 +15,9 @@ use grokhub_core::pulse_sources::{
 };
 use std::io::Read as _;
 
-/// Largest reply read from one source.
 /// The note when no interest or source is set up to check.
 pub(super) const NOTHING_TO_CHECK: &str = "Nothing to check yet. Add an interest or a source.";
+/// Largest reply read from one source.
 const BODY_CAP: u64 = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 8;
 const REDIRECTS_MAX: usize = 3;
@@ -256,7 +256,7 @@ impl Cabin {
         .calls_today(now)
     }
 
-    fn sources_busy(&self) -> bool {
+    pub(super) fn sources_busy(&self) -> bool {
         self.sources.rx.is_some() || self.sources.summary_rx.is_some()
     }
 
