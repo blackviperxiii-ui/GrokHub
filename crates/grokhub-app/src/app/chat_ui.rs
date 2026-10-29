@@ -500,8 +500,18 @@ pub(super) fn paint_speech_bubble(
     };
     let bubble_avail = (avail - mark_w).max(1.0);
     let wrap = bubble_wrap_width(bubble_avail, BUBBLE_PAD_X);
+    // A web-search reply's trailing Sources list paints as site chips.
+    let (answer, sources) = match (markdown && !user)
+        .then(|| grokhub_core::reply_sources::split_sources(body))
+        .flatten()
+    {
+        Some((answer, sources)) => (answer, sources),
+        None => (body, Vec::new()),
+    };
     let content_w = if markdown && !user {
-        crate::markdown::measure_markdown_width(ui, body, wrap)
+        crate::markdown::measure_markdown_width(ui, answer, wrap)
+            .max(crate::ui_kit::source_chips_width(ui, &sources))
+            .min(wrap)
     } else {
         crate::markdown::measure_text(ui, body, wrap).x
     };
@@ -563,7 +573,17 @@ pub(super) fn paint_speech_bubble(
                     let job = crate::markdown::wrapped_job(ui, body, inner_w, crate::theme::fg());
                     ui.add(egui::Label::new(job).wrap().selectable(true));
                 } else {
-                    crate::markdown::show(ui, body);
+                    if !answer.is_empty() {
+                        crate::markdown::show(ui, answer);
+                    }
+                    if !sources.is_empty() {
+                        if !answer.is_empty() {
+                            ui.add_space(8.0);
+                        }
+                        if let Some(url) = crate::ui_kit::source_chips(ui, &sources) {
+                            let _ = crate::desktop::open_url(&url);
+                        }
+                    }
                 }
             });
             ui.add_space(BUBBLE_PAD_X);
