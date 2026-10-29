@@ -182,7 +182,7 @@ a live verbosity change. Skipped: live model latency. Scripted p50 {care_p50_ms:
 {baseline_p50_ms:.3} ms and p95 {care_p95_ms:.3} ms vs {baseline_p95_ms:.3} ms (ratio \
 {p95_ratio:.3}) time a fake client return and do not clear the live p95 budget. \
 Sycophancy agreement with profile is {care_sycophancy:.1} on the soft natural block and \
-{baseline_sycophancy:.1} on today's short block. Classify effort stays {classify} with \
+{baseline_sycophancy:.1} on the short block. Classify effort stays {classify} with \
 the switch off and {care_classify} with it on. The cost and word proxies sit inside \
 their budgets, and that is not a quality gain."
     );
@@ -492,10 +492,10 @@ mod tests {
                 "emotional",
                 "low",
                 "medium",
-                "speed",
                 "care",
-                "short, under 60 words",
-                "natural, about 60 words",
+                "care",
+                "natural, personality sets length",
+                "natural, personality sets length",
                 6,
             ),
             (
@@ -503,10 +503,10 @@ mod tests {
                 "emotional",
                 "low",
                 "medium",
-                "speed",
                 "care",
-                "short, under 60 words",
-                "natural, about 60 words",
+                "care",
+                "natural, personality sets length",
+                "natural, personality sets length",
                 13,
             ),
             (
@@ -525,10 +525,10 @@ mod tests {
                 "open",
                 "low",
                 "medium",
-                "speed",
                 "care",
-                "short, under 60 words",
-                "natural, about 60 words",
+                "care",
+                "natural, personality sets length",
+                "natural, personality sets length",
                 7,
             ),
             (
@@ -536,10 +536,10 @@ mod tests {
                 "open",
                 "low",
                 "medium",
-                "speed",
                 "care",
-                "short, under 60 words",
-                "natural, about 60 words",
+                "care",
+                "natural, personality sets length",
+                "natural, personality sets length",
                 14,
             ),
             (
@@ -547,10 +547,10 @@ mod tests {
                 "open",
                 "xhigh",
                 "medium",
-                "speed",
                 "care",
-                "short, under 60 words",
-                "natural, about 60 words",
+                "care",
+                "natural, personality sets length",
+                "natural, personality sets length",
                 12,
             ),
         ];
@@ -566,9 +566,9 @@ mod tests {
             assert_eq!(turn.care_talk, row.7);
             assert_eq!(turn.words, row.8);
         }
-        assert_eq!(report.baseline_cost_ticks, 12_609);
-        assert_eq!(report.care_cost_ticks, 12_308);
-        assert!((report.cost_ratio - (12_308.0 / 12_609.0)).abs() < 1e-12);
+        assert_eq!(report.baseline_cost_ticks, 12_639);
+        assert_eq!(report.care_cost_ticks, 12_328);
+        assert!((report.cost_ratio - (12_328.0 / 12_639.0)).abs() < 1e-12);
         assert_eq!(report.baseline_words, 65);
         assert_eq!(report.care_words, 65);
         assert_eq!(report.words_ratio, 1.0);
@@ -594,8 +594,8 @@ mod tests {
         assert!(report.care_p95_ms.is_finite() && report.care_p95_ms >= 0.0);
         assert!(report.why.contains("Skipped: live quality judge"));
         assert!(report.why.contains("Skipped: live model latency"));
-        assert!(report.why.contains("12609"));
-        assert!(report.why.contains("12308"));
+        assert!(report.why.contains("12639"));
+        assert!(report.why.contains("12328"));
         assert!(report.turns.iter().any(|turn| turn.kind == "emotional"));
         assert!(report.turns.iter().any(|turn| turn.kind == "open"));
     }

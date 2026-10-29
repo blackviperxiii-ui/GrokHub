@@ -198,6 +198,7 @@ mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
+mod net_log_ui;
 mod night;
 mod nudge_watchers_ui;
 mod oauth;
@@ -226,6 +227,7 @@ mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
+mod screenshot_offer_ui;
 #[cfg(test)]
 mod self_review_tests;
 mod self_review_ui;
@@ -1314,7 +1316,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            picker: Default::default(),
+            picker: personality_ui::first_picker(),
             playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
@@ -5794,9 +5796,6 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
 
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
-}
-fn health_settings_sec() -> SettingsSec {
-    SettingsSec::About
 }
 
 fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {

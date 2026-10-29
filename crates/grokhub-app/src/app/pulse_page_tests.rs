@@ -565,6 +565,9 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         .save_with_format(&fixture, image::ImageFormat::Png)
         .expect("fixture png");
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    pulse_texts(cabin, 1200.0);
+    // The thumb decodes off-thread; on a busy runner it can miss the second pass.
+    super::pulse_ui::wait_pulse_decodes();
     let texts = pulse_texts(cabin, 1200.0);
     for want in [
         "Rust 1.92 ships",

@@ -516,25 +516,41 @@ fn closed(t: &TodoItem) -> bool {
     matches!(t.status.as_str(), "completed" | "cancelled")
 }
 
+/// An item as it reads mid-sentence: "Check failed services" becomes
+/// "check failed services"; "DNS" and "Wi-Fi" stay as they are.
+fn mid_sentence(item: &str) -> String {
+    let first = item.split_whitespace().next().unwrap_or_default();
+    let mut chars = first.chars();
+    let plain_word = chars.next().is_some_and(char::is_uppercase)
+        && chars.all(|c| c.is_alphabetic() && c.is_lowercase());
+    if plain_word {
+        let mut c = item.chars();
+        c.next()
+            .map(|a| a.to_lowercase().chain(c).collect())
+            .unwrap_or_default()
+    } else {
+        item.to_string()
+    }
+}
+
+/// "a", "a and b", "a, b and c", "a, b, c and 2 others".
 fn named(items: &[&TodoItem]) -> String {
     let mut out: Vec<String> = items
         .iter()
         .take(PROGRESS_ITEMS)
-        .map(|t| clip(&t.content))
+        .map(|t| mid_sentence(&clip(&t.content)))
         .collect();
     if items.len() > PROGRESS_ITEMS {
-        let more = format!(
-            "{} and {} more",
-            out.pop().unwrap_or_default(),
-            items.len() - PROGRESS_ITEMS
-        );
-        out.push(more);
+        out.push(format!("{} others", items.len() - PROGRESS_ITEMS));
     }
-    out.join(", ")
+    match out.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => out.join(""),
+    }
 }
 
-/// Brain 5 progress notes for a long run: "Done: services, packages. Next:
-/// boot errors." A note comes only at a phase boundary (a checklist item
+/// Brain 5 progress notes for a long run, in plain sentences: "Finished
+/// services and packages. Now on boot errors." A note comes only at a phase boundary (a checklist item
 /// closed since the last note) while an item is still open (the reply covers
 /// the end), and only once [`PROGRESS_GAP`] tool calls ran since the last
 /// note. A boundary that comes too soon is told with the next one.
@@ -589,12 +605,12 @@ impl Progress {
             .collect();
         let mut parts = Vec::new();
         if !done.is_empty() {
-            parts.push(format!("Done: {}.", named(&done)));
+            parts.push(format!("Finished {}.", named(&done)));
         }
         if !skipped.is_empty() {
-            parts.push(format!("Skipped: {}.", named(&skipped)));
+            parts.push(format!("Skipped {}.", named(&skipped)));
         }
-        parts.push(format!("Next: {}.", clip(&next.content)));
+        parts.push(format!("Now on {}.", mid_sentence(&clip(&next.content))));
         self.told
             .extend(fresh.iter().map(|t| (t.id.clone(), t.content.clone())));
         self.at = evidence;
@@ -973,7 +989,7 @@ mod tests {
         assert_eq!(p.check(&now, 2), None);
         assert_eq!(
             p.check(&now, 3).as_deref(),
-            Some("Done: Check failed services. Next: Verify packages.")
+            Some("Finished check failed services. Now on verify packages.")
         );
         // Told once: more work with no new boundary says nothing.
         assert_eq!(p.check(&now, 4), None);
@@ -983,7 +999,7 @@ mod tests {
         assert_eq!(p.check(&now, 5), None, "only 2 calls since the last note");
         assert_eq!(
             p.check(&now, 6).as_deref(),
-            Some("Done: Verify packages. Skipped: Firewall. Next: Boot errors.")
+            Some("Finished verify packages. Skipped firewall. Now on boot errors.")
         );
         // The last item closing gets no note: the reply covers the end.
         now[3].status = "completed".into();
@@ -996,7 +1012,16 @@ mod tests {
             .collect();
         assert_eq!(
             Progress::default().check(&many, 3).as_deref(),
-            Some("Done: a, b, c and 2 more. Next: f.")
+            Some("Finished a, b, c and 2 others. Now on f.")
+        );
+        let pair = [
+            todo("DNS lookups", "completed"),
+            todo("Wi-Fi signal", "completed"),
+            todo("Restart the router", "pending"),
+        ];
+        assert_eq!(
+            Progress::default().check(&pair, 3).as_deref(),
+            Some("Finished DNS lookups and Wi-Fi signal. Now on restart the router.")
         );
     }
 

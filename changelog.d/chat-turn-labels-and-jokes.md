@@ -1,0 +1,3 @@
+- Chat: saved-turn labels (`TURN_THOUGHT:`, `TURN_SAY:`, `TURN_TOOL:`) are stripped on every path into a model (chat history, goal names, chips, background tasks) and on every path to the screen, including a reply that echoes them mid-text, so they and the thoughts behind them never show in chat.
+- Chat: an obvious joke between friends gets a playful comeback in the personality's voice instead of a lecture; a request that would really hurt someone is still steered away, in character.
+- Deck shots: a joke-chat shot (`GROKHUB_DECK_CHAT=joke`) seeds replies stored with saved-turn labels, so the Windows run proves the chat shows only the replies.

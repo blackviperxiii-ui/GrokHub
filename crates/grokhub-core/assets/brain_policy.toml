@@ -12,22 +12,23 @@
 # goal is one of speed, quality, cost, balanced, care.
 #
 # care_first is the A/B switch. False keeps every row below.
-# True replaces the chat casual row at turn time with goal care,
-# stop "need met", and talk natural. Routing then holds chat:default
-# and the Brief picks effort. The offline dry-run had no live quality
-# judge, so this stays false.
+# True also softens the word caps on the short, concise and progress
+# styles. Routing then holds chat:default and the Brief picks effort.
+# The offline dry-run had no live quality judge, so this stays false.
+# The chat casual row is care-first already: hanging out should feel
+# present, not rushed.
 
 care_first = false
 
 [[row]]
 intent = "chat"
 care = "casual"
-goal = "speed"
-reason = "small talk, fast reply matters most"
+goal = "care"
+reason = "hanging out, staying present matters most"
 depth = "none"
 ask = "act"
-stop = "answered"
-talk = "brief, personality on"
+stop = "need met"
+talk = "natural, personality on"
 
 [[row]]
 intent = "question"

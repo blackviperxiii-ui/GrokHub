@@ -209,6 +209,22 @@ function Seed-Backup([string]$root) {
     return $code
 }
 
+# Internet drop log: on, with three drops between 1 and 3 AM UTC last night
+# and no daily card yet, so the first probe after launch posts the pattern
+# card through the real path. Runners keep UTC, so the hours read as local.
+function Seed-NetLog([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow
+    $night = [DateTimeOffset]::new($now.UtcDateTime.Date, [TimeSpan]::Zero)
+    if ($now.Hour -lt 3) { $night = $night.AddDays(-1) }
+    $outages = @()
+    foreach ($d in @(@(108, 4), @(124, 11), @(151, 6))) {
+        $start = $night.AddMinutes($d[0]).ToUnixTimeMilliseconds()
+        $outages += @{ startMs = $start; endMs = $start + $d[1] * 60000; offsetMin = 0 }
+    }
+    $log = @{ on = $true; outages = $outages; slow = @(); speed = @(); lastInsightMs = 0 }
+    Write-Utf8 (Join-Path $cfg 'net-log.json') ($log | ConvertTo-Json -Depth 4)
+}
+
 # Release radar: on, never checked, and a release-day reminder that came due
 # an hour ago, so launch posts "Out today" through the real reminder path and
 # the live store check runs for the seeded library.
@@ -247,14 +263,19 @@ function Write-ModelDrop([string]$root) {
 # $personality is the stored pick in app.json ('default' is the preset older
 # builds shipped). $pinPersonality opens Settings → Personality
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
-# selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD), since no turn runs here.
+# selected, for slide 19 shots. $mood pins Nyx's corner box picture
+# (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
+# since no turn or game runs here; every shot defaults to hanging-out.
+# $pinBehavior opens Settings →
+# Behavior for the Screenshot explain toggle. $screenshotOffer seeds a live
+# Explain-this chip (path+mtime ledger only; no image bytes). $openSettings
+# opens Settings on that section at launch; $libraryPick selects a Steam app.
 # $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
 # home, pulse or library) instead of a rail click; the cabin closes the
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$backup, [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -266,16 +287,23 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($personality) { $app.personality = $personality }
     if ($pinPersonality) {
         if (-not $personality) { $app.personality = 'viper' }
-        $app.explicit_personalities = $true
+        if (-not $ageCheck) { $app.explicit_personalities = $true }
     }
     if ($library) {
         Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday' $false
         Seed-Library $root
-    } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
+    } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
     if ($backup) {
         $app.backupNudge = $true
         $app.codeFolders = @(Seed-Backup $root)
+    }
+    if ($netLog) {
+        Seed-NetLog $cfg
+        $app.netLog = $true
+    }
+    if ($screenshotOffer -or $pinBehavior) {
+        $app.screenshotExplain = @{ enabled = $true }
     }
     if ($radar) {
         Seed-Radar $cfg
@@ -299,6 +327,18 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
     Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
+    if ($screenshotOffer) {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $ledger = @{
+            lastSeenModifiedMs = $now
+            lastTickMs = $now
+            pending = @{
+                path = 'C:\Users\user\Pictures\Screenshots\ExplainMe.png'
+                offeredAtMs = $now
+            }
+        }
+        Write-Utf8 (Join-Path $cfg 'screenshot-offer.json') ($ledger | ConvertTo-Json -Depth 4 -Compress)
+    }
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
     $env:USERPROFILE = $root
@@ -317,15 +357,23 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
-    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
-    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
-    # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
-    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
+    $env:GROKHUB_DECK_CHAT = $chat
+    if ($ageCheck) { $env:GROKHUB_DECK_AGE_CHECK = '1' } else { Remove-Item Env:GROKHUB_DECK_AGE_CHECK -ErrorAction SilentlyContinue }
+    if ($pinPersonality) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'personality'
+    } elseif ($pinBehavior) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'behavior'
+    } elseif ($openSettings) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings
+    } else {
+        Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue
+    }
+    # $openSettings / $pinPersonality / $pinBehavior open Settings at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality -or $pinBehavior) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
     # Home is never seeded. Other pinned $nav pages keep the seeded list (its
     # titlebar count) and the cabin closes the popover over them.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $pinBehavior -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero

@@ -362,14 +362,15 @@ mod tests {
     }
 
     #[test]
-    fn care_first_ships_off_and_the_chat_row_changes_only_when_applied() {
+    fn care_first_ships_off_and_the_chat_row_is_care_first_already() {
         assert!(!builtin_care_first());
         let shipped = builtin_policy();
         let chat = pick_row(&shipped, "chat", "casual").unwrap();
         assert_eq!(
             (chat.goal.as_str(), chat.stop.as_str(), chat.talk.as_str()),
-            ("speed", "answered", "brief, personality on")
+            ("care", "need met", "natural, personality on")
         );
+        assert_eq!(chat.reason, "hanging out, staying present matters most");
         let on = apply_care_first(shipped);
         let chat = pick_row(&on, "chat", "casual").unwrap();
         assert_eq!(chat, &care_first_chat_row());

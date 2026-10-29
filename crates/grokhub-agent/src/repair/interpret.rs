@@ -479,8 +479,11 @@ fn failed_silently(out: &ProbeOutput) -> bool {
     out.code != Some(0) && out.stdout.trim().is_empty() && !out.stderr.trim().is_empty()
 }
 
-/// `dpkg --audit`, `dnf check`, `pacman -Qkq`: silence means healthy.
+/// `dpkg --audit`, `dnf check`, `pacman -Qk`: silence means healthy.
 fn package_health(out: &ProbeOutput) -> Vec<Finding> {
+    if out.program == "pacman" {
+        return pacman_health(out);
+    }
     if failed_silently(out) {
         return Vec::new();
     }
@@ -491,32 +494,96 @@ fn package_health(out: &ProbeOutput) -> Vec<Finding> {
         .filter(|l| !l.is_empty())
         .collect();
     if lines.is_empty() {
-        return vec![Finding::new(
-            ProbeId::PackageHealth,
-            Severity::Ok,
-            "Your installed packages look healthy.",
-            "",
-        )];
+        return vec![healthy()];
     }
-    let plain = if out.program == "pacman" {
-        let pkgs: std::collections::BTreeSet<&str> = lines
-            .iter()
-            .filter_map(|l| l.split_whitespace().next())
-            .collect();
-        format!(
-            "{} missing files, which can make apps crash or updates fail.",
-            plural(pkgs.len(), "installed package is", "installed packages are")
-        )
-    } else {
-        "Some packages are half-installed or broken, which can stop updates from installing."
-            .to_string()
-    };
     vec![Finding::new(
         ProbeId::PackageHealth,
         Severity::Warning,
-        plain,
+        "Some packages are half-installed or broken, which can stop updates from installing.",
         lines.join("\n"),
     )]
+}
+
+fn healthy() -> Finding {
+    Finding::new(
+        ProbeId::PackageHealth,
+        Severity::Ok,
+        "Your installed packages look healthy.",
+        "",
+    )
+}
+
+/// `pacman -Qk` warns per file on stderr: "warning: pkg: /path (reason)".
+/// Only "No such file or directory" is missing. A file a user can't read
+/// ("Permission denied") couldn't be checked, which says nothing about the
+/// package, so it never becomes a reinstall.
+fn pacman_health(out: &ProbeOutput) -> Vec<Finding> {
+    let mut missing: Vec<String> = Vec::new();
+    let mut unread: Vec<String> = Vec::new();
+    for line in out.stderr.lines().map(str::trim) {
+        let Some(rest) = line.strip_prefix("warning: ") else {
+            continue;
+        };
+        let Some((pkg, file)) = rest.split_once(": ") else {
+            continue;
+        };
+        let Some((path, reason)) = file.rsplit_once(" (") else {
+            continue;
+        };
+        let entry = format!("{pkg} {path}");
+        if reason.starts_with("No such file") {
+            missing.push(entry);
+        } else {
+            unread.push(entry);
+        }
+    }
+    let pkgs = |lines: &[String]| {
+        lines
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .collect::<std::collections::BTreeSet<&str>>()
+            .len()
+    };
+    if missing.is_empty() && unread.is_empty() {
+        if out.code != Some(0) && !out.stderr.trim().is_empty() {
+            return Vec::new();
+        }
+        return vec![healthy()];
+    }
+    let mut found = Vec::new();
+    if !missing.is_empty() {
+        found.push(Finding::new(
+            ProbeId::PackageHealth,
+            Severity::Warning,
+            format!(
+                "{} missing files, which can make apps crash or updates fail.",
+                plural(
+                    pkgs(&missing),
+                    "installed package is",
+                    "installed packages are"
+                )
+            ),
+            missing.join("\n"),
+        ));
+    }
+    if !unread.is_empty() {
+        found.push(Finding::new(
+            ProbeId::PackageHealth,
+            Severity::Info,
+            format!(
+                "I couldn't check {} without admin rights. That isn't a sign anything is missing.",
+                plural(
+                    pkgs(&unread),
+                    "installed package's files",
+                    "installed packages' files"
+                )
+            ),
+            unread.join("\n"),
+        ));
+    } else if missing.is_empty() {
+        found.push(healthy());
+    }
+    found
 }
 
 /// Pending updates from the package lists already on disk.
@@ -820,10 +887,51 @@ Swap:     2000000000  1900000000   100000000
             plains(ProbeId::PackageHealth, &out("dpkg", 0, audit)),
             vec![(Severity::Warning, "Some packages are half-installed or broken, which can stop updates from installing.".into())]
         );
-        let qk = "glibc /usr/lib/libm.so.6\nglibc /usr/lib/libc.so.6\nfirefox /usr/lib/firefox/libxul.so\n";
+        let qk = |stderr: &str| ProbeOutput {
+            stderr: stderr.into(),
+            ..out("pacman", 1, "glibc: 2000 total files, 2 missing files\n")
+        };
+        let gone = "warning: glibc: /usr/lib/libm.so.6 (No such file or directory)\nwarning: glibc: /usr/lib/libc.so.6 (No such file or directory)\nwarning: firefox: /usr/lib/firefox/libxul.so (No such file or directory)\n";
         assert_eq!(
-            plains(ProbeId::PackageHealth, &out("pacman", 1, qk)),
+            plains(ProbeId::PackageHealth, &qk(gone)),
             vec![(Severity::Warning, "2 installed packages are missing files, which can make apps crash or updates fail.".into())]
+        );
+        // Files a user can't read are not missing, and never a reinstall:
+        // root `pacman -Qk` finds nothing wrong with these kernels.
+        let denied = "warning: linux: /boot/vmlinuz-linux (Permission denied)\nwarning: linux-lts: /usr/lib/modules/6.6.58-1-lts/build (Permission denied)\nwarning: sudo: /etc/sudoers.d (Permission denied)\n";
+        let unread = interpret(ProbeId::PackageHealth, &qk(denied));
+        assert_eq!(
+            unread
+                .iter()
+                .map(|f| (f.severity, f.plain.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(
+                Severity::Info,
+                "I couldn't check 3 installed packages' files without admin rights. That isn't a sign anything is missing."
+            )]
+        );
+        assert_eq!(
+            unread[0].detail,
+            "linux /boot/vmlinuz-linux\nlinux-lts /usr/lib/modules/6.6.58-1-lts/build\nsudo /etc/sudoers.d"
+        );
+        // Both at once: only the missing one is a warning.
+        let both = format!(
+            "{denied}warning: firefox: /usr/lib/firefox/libxul.so (No such file or directory)\n"
+        );
+        let found = interpret(ProbeId::PackageHealth, &qk(&both));
+        assert_eq!(
+            found.iter().map(|f| (f.severity, f.detail.as_str())).collect::<Vec<_>>(),
+            vec![
+                (Severity::Warning, "firefox /usr/lib/firefox/libxul.so"),
+                (Severity::Info, "linux /boot/vmlinuz-linux\nlinux-lts /usr/lib/modules/6.6.58-1-lts/build\nsudo /etc/sudoers.d"),
+            ]
+        );
+        assert_eq!(
+            plains(
+                ProbeId::PackageHealth,
+                &out("pacman", 0, "glibc: 2000 total files, 0 missing files\n")
+            ),
+            vec![(Severity::Ok, "Your installed packages look healthy.".into())]
         );
         let apt = "Listing...\nfirefox/jammy-updates 131.0 amd64 [upgradable from: 130.0]\nlibc6/jammy-updates 2.35-0ubuntu3.9 amd64 [upgradable from: 2.35-0ubuntu3.8]\n";
         assert_eq!(
