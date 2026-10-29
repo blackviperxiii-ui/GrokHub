@@ -19,12 +19,13 @@ pub(super) fn launch_args(
             .map(OsString::from)
             .or_else(|| std::env::var_os(key))
     };
+    let cwd = absolute_cwd(cwd, &std::env::current_dir().unwrap_or_default());
     configure(command, args, &lookup, || {
         let home = lookup(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
             .map(PathBuf::from)
             .or_else(grokhub_core::user_home)
             .unwrap_or_default();
-        candidates(std::env::consts::OS, &lookup, &home, cwd)
+        candidates(std::env::consts::OS, &lookup, &home, &cwd)
             .into_iter()
             .find(|path| executable(path))
     })
@@ -56,17 +57,40 @@ fn configure(
         let key = format!("PLAYWRIGHT_MCP_{}", option.replace('-', "_").to_uppercase());
         args.iter()
             .any(|arg| arg == &flag || arg.starts_with(&format!("{flag}=")))
-            || env(&key).is_some_and(|value| !value.is_empty())
+            || env(&key).is_some_and(|value| is_set(&value))
     });
-    // Package-local browser caches can only be resolved by Playwright itself.
-    let explicit = explicit || env("PLAYWRIGHT_BROWSERS_PATH").is_some_and(|value| value == "0");
+    // `0` keeps browsers in Playwright's package-local cache, which only
+    // Playwright can resolve: an installed browser is still preferred, and
+    // without one Playwright is left to look in its own cache.
+    let package_cache = env("PLAYWRIGHT_BROWSERS_PATH").is_some_and(|value| value == "0");
     let mut out = args.to_vec();
     if is_playwright && !explicit {
-        let browser = detect().ok_or_else(|| NO_BROWSER.to_string())?;
-        out.push("--executable-path".into());
-        out.push(browser.to_string_lossy().into_owned());
+        match detect() {
+            Some(browser) => {
+                out.push("--executable-path".into());
+                out.push(browser.to_string_lossy().into_owned());
+            }
+            None if package_cache => {}
+            None => return Err(NO_BROWSER.to_string()),
+        }
     }
     Ok(out)
+}
+
+/// A relative MCP cwd is relative to the cabin's own working folder.
+fn absolute_cwd(cwd: &Path, current: &Path) -> PathBuf {
+    if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        current.join(cwd)
+    }
+}
+
+/// An env choice counts unless it is empty or turns the option off.
+fn is_set(value: &OsString) -> bool {
+    let value = value.to_string_lossy();
+    let value = value.trim();
+    !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
 }
 
 fn candidates(
@@ -115,8 +139,10 @@ fn candidates(
                 .join("ms-playwright")
         }
     };
+    // `0`: the browsers live in the package's own folder, not a shared cache.
+    let package_cache = env("PLAYWRIGHT_BROWSERS_PATH").is_some_and(|value| value == "0");
     let cache = env("PLAYWRIGHT_BROWSERS_PATH")
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && !package_cache)
         .map(PathBuf::from)
         .map(|path| {
             env("INIT_CWD")
@@ -125,8 +151,7 @@ fn candidates(
                 .join(path)
         })
         .unwrap_or(cache);
-    let mut revisions: Vec<_> = cache
-        .is_absolute()
+    let mut revisions: Vec<_> = (cache.is_absolute() && !package_cache)
         .then(|| std::fs::read_dir(cache))
         .into_iter()
         .filter_map(Result::ok)
@@ -147,6 +172,8 @@ fn candidates(
         let paths: &[&str] = match os {
             "windows" => &["chrome-win/chrome.exe", "chrome-win64/chrome.exe"],
             "macos" => &[
+                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
                 "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
                 "chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
                 "chrome-mac-x64/Chromium.app/Contents/MacOS/Chromium",
@@ -238,15 +265,76 @@ mod tests {
             ),
             Ok(input)
         );
+    }
+
+    #[test]
+    fn off_values_and_a_package_local_cache_still_get_the_fallback() {
+        for (key, value) in [
+            ("PLAYWRIGHT_MCP_EXTENSION", "false"),
+            ("PLAYWRIGHT_MCP_EXTENSION", "FALSE"),
+            ("PLAYWRIGHT_MCP_EXTENSION", "0"),
+            ("PLAYWRIGHT_MCP_BROWSER", " "),
+        ] {
+            assert_eq!(
+                configure(
+                    "npx",
+                    &args(&[]),
+                    &|k| (k == key).then(|| value.into()),
+                    || Some(PathBuf::from("/browser/chrome"))
+                ),
+                Ok(args(&["--executable-path", "/browser/chrome"])),
+                "{key}={value:?}"
+            );
+        }
+        let local = |k: &str| (k == "PLAYWRIGHT_BROWSERS_PATH").then(|| "0".into());
         assert_eq!(
-            configure(
-                "npx",
-                &args(&[]),
-                &|key| (key == "PLAYWRIGHT_BROWSERS_PATH").then(|| "0".into()),
-                || panic!("package-local cache belongs to Playwright")
-            ),
-            Ok(args(&[]))
+            configure("npx", &args(&[]), &local, || Some(PathBuf::from(
+                "/opt/google/chrome/chrome"
+            ))),
+            Ok(args(&["--executable-path", "/opt/google/chrome/chrome"])),
+            "an installed browser is still used"
         );
+        assert_eq!(
+            configure("npx", &args(&[]), &local, || None),
+            Ok(args(&[])),
+            "without one, Playwright looks in its own package cache"
+        );
+        let home = std::env::temp_dir().join(format!("gh-browser-local-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".cache/ms-playwright/chromium-1000")).unwrap();
+        let paths = candidates("linux", &local, &home, &home);
+        std::fs::remove_dir_all(&home).unwrap();
+        assert_eq!(paths[0], PathBuf::from("/opt/google/chrome/chrome"));
+        assert!(
+            paths
+                .iter()
+                .all(|p| !p.to_string_lossy().contains("ms-playwright") && !p.starts_with("/0")),
+            "{paths:?}"
+        );
+    }
+
+    #[test]
+    fn macos_finds_chrome_for_testing_before_old_chromium() {
+        let root = std::env::temp_dir().join(format!("gh-browser-mac-{}", std::process::id()));
+        let cache = root.join("Library/Caches/ms-playwright/chromium-1200");
+        std::fs::create_dir_all(&cache).unwrap();
+        let paths = candidates("macos", &|_| None, &root, &root);
+        assert_eq!(
+            paths[1],
+            cache.join(
+                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            )
+        );
+        assert_eq!(
+            paths[2],
+            cache.join(
+                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            )
+        );
+        assert_eq!(
+            paths[3],
+            cache.join("chrome-mac/Chromium.app/Contents/MacOS/Chromium")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -338,5 +426,20 @@ mod tests {
         let paths = candidates("linux", &lookup, &root, &root.join("other"));
         assert_eq!(paths[1], cache.join("chrome-linux/chrome"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn relative_cwd_and_relative_cache_resolve_against_the_working_folder() {
+        let current = std::env::temp_dir().join(format!("gh-browser-cwd-{}", std::process::id()));
+        let cache = current.join("work/browsers/chromium-1000");
+        std::fs::create_dir_all(&cache).unwrap();
+        let cwd = absolute_cwd(Path::new("work"), &current);
+        assert_eq!(cwd, current.join("work"));
+        assert_eq!(absolute_cwd(&current, Path::new("/elsewhere")), current);
+        let lookup =
+            |key: &str| (key == "PLAYWRIGHT_BROWSERS_PATH").then(|| OsString::from("browsers"));
+        let paths = candidates("linux", &lookup, &current, &cwd);
+        assert_eq!(paths[1], cache.join("chrome-linux/chrome"));
+        std::fs::remove_dir_all(current).unwrap();
     }
 }
