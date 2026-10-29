@@ -110,6 +110,8 @@ pub(super) enum ConfirmKind {
     Disconnect {
         name: String,
     },
+    /// The wind-down card's Sleep the PC.
+    SleepPc,
     /// Legacy Marketplace confirm; CN2 uses the credentials hard card instead.
     #[expect(dead_code)]
     SaveKey {
@@ -127,6 +129,7 @@ impl ConfirmKind {
             | Self::LastRun { .. }
             | Self::DeleteRecording { .. }
             | Self::Disconnect { .. }
+            | Self::SleepPc
             | Self::SaveKey { .. } => true,
         }
     }
@@ -188,6 +191,16 @@ pub(super) fn disconnect_spec() -> ConfirmSpec {
         consequence: DISCONNECT_LINE.as_str(),
         primary: "Disconnect",
         danger: true,
+    }
+}
+
+pub(super) fn sleep_pc_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Sleep the PC",
+        consequence:
+            "Open windows stay as they are, but save your work first in case the power goes.",
+        primary: "Sleep",
+        danger: false,
     }
 }
 
@@ -321,6 +334,11 @@ impl Cabin {
                 super::connectors_ui::disconnect_question(name),
                 super::connectors_ui::DISCONNECT_DETAIL.to_string(),
             ),
+            ConfirmKind::SleepPc => (
+                sleep_pc_spec(),
+                "Sleep the PC now?".to_string(),
+                String::new(),
+            ),
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
                 format!("Save the key for {label}?"),
@@ -376,6 +394,7 @@ impl Cabin {
                 title,
             } => self.delete_recording(&card_id, &dir, &title),
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
+            ConfirmKind::SleepPc => self.sleep_pc_confirmed(),
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }
