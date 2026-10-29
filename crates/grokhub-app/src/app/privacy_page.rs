@@ -109,7 +109,7 @@ pub(super) fn cloud_line(cloud: Cloud) -> &'static str {
     if !cloud.signed_in {
         "Grok isn't signed in, so nothing can leave this PC."
     } else if cloud.local_jobs {
-        "Chat sends your messages to Grok. Small background jobs run on this PC; bigger ones use Grok too."
+        "Chat sends your messages to Grok. Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok too."
     } else {
         "Chat and background tasks send their prompts to Grok in the cloud."
     }
@@ -133,7 +133,7 @@ pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
         (true, false) => {
             "On, but the on-device model isn't installed, so background tasks still use Grok"
         }
-        (true, true) => "Small background jobs run on this PC; bigger ones still use Grok",
+        (true, true) => "Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok",
     }
 }
 
@@ -632,7 +632,7 @@ mod tests {
                 signed_in: true,
                 local_jobs: true
             }),
-            "Chat sends your messages to Grok. Small background jobs run on this PC; bigger ones use Grok too."
+            "Chat sends your messages to Grok. Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok too."
         );
         assert_eq!(
             cloud_line(SIGNED_OUT),
@@ -648,7 +648,7 @@ mod tests {
         );
         assert_eq!(
             local_hint(true, true),
-            "Small background jobs run on this PC; bigger ones still use Grok"
+            "Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok"
         );
     }
 
