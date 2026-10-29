@@ -431,6 +431,28 @@ pub struct AppConfig {
     /// Settings → Behavior: weekly Downloads cleanup suggestions. Off by default.
     #[serde(default)]
     pub downloads_tidy: bool,
+    /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
+    #[serde(default)]
+    pub backup_nudge: bool,
+    /// Folders whose changes the backup reminder compares to the last backup.
+    #[serde(default)]
+    pub important_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
+    /// Settings → Behavior: the game launch companion card. Off by default.
+    #[serde(default)]
+    pub game_companion: bool,
+    /// Also a quiet desktop notification when the companion card posts.
+    #[serde(default)]
+    pub game_companion_ping: bool,
+    /// Settings → Behavior: offer next steps for new 3D models in Downloads.
+    /// Off by default.
+    #[serde(default)]
+    pub model_drop: bool,
+    /// Where "Move to models" puts a model; empty means `~/Models`.
+    #[serde(default)]
+    pub models_folder: String,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -457,6 +479,14 @@ pub struct AppConfig {
     /// in every picker, and a chat set to one speaks in the default voice.
     #[serde(default)]
     pub explicit_personalities: bool,
+    /// Playbooks 8: the user confirmed once that they are 18 or older. Asked the
+    /// first time adults-only turns on, then never again.
+    #[serde(default)]
+    pub adult_confirmed: bool,
+    /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
+    /// message actions can Save a redacted debug bundle to the Desktop.
+    #[serde(default)]
+    pub diagnostics_mode: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -517,6 +547,27 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    #[serde(default)]
+    pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
+    pub pc_health: grokhub_core::PcHealthSettings,
+    /// Settings → Behavior: offer to automate repeated local asks.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::AskOfferSettings::is_default"
+    )]
+    pub ask_offers: grokhub_core::AskOfferSettings,
+    /// Settings → Pulse: LAN 3D printer finish/fail alerts (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PrintAlertsSettings::is_default"
+    )]
+    pub print_alerts: grokhub_core::PrintAlertsSettings,
     /// Settings → Pulse → Learning paths (Know me hobbies, opt-in per hobby).
     #[serde(default)]
     pub hobby_paths: grokhub_core::HobbyPathSettings,
@@ -754,6 +805,13 @@ impl Default for AppConfig {
             resume_code: false,
             downloads_tidy: false,
             code_folders: Vec::new(),
+            backup_nudge: false,
+            important_folders: Vec::new(),
+            net_log: false,
+            game_companion: false,
+            game_companion_ping: false,
+            model_drop: false,
+            models_folder: String::new(),
             dock_panels: false,
             chat_objectives: false,
             desktop_control: false,
@@ -761,6 +819,8 @@ impl Default for AppConfig {
             self_improve_quiet: false,
             personality: String::new(),
             explicit_personalities: false,
+            adult_confirmed: false,
+            diagnostics_mode: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
@@ -778,6 +838,10 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
+            ask_offers: grokhub_core::AskOfferSettings::default(),
+            print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
@@ -939,6 +1003,10 @@ pub fn load() -> AppConfig {
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
         rewrite_personality = true;
+    }
+    // Adults-only already on from before the 18+ check: that was the user's own opt-in.
+    if cfg.explicit_personalities {
+        cfg.adult_confirmed = true;
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -1168,6 +1236,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn print_alerts_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("printAlerts") && !json.contains("print_alerts"),
+            "default config must omit print_alerts: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.print_alerts.enabled && !missing.print_alerts.camera);
+        let on: AppConfig =
+            serde_json::from_str(r#"{"printAlerts":{"enabled":true,"camera":true}}"#).unwrap();
+        assert!(on.print_alerts.enabled && on.print_alerts.camera);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"printAlerts\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
+    }
+
+    #[test]
     fn dream_model_defaults_off_and_omits_the_key() {
         let missing: AppConfig = serde_json::from_str("{}").unwrap();
         assert!(!missing.dream_model);
@@ -1180,6 +1267,24 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
     }
 
     #[test]
@@ -1522,6 +1627,35 @@ mod tests {
         assert!(!load().composer_autocomplete);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diagnostics_mode_defaults_off() {
+        assert!(!AppConfig::default().diagnostics_mode);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.diagnostics_mode);
+        let _g = hold_test_config();
+        let root = test_config_root("diagnostics-mode");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            diagnostics_mode: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().diagnostics_mode);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"diagnosticsMode\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.diagnostics_mode = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().diagnostics_mode);
+        fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!load().diagnostics_mode);
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -22,7 +22,7 @@ pub const NAME_MAX: usize = 32;
 
 /// Closes every personality block: the rules after it outrank the tone above it.
 pub const SAFETY_LINE: &str =
-    "Personality affects tone only. Safety, approval, honesty and no-fabrication rules above all else.";
+    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -376,6 +376,16 @@ pub fn try_it_messages(personality: &Personality) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nyx_flirts_back_but_stays_pg13() {
+        let nyx = builtin("nyx");
+        assert!(nyx.tone_rules.ends_with(
+            "When they flirt, flirt back playfully and keep it PG-13: no profanity or explicit content."
+        ));
+        assert!(!nyx.explicit);
+        assert!(nyx.tone_rules.len() <= TONE_RULES_MAX);
+    }
 
     #[test]
     fn the_builtins_are_nyx_and_the_twenty_one_styles() {

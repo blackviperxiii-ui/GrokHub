@@ -8,7 +8,10 @@ use eframe::egui;
 
 #[test]
 fn health_opens_the_about_page() {
-    assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
+    assert_eq!(
+        super::settings::health_settings_sec(),
+        super::SettingsSec::About
+    );
 }
 
 #[test]
@@ -980,6 +983,17 @@ fn labs_beta_channel_toggle_is_wired() {
             && settings.contains("maybe_auto_off_beta_channel")
             && settings.contains("channel_auto_off_note"),
         "Labs must wire the Beta channel toggle, status line, Windows note, and auto-off"
+    );
+    assert!(
+        settings.contains("ui_labs_diagnostics"),
+        "Labs must paint the Diagnostics mode toggle"
+    );
+    let diag = include_str!("diagnostics_ui.rs");
+    assert!(
+        diag.contains("Diagnostics mode")
+            && diag.contains("save_chat_diagnostics")
+            && diag.contains("loadout-diagnostics"),
+        "Labs Diagnostics UI must wire the mode toggle and Desktop zip export"
     );
     let app = include_str!("mod.rs");
     assert!(

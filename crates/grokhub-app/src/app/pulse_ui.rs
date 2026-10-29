@@ -242,6 +242,10 @@ pub(super) enum PulseAct {
     /// More or fewer cards of this one's kind, from the ··· menu.
     MoreKind(String),
     LessKind(String),
+    /// A backup reminder's one-tap, by chip id.
+    BackupChip(String),
+    /// Start-my-day brief: run one item's one-tap prompt.
+    DayTap(String),
     /// Hobby learning-path tip feedback.
     HobbyDone(String),
     HobbySkip(String),
@@ -618,8 +622,13 @@ fn pulse_menu(
     }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
-    pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
-    pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
+        pick(ui, "Not today", "N", PulseAct::NotThis(id.clone()), act);
+        pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    } else {
+        pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
+        pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    }
     if let Some(why) = why {
         ui.separator();
         ui.label(
@@ -995,6 +1004,12 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
+    if grokhub_core::local_model_news::is_upgrade_card(card)
+        && card.status != grokhub_core::UpdateStatus::Dismissed
+        && super::change_undo::click_pill(ui, "Open in Settings")
+    {
+        act = Some(FeedPostAct::Open);
+    }
     if super::fix_it::is_diagnosis_report_card(card) {
         if let Some(rec) = paint_recording(ui, card) {
             act = Some(rec);
@@ -1004,6 +1019,33 @@ pub(super) fn paint_post_body(
         act = Some(wait);
     }
     act
+}
+
+/// One-tap buttons under a Start my day Digest.
+fn paint_day_brief_taps(ui: &mut egui::Ui, taps: &[(String, String)]) -> Option<String> {
+    if taps.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (label, prompt) in taps.iter().take(grokhub_core::day_brief::ITEM_CAP) {
+            let btn = ui.add(
+                egui::Button::new(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::fg()),
+                )
+                .frame(false)
+                .min_size(egui::vec2(0.0, 22.0)),
+            );
+            if btn.clicked() {
+                picked = Some(prompt.clone());
+            }
+        }
+    });
+    picked
 }
 
 /// Save, Not interested and More like this under a source post. Save reads Saved
@@ -1656,6 +1698,14 @@ impl Cabin {
                             FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
                         });
                     }
+                    if let Some(id) = self.paint_backup_one_taps(ui, card) {
+                        act = Some(PulseAct::BackupChip(id));
+                    }
+                    if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
+                        if let Some(tap) = paint_day_brief_taps(ui, &self.day_brief_taps()) {
+                            act = Some(PulseAct::DayTap(tap));
+                        }
+                    }
                 });
             });
         });
@@ -1923,8 +1973,29 @@ impl Cabin {
                 let clock = Self::local_clock();
                 self.pulse_snooze_at(&id, clock.now_ms, clock.hour, clock.minute);
             }
-            PulseAct::Dismiss(id) => self.pulse_dismiss(&id, &Self::local_day()),
-            PulseAct::NotThis(id) => self.pulse_not_this(&id, &Self::local_day()),
+            PulseAct::Dismiss(id) => {
+                if self
+                    .pulse_card(&id)
+                    .is_some_and(|c| grokhub_core::day_brief::is_day_brief_card(&c.source_id))
+                {
+                    self.day_brief_not_today(&id);
+                } else {
+                    self.pulse_dismiss(&id, &Self::local_day());
+                }
+            }
+            PulseAct::NotThis(id) => {
+                if self
+                    .pulse_card(&id)
+                    .is_some_and(|c| grokhub_core::day_brief::is_day_brief_card(&c.source_id))
+                {
+                    self.day_brief_not_today(&id);
+                } else {
+                    self.pulse_not_this(&id, &Self::local_day());
+                }
+            }
+            PulseAct::DayTap(prompt) => {
+                self.send_chat(prompt);
+            }
             PulseAct::Always(id) => self.pulse_always(&id, &Self::local_day()),
             PulseAct::Accept(id) => self.pulse_accept(&id, &Self::local_day()),
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
@@ -1938,6 +2009,7 @@ impl Cabin {
             PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::BackupChip(id) => self.tap_backup_chip(&id),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
             // Recorded by react_to_act; nothing else to do.
             PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
@@ -1985,6 +2057,10 @@ impl Cabin {
             self.proactive_click(id);
             return None;
         }
+        if self.pulse_card(id)?.pulse.print_alert.is_some() {
+            self.print_alert_run(id);
+            return None;
+        }
         self.pulse_run_line(id)
     }
 
@@ -2028,6 +2104,7 @@ impl Cabin {
         self.pulse_note(&card.title, kind.ledger_reason(), day);
         if kind.counts_negative() {
             self.nudge_watcher_dismissed(&card);
+            self.ask_offer_dismissed(&card);
             self.heartbeat_card_dismissed();
             self.proactive_dismissed(&card);
             self.pulse_remove_dismiss(&card, true);
@@ -2456,6 +2533,18 @@ fn kick_pulse_decode(ctx: egui::Context, name: String, path: std::path::PathBuf)
         }
         ctx.request_repaint();
     });
+}
+
+/// Tests: block until no thumb decode is in flight, so the next pass uploads it.
+#[cfg(test)]
+pub(super) fn wait_pulse_decodes() {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        if pulse_tex_gate().lock().is_ok_and(|g| g.inflight.is_empty()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn fetch_agent() -> ureq::Agent {

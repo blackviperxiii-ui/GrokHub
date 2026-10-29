@@ -1065,6 +1065,46 @@ fn automate_offer_files_a_daily_job() {
     assert_eq!(cabin.automations.len(), 2);
     assert!(!cabin.running);
 
+    // Repeated-ask offer: human title + editable schedule preview in `prompt`.
+    let mut preview = offer_card(
+        "repeat",
+        "You ask this most evenings around 7 PM, want me to do it automatically?",
+        UpdateStatus::Unread,
+    );
+    preview.prompt = Some("every day at 7pm, check patch notes".into());
+    preview.source_id = "askoffer:patch-note@h19".into();
+    cabin.automations.clear();
+    cabin.updates.push(preview);
+    cabin.accept_automate_offer("repeat");
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.automations[0].schedule, "daily");
+    assert_eq!(cabin.automations[0].time, "19:00");
+    assert_eq!(cabin.automations[0].name, "check patch notes");
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn ask_offer_dismiss_persists_in_ledger() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("ask-offer-dismiss");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    let mut card = offer_card(
+        "repeat",
+        "You ask this most evenings around 7 PM, want me to do it automatically?",
+        UpdateStatus::Unread,
+    );
+    card.source_id = "askoffer:patch-note@h19".into();
+    card.prompt = Some("every day at 7pm, check patch notes".into());
+    cabin.ask_offer_dismissed(&card);
+    let ledger = super::super::ask_offers_ui::load_ask_offer_ledger();
+    assert!(ledger.dismissed.contains("patch-note@h19"));
+
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
@@ -1414,6 +1454,95 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Downloads",
     ));
     rows.push((
+        "show_backup_reminder",
+        grokhub_core::backup_nudge::Reminder {
+            lines: vec!["my-app has 2 commits on feat-x not pushed for 4 days.".into()],
+            push: None,
+            tool: None,
+        }
+        .card(now),
+        "my-app",
+    ));
+    rows.push((
+        "note_probe",
+        grokhub_core::net_log::insight_card(
+            &[&grokhub_core::net_log::Outage {
+                start_ms: 2 * 60 * 60 * 1000,
+                end_ms: Some(3 * 60 * 60 * 1000),
+                offset_min: 0,
+            }],
+            now,
+        )
+        .expect("insight"),
+        "internet",
+    ));
+    rows.push((
+        "finish_release_radar",
+        grokhub_core::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: grokhub_core::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        }
+        .radar_card(now),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
+        "post_due_reminders",
+        grokhub_core::release_radar::out_today_card(
+            9,
+            &grokhub_core::release_radar::Reminder {
+                name: "Fake Quest: Frontier".into(),
+                date_ms: 1,
+            },
+            now,
+        ),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
+        "post_companion",
+        grokhub_core::game_companion::Companion {
+            game: grokhub_core::steam::SteamGame {
+                app_id: 7,
+                name: "Fake Quest".into(),
+                last_played: 1,
+                playtime_min: 60,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        }
+        .companion_card(now),
+        "Fake Quest",
+    ));
+    rows.push((
+        "finish_local_models",
+        grokhub_core::local_model_news::Suggestion::Release {
+            repo: "ggml-org/Qwen3-14B-GGUF".into(),
+            run_mb: 10_020,
+            budget_mb: 16_384,
+            mem: grokhub_core::local_picker::Memory::Gpu,
+            like: None,
+        }
+        .card(now),
+        "Qwen3-14B",
+    ));
+    rows.push((
+        "post_model_offer",
+        grokhub_core::model_drop::ModelOffer {
+            file: grokhub_core::model_drop::ModelFile {
+                path: "/home/user/Downloads/bracket.stl".into(),
+                name: "bracket.stl".into(),
+                bytes: 2048,
+            },
+            dims: Some([60.0, 20.0, 40.0]),
+            thumb: None,
+        }
+        .card(None, now),
+        "bracket.stl",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {
@@ -1579,10 +1708,81 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ..Default::default()
     };
     let nudge = grokhub_core::nudge_watchers::detect_gpu_driver(&gpu_snap).expect("gpu nudge");
+    let print_alert = grokhub_core::AlertResult {
+        kind: grokhub_core::AlertKind::Failed,
+        printer_key: "k1".into(),
+        status: grokhub_core::PrinterStatus {
+            name: "Shop K2".into(),
+            kind: grokhub_core::PrinterKind::Moonraker,
+            state: grokhub_core::PrintState::Error,
+            progress_pct: Some(42.0),
+            eta_secs: None,
+            filename: Some("bracket.gcode".into()),
+            message: None,
+            camera_path: None,
+        },
+        camera_enabled: false,
+    };
+    rows.push((
+        "tick_print_alerts",
+        grokhub_core::alert_card(&print_alert, now),
+        "Shop K2",
+    ));
     rows.push((
         "tick_nudge_watchers",
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
+    ));
+    let mut health_session = None;
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now,
+            cpu_temp_c: Some(70.0),
+            gpu_temp_c: Some(75.0),
+            cpu_util_pct: Some(40),
+            gpu_util_pct: Some(85),
+            cpu_clock_mhz: Some(4000),
+            gpu_clock_mhz: Some(1800),
+            game_label: Some("Hades".into()),
+        },
+        now,
+    );
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now + 70_000,
+            cpu_temp_c: Some(72.0),
+            gpu_temp_c: Some(78.0),
+            cpu_util_pct: Some(42),
+            gpu_util_pct: Some(88),
+            cpu_clock_mhz: Some(4100),
+            gpu_clock_mhz: Some(1850),
+            game_label: Some("Hades".into()),
+        },
+        now + 70_000,
+    );
+    let health =
+        grokhub_core::pc_health::summarize(health_session.as_ref().expect("session"), now + 70_000);
+    rows.push((
+        "tick_pc_health",
+        grokhub_core::summary_card(&health, now),
+        "Hades",
+    ));
+    rows.push((
+        "tick_ask_offers",
+        grokhub_core::build_offer_card(
+            &grokhub_core::AskCluster {
+                key: "patch-note@h19".into(),
+                example: "check patch notes".into(),
+                count: 3,
+                peak_hour: 19,
+                weekday_share_pct: 40,
+                kind: grokhub_core::OfferKind::Automation,
+            },
+            now,
+        ),
+        "patch notes",
     ));
     let rust_step = grokhub_core::next_step(
         grokhub_core::HobbyId::Rust,

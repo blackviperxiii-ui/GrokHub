@@ -262,6 +262,7 @@ fn composer_stack_drops_approve_slots() {
             super::ComposerStackSlot::SessionTools,
             super::ComposerStackSlot::LiveWork,
             super::ComposerStackSlot::SlashPalette,
+            super::ComposerStackSlot::ScreenshotOffer,
             super::ComposerStackSlot::Attach,
             super::ComposerStackSlot::Voice,
             super::ComposerStackSlot::Pill,

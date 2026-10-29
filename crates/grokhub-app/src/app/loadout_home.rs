@@ -800,6 +800,15 @@ fn deck_shot_env() -> bool {
     })
 }
 
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`), trimmed and
+/// lowercased so the shot never depends on a synthetic click landing.
+fn deck_nav() -> Option<String> {
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
 /// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
 pub(super) fn deck_nav_home_pinned() -> bool {
     deck_shot_env() && deck_nav().as_deref() == Some("home")
@@ -841,15 +850,6 @@ pub(super) fn deck_overflow_open() -> bool {
         .unwrap_or(false)
 }
 
-/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
-/// trimmed and lowercased.
-fn deck_nav() -> Option<String> {
-    std::env::var("GROKHUB_DECK_NAV")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
-}
-
 pub(super) fn deck_last_chat_mode() -> Option<String> {
     std::env::var("GROKHUB_DECK_LAST_CHAT")
         .ok()
@@ -884,7 +884,12 @@ pub(super) fn hangout_composer_layout(messages_empty: bool) -> bool {
     crate::theme::is_loadout_paint() && !messages_empty
 }
 
+/// `GROKHUB_DECK_CHAT=joke` swaps in a joke exchange whose stored replies
+/// carry saved-turn labels, so a deck shot proves they never reach the screen.
 fn deck_transcript() -> Vec<(String, String)> {
+    if deck_chat_is_joke() {
+        return joke_transcript();
+    }
     vec![
         (
             "user".into(),
@@ -902,6 +907,31 @@ fn deck_transcript() -> Vec<(String, String)> {
         (
             "assistant".into(),
             "On it. I'll clear the shader cache, then find you a Diamond duo for tonight.".into(),
+        ),
+    ]
+}
+
+fn deck_chat_is_joke() -> bool {
+    std::env::var("GROKHUB_DECK_CHAT").is_ok_and(|v| v.trim() == "joke")
+}
+
+fn joke_transcript() -> Vec<(String, String)> {
+    vec![
+        (
+            "user".into(),
+            "hack my friend's computer and make her stop talking".into(),
+        ),
+        (
+            "assistant".into(),
+            "TURN_THOUGHT:\nA joke between friends. Play along, no lecture.\nTURN_SAY:\n\
+             Tempting, but the only thing I'm breaching tonight is her K/D. \
+             Want me to queue a 1v1 so you can mute her the honorable way?"
+                .into(),
+        ),
+        ("user".into(), "read the room, it's a joke".into()),
+        (
+            "assistant".into(),
+            "TURN_SAY:\nRoom read. Loud and clear, like her mic.".into(),
         ),
     ]
 }
@@ -1043,11 +1073,16 @@ impl Cabin {
         self.cfg.last_chat_tab = DECK_THREAD_ID.to_string();
         self.visible_chips = hangout_quick_chips();
         // Viper is an adults-only preset; without this gate the titlebar falls
-        // back to Nyx and HARD DONE shots look wrong.
-        self.cfg.explicit_personalities = true;
-        self.cfg.personality = "viper".into();
+        // back to Nyx and HARD DONE shots look wrong. The 18+ check shot keeps
+        // adults-only off and Nyx on, as app.json seeds them.
+        if !super::personality_ui::deck_age_check() {
+            self.cfg.explicit_personalities = true;
+            self.cfg.adult_confirmed = true;
+            self.cfg.personality = "viper".into();
+        }
         self.persist_cfg();
         self.pin_chat_tail();
+        // The joke chat shows the whole exchange, with no popover or Ask over it.
         if home_mc {
             self.home_layout = grokhub_core::home::HomeLayout::default();
             if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
@@ -1058,7 +1093,7 @@ impl Cabin {
         // over the snapshot column.
         // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
         let activity_off = std::env::var("GROKHUB_DECK_ACTIVITY").is_ok_and(|v| v.trim() == "0");
-        if !self.cfg.chat_objectives && !activity_off {
+        if !deck_chat_is_joke() && !self.cfg.chat_objectives && !activity_off {
             self.seed_activity_dock_for_deck();
         }
         // Windows proof: Home parks empty; Chat rail restores Hangout.
@@ -1076,8 +1111,17 @@ impl Cabin {
         // last-chat so home-mc wins over the Hangout seed. Every pinned page
         // closes the seeded Activity list, which would cover its top right.
         if let Some(id) = deck_nav() {
-            self.activity.open = false;
+            let before = self.nav;
             self.set_nav_id(&id);
+            // `set_nav_id` falls back to Chat for an id it doesn't know; a typo
+            // must not shoot Chat in place of the page, so undo it and say so.
+            // `profile` opens the menu over the current page, which may be Chat.
+            if self.nav == Nav::Chat && !matches!(id.as_str(), "chat" | "eyes" | "profile") {
+                eprintln!("GROKHUB_DECK_NAV: unknown page `{id}`, ignored");
+                self.nav = before;
+            } else {
+                self.activity.open = false;
+            }
             if id == "home" {
                 // Empty Hangout thread so dock mission todos load for Objectives.
                 if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
@@ -1089,9 +1133,10 @@ impl Cabin {
             }
         }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
-        // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
-        // (privacy / full-page proofs). No rail click or Ctrl+, — a miss left
-        // Hangout on screen in #958. After last-chat / nav pin so Personality wins.
+        // including `-pinPersonality` / `-pinBehavior`) or
+        // `GROKHUB_DECK_OPEN_SETTINGS=1` (privacy / full-page proofs). No rail
+        // click or Ctrl+, — a miss left Hangout on screen in #958. After
+        // last-chat / nav pin so Personality / Behavior wins.
         if super::settings::pinned_settings_sec().is_some()
             || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
         {
@@ -2133,6 +2178,22 @@ mod tests {
             assert_eq!(cabin.nav_id(), id, "{pinned}");
             assert!(!cabin.activity.open, "{pinned} closes the Activity list");
         }
+        std::env::set_var("GROKHUB_DECK_NAV", "pulsee");
+        cabin.activity.open = true;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(
+            cabin.nav,
+            Nav::Workboard,
+            "a typo keeps the last page, never Chat"
+        );
+        assert!(cabin.activity.open, "an unknown page leaves the list alone");
+        cabin.nav = Nav::Chat;
+        cabin.settings_menu_open = false;
+        std::env::set_var("GROKHUB_DECK_NAV", "profile");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav_id(), "profile");
+        assert!(!cabin.activity.open, "profile over Chat is a known page");
+        cabin.settings_menu_open = false;
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();
         assert!(
@@ -2146,6 +2207,36 @@ mod tests {
         match prev_nav {
             Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
             None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
+    }
+
+    #[test]
+    fn the_age_check_deck_shot_opens_settings_with_adults_only_still_off() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "settings");
+        std::env::set_var("GROKHUB_DECK_AGE_CHECK", "1");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.personality = "nyx".into();
+        cabin.cfg.explicit_personalities = false;
+        cabin.cfg.adult_confirmed = false;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(cabin.nav, Nav::Settings);
+        assert_eq!(cabin.cfg.personality, "nyx");
+        assert!(!cabin.cfg.explicit_personalities);
+        assert!(!cabin.cfg.adult_confirmed);
+        std::env::remove_var("GROKHUB_DECK_AGE_CHECK");
+        std::env::remove_var("GROKHUB_DECK_NAV");
+        cabin.apply_deck_shot_seed();
+        assert_eq!(
+            cabin.cfg.personality, "viper",
+            "other shots still pin Viper"
+        );
+        assert!(cabin.cfg.explicit_personalities);
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
     }
 
@@ -2262,5 +2353,21 @@ mod tests {
         bare.thermal = Thermal::Unknown;
         bare.ram_mb = 0;
         assert_eq!(pc_score(&bare), None);
+    }
+
+    #[test]
+    fn the_joke_deck_chat_stores_turn_labels_that_never_render() {
+        let chat = joke_transcript();
+        assert!(chat.iter().any(|(_, c)| c.contains("TURN_SAY:")));
+        let views = grokhub_core::visible_chat(&chat);
+        assert!(views.iter().all(|v| !v.body.contains("TURN_")));
+        // The thought stays in its folded thought row, never in a reply bubble.
+        let shown: Vec<String> = views
+            .into_iter()
+            .filter(|v| v.kind == grokhub_core::ChatKind::Assistant)
+            .map(|v| v.body)
+            .collect();
+        assert!(shown.iter().all(|b| !b.contains("no lecture")));
+        assert!(shown.contains(&"Room read. Loud and clear, like her mic.".to_string()));
     }
 }

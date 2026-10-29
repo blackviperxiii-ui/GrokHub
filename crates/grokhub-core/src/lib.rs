@@ -2,12 +2,14 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod adult_guard;
 pub mod amr;
 pub mod appearance;
 pub mod attach;
 pub mod audio_check;
 pub mod automation;
 pub mod autonomy;
+pub mod backup_nudge;
 pub mod bg_task;
 pub mod brain_policy;
 pub mod brand;
@@ -43,6 +45,7 @@ pub mod findings;
 pub mod fix_plan;
 pub mod focus_app;
 pub mod frame;
+pub mod game_companion;
 pub mod gguf;
 pub mod goal;
 pub mod governor;
@@ -64,6 +67,8 @@ pub mod ideas;
 pub mod imagine;
 pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
+pub mod ask_offers;
+pub mod day_brief;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -71,6 +76,7 @@ pub mod learning;
 pub mod local_discover;
 pub mod local_draft;
 pub mod local_governor;
+pub mod local_model_news;
 pub mod local_picker;
 pub mod local_profile;
 pub mod local_setup;
@@ -79,8 +85,10 @@ pub mod mcp_oauth;
 pub mod md;
 pub mod mission;
 pub mod model_download;
+pub mod model_drop;
 pub mod model_registry;
 pub mod models;
+pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
 pub mod openclaw;
@@ -89,10 +97,12 @@ pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
 pub mod paths;
+pub mod pc_health;
 pub mod personality;
 pub mod pii;
 pub mod pkce;
 pub mod playbook;
+pub mod print_alerts;
 pub mod proactive;
 pub mod proactive_auto;
 pub mod proc_util;
@@ -107,6 +117,7 @@ pub mod recipe;
 pub mod recovered;
 pub mod redact;
 pub mod reflect;
+pub mod release_radar;
 pub mod release_verify;
 pub mod review;
 pub mod rewind;
@@ -114,6 +125,7 @@ pub mod rhythm;
 pub mod run_metrics;
 pub mod runtime_download;
 pub mod screen_record;
+pub mod screenshot_offer;
 pub mod sddl;
 pub mod self_review;
 pub mod shortcuts;
@@ -154,6 +166,15 @@ pub use amr::{
 pub use appearance::{
     appearance_choices, appearance_hint, kde_prefers_dark, os_prefers_dark, parse_theme,
     pick_theme, resolve_dark, resolve_palette, theme_id, theme_label, DarkPalette, ThemeChoice,
+};
+pub use ask_offers::{
+    append_ask, automate_accept_seed, build_offer_card, clock_token, cluster_asks,
+    cluster_key_from_source, dismiss_cluster, is_ask_offer_card, may_log_ask, offer_preview,
+    suggestion_title, tick as tick_ask_offers, AskCluster, AskLogEntry, AskOfferLedger,
+    AskOfferSettings, OfferKind, TickInput as AskOfferTickInput, TickOutput as AskOfferTickOutput,
+    DEFAULT_DAILY_MAX as ASK_OFFER_DAILY_MAX, LEDGER_FILE as ASK_OFFERS_FILE, OFFER_MIN_COUNT,
+    SOURCE_PREFIX as ASK_OFFER_PREFIX, TICK_EVERY_MS as ASK_OFFER_TICK_MS,
+    WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,
@@ -249,16 +270,16 @@ pub use chat_view::{
     CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use chips::{
-    build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
-    chip_spend_allowed, chip_suggest_prompt, chip_thread_from_messages, context_fingerprint,
-    detect_chip_context, detect_chip_stage, empty_chip_memory, home_slash_cmd,
+    build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_key_embeds_chat_text,
+    chip_memory_key, chip_scan, chip_spend_allowed, chip_suggest_prompt, chip_thread_from_messages,
+    context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory, home_slash_cmd,
     home_surface_from_nav, idea_talk_chips, local_lessons, mode_from_chip_value,
     nav_from_chip_value, parse_llm_chips, predict_intents, prune_retired_chip_memory,
     remember_chip_click, remember_chip_dismiss, remember_chip_outcome, remember_home_slash,
-    remember_home_surface, remember_typed_prompt, should_refresh_llm, skill_offer_chip,
-    top_habit_labels, CabinPace, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread,
-    PredictedIntent, QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_LLM_SPEND_MS,
-    CHIP_VISIBLE_MAX,
+    remember_home_surface, remember_typed_prompt, scrub_chat_text_chip_keys, should_refresh_llm,
+    skill_offer_chip, top_habit_labels, CabinPace, ChipInput, ChipKind, ChipMemory, ChipStage,
+    ChipThread, PredictedIntent, QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_LLM_SPEND_MS,
+    CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -276,7 +297,13 @@ pub use desktop_mcp::{
     apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, CABIN_CU_SERVERS,
     CUA_MCP_RULE, CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER, SELF_MCP_SERVER,
 };
-pub use diagnostics::diagnostics_bundle;
+pub use diagnostics::{
+    content_level_label, desktop_dir, diagnostics_bundle, diagnostics_markdown,
+    diagnostics_saved_status, diagnostics_zip_name, diagnostics_zip_path, redact_for_diagnostics,
+    redact_turn, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier, DiagnosticsExport,
+    DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall, DiagnosticsTurn,
+    DIAGNOSTICS_PREVIEW_LINES,
+};
 pub use doctor::{
     doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,
     hub_kind_from_health, DoctorLine,
@@ -453,7 +480,18 @@ pub use paths::{
     cabin_session_cwd, cabin_work_root, canonical_session_cwd, chat_appears_in_history,
     history_list_refresh_due, session_home, user_home,
 };
+pub use pc_health::{
+    game_running, is_pc_health_card, observe, summary_card, BoundGuess, GameSession, ObserveOut,
+    PcHealthLedger, PcHealthSettings, SensorSample, SessionSummary, SAMPLE_EVERY_MS,
+};
 pub use pii::{redact_pii, redact_recall};
+pub use print_alerts::{
+    alert_card, control_action_json, control_request, controls_for, detect_alert, identify_api,
+    is_print_alert_card, observe as observe_print, parse_control_action, parse_moonraker_status,
+    parse_octoprint_job, AlertKind, AlertResult, ControlKind, PrintAlertMeta, PrintAlertsLedger,
+    PrintAlertsSettings, PrintState, PrinterKind, PrinterStatus, SavedPrinter, ALERT_COOLDOWN_MS,
+    CONTROL_TOOL, POLL_EVERY_MS,
+};
 pub use proactive_auto::{
     ceiling_allows, AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss,
     PillMode, AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_REVERSIBILITY,
@@ -498,6 +536,11 @@ pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
     rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_sensitive, rewind_snapshot_ready, RewindRecord,
+};
+pub use screenshot_offer::{
+    dismiss as dismiss_screenshot_offer, is_image_name, newest_in_watch_dirs,
+    tick as tick_screenshot_offer, watch_dirs, ScreenshotExplainSettings, ScreenshotOfferLedger,
+    TickOutcome, CHIP_LABEL, CHIP_TTL_MS, DISMISS_LABEL, EXPLAIN_PROMPT,
 };
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
@@ -545,9 +588,9 @@ pub use trajectory::{
 pub use tui_gaps::{btw_queues_without_interrupt, BTW_LABEL, BTW_TIP_BODY, BTW_TIP_TITLE};
 pub use turn_timeline::{
     append_say, append_thought, append_tool, chunk_seam, decode_tool_rows, decode_turn,
-    encode_turn, last_say, split_at_last_sentence, tool_detail_is_status, tool_display_title,
-    tool_group_label, tool_status_failed, tool_status_running, turn_needs_timeline, turn_says,
-    views_up_to_last_user, LiveBlock, LiveKind, ToolRow, TurnPart,
+    encode_turn, last_say, split_at_last_sentence, strip_turn_labels, tool_detail_is_status,
+    tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
+    turn_needs_timeline, turn_says, views_up_to_last_user, LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
     beta_auto_off_for_versions, cabin_overlay_step, cabin_update_notice, cabin_version_newer,

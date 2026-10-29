@@ -140,10 +140,12 @@ mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod activity_dock;
+mod ask_offers_ui;
 mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
+mod backup_ui;
 mod board_ui;
 mod budget_ui;
 mod canary_ui;
@@ -157,6 +159,8 @@ mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
+mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
 mod episode_ui;
@@ -165,6 +169,7 @@ mod feed_ui;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
+mod game_companion_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -182,6 +187,7 @@ mod knowme_ui;
 mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
+mod local_models_ui;
 mod local_pick_ui;
 mod local_probe;
 mod local_signals;
@@ -189,17 +195,21 @@ mod marketplace_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
+mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
+mod net_log_ui;
 mod night;
 mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;
+mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
@@ -210,6 +220,7 @@ mod pulse;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
+mod release_radar_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
@@ -217,6 +228,7 @@ mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
+mod screenshot_offer_ui;
 #[cfg(test)]
 mod self_review_tests;
 mod self_review_ui;
@@ -238,21 +250,6 @@ mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;
 
-/// Title and body for a token budget warning.
-pub(super) fn token_budget_notice(
-    level: grokhub_core::BudgetLevel,
-    line: &str,
-    pauses: bool,
-) -> (&'static str, String) {
-    match level {
-        grokhub_core::BudgetLevel::Over if pauses => (
-            "Token budget used up",
-            format!("{line}. Scheduled work waits until tomorrow."),
-        ),
-        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
-        _ => ("Token budget at 80%", format!("{line}.")),
-    }
-}
 use confirm::*;
 #[cfg(test)]
 use feed_ui::*;
@@ -589,6 +586,8 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
+    pc_health: pc_health_ui::PcHealthState,
+    print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -887,6 +886,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
+    /// Last Labs Diagnostics zip on the Desktop (Open folder).
+    diagnostics_last_zip: Option<std::path::PathBuf>,
     /// Modular Home slot layout (`home_layout.json` v2).
     home_layout: grokhub_core::home::HomeLayout,
     /// Edit Home modules dialog draft (`None` = closed).
@@ -1213,6 +1214,8 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1314,7 +1317,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            picker: Default::default(),
+            picker: personality_ui::first_picker(),
             playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
@@ -1456,6 +1459,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
             home_edit: None,
         };
@@ -1679,6 +1683,8 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
@@ -1919,6 +1925,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
+            diagnostics_last_zip: None,
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
         }
@@ -2998,23 +3005,6 @@ impl Cabin {
         Some(cmd)
     }
 
-    fn doctor_text(&self) -> String {
-        self.doctor_checks()
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
-        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
-        lines.extend(grokhub_core::doctor_extras(
-            self.last_receipt_ok,
-            self.skill_list.len(),
-        ));
-        lines
-    }
-
     /// `/health` from what this session already knows: the last update probe,
     /// the doctor checks, failing automations, MCP servers and the newest dream.
     fn health_input(&self) -> grokhub_core::health::HealthInput {
@@ -3353,7 +3343,8 @@ impl Cabin {
             return;
         };
         let line = grokhub_core::budget_line(&self.usage, cap);
-        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        let (title, body) =
+            budget_ui::token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
         self.status = format!("{title} — {body}");
         if crate::notify::allow_ping(self.quiet_now()) {
             crate::notify::ping(title, &body);
@@ -3533,10 +3524,8 @@ impl Cabin {
             }
             match act {
                 HeartbeatAct::Housekeep => {
-                    self.housekeep_rhythm_and_recap();
-                    if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist_bg();
-                    }
+                    self.tick_housekeep();
+                    self.tick_day_brief();
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
@@ -5444,6 +5433,7 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.paint_focus_overlays(&ctx);
         self.paint_tidy_review(&ctx);
         self.tick_setup_wizard();
         self.paint_setup_wizard(&ctx);
@@ -5808,9 +5798,6 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
 
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
-}
-fn health_settings_sec() -> SettingsSec {
-    SettingsSec::About
 }
 
 fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {

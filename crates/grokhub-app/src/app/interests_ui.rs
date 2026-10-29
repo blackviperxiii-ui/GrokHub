@@ -262,6 +262,9 @@ impl Cabin {
         self.ui_reactions(ui);
         self.ui_daily_drop(ui);
         self.ui_nudge_watchers(ui);
+        ui.add_space(12.0);
+        self.ui_pc_health_row(ui);
+        self.ui_print_alerts(ui);
     }
 }
 
