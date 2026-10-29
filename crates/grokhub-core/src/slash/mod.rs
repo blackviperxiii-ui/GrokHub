@@ -135,10 +135,10 @@ pub enum Slash {
     SkillUndo(String),
     /// `/skills restore <name>`: bring back a skill that was removed.
     SkillRestore(String),
-    /// `/connections changes`: connections GrokHub added, changed, or turned
+    /// `/connections changes`: connections {product} added, changed, or turned
     /// off on its own, each with an Undo click.
     ConnectionChanges,
-    /// `/automations changes`: automations GrokHub made or changed on its own.
+    /// `/automations changes`: automations {product} made or changed on its own.
     AutomationChanges,
     GrokConnectors,
     /// `/hooks` — Connectors tab, Hooks section.
@@ -738,7 +738,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/skills changes",
-        hint: "What GrokHub changed in your skills",
+        hint: "What {product} changed in your skills",
         insert: "/skills changes",
         run_on_pick: true,
     },
@@ -756,13 +756,13 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/connections changes",
-        hint: "What GrokHub changed in your connections",
+        hint: "What {product} changed in your connections",
         insert: "/connections changes",
         run_on_pick: true,
     },
     SlashDef {
         cmd: "/automations changes",
-        hint: "What GrokHub changed in your automations",
+        hint: "What {product} changed in your automations",
         insert: "/automations changes",
         run_on_pick: true,
     },
@@ -850,7 +850,7 @@ impl From<&SlashDef> for SlashHit {
     fn from(s: &SlashDef) -> Self {
         Self {
             cmd: s.cmd.to_string(),
-            hint: s.hint.to_string(),
+            hint: crate::brand::filled(s.hint).to_string(),
             insert: s.insert.to_string(),
             run_on_pick: s.run_on_pick,
         }
@@ -944,11 +944,11 @@ pub fn slash_help() -> String {
         "/loop [30m] <prompt> — interval scheduler",
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
         "/skills — skills catalog: cabin skills and project and user skills",
-        "/skills changes — what GrokHub changed in your skills on its own, each with Undo",
+        "/skills changes — what {product} changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
-        "/connections changes — connections GrokHub added, changed, or turned off on its own, each with Undo",
-        "/automations changes — automations GrokHub made or changed on its own, each with Undo",
+        "/connections changes — connections {product} added, changed, or turned off on its own, each with Undo",
+        "/automations changes — automations {product} made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — chat model for this cabin",
@@ -981,7 +981,7 @@ pub fn slash_help() -> String {
         "/privacy — your grants, learning scopes (all off), and what left this computer",
         "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks; /why local shows the on-device model",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
-        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Cabin defaults",
+        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Defaults",
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
@@ -992,7 +992,7 @@ pub fn slash_help() -> String {
         "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
         "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
         "/worktree — next chat starts in a git worktree",
-        "/workflow — workflows were a grok CLI feature and are not in GrokHub",
+        "/workflow — workflows were a grok CLI feature and are not in {product}",
         "/room <name> — speak the room",
         "/export — write this chat as markdown (/export html or /export json for those)",
         "/rename <title> — name this chat (permanent)",
@@ -1013,15 +1013,15 @@ pub fn slash_help() -> String {
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. GrokHub's own engine runs the agent.",
+        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: {product} picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. {product}'s own engine runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow the PermissionMode pill, and `/compact` and `/rewind` honor that same pill. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends read-only (no desktop-do-the-work). Idle btw sends that same read-only ask. Night, inbox, and anticipate runs are unattended: they inherit the pill, and Ask fails closed. Halt cancels the turn.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control runs through the cabin's own desktop tools; Halt cancels the turn.",
         if cfg!(windows) {
-            "First run is Get Started: Super Grok OAuth signs GrokHub in, and that sign-in stays with GrokHub. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
+            "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
         } else {
-            "First run is Get Started: Super Grok OAuth signs GrokHub in, and that sign-in stays with GrokHub. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
+            "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
@@ -1033,6 +1033,7 @@ pub fn slash_help() -> String {
         "Five chips sit centered over the composer. The attach control is a paperclip. Ask anything is a faint placeholder centered with the mic and send. The home update feed is newest-first event cards (automation_done, schedule_created). Idea and digest cards share updates.json and do not use that three-card cap. Accept on an idea files a workboard Todo. No weather, mail, or calendar stubs.",
     ]
     .join("\n")
+    .replace("{product}", crate::brand::product_name())
 }
 
 #[cfg(test)]
@@ -1330,7 +1331,7 @@ mod tests {
             slash_help()
         );
         assert!(slash_help().contains(
-            "Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons."
+            "Effort is automatic: Loadout picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons."
         ));
         assert!(slash_help().contains("Default model is grok-4.7"));
         assert!(slash_help().contains("Hover a composer pill for what it does"));
@@ -1496,7 +1497,7 @@ mod tests {
             .iter()
             .all(|s| !s.cmd.starts_with("/workflow")));
         assert!(slash_help()
-            .contains("/workflow — workflows were a grok CLI feature and are not in GrokHub"));
+            .contains("/workflow — workflows were a grok CLI feature and are not in Loadout"));
         // Still parsed, so a typed /workflow gets that answer instead of going to the engine.
         assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
         assert!(!unknown_cabin_slash("/workflow pause"));

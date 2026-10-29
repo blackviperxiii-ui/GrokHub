@@ -135,17 +135,17 @@ pub fn build_self_review_digest(stats: &[SkillStats]) -> String {
 }
 
 pub fn self_review_system_prompt() -> &'static str {
-    "You review how GrokHub's skills went this week. For each skill whose runs needed fixes, \
+    crate::brand::filled("You review how {product}'s skills went this week. For each skill whose runs needed fixes, \
      propose one concrete change to that skill's steps that would have avoided the failures named. \
      Write one line per proposal, at most 5:\n\
      PATCH_SKILL: skill:<name> | <short title> | <the full new steps, numbered, on one line>\n\
      When the failures share a cause no single skill fixes, you may add one general note for chat replies:\n\
      TUNE_SNIPPET: snippet:<short-name> | <short title> | <one or two sentences, at most 300 characters>\n\
-     When a failure needs a change to GrokHub's own code, describe it for its developers, at most 2:\n\
+     When a failure needs a change to {product}'s own code, describe it for its developers, at most 2:\n\
      CODE_IDEA: <short title> | <the problem, in a sentence> | <the evidence from the numbers above>\n\
      Only skills listed may be patched. Never propose changes to permissions, approval rules, \
-     the hard-action list, consent, network access, honesty rules, GrokHub's code, or how changes are reviewed; \
-     a CODE_IDEA only describes a problem and changes nothing. Write nothing else."
+     the hard-action list, consent, network access, honesty rules, {product}'s code, or how changes are reviewed; \
+     a CODE_IDEA only describes a problem and changes nothing. Write nothing else.")
 }
 
 /// One proposal from the weekly model call, before the rules run.
@@ -202,7 +202,7 @@ pub fn parse_self_review(raw: &str) -> Vec<Proposal> {
 pub fn check_target(raw: &str) -> Result<String, String> {
     match ProtectedSurface::check(raw) {
         Ok(TuneTarget::Skill(name)) => Ok(name),
-        Err(why) if why.starts_with("GrokHub never") => Err(why),
+        Err(why) if why.starts_with(crate::brand::filled("{product} never")) => Err(why),
         _ => Err("a weekly proposal may only change a skill".into()),
     }
 }
@@ -580,7 +580,7 @@ pub fn pick_brain_tweak(
             continue;
         }
         let why = match ProtectedSurface::check(&p.target) {
-            Err(why) if why.starts_with("GrokHub never") => why,
+            Err(why) if why.starts_with(crate::brand::filled("{product} never")) => why,
             _ => format!("a weekly Brain tweak may only change {}", asked.name()),
         };
         refused.push(RejectedProposal {
@@ -1123,15 +1123,15 @@ mod tests {
             vec![
                 RejectedProposal {
                     target: "harness/policy.json".into(),
-                    why: "GrokHub never changes harness policy on its own".into()
+                    why: "Loadout never changes harness policy on its own".into()
                 },
                 RejectedProposal {
                     target: "consent.jsonl".into(),
-                    why: "GrokHub never changes the consent store on its own".into()
+                    why: "Loadout never changes the consent store on its own".into()
                 },
                 RejectedProposal {
                     target: "hard-class list".into(),
-                    why: "GrokHub never changes the hard-class list on its own".into()
+                    why: "Loadout never changes the hard-class list on its own".into()
                 },
             ]
         );
@@ -1185,7 +1185,7 @@ mod tests {
                 },
                 RejectedProposal {
                     target: "crates/grokhub-agent/src/prompt_template.md".into(),
-                    why: "GrokHub never changes the honesty rules on its own".into()
+                    why: "Loadout never changes the honesty rules on its own".into()
                 },
             ]
         );
@@ -1218,7 +1218,7 @@ mod tests {
         );
         assert_eq!(
             check_target("skill:approval-rules"),
-            Err("GrokHub never changes the gate on its own".into())
+            Err("Loadout never changes the gate on its own".into())
         );
     }
 

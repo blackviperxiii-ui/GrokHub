@@ -6,6 +6,9 @@
 use super::*;
 use grokhub_core::interests::{self, InterestProfile, InterestSignal, InterestSource, SeedFrom};
 
+/// The Add-topic row: the pill's height, so the field and Add line up.
+const ADD_ROW_H: f32 = 28.0;
+
 #[derive(Default)]
 pub(super) struct InterestsState {
     /// Read from disk the first time anything needs it.
@@ -176,13 +179,16 @@ impl Cabin {
         );
         ui.add_space(6.0);
         let mut add = false;
+        // Field and Add share one centre line and one height.
         ui.horizontal(|ui| {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.interests.draft)
                     .id(egui::Id::new("pulse-interest-add"))
                     .hint_text("Add a topic, like air compressors")
                     .char_limit(interests::TOPIC_CHARS)
-                    .desired_width(280.0),
+                    .desired_width(280.0)
+                    .min_size(egui::vec2(280.0, ADD_ROW_H))
+                    .vertical_align(egui::Align::Center),
             );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 add = true;
@@ -285,6 +291,56 @@ pub(super) fn ledger_signal(reason: grokhub_core::pulse::LedgerReason) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_add_topic_field_and_button_share_a_centre_line() {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.job.text.clone(), shape.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let (_lock, _root, mut cabin) = cabin();
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..Default::default()
+        };
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            texts.clear();
+            let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_settings_pulse(ui));
+            for c in &out.shapes {
+                walk(&c.shape, &mut texts);
+            }
+        }
+        let y = |text: &str| {
+            texts
+                .iter()
+                .find(|(t, _)| t == text)
+                .map(|(_, r)| r.center().y)
+                .unwrap_or_else(|| panic!("{text} missing: {texts:?}"))
+        };
+        // The field is the pill's height, and its box is centred on the Add label.
+        let field = ctx
+            .read_response(egui::Id::new("pulse-interest-add"))
+            .expect("the Add topic field")
+            .rect;
+        let add = y("Add");
+        assert_eq!(field.height(), ADD_ROW_H, "{field:?}");
+        assert!(
+            (field.center().y - add).abs() <= 1.5,
+            "field {field:?} vs Add {add}"
+        );
+    }
 
     fn cabin() -> (
         std::sync::MutexGuard<'static, ()>,

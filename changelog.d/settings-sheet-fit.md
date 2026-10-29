@@ -1,0 +1,4 @@
+- The Settings sheet (non-Loadout themes) takes 80% of the window between 920×620 and 1280×880, centres under the titlebar, and no longer covers the window buttons. Maximizing gives a bigger sheet.
+- Each Settings section opens at the top instead of keeping another section's scroll position.
+- The About heading opens About, which shows the version and a build line (channel, branch and commit), instead of a panel titled Update.
+- Connectors › GitHub copy says "your GitHub token" instead of internal names.

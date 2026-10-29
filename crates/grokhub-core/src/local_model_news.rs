@@ -284,10 +284,10 @@ impl Suggestion {
                     .map(|(name, t)| format!(", about {t} tok/s here like {name}"))
                     .unwrap_or_default();
                 format!(
-                    "Needs about {} at Q4, fits your {} of {}{speed}. Not in GrokHub's checked catalog yet, so this only links it.",
+                    "Needs about {} at Q4, fits your {} of {}{speed}. Not in {product}'s checked catalog yet, so this only links it.",
                     size_label(*run_mb),
                     size_label(*budget_mb),
-                    memory_words(*mem)
+                    memory_words(*mem), product = crate::brand::product_name()
                 )
             }
         }
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(names, vec!["New on Hugging Face: Qwen3-14B-GGUF"]);
         assert_eq!(
             got[0].body(),
-            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 35 tok/s here like Gemma 4 12B. Not in GrokHub's checked catalog yet, so this only links it."
+            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 35 tok/s here like Gemma 4 12B. Not in Loadout's checked catalog yet, so this only links it."
         );
         let card = got[0].card(9);
         assert_eq!(

@@ -328,7 +328,6 @@ fn profile_name_clips_at_sixty_four() {
     assert_eq!(clipped, "a".repeat(64));
 }
 
-
 #[test]
 fn devices_signed_out_send_task_shows_explanation_and_signin_link() {
     let mut quiet = QuietCabin::boot("devices-signed-out");
@@ -368,5 +367,20 @@ fn session_menu_hidden_when_no_session() {
         menu_rect,
         egui::Rect::NOTHING,
         "the session menu must be hidden when there is no active session"
+    );
+}
+
+#[test]
+fn library_empty_state_hides_filters_and_offers_open_steam_action() {
+    let src = include_str!("library_ui.rs")
+        .replace("\r\n", "\n")
+        .replace("pub(super) ", "");
+    let lib = fn_src(&src, "ui_library");
+    assert!(
+        lib.contains("empty_state")
+            && lib.contains("No Steam library")
+            && lib.contains("Open Steam")
+            && lib.contains("steam://"),
+        "Library empty state must offer one clear action and hide filters: {lib}"
     );
 }

@@ -160,11 +160,7 @@ function pulseFixture(req, res) {
   const kind = url.pathname.slice("/pulse/".length);
   let type = "text/html";
   let body = null;
-  let askedHost = "";
-  try {
-    askedHost = new URL(asked).hostname;
-  } catch {}
-  if (kind === "source" && (askedHost === "hn.algolia.com" || askedHost.endsWith(".hn.algolia.com"))) {
+  if (kind === "source" && asked.includes("hn.algolia.com")) {
     type = "application/json";
     body = JSON.stringify({
       hits: [
@@ -1058,6 +1054,10 @@ async function appearance(s, config) {
   console.log(`appearance: ${theme} on the page (${bg}), ${saved} in shell.json`);
   await pick("System");
   await waitFor("the system theme", async () => ((await look())[0] === "" ? true : null));
+  await pick("Ops Dark");
+  await waitFor("ops-dark after system", async () =>
+    (await look())[0] === "ops-dark" ? true : null,
+  );
 }
 
 async function main() {
@@ -1065,7 +1065,7 @@ async function main() {
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
   const workspace = join(config, "work");
   mkdirSync(workspace);
-  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace }));
+  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace, theme: "ops-dark" }));
   const modelCalls = () => mock.seen.filter((c) => c.path === "/v1/responses");
   const native = process.env.SMOKE_NATIVE_DRIVER;
   const driver = spawn("tauri-driver", native ? ["--native-driver", native] : [], {

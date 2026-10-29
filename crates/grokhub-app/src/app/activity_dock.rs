@@ -370,6 +370,15 @@ impl Cabin {
     }
 
     /// Titlebar Activity control: collapsed summary, expandable list.
+    /// The list opens below the Chat tab strip, never over it.
+    fn activity_strip_gap(&self) -> f32 {
+        if self.page_nav() == Nav::Chat {
+            super::chat_tabs::CHAT_TABS_H
+        } else {
+            0.0
+        }
+    }
+
     pub(super) fn ui_activity_dock(&mut self, ui: &mut egui::Ui) {
         let items = self.activity_items();
         if items.is_empty() {
@@ -427,7 +436,10 @@ impl Cabin {
         let mut act: Option<(ActivityKind, String, bool)> = None;
         egui::Area::new(egui::Id::new("activity-dock-list"))
             .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(top.right() - 340.0, top.bottom() + 6.0))
+            .fixed_pos(egui::pos2(
+                top.right() - 340.0,
+                top.bottom() + 6.0 + self.activity_strip_gap(),
+            ))
             .constrain_to(ui.ctx().content_rect())
             .show(ui.ctx(), |ui| {
                 let card = crate::ui_kit::recipe::look(

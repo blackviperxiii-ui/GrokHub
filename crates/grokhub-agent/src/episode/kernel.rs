@@ -451,7 +451,10 @@ impl Run<'_, '_> {
             self.ep.goal_step
         );
         if let Some(note) = &self.ep.note {
-            now.push_str(&format!("GrokHub's check: {note}\n"));
+            now.push_str(&format!(
+                "{product}'s check: {note}\n",
+                product = grokhub_core::brand::product_name()
+            ));
         }
         for park in self.ep.parks.iter().filter(|p| p.waiting) {
             now.push_str(&waiting_line(park));

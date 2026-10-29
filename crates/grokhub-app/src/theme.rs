@@ -1702,21 +1702,28 @@ pub fn loadout_mark(ctx: &egui::Context) -> TextureHandle {
     tex
 }
 
-/// Titlebar trust chip: off-device bytes this week (egress log has no payload sizes).
-pub fn titlebar_sent_label(bytes: u64) -> String {
-    let b = if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{} KB", bytes / 1024)
-    } else {
-        format!("{} MB", bytes / (1024 * 1024))
-    };
-    format!("LOCAL · {} SENT", b.to_ascii_uppercase())
+/// Titlebar trust chip from the same 7-day egress log as Settings › Privacy.
+/// The log records calls, not sizes, so "0 B" is only claimed for no calls.
+pub fn titlebar_sent_label(calls: Option<u32>) -> String {
+    match calls {
+        Some(0) => "LOCAL · 0 B SENT".into(),
+        Some(1) => "LOCAL FIRST · 1 CALL SENT".into(),
+        Some(n) => format!("LOCAL FIRST · {n} CALLS SENT"),
+        None => "LOCAL FIRST".into(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sent_chip_only_says_zero_bytes_for_a_quiet_week() {
+        assert_eq!(titlebar_sent_label(Some(0)), "LOCAL · 0 B SENT");
+        assert_eq!(titlebar_sent_label(Some(1)), "LOCAL FIRST · 1 CALL SENT");
+        assert_eq!(titlebar_sent_label(Some(12)), "LOCAL FIRST · 12 CALLS SENT");
+        assert_eq!(titlebar_sent_label(None), "LOCAL FIRST");
+    }
 
     #[test]
     fn the_bundled_mark_decodes() {

@@ -811,20 +811,20 @@ mod tests {
             vec![
                 (
                     "crates/grokhub-agent/src/harness/hard.rs",
-                    "GrokHub never changes the hard-class list on its own"
+                    "Loadout never changes the hard-class list on its own"
                 ),
-                ("approval.rs", "GrokHub never changes the gate on its own"),
+                ("approval.rs", "Loadout never changes the gate on its own"),
                 (
                     "crates/grokhub-agent/src/prompt_template.md",
-                    "GrokHub never changes the honesty rules on its own"
+                    "Loadout never changes the honesty rules on its own"
                 ),
                 (
                     "canary.rs",
-                    "GrokHub never changes the evaluator and rollback on its own"
+                    "Loadout never changes the evaluator and rollback on its own"
                 ),
                 (
                     "crates/grokhub-app/src/main.rs",
-                    "GrokHub never changes its own code or files outside its tunable areas"
+                    "Loadout never changes its own code or files outside its tunable areas"
                 ),
                 ("snippet:speed", "a chat note never steers around the rules"),
             ]
@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(findings[0].target, "consent.jsonl");
         assert_eq!(
             findings[0].detail,
-            "GrokHub never changes the consent store on its own"
+            "Loadout never changes the consent store on its own"
         );
         for _ in 0..3 {
             let new = OLD.replace("2. click Export", "2. click Export\n3. wait");
