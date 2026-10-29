@@ -324,6 +324,10 @@ pub struct AppConfig {
     pub host_hour_cap: u32,
     #[serde(default)]
     pub current_thread: String,
+    /// Last Chat-rail tab the user was on. Survives Home parking and restarts;
+    /// Home's empty draft must not overwrite this (`open_fresh_home` keeps it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_chat_tab: String,
     #[serde(default)]
     pub connector_hosts: Vec<String>,
     #[serde(default = "default_close_to_tray")]
@@ -349,9 +353,12 @@ pub struct AppConfig {
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
-    /// Composer permission pill — ask / auto. Always-approve is a per-run choice.
+    /// Composer permission pill — ask / auto / always-approve. Survives restart.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    /// True after the user confirms Always once. Later Always picks skip the sheet.
+    #[serde(default)]
+    pub always_confirmed: bool,
     /// Settings → Cabin defaults. Thoughts start collapsed in every session.
     #[serde(default)]
     pub always_collapse_thoughts: bool,
@@ -411,9 +418,49 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: suggest help for the app the user was just in,
+    /// from its process name only. Off by default.
+    #[serde(default)]
+    pub focus_help: bool,
+    /// Settings → Behavior: offer to resume work in the repos under
+    /// `code_folders`, from git metadata only. Off by default.
+    #[serde(default)]
+    pub resume_code: bool,
+    #[serde(default)]
+    pub code_folders: Vec<String>,
+    /// Settings → Behavior: weekly Downloads cleanup suggestions. Off by default.
+    #[serde(default)]
+    pub downloads_tidy: bool,
+    /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
+    #[serde(default)]
+    pub backup_nudge: bool,
+    /// Folders whose changes the backup reminder compares to the last backup.
+    #[serde(default)]
+    pub important_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
+    /// Settings → Behavior: the game launch companion card. Off by default.
+    #[serde(default)]
+    pub game_companion: bool,
+    /// Also a quiet desktop notification when the companion card posts.
+    #[serde(default)]
+    pub game_companion_ping: bool,
+    /// Settings → Behavior: offer next steps for new 3D models in Downloads.
+    /// Off by default.
+    #[serde(default)]
+    pub model_drop: bool,
+    /// Where "Move to models" puts a model; empty means `~/Models`.
+    #[serde(default)]
+    pub models_folder: String,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
+    /// Settings → Appearance: chat pages show the objectives and recent chats on
+    /// the left and a PC snapshot on the right (deck slide 10) instead of the
+    /// companion dock. Off by default.
+    #[serde(default)]
+    pub chat_objectives: bool,
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
@@ -432,6 +479,14 @@ pub struct AppConfig {
     /// in every picker, and a chat set to one speaks in the default voice.
     #[serde(default)]
     pub explicit_personalities: bool,
+    /// Playbooks 8: the user confirmed once that they are 18 or older. Asked the
+    /// first time adults-only turns on, then never again.
+    #[serde(default)]
+    pub adult_confirmed: bool,
+    /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
+    /// message actions can Save a redacted debug bundle to the Desktop.
+    #[serde(default)]
+    pub diagnostics_mode: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -455,6 +510,10 @@ pub struct AppConfig {
     pub cua_driver_path: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Set by [`load`] once a pre-3.4 `"dark"` has moved to Ops Dark, so a
+    /// later pick of Dark in Settings sticks. Omitted while false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub theme_migrated: bool,
     #[serde(default)]
     pub window: crate::window::WindowGeom,
     /// First-run Get Started completed (Super Grok OAuth succeeded once).
@@ -485,6 +544,33 @@ pub struct AppConfig {
     /// Settings → Pulse → Daily drop: overnight ranked source posts (off by default).
     #[serde(default)]
     pub daily_drop: DailyDropSettings,
+    /// Settings → Pulse → Proactive nudges (Command Centre card 42).
+    #[serde(default)]
+    pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    #[serde(default)]
+    pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
+    pub pc_health: grokhub_core::PcHealthSettings,
+    /// Settings → Behavior: offer to automate repeated local asks.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::AskOfferSettings::is_default"
+    )]
+    pub ask_offers: grokhub_core::AskOfferSettings,
+    /// Settings → Pulse: LAN 3D printer finish/fail alerts (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PrintAlertsSettings::is_default"
+    )]
+    pub print_alerts: grokhub_core::PrintAlertsSettings,
+    /// Settings → Pulse → Learning paths (Know me hobbies, opt-in per hobby).
+    #[serde(default)]
+    pub hobby_paths: grokhub_core::HobbyPathSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -512,6 +598,41 @@ pub struct AppConfig {
     /// Omitted from `app.json` while this stays off. `"dream_model": true` turns it on.
     #[serde(default, rename = "dream_model", skip_serializing_if = "is_false")]
     pub dream_model: bool,
+    /// Settings → Models & providers → Web search. Free DuckDuckGo Lite by default;
+    /// optional SearXNG URL. Brave API keys stay in the OS keyring, never here.
+    #[serde(default, skip_serializing_if = "WebSearchConfig::is_default")]
+    pub web_search: WebSearchConfig,
+}
+
+/// Cabin web_search backend for OpenRouter and the local model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchConfig {
+    /// `duckduckgo` (default, free), `searxng`, or `brave`.
+    #[serde(default = "default_web_search_backend")]
+    pub backend: String,
+    /// Self-hosted SearXNG base URL when `backend` is `searxng`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub searxng_url: String,
+}
+
+fn default_web_search_backend() -> String {
+    "duckduckgo".into()
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_web_search_backend(),
+            searxng_url: String::new(),
+        }
+    }
+}
+
+impl WebSearchConfig {
+    pub fn is_default(&self) -> bool {
+        self.backend == "duckduckgo" && self.searxng_url.is_empty()
+    }
 }
 
 fn is_true(v: &bool) -> bool {
@@ -627,13 +748,11 @@ fn default_cabin_lane() -> String {
     "coding".into()
 }
 
-/// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
+/// Ask, Auto, and Always all survive disk and relaunch. Unknown values fall to Ask.
 pub fn persistable_permission_mode(raw: &str) -> String {
     match grokhub_core::wire::PermissionMode::parse(raw) {
-        Some(grokhub_core::wire::PermissionMode::Auto) => grokhub_core::wire::PermissionMode::Auto
-            .as_str()
-            .to_string(),
-        _ => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
+        Some(mode) => mode.as_str().to_string(),
+        None => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
     }
 }
 
@@ -652,6 +771,7 @@ impl Default for AppConfig {
             host_on: default_host_on(),
             host_hour_cap: default_host_cap(),
             current_thread: String::new(),
+            last_chat_tab: String::new(),
             connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
@@ -661,6 +781,7 @@ impl Default for AppConfig {
             provider_model: String::new(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
+            always_confirmed: false,
             always_collapse_thoughts: false,
             cabin_lane: default_cabin_lane(),
             quiet_start: default_quiet_start(),
@@ -680,17 +801,32 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            focus_help: false,
+            resume_code: false,
+            downloads_tidy: false,
+            code_folders: Vec::new(),
+            backup_nudge: false,
+            important_folders: Vec::new(),
+            net_log: false,
+            game_companion: false,
+            game_companion_ping: false,
+            model_drop: false,
+            models_folder: String::new(),
             dock_panels: false,
+            chat_objectives: false,
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
             personality: String::new(),
             explicit_personalities: false,
+            adult_confirmed: false,
+            diagnostics_mode: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),
+            theme_migrated: false,
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
             setup_done: false,
@@ -701,10 +837,17 @@ impl Default for AppConfig {
             feed_instructions: String::new(),
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
+            nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
+            ask_offers: grokhub_core::AskOfferSettings::default(),
+            print_alerts: grokhub_core::PrintAlertsSettings::default(),
+            hobby_paths: grokhub_core::HobbyPathSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
             memory_writes: true,
             dream_model: false,
+            web_search: WebSearchConfig::default(),
         }
     }
 }
@@ -831,6 +974,18 @@ pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
     }
 }
 
+/// Cabins before 3.4 saved `"dark"` as the default theme, so upgraders never
+/// saw Ops Dark. Move that once; the flag keeps a later manual pick of Dark.
+pub fn migrate_theme(cfg: &mut AppConfig) {
+    if cfg.theme_migrated {
+        return;
+    }
+    if cfg.theme.trim().eq_ignore_ascii_case("dark") {
+        cfg.theme = default_theme();
+    }
+    cfg.theme_migrated = true;
+}
+
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     // A missing file is a new install. An existing file, even `{}`, keeps its backend.
@@ -840,7 +995,18 @@ pub fn load() -> AppConfig {
         cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
         cfg.memory_migrated = true;
         // An existing file keeps its pick; a missing field is the default voice.
-        cfg.personality = grokhub_core::personality::NEW_INSTALL_ID.into();
+        cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
+    }
+    // The plain "Default" preset is gone; a profile still on it speaks as Nyx.
+    // Rewrite on disk so the next launch no longer carries the retired id.
+    let mut rewrite_personality = false;
+    if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
+        cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
+        rewrite_personality = true;
+    }
+    // Adults-only already on from before the 18+ check: that was the user's own opt-in.
+    if cfg.explicit_personalities {
+        cfg.adult_confirmed = true;
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -849,17 +1015,20 @@ pub fn load() -> AppConfig {
         cfg.device_name = default_device_name();
     }
     drop_saved_effort(&mut cfg, &config_dir());
+    migrate_theme(&mut cfg);
     cfg.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
         .unwrap_or(grokhub_core::wire::SessionMode::Chat)
         .as_str()
         .to_string();
-    // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not
-    // boot into blanket approval because one turn needed it last week.
+    // Ask / Auto / Always stick until the user changes them.
     cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
     cfg.cabin_lane = match cfg.cabin_lane.trim().to_ascii_lowercase().as_str() {
         "life" => "life".into(),
         _ => "coding".into(),
     };
+    if rewrite_personality {
+        let _ = save_in(&config_dir(), &cfg);
+    }
     cfg
 }
 
@@ -1067,6 +1236,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn print_alerts_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("printAlerts") && !json.contains("print_alerts"),
+            "default config must omit print_alerts: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.print_alerts.enabled && !missing.print_alerts.camera);
+        let on: AppConfig =
+            serde_json::from_str(r#"{"printAlerts":{"enabled":true,"camera":true}}"#).unwrap();
+        assert!(on.print_alerts.enabled && on.print_alerts.camera);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"printAlerts\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
+    }
+
+    #[test]
     fn dream_model_defaults_off_and_omits_the_key() {
         let missing: AppConfig = serde_json::from_str("{}").unwrap();
         assert!(!missing.dream_model);
@@ -1079,6 +1267,45 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
+    }
+
+    #[test]
+    fn web_search_defaults_omitted_and_overrides_parse() {
+        let v: serde_json::Value = serde_json::to_value(AppConfig::default()).unwrap();
+        assert!(
+            v.get("webSearch").is_none(),
+            "default config must omit top-level webSearch: {v}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(missing.web_search.is_default());
+        assert_eq!(missing.web_search.backend, "duckduckgo");
+        let set: AppConfig = serde_json::from_str(
+            r#"{"webSearch":{"backend":"searxng","searxngUrl":"https://searx.example"}}"#,
+        )
+        .unwrap();
+        assert_eq!(set.web_search.backend, "searxng");
+        assert_eq!(set.web_search.searxng_url, "https://searx.example");
+        let saved: serde_json::Value = serde_json::to_value(&set).unwrap();
+        assert_eq!(saved["webSearch"]["backend"], "searxng");
+        assert_eq!(saved["webSearch"]["searxngUrl"], "https://searx.example");
     }
 
     #[test]
@@ -1114,6 +1341,44 @@ mod tests {
             !json.contains("memory_migrated"),
             "default config must omit memory_migrated: {json}"
         );
+    }
+
+    #[test]
+    fn pre_3_4_dark_moves_to_ops_dark_once_and_a_later_dark_pick_sticks() {
+        let _g = hold_test_config();
+        let root = test_config_root("theme-migrate");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("app.json"), "{\"theme\":\"dark\"}\n").unwrap();
+        let upgraded = load();
+        assert_eq!(upgraded.theme, "ops-dark");
+        assert!(upgraded.theme_migrated);
+        save(&upgraded).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"theme\": \"ops-dark\""), "{body}");
+        assert!(body.contains("\"themeMigrated\": true"), "{body}");
+
+        let mut picked = load();
+        picked.theme = "dark".into();
+        save(&picked).unwrap();
+        let kept = load();
+        assert_eq!(kept.theme, "dark", "a Dark pick after the move stays Dark");
+
+        for other in ["light", "system", "oled-black", "soft-charcoal"] {
+            fs::write(
+                root.join("app.json"),
+                format!("{{\"theme\":\"{other}\"}}\n"),
+            )
+            .unwrap();
+            let cfg = load();
+            assert_eq!(cfg.theme, other, "only the old Dark default moves");
+            assert!(cfg.theme_migrated);
+        }
+        assert!(!serde_json::to_string(&AppConfig::default())
+            .unwrap()
+            .contains("themeMigrated"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1180,6 +1445,16 @@ mod tests {
         assert_eq!(load().personality, "");
         fs::write(root.join("app.json"), "{\"personality\":\"pirate\"}\n").unwrap();
         assert_eq!(load().personality, "pirate");
+        // An install still on the retired "default" preset upgrades to Nyx
+        // and rewrites app.json so the retired id does not linger on disk.
+        fs::write(root.join("app.json"), "{\"personality\":\"default\"}\n").unwrap();
+        assert_eq!(load().personality, "nyx");
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            body.contains("\"personality\": \"nyx\""),
+            "upgrade must persist Nyx, got {body}"
+        );
+        assert!(!body.contains("\"default\""), "{body}");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1356,6 +1631,35 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_mode_defaults_off() {
+        assert!(!AppConfig::default().diagnostics_mode);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.diagnostics_mode);
+        let _g = hold_test_config();
+        let root = test_config_root("diagnostics-mode");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            diagnostics_mode: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().diagnostics_mode);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"diagnosticsMode\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.diagnostics_mode = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().diagnostics_mode);
+        fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!load().diagnostics_mode);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn dock_panels_defaults_off() {
         assert!(!AppConfig::default().dock_panels);
         let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
@@ -1495,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_pills_survive_a_restart_but_always_approve_does_not() {
+    fn composer_pills_including_always_survive_a_restart() {
         let _g = hold_test_config();
         let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
@@ -1503,6 +1807,7 @@ mod tests {
         let mut cfg = AppConfig::default();
         assert_eq!(cfg.session_mode, "chat");
         assert_eq!(cfg.permission_mode, "ask");
+        assert!(!cfg.always_confirmed);
         cfg.session_mode = "plan".into();
         cfg.permission_mode = "auto".into();
         save(&cfg).expect("save");
@@ -1510,19 +1815,18 @@ mod tests {
         assert_eq!(loaded.session_mode, "plan");
         assert_eq!(loaded.permission_mode, "auto");
         cfg.permission_mode = "always-approve".into();
+        cfg.always_confirmed = true;
         save(&cfg).expect("save");
         assert_eq!(
             persistable_permission_mode("always-approve"),
-            "ask",
-            "Always must not persist"
+            "always-approve",
+            "Always sticks until the user changes it"
         );
         assert_eq!(persistable_permission_mode("auto"), "auto");
         assert_eq!(persistable_permission_mode("ask"), "ask");
-        assert_eq!(
-            load().permission_mode,
-            "ask",
-            "a cabin must not boot into blanket approval because one turn needed it"
-        );
+        let always = load();
+        assert_eq!(always.permission_mode, "always-approve");
+        assert!(always.always_confirmed);
         cfg.session_mode = "nonsense".into();
         cfg.permission_mode = "nonsense".into();
         save(&cfg).expect("save");
@@ -1556,19 +1860,24 @@ mod tests {
         assert!(loaded.close_to_tray_tip_seen);
         cfg.model.clear();
         cfg.permission_mode = persistable_permission_mode("always-approve");
+        cfg.always_confirmed = true;
         cfg.session_mode = "ask".into();
         cfg.always_collapse_thoughts = false;
         cfg.close_to_tray_tip_seen = false;
-        assert_eq!(cfg.permission_mode, "ask");
-        save(&cfg).expect("save always collapsed to ask");
+        assert_eq!(cfg.permission_mode, "always-approve");
+        save(&cfg).expect("save always");
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         assert!(
             body.contains("\"model\": \"\""),
             "Auto persists an empty model pin: {body}"
         );
         assert!(
-            !body.contains("always-approve"),
-            "Always must not be written: {body}"
+            body.contains("always-approve"),
+            "Always must be written: {body}"
+        );
+        assert!(
+            body.contains("\"alwaysConfirmed\": true"),
+            "Always confirm flag round-trips: {body}"
         );
         assert!(
             body.contains("\"alwaysCollapseThoughts\": false"),
@@ -1580,12 +1889,14 @@ mod tests {
         );
         let loaded = load();
         assert_eq!(loaded.model, "");
-        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.permission_mode, "always-approve");
+        assert!(loaded.always_confirmed);
         assert_eq!(loaded.session_mode, "ask");
         assert!(!loaded.always_collapse_thoughts);
         assert!(!loaded.close_to_tray_tip_seen);
         let mut raw: serde_json::Value = serde_json::from_str(&body).unwrap();
         raw["permissionMode"] = serde_json::json!("always");
+        raw["alwaysConfirmed"] = serde_json::json!(true);
         raw["alwaysCollapseThoughts"] = serde_json::json!(true);
         raw["model"] = serde_json::json!("grok-4.7");
         raw["reasoningEffort"] = serde_json::json!("minimal");
@@ -1598,10 +1909,10 @@ mod tests {
         let loaded = load();
         assert_eq!(
             persistable_permission_mode("always"),
-            "ask",
-            "Always input via the helper collapses to Ask"
+            "always-approve",
+            "Always aliases round-trip as always-approve"
         );
-        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.permission_mode, "always-approve");
         assert_eq!(loaded.model, "grok-4.7");
         assert_eq!(
             loaded.legacy_reasoning_effort, None,

@@ -1,0 +1,40 @@
+# GrokHub playbook: winding down. They are tired, stressed or venting.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Every step here only talks. A playbook can never make GrokHub skip an
+# approval.
+
+id = "wind-down"
+name = "Winding down"
+summary = "They are tired, stressed or venting. Listen first, be gentle, and offer no fixes unless they ask."
+
+checklist = ["listened", "gentle", "no pressure to plan"]
+backup = "Nothing to back up: this is talk, not changes."
+verify = "They feel heard: the reply reflects what they said, stays calm and short, and asks nothing of them."
+rollback = "If they say you got it wrong, thank them and ask what they meant."
+give_up = [
+  "they ask for help with something specific; then follow that ask instead",
+]
+
+[applies_when]
+intent = ["chat"]
+mood = ["low"]
+
+[[phase]]
+name = "Listen"
+tier = "read_only"
+
+[[phase.step]]
+name = "Say back what you heard in a line, without judging it"
+
+[[phase.step]]
+name = "Offer no fixes, tips or plans unless they ask for them"
+
+[[phase.step]]
+name = "Keep it gentle and short, and never push them to plan or get back to work"
+
+[[phase.step]]
+name = "Use no tools and never show your planning or turn labels"

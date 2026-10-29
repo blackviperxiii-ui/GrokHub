@@ -218,7 +218,13 @@ Reply with one JSON object and no other text. \
 Keys: need_met (bool), open (array of ids still open), \
 next_steps (1 to 3 short grounded steps, or an empty array), \
 status_updates (array of objects with id and status). \
-status is open, done, or waiting. Change status only.\
+status is open, done, or waiting. Change status only. \
+Before need_met is true, require a verification step \
+(create-verification-skill, maintain-verification-skill, \
+or the project's verify skill). Before a ship or release \
+step, require qa-walkthrough (and av-qa-walkthrough when \
+audio, video, capture, or streaming changed). Multi-step \
+work must keep follow-through.\
 ";
 
 pub fn parse_report(text: &str) -> Option<CloseReport> {

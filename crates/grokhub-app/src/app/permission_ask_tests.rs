@@ -295,27 +295,27 @@ fn always_permission_keeps_the_acp_session() {
 #[test]
 fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
     assert_eq!(
-        super::mode_status_line("auto", "grok-3-mini-fast"),
+        super::slash::mode_status_line("auto", "grok-3-mini-fast"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-4.6"),
+        super::slash::mode_status_line("auto", "grok-4.6"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-4.7"),
+        super::slash::mode_status_line("auto", "grok-4.7"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-3"),
+        super::slash::mode_status_line("auto", "grok-3"),
         "Mode auto → grok-3"
     );
     assert_eq!(
-        super::mode_status_line("think", "grok-3"),
+        super::slash::mode_status_line("think", "grok-3"),
         "Mode think → grok-4.7 · high"
     );
     assert_eq!(
-        super::mode_status_line("max", ""),
+        super::slash::mode_status_line("max", ""),
         "Mode max → grok-4.7 · xhigh"
     );
 }
@@ -356,12 +356,18 @@ fn set_permission_mode_saves_auto_and_always() {
     cabin.set_permission_mode(PermissionMode::Auto);
     assert_eq!(cabin.permission_mode, PermissionMode::Auto);
     assert_eq!(cabin.cfg.permission_mode, "auto");
+    assert!(!cabin.cfg.always_confirmed);
     cabin.set_permission_mode(PermissionMode::AlwaysApprove);
     assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
-    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.cfg.permission_mode, "always-approve");
+    assert!(cabin.cfg.always_confirmed);
     cabin.set_permission_mode(PermissionMode::Ask);
     assert_eq!(cabin.permission_mode, PermissionMode::Ask);
     assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert!(
+        cabin.cfg.always_confirmed,
+        "confirm flag stays so the next Always pick skips the sheet"
+    );
     std::env::remove_var("GROKHUB_CONFIG");
 }
 

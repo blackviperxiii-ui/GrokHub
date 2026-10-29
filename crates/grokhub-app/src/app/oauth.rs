@@ -121,7 +121,10 @@ pub(super) fn account_connect_chrome(
     let Some(tokens) = oauth.filter(|t| !t.access_token.trim().is_empty()) else {
         return AccountConnectChrome {
             title: "Connect Grok",
-            hint: "Device-code OAuth. GrokHub keeps this sign-in to itself.".into(),
+            hint: format!(
+                "Device-code OAuth. {} keeps this sign-in to itself.",
+                grokhub_core::brand::product_name()
+            ),
             action: "Sign in with Grok",
             connected: false,
         };

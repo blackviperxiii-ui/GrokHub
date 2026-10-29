@@ -713,8 +713,15 @@ impl Cabin {
         let Some(id) = id else {
             return;
         };
+        let title = self
+            .automations
+            .iter()
+            .find(|x| x.id == id)
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| id.to_string());
         match end {
             BgEnd::Done => {
+                self.note_activity_routine_end(id, &title, true, reply);
                 self.update_auto_health(id, mark_automation_ok);
                 let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() else {
                     return;
@@ -724,7 +731,10 @@ impl Cabin {
                 }
             }
             BgEnd::Stopped => self.update_auto_health(id, mark_automation_stopped),
-            BgEnd::Failed(why) => self.note_auto_failed(id, why),
+            BgEnd::Failed(why) => {
+                self.note_activity_routine_end(id, &title, false, why);
+                self.note_auto_failed(id, why);
+            }
         }
     }
 

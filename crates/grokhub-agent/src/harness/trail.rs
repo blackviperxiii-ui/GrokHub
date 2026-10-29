@@ -464,7 +464,7 @@ mod tests {
             turn: 4,
             brief,
             policy,
-            playbook: "Repair Linux".into(),
+            playbook: "Fix this PC".into(),
             ..Default::default()
         };
         crate::brain::record_brief(&dir, &line).unwrap();
@@ -488,7 +488,7 @@ mod tests {
         let body = md.split("---\n").nth(2).unwrap();
         assert_eq!(
             body,
-            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Repair Linux\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
+            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Fix this PC\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
         );
         assert_eq!(
             with_brief(

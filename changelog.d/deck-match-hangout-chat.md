@@ -1,0 +1,3 @@
+- Restyle the Hangout chat column to slide 02: companion header with TALK/TYPE, red-rim assistant bubbles with face avatars, red composer outline and amber send
+- Deck shots re-seed the Hangout transcript after fresh-home boot; slide quick-reply chips replace Connect / Start here under the composer
+- Windows deck-shots also pair Pulse at 1600×900 and 1100×720 beside slides 13 and 15

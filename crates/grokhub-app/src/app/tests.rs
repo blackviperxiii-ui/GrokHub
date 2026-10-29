@@ -84,6 +84,9 @@ mod persist_tests;
 #[path = "home_feed_tests.rs"]
 mod home_feed_tests;
 
+#[path = "home_mission_tests.rs"]
+mod home_mission_tests;
+
 #[path = "chat_threads_tests.rs"]
 mod chat_threads_tests;
 
@@ -122,6 +125,7 @@ fn cabin_src() -> String {
         include_str!("imagine.rs"),
         include_str!("night.rs"),
         include_str!("chat_ui.rs"),
+        include_str!("chat_tabs.rs"),
         include_str!("sidebar.rs"),
         include_str!("pages.rs"),
         include_str!("connectors_ui.rs"),
@@ -1946,6 +1950,7 @@ fn quiet_cabin() -> Cabin {
         messages_rev: 0,
         messages_body_rev: 0,
         status: String::new(),
+        web_search_key_draft: String::new(),
         running: false,
         turn_retried: false,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2067,6 +2072,9 @@ fn quiet_cabin() -> Cabin {
         digest_interests: String::new(),
         situation_ping: None,
         window_focused: true,
+        focus: Default::default(),
+        pc_health: Default::default(),
+        print_alerts: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
@@ -2120,7 +2128,6 @@ fn quiet_cabin() -> Cabin {
         hotkeys: None,
         hotkey_hey: 0,
         hotkey_halt: 0,
-        sidebar_q: String::new(),
         rename_idx: None,
         rename_buf: String::new(),
         rename_focus: false,
@@ -2160,6 +2167,7 @@ fn quiet_cabin() -> Cabin {
         board_link: false,
         settings_menu_open: false,
         settings_menu_ignore: false,
+        sidebar_q: String::new(),
         win_max: false,
         geom_dirty: false,
         geom_applied: false,
@@ -2306,6 +2314,10 @@ fn quiet_cabin() -> Cabin {
         dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),
+        activity: Default::default(),
+        diagnostics_last_zip: None,
+        home_layout: grokhub_core::home::HomeLayout::default(),
+        home_edit: None,
     }
 }
 

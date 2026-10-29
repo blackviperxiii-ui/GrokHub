@@ -41,6 +41,20 @@ pub(super) struct SourcesState {
     pub looking_more: bool,
     /// The Steam library and its Pulse prefs.
     pub steam: super::steam_ui::SteamState,
+    /// Know me's saved tags and its running scan.
+    pub know_me: super::knowme_ui::KnowMeState,
+    /// Learned reactions per card category, read from disk when first needed.
+    pub reactions: Option<grokhub_core::reactions::Reactions>,
+    /// The learned daily rhythm, read from disk when first needed.
+    pub rhythm: Option<grokhub_core::rhythm::Rhythm>,
+    /// Steam wishlist sale alerts and their daily check.
+    pub wish: super::wishlist_ui::WishState,
+    /// Achievement nudges and their weekly check.
+    pub ach: super::achievements_ui::AchState,
+    /// Upcoming DLC and sequels, and release-day reminders.
+    pub radar: super::release_radar_ui::RadarState,
+    /// New local model suggestions and their weekly check.
+    pub models: super::local_models_ui::ModelNewsState,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -99,7 +113,7 @@ fn redirect_target(from: &str, location: &str) -> String {
 
 /// One source over HTTP. A topic search carries the person's topic, so it goes as
 /// chat text; a followed feed URL carries nothing of theirs.
-fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
+pub(super) fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
     let data: &[DataClass] = if req.topic.is_some() {
         &[DataClass::Chat]
     } else {
@@ -187,7 +201,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// "just now", "12 min ago", "3 h ago", for the Settings note.
-fn ago_label(ms: u64, now: u64) -> String {
+pub(super) fn ago_label(ms: u64, now: u64) -> String {
     let mins = now.saturating_sub(ms) / 60_000;
     match mins {
         0 => "just now".into(),
@@ -250,6 +264,9 @@ impl Cabin {
             return;
         }
         let now = now_ms();
+        self.kick_know_me(false);
+        self.kick_wishlist(now);
+        self.kick_release_radar(now);
         if !self.interests_now().seeded {
             let user_md = crate::config::read_memory("USER.md");
             let memory_md = crate::config::read_memory("MEMORY.md");
@@ -315,6 +332,11 @@ impl Cabin {
 
     pub(super) fn poll_source_fetch(&mut self) {
         self.poll_source_summaries();
+        self.poll_know_me();
+        self.poll_wishlist();
+        self.tick_achievements(now_ms());
+        self.poll_release_radar();
+        self.tick_local_models(now_ms());
         let Some(rx) = self.sources.rx.take() else {
             return;
         };
@@ -733,6 +755,10 @@ impl Cabin {
             ui.add_space(6.0);
         }
         self.ui_steam_source(ui);
+        self.ui_wishlist_source(ui);
+        self.ui_achievements_source(ui);
+        self.ui_release_radar_source(ui);
+        self.ui_local_models_source(ui);
         // The paid search extension point, shown off and not clickable.
         let mut paid = ps::PAID_SEARCH_ENABLED;
         ui.add_enabled(
@@ -753,7 +779,7 @@ impl Cabin {
         ui.add_space(4.0);
         crate::cards::help_text(
             ui,
-            "Checks run every two hours, once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
+            &format!("Checks run every two hours, once when {} opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.", grokhub_core::brand::product_name()),
         );
         let today = self.summary_calls_today(now_ms());
         ui.label(

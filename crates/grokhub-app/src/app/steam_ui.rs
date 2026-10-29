@@ -23,6 +23,16 @@ pub(super) struct SteamState {
 }
 
 impl SteamState {
+    #[cfg(test)]
+    pub(super) fn for_test(games: Vec<SteamGame>, read_ms: u64) -> Self {
+        Self {
+            found: Some(true),
+            games,
+            read_ms,
+            ..Self::default()
+        }
+    }
+
     /// The library and prefs, read again when they are stale.
     fn refresh(&mut self, now: u64, root: impl FnOnce() -> Option<std::path::PathBuf>) {
         if self.found.is_none() || now.saturating_sub(self.read_ms) >= LIBRARY_TTL_MS {
@@ -39,6 +49,35 @@ impl SteamState {
 
     fn found(&self) -> bool {
         self.found == Some(true)
+    }
+
+    /// Library games when Steam is found and the Pulse Steam source is on.
+    pub(super) fn library_for_recap(&self) -> Option<&[SteamGame]> {
+        if self.found() && self.prefs.enabled() {
+            Some(&self.games)
+        } else {
+            None
+        }
+    }
+
+    /// Seed the library cache for tests (no disk read). `now` keeps the TTL fresh.
+    #[cfg(test)]
+    pub(super) fn seed_library_for_test(&mut self, games: Vec<SteamGame>, on: bool, now: u64) {
+        self.found = Some(true);
+        self.games = games;
+        self.prefs.on = Some(on);
+        self.read_ms = now.max(1);
+        self.prefs_ms = now.max(1);
+    }
+
+    /// Most recently played library title, if any (Linux controller nudges).
+    #[cfg(target_os = "linux")]
+    pub(super) fn top_game_name(&self) -> Option<String> {
+        self.games
+            .iter()
+            .max_by_key(|g| g.last_played)
+            .map(|g| g.name.clone())
+            .filter(|n| !n.is_empty())
     }
 
     /// This check's Steam news fetches; none when Steam is missing or off.
@@ -61,9 +100,45 @@ impl SteamState {
 }
 
 impl Cabin {
-    pub(super) fn steam_requests(&mut self, now: u64) -> Vec<SourceReq> {
+    pub(super) fn steam_refresh_library(&mut self, now: u64) {
         self.sources.steam.refresh(now, steam::detect_root);
+    }
+
+    pub(super) fn steam_requests(&mut self, now: u64) -> Vec<SourceReq> {
+        self.steam_refresh_library(now);
         self.sources.steam.requests()
+    }
+
+    /// The whole library for the Library page, and whether Steam was found.
+    pub(super) fn steam_library(&mut self, now: u64) -> (bool, &[SteamGame]) {
+        self.sources.steam.refresh(now, steam::detect_root);
+        (self.sources.steam.found(), &self.sources.steam.games)
+    }
+
+    /// Each game's last-played time in ms, for the daily rhythm.
+    pub(super) fn steam_last_played(&mut self, now: u64) -> Vec<(String, u64)> {
+        self.sources.steam.refresh(now, steam::detect_root);
+        self.sources
+            .steam
+            .games
+            .iter()
+            .filter(|g| g.last_played > 0)
+            .map(|g| (g.app_id.to_string(), g.last_played * 1000))
+            .collect()
+    }
+
+    /// Game names from the library while the Steam source is on.
+    pub(super) fn steam_game_names(&mut self) -> Vec<String> {
+        self.sources.steam.refresh(now_ms(), steam::detect_root);
+        if !self.sources.steam.found() || !self.sources.steam.prefs.enabled() {
+            return Vec::new();
+        }
+        self.sources
+            .steam
+            .games
+            .iter()
+            .map(|g| g.name.clone())
+            .collect()
     }
 
     pub(super) fn steam_muted(&self, card: &grokhub_core::update_feed::UpdateCard) -> bool {

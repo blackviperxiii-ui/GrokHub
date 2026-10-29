@@ -112,6 +112,16 @@ impl Cabin {
         self.governor.charge(kind, tokens, &Self::local_day());
     }
 
+    /// Local upkeep on the Housekeep slot: rhythm, recap, opt-in samples, and persist.
+    pub(super) fn tick_housekeep(&mut self) {
+        self.housekeep_rhythm_and_recap();
+        self.tick_pc_health();
+        self.tick_print_alerts();
+        if self.last_persist.elapsed() > Duration::from_secs(2) {
+            self.persist_bg();
+        }
+    }
+
     fn trace_pace(&mut self, act: ProactiveAct, gate: PaceGate) {
         let reason = gate.reason();
         let acted = gate == PaceGate::Act;
