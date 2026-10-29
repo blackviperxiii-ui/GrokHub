@@ -23,8 +23,9 @@ Board: "Grok Bot Command Centre" database, data source "Command Center"
 ## Working a card
 - Start: set Status = Doing and Picked up = now. Add a line to Result saying you started.
 - PR opened: put the PR link and a one-line summary in Result.
-- Merged to beta (auto-merge lands it once required checks pass): set Status = Done,
-  Done at = merge time, and update Result with the PR link and summary.
+- Merged to beta (auto-merge lands it once required checks pass): cards-sync sets
+  Status = Done, Done at and Result, and closes the issue. Only if the card is still
+  Doing after that, set them yourself with the PR link and summary.
 - Never set Done before the PR has merged to beta.
 - Blocked: set Status back to Ready and put a clear note in Result saying
   what blocked you and what's needed. Don't use Needs you.
