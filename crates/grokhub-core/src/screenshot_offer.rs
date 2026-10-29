@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 pub const CHIP_TTL_MS: u64 = 5 * 60 * 1000;
 /// Ignore files older than this when first seen (stale folder contents).
 pub const NEW_FILE_MAX_AGE_MS: u64 = 2 * 60 * 1000;
+/// A file stamped further ahead than this is from a wrong clock (a camera,
+/// a copied archive): it is skipped, so it cannot hold the watermark ahead
+/// of every real screenshot.
+pub const FUTURE_SLACK_MS: u64 = 60 * 1000;
 
 pub const CHIP_LABEL: &str = "Explain this?";
 pub const DISMISS_LABEL: &str = "Not now";
@@ -63,27 +67,38 @@ impl ScreenshotOfferLedger {
     }
 }
 
-pub fn watch_dirs(home: &Path, os: &str) -> Vec<PathBuf> {
+/// The user's Pictures folder from the platform (the Windows known folder,
+/// which can be redirected to another drive or OneDrive; XDG
+/// `user-dirs.dirs` on Linux). Only for the real home, so a `HOME` /
+/// `USERPROFILE` override (tests, portable runs) keeps its own folders.
+pub fn pictures_dir(home: &Path) -> Option<PathBuf> {
+    dirs::picture_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home))
+        .filter(|d| d != home)
+}
+
+/// Folders to watch. `pictures` is the platform Pictures folder when known
+/// ([`pictures_dir`]); `<home>/Pictures` is always watched too.
+pub fn watch_dirs(home: &Path, pictures: Option<&Path>, os: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
-        if p.is_absolute() {
+        if p.is_absolute() && !out.contains(&p) {
             out.push(p);
         }
     };
+    if let Some(pictures) = pictures {
+        push(pictures.join("Screenshots"), &mut out);
+    }
+    push(home.join("Pictures").join("Screenshots"), &mut out);
     match os {
         "windows" => {
-            push(home.join("Pictures").join("Screenshots"), &mut out);
             push(
                 home.join("OneDrive").join("Pictures").join("Screenshots"),
                 &mut out,
             );
         }
-        "macos" => {
-            push(home.join("Pictures").join("Screenshots"), &mut out);
-            push(home.join("Desktop"), &mut out);
-        }
+        "macos" => push(home.join("Desktop"), &mut out),
         _ => {
-            push(home.join("Pictures").join("Screenshots"), &mut out);
             if let Ok(xdg) = std::env::var("XDG_PICTURES_DIR") {
                 push(PathBuf::from(xdg).join("Screenshots"), &mut out);
             }
@@ -112,9 +127,10 @@ fn modified_ms(meta: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
-/// Newest image under `dir` by modified time. Uses directory listing and
-/// metadata only — never opens file contents.
-pub fn newest_image_meta(dir: &Path) -> Option<ImageMeta> {
+/// Newest image under `dir` by modified time, skipping files stamped after
+/// `not_after_ms`. Uses directory listing and metadata only — never opens
+/// file contents.
+pub fn newest_image_meta(dir: &Path, not_after_ms: u64) -> Option<ImageMeta> {
     let read = std::fs::read_dir(dir).ok()?;
     let mut best: Option<ImageMeta> = None;
     for entry in read.flatten() {
@@ -129,6 +145,9 @@ pub fn newest_image_meta(dir: &Path) -> Option<ImageMeta> {
             continue;
         }
         let modified_ms = modified_ms(&meta);
+        if modified_ms > not_after_ms {
+            continue;
+        }
         if best.as_ref().is_none_or(|b| modified_ms > b.modified_ms) {
             best = Some(ImageMeta { path, modified_ms });
         }
@@ -136,10 +155,13 @@ pub fn newest_image_meta(dir: &Path) -> Option<ImageMeta> {
     best
 }
 
-pub fn newest_in_watch_dirs(dirs: &[PathBuf]) -> Option<ImageMeta> {
+/// The newest image across `dirs` that is not from the future at `now_ms`.
+/// Lists folders and reads metadata, so run it off the UI thread.
+pub fn newest_in_watch_dirs(dirs: &[PathBuf], now_ms: u64) -> Option<ImageMeta> {
+    let not_after = now_ms.saturating_add(FUTURE_SLACK_MS);
     let mut best: Option<ImageMeta> = None;
     for dir in dirs {
-        if let Some(hit) = newest_image_meta(dir) {
+        if let Some(hit) = newest_image_meta(dir, not_after) {
             if best
                 .as_ref()
                 .is_none_or(|b| hit.modified_ms > b.modified_ms)
@@ -158,13 +180,19 @@ pub enum TickOutcome {
     NewOffer(ImageMeta),
 }
 
-/// Poll screenshot folders. Does not read image bytes.
+/// Fold one folder scan (`newest`, from [`newest_in_watch_dirs`]) into the
+/// ledger. Does not touch the disk.
 pub fn tick(
     ledger: &mut ScreenshotOfferLedger,
     settings: &ScreenshotExplainSettings,
-    dirs: &[PathBuf],
+    newest: Option<ImageMeta>,
     now_ms: u64,
 ) -> TickOutcome {
+    // A watermark saved from a future-dated file would hide every real
+    // screenshot until the clock caught up; start over from the folder.
+    if ledger.last_seen_modified_ms > now_ms.saturating_add(FUTURE_SLACK_MS) {
+        ledger.last_seen_modified_ms = 0;
+    }
     if !settings.enabled {
         if ledger.pending.take().is_some() {
             return TickOutcome::ClearedExpired;
@@ -179,7 +207,8 @@ pub fn tick(
         ledger.pending = None;
         return TickOutcome::ClearedExpired;
     }
-    let Some(hit) = newest_in_watch_dirs(dirs) else {
+    let Some(hit) = newest.filter(|h| h.modified_ms <= now_ms.saturating_add(FUTURE_SLACK_MS))
+    else {
         return TickOutcome::Unchanged;
     };
     if hit.modified_ms <= ledger.last_seen_modified_ms {
@@ -236,15 +265,26 @@ mod tests {
             }),
             ..Default::default()
         };
+        let now = modified_ms(&fs::metadata(&path).unwrap()) + 1;
         let mut settings = ScreenshotExplainSettings { enabled: false };
         assert_eq!(
-            tick(&mut ledger, &settings, std::slice::from_ref(&dir), 2),
+            tick(
+                &mut ledger,
+                &settings,
+                newest_in_watch_dirs(std::slice::from_ref(&dir), now),
+                now
+            ),
             TickOutcome::ClearedExpired
         );
         assert!(ledger.pending.is_none());
         settings.enabled = true;
         assert_eq!(
-            tick(&mut ledger, &settings, std::slice::from_ref(&dir), 3),
+            tick(
+                &mut ledger,
+                &settings,
+                newest_in_watch_dirs(std::slice::from_ref(&dir), now + 1),
+                now + 1
+            ),
             TickOutcome::NewOffer(ImageMeta {
                 path,
                 modified_ms: ledger.last_seen_modified_ms,
@@ -273,13 +313,18 @@ mod tests {
         let path = dir.join("capture.png");
         fs::write(&path, b"not-a-real-png-but-bytes").unwrap();
         thread::sleep(Duration::from_millis(5));
-        let meta = newest_image_meta(&dir).expect("newest");
+        let meta = newest_image_meta(&dir, u64::MAX).expect("newest");
         assert_eq!(meta.path, path);
         let mut ledger = ScreenshotOfferLedger::default();
         let settings = ScreenshotExplainSettings { enabled: true };
         let now = meta.modified_ms + 1;
         assert!(matches!(
-            tick(&mut ledger, &settings, &[dir], now),
+            tick(
+                &mut ledger,
+                &settings,
+                newest_in_watch_dirs(&[dir], now),
+                now
+            ),
             TickOutcome::NewOffer(_)
         ));
         assert!(ledger.pending.is_some());
@@ -297,7 +342,12 @@ mod tests {
         let settings = ScreenshotExplainSettings { enabled: true };
         let now = old_ms + NEW_FILE_MAX_AGE_MS + 10_000;
         assert_eq!(
-            tick(&mut ledger, &settings, &[dir], now),
+            tick(
+                &mut ledger,
+                &settings,
+                newest_in_watch_dirs(&[dir], now),
+                now
+            ),
             TickOutcome::Unchanged
         );
         assert!(ledger.pending.is_none());
@@ -313,7 +363,82 @@ mod tests {
         } else {
             PathBuf::from("/home/user")
         };
-        let dirs = watch_dirs(&home, "linux");
+        let dirs = watch_dirs(&home, None, "linux");
         assert!(dirs.contains(&home.join("Pictures").join("Screenshots")));
+    }
+
+    #[test]
+    fn a_redirected_pictures_folder_is_watched_first() {
+        let (home, moved) = if cfg!(windows) {
+            (PathBuf::from(r"C:\Users\user"), PathBuf::from(r"D:\Photos"))
+        } else {
+            (
+                PathBuf::from("/home/user"),
+                PathBuf::from("/mnt/data/Bilder"),
+            )
+        };
+        assert_eq!(
+            watch_dirs(&home, Some(&moved), "windows"),
+            vec![
+                moved.join("Screenshots"),
+                home.join("Pictures").join("Screenshots"),
+                home.join("OneDrive").join("Pictures").join("Screenshots"),
+            ]
+        );
+        let same = home.join("Pictures");
+        assert_eq!(
+            watch_dirs(&home, Some(&same), "macos"),
+            vec![
+                home.join("Pictures").join("Screenshots"),
+                home.join("Desktop")
+            ],
+            "the default folder is listed once"
+        );
+        assert_eq!(pictures_dir(Path::new("/not/the/real/home")), None);
+    }
+
+    #[test]
+    fn a_future_dated_file_cannot_block_later_screenshots() {
+        let now = 1_700_000_000_000u64;
+        let settings = ScreenshotExplainSettings { enabled: true };
+        let future = ImageMeta {
+            path: PathBuf::from("/x/camera.png"),
+            modified_ms: now + 365 * 24 * 60 * 60 * 1000,
+        };
+        let mut ledger = ScreenshotOfferLedger::default();
+        assert_eq!(
+            tick(&mut ledger, &settings, Some(future), now),
+            TickOutcome::Unchanged
+        );
+        assert_eq!(
+            ledger.last_seen_modified_ms, 0,
+            "the future stamp is not kept"
+        );
+        // A ledger saved by the old code with that stamp starts over.
+        ledger.last_seen_modified_ms = now + 365 * 24 * 60 * 60 * 1000;
+        let shot = ImageMeta {
+            path: PathBuf::from("/x/shot.png"),
+            modified_ms: now - 1_000,
+        };
+        assert_eq!(
+            tick(&mut ledger, &settings, Some(shot.clone()), now),
+            TickOutcome::NewOffer(shot)
+        );
+        assert_eq!(ledger.last_seen_modified_ms, now - 1_000);
+    }
+
+    #[test]
+    fn the_folder_scan_skips_files_from_the_future() {
+        let dir = tmp("future");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot.png");
+        fs::write(&path, b"x").unwrap();
+        let stamp = modified_ms(&fs::metadata(&path).unwrap());
+        assert_eq!(newest_image_meta(&dir, stamp).map(|m| m.path), Some(path));
+        assert_eq!(newest_image_meta(&dir, stamp - 1), None);
+        assert!(
+            newest_in_watch_dirs(std::slice::from_ref(&dir), stamp - FUTURE_SLACK_MS - 1).is_none()
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 }

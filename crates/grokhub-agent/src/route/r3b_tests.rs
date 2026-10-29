@@ -1335,3 +1335,69 @@ fn openrouter_keeps_its_pick_for_explicit_turns_and_banned_asks_never_leave() {
     assert_eq!(bodies[2]["provider"], serde_json::Value::Null);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Records the time limit of each post; can cancel the call while "on the wire".
+#[derive(Default)]
+struct LimitWire {
+    limits: Mutex<Vec<Option<std::time::Duration>>>,
+    cancel: Mutex<Option<CancelToken>>,
+}
+
+impl ProviderTransport for LimitWire {
+    fn get(&self, _: &str, _: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+        })
+    }
+    fn post(&self, _: &str, _: &[(String, String)], _: &str) -> Result<HttpReply, String> {
+        Err("call_model posts through post_within".into())
+    }
+    fn post_within(
+        &self,
+        _: &str,
+        _: &[(String, String)],
+        _: &str,
+        limit: Option<std::time::Duration>,
+    ) -> Result<HttpReply, String> {
+        self.limits.lock().unwrap().push(limit);
+        if let Some(token) = self.cancel.lock().unwrap().take() {
+            token.cancel();
+        }
+        Ok(HttpReply {
+            status: 200,
+            body: OR_REPLY.into(),
+        })
+    }
+}
+
+#[test]
+fn a_provider_call_keeps_its_time_limit_and_a_cancel_on_the_wire_drops_the_reply() {
+    let dir = test_dir("r3b-limit");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(LimitWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let mut timed = hello();
+    timed.call_timeout = Some(std::time::Duration::from_secs(45));
+    let call = |req: &ResponsesRequest, cancel: &CancelToken| {
+        providers::call_model(&dir, OR_MODEL, None, req, CALL_DATA, "try-it:1", cancel)
+    };
+    assert_eq!(
+        call(&timed, &CancelToken::new()).unwrap().text,
+        "hello from the provider"
+    );
+    assert_eq!(send(&dir).unwrap().text, "hello from the provider");
+    let cancel = CancelToken::new();
+    *wire.cancel.lock().unwrap() = Some(cancel.clone());
+    assert!(matches!(call(&timed, &cancel), Err(ClientError::Cancelled)));
+    assert_eq!(
+        *wire.limits.lock().unwrap(),
+        vec![
+            Some(std::time::Duration::from_secs(45)),
+            None,
+            Some(std::time::Duration::from_secs(45)),
+        ]
+    );
+}
