@@ -231,12 +231,23 @@ pub fn resolve_bin(name: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Move files to the trash (Linux) or the Recycle Bin (Windows). Refuses
-/// on Windows when a path has no Recycle Bin, where it would delete for good.
+/// on Windows when a path's Recycle Bin is missing or turned off, where it
+/// would delete for good.
 pub fn trash_paths(paths: &[std::path::PathBuf]) -> Result<(), String> {
-    if paths.iter().any(|p| apps::no_recycle_bin(p)) {
-        return Err("That drive has no Recycle Bin, so nothing was moved.".into());
+    trash_guarded(paths, apps::no_recycle_bin, apps::trash)
+}
+
+const NO_BIN_MSG: &str = "That drive's Recycle Bin is missing or turned off, so nothing was moved.";
+
+fn trash_guarded(
+    paths: &[std::path::PathBuf],
+    no_bin: impl Fn(&std::path::Path) -> bool,
+    trash: impl FnOnce(&[std::path::PathBuf]) -> Result<(), String>,
+) -> Result<(), String> {
+    if paths.iter().any(|p| no_bin(p)) {
+        return Err(NO_BIN_MSG.into());
     }
-    apps::trash(paths)
+    trash(paths)
 }
 
 pub fn which(name: &str) -> bool {
@@ -760,6 +771,36 @@ pub(crate) fn test_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_volume_without_a_usable_recycle_bin_moves_nothing() {
+        let paths = vec![
+            std::path::PathBuf::from(r"C:\Users\user\Downloads\a.zip"),
+            std::path::PathBuf::from(r"D:\Downloads\b.iso"),
+        ];
+        let mut called = false;
+        let got = trash_guarded(
+            &paths,
+            |p| p.to_string_lossy().starts_with('D'),
+            |_| {
+                called = true;
+                Ok(())
+            },
+        );
+        assert_eq!(got, Err(NO_BIN_MSG.to_string()));
+        assert!(!called, "nothing reaches the Recycle Bin call");
+        let mut moved = Vec::new();
+        let got = trash_guarded(
+            &paths,
+            |_| false,
+            |p| {
+                moved = p.to_vec();
+                Ok(())
+            },
+        );
+        assert_eq!(got, Ok(()));
+        assert_eq!(moved, paths);
+    }
 
     #[test]
     fn cua_proxy_is_wanted_only_with_the_flag_and_the_switch_on_linux() {
