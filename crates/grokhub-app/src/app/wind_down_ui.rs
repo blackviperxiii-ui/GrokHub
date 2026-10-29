@@ -115,7 +115,7 @@ impl Cabin {
 
     /// Cabin work a sleep would cut off.
     fn wind_down_busy(&self) -> Option<Busy> {
-        if self.running {
+        if self.running || self.bg.runs.iter().any(|r| r.live()) {
             Some(Busy::Task)
         } else if self.setup.dl.is_some() || self.setup.runtime_dl.is_some() {
             Some(Busy::Download)
@@ -199,6 +199,11 @@ impl Cabin {
 
     /// Only from the confirm sheet.
     pub(super) fn sleep_pc_confirmed(&mut self) {
+        // Work may have started while the sheet was open.
+        if self.wind_down_busy().is_some() {
+            self.status = "Not sleeping: something is still running".into();
+            return;
+        }
         self.status = match sleep_pc() {
             Ok(()) => "Sleeping the PC".into(),
             Err(err) => err,

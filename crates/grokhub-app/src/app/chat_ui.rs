@@ -18,6 +18,7 @@ pub(super) enum ComposerStackSlot {
     /// Steer / Queue for typed text during a run, queued messages, background runs.
     LiveWork,
     SlashPalette,
+    ScreenshotOffer,
     Chips,
     Attach,
     Voice,
@@ -175,6 +176,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::SessionTools,
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
         ComposerStackSlot::Pill,
@@ -190,6 +192,7 @@ fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Chips,
+        ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
     ]
@@ -2131,7 +2134,7 @@ impl Cabin {
                             let view = ChatView {
                                 kind: ChatKind::Assistant,
                                 title: String::new(),
-                                body: b.body.clone(),
+                                body: grokhub_core::strip_turn_labels(&b.body),
                             };
                             act = paint_chat_block_with(
                                 ui,
@@ -2952,6 +2955,9 @@ impl Cabin {
                             self.slash_filter_n = 0;
                             self.slash_filter_first.clear();
                         }
+                    }
+                    ComposerStackSlot::ScreenshotOffer => {
+                        self.ui_screenshot_offer_chip(ui);
                     }
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);

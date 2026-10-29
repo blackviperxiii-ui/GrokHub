@@ -26,6 +26,10 @@ pub(super) struct FocusState {
     pub resume: super::code_resume_ui::ResumeState,
     /// The late-night wind-down reminder.
     pub wind: super::wind_down_ui::WindDownState,
+    /// Backup and unpushed-work reminders.
+    pub backup: super::backup_ui::BackupState,
+    /// The internet drop log.
+    pub net: super::net_log_ui::NetState,
     /// The game launch companion.
     pub game: super::game_companion_ui::GameUi,
     /// New 3D models in Downloads.
@@ -39,6 +43,8 @@ impl Cabin {
         self.tick_focus(self.window_focused);
         self.tick_code_resume();
         self.tick_wind_down();
+        self.tick_backup();
+        self.tick_net_log();
         self.tick_game_companion();
         self.tick_model_drop();
     }

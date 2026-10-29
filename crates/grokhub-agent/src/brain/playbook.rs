@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_core::playbook::{self as core_pb, Playbook, Tier};
+use grokhub_core::playbook::{self as core_pb, Playbook, Step, Tier};
 
 use crate::harness::{record_change, ChangeTarget, HardHit, Origin, PlaybookTarget};
 use crate::repair::{repair_hit, Os, ProbeId};
@@ -48,7 +48,7 @@ fn file_for(config_dir: &Path, id: &str) -> PathBuf {
 pub fn lock_check(p: &Playbook) -> Result<(), String> {
     for (phase, step) in p.steps() {
         if !step.probe.is_empty() {
-            probe_check(p, &step.name, &step.probe)?;
+            probe_check(p, step)?;
         }
         if step.run.trim().is_empty() {
             continue;
@@ -79,10 +79,15 @@ pub fn lock_check(p: &Playbook) -> Result<(), String> {
     Ok(())
 }
 
-fn probe_check(p: &Playbook, step: &str, probe: &str) -> Result<(), String> {
-    let oses: Vec<Os> = p
-        .applies_when
-        .os
+fn probe_check(p: &Playbook, s: &Step) -> Result<(), String> {
+    let (step, probe) = (s.name.as_str(), s.probe.as_str());
+    // A family playbook names the OS on the step; a single-OS one on the playbook.
+    let named = if s.os.is_empty() {
+        &p.applies_when.os
+    } else {
+        &s.os
+    };
+    let oses: Vec<Os> = named
         .iter()
         .filter_map(|o| match o.as_str() {
             "linux" => Some(Os::Linux),
@@ -90,9 +95,9 @@ fn probe_check(p: &Playbook, step: &str, probe: &str) -> Result<(), String> {
             _ => None,
         })
         .collect();
-    if oses.is_empty() || oses.len() != p.applies_when.os.len() {
+    if oses.is_empty() || oses.len() != named.len() {
         return Err(format!(
-            "step \"{step}\" names a probe, so applies_when.os must list only linux or windows"
+            "step \"{step}\" names a probe, so its os (or applies_when.os) must list only linux or windows"
         ));
     }
     for os in oses {
@@ -255,14 +260,24 @@ pub fn host_os() -> &'static str {
     }
 }
 
-/// The playbook that fits a Brief best: the one naming the most of intent,
-/// domain and OS that all match; the first listed wins a tie.
-pub fn pick<'a>(all: &'a [Loaded], intent: &str, domain: &str, os: &str) -> Option<&'a Playbook> {
-    let mut best: Option<(usize, &Playbook)> = None;
+/// The playbook that fits a Brief best, in this order: the safety checks in
+/// [`Playbook::fit`] first (an excluded intent, or talk the playbook doesn't
+/// name, never fits), then a specialist naming the most of intent, domain,
+/// OS and mood, then the default for that kind of ask (intent only), then a generic
+/// fallback that names nothing. `priority` breaks a tie, then the first listed.
+pub fn pick<'a>(
+    all: &'a [Loaded],
+    intent: &str,
+    domain: &str,
+    os: &str,
+    mood: &str,
+) -> Option<&'a Playbook> {
+    let mut best: Option<((usize, u8), &Playbook)> = None;
     for l in all {
-        if let Some(score) = l.playbook.fit(intent, domain, os) {
-            if best.is_none_or(|(b, _)| score > b) {
-                best = Some((score, &l.playbook));
+        if let Some(score) = l.playbook.fit(intent, domain, os, mood) {
+            let key = (score, l.playbook.applies_when.priority);
+            if best.is_none_or(|(b, _)| key > b) {
+                best = Some((key, &l.playbook));
             }
         }
     }
@@ -316,7 +331,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (14, Source::Shipped, 0)
+            (15, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -344,8 +359,7 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Edited),
-                ("repair-linux", Source::Shipped),
-                ("repair-windows", Source::Shipped),
+                ("pc-fix", Source::Shipped),
                 ("code-dev", Source::Shipped),
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
@@ -354,6 +368,8 @@ mod tests {
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
+                ("chat-hangout", Source::Shipped),
+                ("wind-down", Source::Shipped),
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
@@ -372,8 +388,7 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Shipped),
-                ("repair-linux", Source::Shipped),
-                ("repair-windows", Source::Shipped),
+                ("pc-fix", Source::Shipped),
                 ("code-dev", Source::Shipped),
                 ("files", Source::Shipped),
                 ("research", Source::Shipped),
@@ -382,6 +397,8 @@ mod tests {
                 ("gaming-help", Source::Shipped),
                 ("game-tuning", Source::Shipped),
                 ("build-loadout", Source::Shipped),
+                ("chat-hangout", Source::Shipped),
+                ("wind-down", Source::Shipped),
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
@@ -448,7 +465,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 15);
+        assert_eq!(all.len(), 16);
         assert_eq!(
             problems,
             vec![
@@ -473,20 +490,15 @@ mod tests {
             );
         save(&dir, &specific).unwrap();
         let (all, _) = load(&dir);
-        let id = |i, d, o| pick(&all, i, d, o).map(|p| p.id.clone());
-        assert_eq!(
-            id("repair", "system", "linux").as_deref(),
-            Some("repair-linux")
-        );
-        assert_eq!(
-            id("repair", "system", "windows").as_deref(),
-            Some("repair-windows")
-        );
+        let id = |i, d, o| pick(&all, i, d, o, "calm").map(|p| p.id.clone());
+        assert_eq!(id("repair", "system", "linux").as_deref(), Some("pc-fix"));
+        assert_eq!(id("repair", "system", "windows").as_deref(), Some("pc-fix"));
         assert_eq!(
             id("repair", "code", "linux").as_deref(),
             Some("repair-code-test")
         );
-        assert_eq!(id("repair", "system", "macos").as_deref(), Some(SHIPPED));
+        // One PC-fix family covers macOS too; the any-task playbook no longer does.
+        assert_eq!(id("repair", "system", "macos").as_deref(), Some("pc-fix"));
         assert_eq!(id("task", "code", "linux").as_deref(), Some("code-dev"));
         assert_eq!(id("repair", "code", "windows").as_deref(), Some("code-dev"));
         assert_eq!(id("task", "files", "linux").as_deref(), Some("files"));
@@ -542,8 +554,90 @@ mod tests {
             id("creative", "media", "linux").as_deref(),
             Some("creative")
         );
-        assert_eq!(id("chat", "general", "linux"), None);
-        assert_eq!(id("chat", "gaming", "windows"), None);
+        // Chat talking about games still gets the hangout playbook.
+        assert_eq!(
+            id("chat", "gaming", "windows").as_deref(),
+            Some("chat-hangout")
+        );
+        assert_eq!(
+            id("chat", "general", "linux").as_deref(),
+            Some("chat-hangout")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn chat_never_falls_through_to_a_task_playbook_and_priority_breaks_ties() {
+        let dir = crate::harness::test_dir("playbook-order");
+        // A generic fallback that names nothing fits any work, never small talk.
+        let generic = core_pb::renamed(core_pb::BUILTIN[0], "any-work", "Any work").replacen(
+            "intent = [\"task\", \"repair\"]\n# Small talk never gets a task playbook, even in a copy that names no intent.\nexclude = [\"chat\"]",
+            "",
+            1,
+        );
+        assert!(!generic.contains("exclude"));
+        save(&dir, &generic).unwrap();
+        // A talk playbook names chat, so chat gets it.
+        let talk = generic
+            .replacen("[applies_when]", "[applies_when]\nintent = [\"chat\"]", 1)
+            .replace("any-work", "hangout-test");
+        let (all, _) = load(&dir);
+        let id = |all: &[Loaded], i, d| pick(all, i, d, "linux", "calm").map(|p| p.id.clone());
+        // Chat gets the hangout playbook, a low mood the wind-down one.
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("chat-hangout"));
+        assert_eq!(
+            pick(&all, "chat", "general", "linux", "low").map(|p| p.id.as_str()),
+            Some("wind-down")
+        );
+        assert_eq!(
+            pick(&all, "task", "general", "linux", "low").map(|p| p.id.as_str()),
+            Some(SHIPPED)
+        );
+        // The shipped quick answer takes questions; the generic one takes the rest.
+        assert_eq!(
+            id(&all, "question", "general").as_deref(),
+            Some("quick-answer")
+        );
+        assert_eq!(
+            id(&all, "background", "general").as_deref(),
+            Some("any-work")
+        );
+        // The default for its kind beats the generic fallback.
+        assert_eq!(id(&all, "task", "general").as_deref(), Some(SHIPPED));
+        // Excluding an intent drops it even when nothing else is named.
+        let shut = generic.replacen(
+            "[applies_when]",
+            "[applies_when]\nexclude = [\"background\"]",
+            1,
+        );
+        save(&dir, &shut).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "background", "general"), None);
+        // A talk playbook of the user's that names chat ties with the
+        // shipped one, so its priority decides.
+        save(&dir, &talk).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("chat-hangout"));
+        save(
+            &dir,
+            &talk.replacen(
+                "intent = [\"chat\"]",
+                "intent = [\"chat\"]\npriority = 1",
+                1,
+            ),
+        )
+        .unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "chat", "general").as_deref(), Some("hangout-test"));
+        // Two that fit equally: the higher priority wins over the first listed.
+        let first = core_pb::renamed(core_pb::BUILTIN[0], "files-alt", "Files alt").replacen(
+            "intent = [\"task\", \"repair\"]",
+            "intent = [\"task\"]\ndomain = [\"files\"]\npriority = 5",
+            1,
+        );
+        save(&dir, &first).unwrap();
+        let (all, _) = load(&dir);
+        assert_eq!(id(&all, "task", "files").as_deref(), Some("files-alt"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -558,7 +652,14 @@ mod tests {
                 ..Default::default()
             })
             .unwrap_or_else(|| panic!("{text}"));
-            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+            pick(
+                &all,
+                b.intent.as_str(),
+                &b.domain,
+                "windows",
+                b.mood.as_str(),
+            )
+            .map(|p| p.id.clone())
         };
         assert_eq!(
             pick_id("tips for Minecraft mods this patch, no spoilers").as_deref(),
@@ -615,7 +716,7 @@ mod tests {
         .unwrap();
         assert_eq!(steam_wont.intent, crate::brain::Intent::Repair);
         assert_ne!(steam_wont.domain.as_str(), "library");
-        assert_eq!(pick_id("hi there"), None);
+        assert_eq!(pick_id("hi there").as_deref(), Some("chat-hangout"));
     }
 
     #[test]
@@ -627,7 +728,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap_or_else(|| panic!("{text}"));
-            pick(&all, b.intent.as_str(), &b.domain, "linux").map(|p| p.id.clone())
+            pick(&all, b.intent.as_str(), &b.domain, "linux", b.mood.as_str()).map(|p| p.id.clone())
         };
         assert_eq!(
             pick_id("what is the capital of France?").as_deref(),
@@ -653,7 +754,7 @@ mod tests {
             pick_id("organize the downloads folder by date").as_deref(),
             Some("files")
         );
-        assert_eq!(pick_id("hi there"), None);
+        assert_eq!(pick_id("hi there").as_deref(), Some("chat-hangout"));
     }
 
     #[test]
@@ -665,7 +766,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap_or_else(|| panic!("{text}"));
-            pick(&all, b.intent.as_str(), &b.domain, "windows").map(|p| p.id.clone())
+            pick(&all, b.intent.as_str(), &b.domain, "windows", &b.mood).map(|p| p.id.clone())
         };
         assert_eq!(
             pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
@@ -675,8 +776,13 @@ mod tests {
             pick_id("boost FPS in Fortnite, aim for 144").as_deref(),
             Some("game-tuning")
         );
-        assert_eq!(pick_id("hi there"), None);
-        assert_eq!(pick_id("thanks!"), None);
+        // Casual chat gets the hangout playbook, never game tuning.
+        assert_eq!(pick_id("hi there").as_deref(), Some("chat-hangout"));
+        assert_eq!(pick_id("thanks!").as_deref(), Some("chat-hangout"));
+        assert_eq!(
+            pick_id("do you like games?").as_deref(),
+            Some("chat-hangout")
+        );
     }
 
     fn shipped_one(id: &str) -> Playbook {
@@ -687,19 +793,20 @@ mod tests {
             .unwrap()
     }
 
-    /// The repair playbooks sit on the repair module: every look step is one of
-    /// its probes for that OS (fixed argv, read-only), and the risky steps are
-    /// exactly the ones its rules call hard.
+    /// The PC-fix family sits on the repair module: on each OS, every look
+    /// step is one of its probes for that OS (fixed argv, read-only), and the
+    /// risky steps are exactly the ones its rules call hard.
     #[test]
     fn repair_playbooks_look_first_with_repair_probes_and_ask_before_hard_steps() {
-        for (id, os) in [("repair-linux", Os::Linux), ("repair-windows", Os::Windows)] {
-            let p = shipped_one(id);
+        let family = shipped_one("pc-fix");
+        for (name, os) in [("linux", Os::Linux), ("windows", Os::Windows)] {
+            let p = family.for_os(name);
             assert!(
                 !p.backup.is_empty() && !p.verify.is_empty() && !p.rollback.is_empty(),
-                "{id}"
+                "{name}"
             );
             let tiers: Vec<Tier> = p.steps().map(|(ph, s)| s.tier_in(ph)).collect();
-            assert!(tiers.windows(2).all(|w| w[0] <= w[1]), "{id}: {tiers:?}");
+            assert!(tiers.windows(2).all(|w| w[0] <= w[1]), "{name}: {tiers:?}");
             let mut probes: Vec<&str> = p
                 .steps()
                 .filter(|(_, s)| !s.probe.is_empty())
@@ -708,7 +815,7 @@ mod tests {
             let mut all: Vec<&str> = ProbeId::all(os).iter().map(|p| p.key()).collect();
             probes.sort_unstable();
             all.sort_unstable();
-            assert_eq!(probes, all, "{id} looks with every repair probe");
+            assert_eq!(probes, all, "{name} looks with every repair probe");
             for key in probes {
                 let spec = crate::repair::probe_spec_with(
                     ProbeId::parse(key, os).unwrap(),
@@ -718,12 +825,20 @@ mod tests {
                 assert_eq!(
                     spec.as_ref().and_then(crate::repair::read_only_violation),
                     None,
-                    "{id} {key}"
+                    "{name} {key}"
                 );
             }
         }
-        let risky = |id: &str| -> Vec<(String, String)> {
-            shipped_one(id)
+        assert!(
+            family
+                .for_os("macos")
+                .steps()
+                .all(|(_, s)| s.probe.is_empty()),
+            "macOS has no repair probes yet, so its look steps are plain"
+        );
+        let risky = |os: &str| -> Vec<(String, String)> {
+            family
+                .for_os(os)
                 .steps()
                 .filter(|(ph, s)| s.tier_in(ph) == Tier::Risky)
                 .map(|(_, s)| (s.name.clone(), hit_label(&s.run)))
@@ -735,20 +850,43 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            risky("repair-linux"),
+            risky("linux"),
             pairs(&[
-                ("Reinstall packages with missing files", "none"),
-                ("Install pending updates", "none"),
-                ("Delete old installer copies to free space", "Delete"),
+                ("On Arch: reinstall packages with missing files", "none"),
+                ("On Arch: install pending updates", "none"),
+                (
+                    "On Arch: delete old installer copies to free space",
+                    "Delete"
+                ),
+                ("On Debian or Ubuntu: reinstall a broken package", "none"),
+                ("On Debian or Ubuntu: install pending updates", "none"),
+                // apt's autoclean only drops outdated copies; it is risky by tier.
+                (
+                    "On Debian or Ubuntu: delete old installer copies to free space",
+                    "none"
+                ),
+                ("On Fedora: reinstall a broken package", "none"),
+                ("On Fedora: install pending updates", "none"),
+                (
+                    "On Fedora: delete old installer copies to free space",
+                    "Delete"
+                ),
             ])
         );
         assert_eq!(
-            risky("repair-windows"),
+            risky("windows"),
             pairs(&[
                 ("Repair system files", "none"),
                 ("Repair the Windows image", "none"),
                 ("Install app updates", "none"),
                 ("Delete temporary files to free space", "Delete"),
+            ])
+        );
+        assert_eq!(
+            risky("macos"),
+            pairs(&[
+                ("Install macOS updates", "none"),
+                ("Run First Aid on the startup disk", "none"),
             ])
         );
     }
@@ -776,7 +914,7 @@ mod tests {
         );
         assert_eq!(
             parse(&mkfs).unwrap_err(),
-            "step \"Install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
+            "step \"On Arch: install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
         );
         let wrong = linux.replacen("probe = \"memory\"", "probe = \"volumes\"", 1);
         assert_eq!(
@@ -786,7 +924,13 @@ mod tests {
         let any_os = linux.replacen("os = [\"linux\"]", "", 1);
         assert_eq!(
             parse(&any_os).unwrap_err(),
-            "step \"List failed services\" names a probe, so applies_when.os must list only linux or windows"
+            "step \"List failed services\" names a probe, so its os (or applies_when.os) must list only linux or windows"
+        );
+        // macOS has no repair probes yet.
+        let mac_probe = linux.replacen("os = [\"linux\"]", "os = [\"macos\"]", 1);
+        assert_eq!(
+            parse(&mac_probe).unwrap_err(),
+            "step \"List failed services\" names a probe, so its os (or applies_when.os) must list only linux or windows"
         );
     }
 }

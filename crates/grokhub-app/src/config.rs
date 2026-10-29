@@ -428,6 +428,15 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
+    #[serde(default)]
+    pub backup_nudge: bool,
+    /// Folders whose changes the backup reminder compares to the last backup.
+    #[serde(default)]
+    pub important_folders: Vec<String>,
+    /// Settings → Behavior: the internet drop and speed log. Off by default.
+    #[serde(default)]
+    pub net_log: bool,
     /// Settings → Behavior: the game launch companion card. Off by default.
     #[serde(default)]
     pub game_companion: bool,
@@ -467,6 +476,10 @@ pub struct AppConfig {
     /// in every picker, and a chat set to one speaks in the default voice.
     #[serde(default)]
     pub explicit_personalities: bool,
+    /// Playbooks 8: the user confirmed once that they are 18 or older. Asked the
+    /// first time adults-only turns on, then never again.
+    #[serde(default)]
+    pub adult_confirmed: bool,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -531,6 +544,15 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    #[serde(default)]
+    pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
+    pub pc_health: grokhub_core::PcHealthSettings,
     /// Settings → Behavior: offer to automate repeated local asks.
     #[serde(
         default,
@@ -779,6 +801,9 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            backup_nudge: false,
+            important_folders: Vec::new(),
+            net_log: false,
             game_companion: false,
             game_companion_ping: false,
             model_drop: false,
@@ -790,6 +815,7 @@ impl Default for AppConfig {
             self_improve_quiet: false,
             personality: String::new(),
             explicit_personalities: false,
+            adult_confirmed: false,
             diagnostics_mode: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
@@ -808,6 +834,8 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            screenshot_explain: grokhub_core::ScreenshotExplainSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
             ask_offers: grokhub_core::AskOfferSettings::default(),
             print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
@@ -971,6 +999,10 @@ pub fn load() -> AppConfig {
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
         rewrite_personality = true;
+    }
+    // Adults-only already on from before the 18+ check: that was the user's own opt-in.
+    if cfg.explicit_personalities {
+        cfg.adult_confirmed = true;
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -1231,6 +1263,24 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
     }
 
     #[test]

@@ -26,6 +26,8 @@ give_up = [
 
 [applies_when]
 intent = ["task", "repair"]
+# Small talk never gets a task playbook, even in a copy that names no intent.
+exclude = ["chat"]
 
 [[phase]]
 name = "Look"

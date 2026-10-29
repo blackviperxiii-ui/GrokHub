@@ -312,7 +312,7 @@ impl ProtectedSurface {
     }
 }
 
-/// The locks on a system-domain playbook (Repair Linux, Repair Windows).
+/// The locks on a system-domain playbook (Fix this PC).
 fn system_locks(base: &Playbook, new: &Playbook) -> Result<(), String> {
     let name = &base.name;
     if !new.applies_when.domain.iter().any(|d| d == SYSTEM_DOMAIN) {
@@ -485,7 +485,7 @@ mod tests {
         );
     }
 
-    /// Repair Linux as shipped, with LF line endings.
+    /// Fix this PC as shipped, with LF line endings.
     fn linux() -> String {
         crate::playbook::BUILTIN[1].replace("\r\n", "\n")
     }
@@ -501,8 +501,8 @@ mod tests {
             Ok(TuneTarget::Policy("any × any".into()))
         );
         assert_eq!(
-            ProtectedSurface::check("playbook:Repair-Linux"),
-            Ok(TuneTarget::Playbook("repair-linux".into()))
+            ProtectedSurface::check("playbook:PC-Fix"),
+            Ok(TuneTarget::Playbook("pc-fix".into()))
         );
         let refused = |t: &str| ProtectedSurface::check(t).unwrap_err();
         assert_eq!(refused("policy:gossip-casual"), NOT_ALLOWED);
@@ -590,35 +590,35 @@ mod tests {
         assert!(text.contains(restore));
         assert_eq!(
             refused(text.replace(restore, "")),
-            "GrokHub never removes the \"Take a restore point before the first change\" step from Repair Linux on its own"
+            "GrokHub never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"
         );
         let recheck = "\n[[phase.step]]\nname = \"Re-check with the same probe\"\n";
         assert!(text.contains(recheck));
         assert_eq!(
             refused(text.replace(recheck, "\n")),
-            "GrokHub never removes the \"Re-check with the same probe\" step from Repair Linux on its own"
+            "GrokHub never removes the \"Re-check with the same probe\" step from Fix this PC on its own"
         );
-        let reinstall = "name = \"Reinstall packages with missing files\"\n";
+        let reinstall = "name = \"On Arch: reinstall packages with missing files\"\n";
         assert_eq!(
             refused(text.replace(reinstall, &format!("{reinstall}tier = \"safe\"\n"))),
-            "GrokHub never lowers the care of Repair Linux on its own: \"Reinstall packages with missing files\" was risky, asks first"
+            "GrokHub never lowers the care of Fix this PC on its own: \"On Arch: reinstall packages with missing files\" was risky, asks first"
         );
         assert_eq!(
             refused(text.replace("name = \"Bigger fixes\"\ntier = \"risky\"", "name = \"Bigger fixes\"\ntier = \"safe\"")),
-            "GrokHub never lowers the care of Repair Linux on its own: the \"Bigger fixes\" phase was risky, asks first"
+            "GrokHub never lowers the care of Fix this PC on its own: the \"Bigger fixes\" phase was risky, asks first"
         );
         assert_eq!(
             refused(text.replace("domain = [\"system\"]", "domain = [\"files\"]")),
-            "GrokHub never moves Repair Linux out of the system domain on its own"
+            "GrokHub never moves Fix this PC out of the system domain on its own"
         );
         let backup = text.lines().find(|l| l.starts_with("backup = ")).unwrap();
         assert_eq!(
             refused(text.replace(backup, "backup = \"\"")),
-            "GrokHub never empties the back-up or check of Repair Linux on its own"
+            "GrokHub never empties the back-up or check of Fix this PC on its own"
         );
         assert_eq!(
-            refused(text.replace("id = \"repair-linux\"", "id = \"repair-other\"")),
-            "a tweak to Repair Linux keeps its id `repair-linux`"
+            refused(text.replace("id = \"pc-fix\"", "id = \"repair-other\"")),
+            "a tweak to Fix this PC keeps its id `pc-fix`"
         );
         // Moving the ports check first lowers nothing and keeps every guarded step.
         let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";
