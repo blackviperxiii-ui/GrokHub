@@ -1511,5 +1511,14 @@ fn tab_plus_shows_the_new_chat_as_a_selected_tab() {
     // An empty draft that is not open stays off the strip.
     cabin.switch_thread(0);
     assert_eq!(cabin.chat_tab_indices(), vec![0]);
+
+    // An open project chat with messages stays in its project, off the strip.
+    let mut harbor = spoke("Project harbor", 50);
+    harbor.project_id = Some("proj-harbor".into());
+    cabin.threads.push(harbor);
+    let project_chat = cabin.threads.len() - 1;
+    cabin.switch_thread(project_chat);
+    assert!(!cabin.messages.is_empty(), "the project chat has messages");
+    assert_eq!(cabin.chat_tab_indices(), vec![0]);
     let _ = std::fs::remove_dir_all(&root);
 }

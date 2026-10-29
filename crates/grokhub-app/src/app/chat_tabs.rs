@@ -221,7 +221,11 @@ impl Cabin {
                 .filter(|&i| !threads::is_background_history_title(&self.thread_rail_title(i)))
                 .collect();
         // History hides empty drafts, but the open one is a tab: "+" must show it.
-        if live_draft_tab(&self.threads, self.thread_idx, &listed) {
+        // Only the empty draft: a project chat with messages stays in its project.
+        if live_empty
+            && live_draft_tab(&self.threads, self.thread_idx, &listed)
+            && !threads::is_background_history_title(&self.thread_rail_title(self.thread_idx))
+        {
             listed.push(self.thread_idx);
         }
         listed
@@ -385,7 +389,6 @@ fn live_draft_tab(all: &[ChatThread], live: usize, listed: &[usize]) -> bool {
         && !t.scratch
         && !threads::is_archived(t)
         && !threads::is_deleted(t)
-        && !threads::is_background_history_title(&t.title)
 }
 
 /// How many tabs fit at [`TAB_MIN_W`], always keeping the active tab in view.
