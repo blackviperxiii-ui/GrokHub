@@ -151,3 +151,9 @@ Shot 1100 720 'tidy-1100x720' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
 Shot 1100 720 'tidy-1100x720-scrolled' 'ops-dark' '14' -tidy 'card' -nav 'pulse' -wheel 12
 Shot 1600 900 'tidy-approve-1600x900' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
 Shot 1100 720 'tidy-approve-1100x720' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
+# Signed out: the empty chat, then a typed send that keeps its text and shows
+# the inline sign-in card (deck shots carry no key or sign-in).
+Shot 1600 900 'signed-out-empty-1600x900' 'ops-dark' '02'
+Shot 1100 720 'signed-out-empty-1100x720' 'ops-dark' '02'
+Shot 1600 900 'signed-out-send-1600x900' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'
+Shot 1100 720 'signed-out-send-1100x720' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'

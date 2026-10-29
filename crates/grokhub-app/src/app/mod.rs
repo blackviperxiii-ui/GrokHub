@@ -485,6 +485,9 @@ pub struct Cabin {
     hands_attach: bool,
     eyes_attach: bool,
     speak_next: bool,
+    /// A send was refused while signed out: the composer kept the text and
+    /// the inline sign-in card shows until a sign-in or a sent turn.
+    signin_card: bool,
     verify_ok_turn: bool,
     verify_chip: String,
     reflect_diff: String,
@@ -1129,6 +1132,7 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
+            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),
@@ -1602,6 +1606,7 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
+            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),

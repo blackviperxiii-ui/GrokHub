@@ -484,12 +484,7 @@ impl Cabin {
     /// "How Auto picks": read-only, one line per class from the routing table.
     pub(super) fn how_auto_picks_lines(&self) -> String {
         let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
-        if table.classes.is_empty() {
-            return "How Auto picks: the table builds after the model list refreshes.".into();
-        }
-        let mut lines = vec![format!("How Auto picks (table v{}):", table.version)];
-        lines.extend(grokhub_agent::route::table::how_auto_picks(&table));
-        lines.join("\n")
+        how_auto_picks_note(grokhub_agent::route::table::how_auto_picks(&table))
     }
 
     /// `/why table`.
@@ -517,6 +512,15 @@ impl Cabin {
     }
 }
 
+fn how_auto_picks_note(lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        return "Refresh the model list to see how Auto chooses models.".into();
+    }
+    let mut note = vec!["How Auto picks:".to_string()];
+    note.extend(lines);
+    note.join("\n")
+}
+
 /// The Pulse Suggestion for a class the accuracy guard reverted. The title
 /// names the kind of step ("Auto now thinks harder on everyday chat").
 pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::UpdateCard {
@@ -533,6 +537,18 @@ pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::Upd
 mod tests {
     use super::*;
     use grokhub_agent::route::heal::pause_msg;
+
+    #[test]
+    fn settings_auto_picks_copy_hides_table_version() {
+        assert_eq!(
+            how_auto_picks_note(Vec::new()),
+            "Refresh the model list to see how Auto chooses models."
+        );
+        assert_eq!(
+            how_auto_picks_note(vec!["Everyday chat: Grok".into()]),
+            "How Auto picks:\nEveryday chat: Grok"
+        );
+    }
 
     fn msg(tier: Tier, key: &str, text: &str) -> HealMsg {
         HealMsg {
