@@ -180,6 +180,16 @@ pub(super) fn mood_for(viper: bool, tool: Option<&str>, gaming: bool) -> Mood {
     }
 }
 
+/// The dock card's caption: the deck's "Companion · docked" for Nyx, else
+/// the voice that is docked, so a switch shows here too.
+pub(super) fn dock_title(id: &str, name: &str) -> String {
+    if id == grokhub_core::personality::DEFAULT_ID {
+        "Companion · docked".into()
+    } else {
+        format!("{} · docked", name.trim())
+    }
+}
+
 /// Art height for the companion card's inner width.
 pub(super) fn art_height(inner_w: f32) -> f32 {
     (inner_w * 0.78).clamp(ART_H, ART_MAX_H)
@@ -589,6 +599,12 @@ pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle>
 
 /// Paint the circular companion face into `size`×`size`.
 pub(super) fn paint_companion_face(ui: &mut egui::Ui, size: f32) {
+    let shown = super::personality_ui::shown_face(ui.ctx());
+    if !shown.art {
+        let letter = super::personality_ui::initial_letter(&shown.name);
+        super::personality_ui::paint_letter_tile(ui, letter, size, true);
+        return;
+    }
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if let Some(tex) = companion_face(ui.ctx()) {
         ui.painter().image(
@@ -1166,14 +1182,16 @@ impl Cabin {
     }
 
     fn dock_companion(&mut self, ui: &mut egui::Ui) {
-        let name = grokhub_core::brand::companion_name();
+        let shown = self.shown_personality();
+        let name = shown.name.as_str();
+        let art_on = super::personality_ui::wears_companion_art(&shown.id);
         let live = self.voice_is_on();
         let mood = self.companion_mood();
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 diamond(ui, true);
-                ui.label(caption("Companion · docked"));
+                ui.label(caption(&dock_title(&shown.id, name)));
             });
             ui.add_space(crate::theme::SPACING_4);
             let w = ui.available_width();
@@ -1181,7 +1199,14 @@ impl Cabin {
                 ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
             ui.painter()
                 .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
-            if let Some(tex) = companion_texture(ui.ctx(), mood) {
+            if !art_on {
+                let side = (art.height() * 0.5).min(art.width());
+                let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
+                    let letter = super::personality_ui::initial_letter(name);
+                    super::personality_ui::paint_letter_tile(ui, letter, side, true);
+                });
+            } else if let Some(tex) = companion_texture(ui.ctx(), mood) {
                 egui::Image::from_texture(&tex)
                     .uv(cover_uv(tex.size(), art.size()))
                     .corner_radius(crate::theme::RADIUS_SM)
@@ -1236,7 +1261,7 @@ impl Cabin {
             .app
             .as_ref()
             .is_some_and(|a| a.category == grokhub_core::focus_app::FocusCategory::Gaming);
-        mood_for(self.personality_id() == "viper", tool, gaming)
+        mood_for(self.shown_personality_id() == "viper", tool, gaming)
     }
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {

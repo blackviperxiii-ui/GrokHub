@@ -5385,6 +5385,7 @@ impl eframe::App for Cabin {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
+        self.publish_shown_personality(&ctx);
         self.ui_titlebar(ui);
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
@@ -5397,6 +5398,7 @@ impl eframe::App for Cabin {
                 self.ui_chat_tabs(ui);
             }
             self.ui_settings_menu(&ctx);
+            self.ui_personality_sheet(&ctx);
 
             if self.cfg.dock_panels && self.dock_covers_page() {
                 self.ui_docked_main(ui);
