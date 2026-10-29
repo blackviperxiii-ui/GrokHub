@@ -307,12 +307,13 @@ fn is_key_byte(b: u8) -> bool {
 }
 
 fn is_credential_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
+    // `max_tokens` / `tokens_used` count tokens; they are not a token.
+    let key = key.to_ascii_lowercase().replace("tokens", "");
     CREDENTIAL_KEYS.iter().any(|k| key.contains(k))
 }
 
 /// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
-/// key names a credential. Numbers stay (`max_tokens: 4000`).
+/// key names a credential, numbers and escaped quotes included.
 fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -336,14 +337,14 @@ fn redact_credential_values(input: &str) -> String {
         if j < b.len() && matches!(b[j], b'"' | b'\'') {
             j += 1;
         }
-        while j < b.len() && b[j] == b' ' {
+        while j < b.len() && matches!(b[j], b' ' | b'\t') {
             j += 1;
         }
         if j >= b.len() || !matches!(b[j], b'=' | b':') {
             continue;
         }
         j += 1;
-        while j < b.len() && b[j] == b' ' {
+        while j < b.len() && matches!(b[j], b' ' | b'\t') {
             j += 1;
         }
         let quote = (j < b.len() && matches!(b[j], b'"' | b'\'')).then(|| b[j]);
@@ -357,10 +358,14 @@ fn redact_credential_values(input: &str) -> String {
                 None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
             }
         {
+            // `\"` inside a quoted value is part of it.
+            if quote.is_some() && b[j] == b'\\' && j + 1 < b.len() && b[j + 1] != b'\n' {
+                j += 1;
+            }
             j += 1;
         }
         let value = &input[vstart..j];
-        if value.is_empty() || value.starts_with('[') || value.bytes().all(|c| c.is_ascii_digit()) {
+        if value.is_empty() || value == "[redacted]" {
             continue;
         }
         out.push_str(&input[i..vstart]);
@@ -559,7 +564,7 @@ fn create_new_numbered(path: &Path) -> Result<(std::fs::File, PathBuf), String> 
         .unwrap_or("diagnostics")
         .to_string();
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("zip");
-    for n in 1..=99 {
+    for n in 1u32.. {
         let candidate = if n == 1 {
             path.to_path_buf()
         } else {
@@ -575,7 +580,7 @@ fn create_new_numbered(path: &Path) -> Result<(std::fs::File, PathBuf), String> 
             Err(e) => return Err(format!("create zip: {e}")),
         }
     }
-    Err("create zip: too many bundles with this name".into())
+    unreachable!("an unbounded name search returns or errors")
 }
 
 /// Status line after a successful Desktop write (triggers a Saved toast;
@@ -822,6 +827,8 @@ mod tests {
         let raw = "DATABASE_PASSWORD=not-a-real-password\n\
                    {\"api_key\": \"abc123xyz\", \"name\": \"harbor\"}\n\
                    client_secret: hunter2\n\
+                   PIN_TOKEN=12345\n\
+                   api_key: \"abc\\\"tail-secret\" next\n\
                    max_tokens: 4000\n\
                    author: Pat";
         assert_eq!(
@@ -829,6 +836,8 @@ mod tests {
             "DATABASE_PASSWORD=[redacted]\n\
              {\"api_key\": \"[redacted]\", \"name\": \"harbor\"}\n\
              client_secret: [redacted]\n\
+             PIN_TOKEN=[redacted]\n\
+             api_key: \"[redacted]\" next\n\
              max_tokens: 4000\n\
              author: Pat"
         );
@@ -886,6 +895,18 @@ mod tests {
         };
         assert_eq!(read_title(&path), "First");
         assert_eq!(read_title(&next), "Second");
+        // No cap on the suffix.
+        for n in 3..=100 {
+            std::fs::write(
+                dir.join(format!("loadout-diagnostics-20231114-221320-{n}.zip")),
+                b"",
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            write_diagnostics_zip(&path, &first).unwrap(),
+            dir.join("loadout-diagnostics-20231114-221320-101.zip")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

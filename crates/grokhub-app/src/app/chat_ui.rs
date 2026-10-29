@@ -2176,7 +2176,8 @@ impl Cabin {
                                 ThoughtFold::Expanded,
                                 last_say,
                                 self.cfg.diagnostics_mode,
-                                self.turn_no().max(1),
+                                // Visible asks, as the export numbers them.
+                                visible_turn_count(&self.messages).max(1) as u32,
                             )
                             .act;
                         }
