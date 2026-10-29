@@ -107,13 +107,9 @@ pub(super) fn launch_pin<T: Copy + Send + Sync>(cell: &'static OnceLock<T>, read
 }
 
 fn pinned_mood() -> Option<Mood> {
-    static PIN: OnceLock<Option<Mood>> = OnceLock::new();
-    launch_pin(&PIN, || {
-        std::env::var("GROKHUB_DECK_MOOD")
-            .ok()
-            .as_deref()
-            .and_then(parse_mood)
-    })
+    deck_switch("GROKHUB_DECK_MOOD")
+        .as_deref()
+        .and_then(parse_mood)
 }
 
 /// Words in a tool title that mean looking after the PC itself.
@@ -641,10 +637,9 @@ fn paint_wave(ui: &mut egui::Ui, live: bool) {
 /// Cabin thread id for Windows deck shots (`scripts/deck-shots.ps1`).
 pub(crate) const DECK_THREAD_ID: &str = "deck-hangout";
 
-/// Windows deck screenshots (`scripts/deck-shots.ps1`) set `GROKHUB_DECK_SHOT=1`;
-/// mood shots may also set `GROKHUB_DECK_MOOD`.
+/// Windows deck screenshots (`scripts/deck-shots.ps1`) set `GROKHUB_DECK_SHOT=1`.
 pub(super) fn deck_shot_requested() -> bool {
-    deck_shot_env() || pinned_mood().is_some()
+    deck_shot_env()
 }
 
 /// Windows web_search proof shots (`scripts/web-search-shots.ps1`).
@@ -666,13 +661,42 @@ fn deck_shot_env() -> bool {
     })
 }
 
+/// A deck screenshot switch (`GROKHUB_DECK_TABS` and the rest), trimmed,
+/// empty as `None`. Honored only in a proof-shot launch (`GROKHUB_DECK_SHOT=1`,
+/// or `GROKHUB_WEB_SEARCH_SHOT=1`, which pins a Settings section), so a stray
+/// variable can't fake an idle PC or open a sheet in a real cabin. Read once
+/// per run, like [`launch_pin`].
+pub(super) fn deck_switch(var: &'static str) -> Option<String> {
+    if !proof_shot_requested() {
+        return None;
+    }
+    let read = || {
+        std::env::var(var)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if cfg!(test) {
+        return read();
+    }
+    static READ: OnceLock<Mutex<std::collections::HashMap<&'static str, Option<String>>>> =
+        OnceLock::new();
+    let mut seen = READ
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    seen.entry(var).or_insert_with(read).clone()
+}
+
+/// True when the deck switch `var` is set to exactly `value`.
+pub(super) fn deck_switch_is(var: &'static str, value: &str) -> bool {
+    deck_switch(var).as_deref() == Some(value)
+}
+
 /// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`), trimmed and
 /// lowercased so the shot never depends on a synthetic click landing.
 fn deck_nav() -> Option<String> {
-    std::env::var("GROKHUB_DECK_NAV")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
+    deck_switch("GROKHUB_DECK_NAV").map(|v| v.to_ascii_lowercase())
 }
 
 /// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
@@ -704,23 +728,19 @@ pub(super) fn web_search_settings_shot() -> bool {
 
 /// How many chat tabs a deck shot should plant (`GROKHUB_DECK_TABS`).
 pub(super) fn deck_tab_count() -> Option<usize> {
-    std::env::var("GROKHUB_DECK_TABS")
-        .ok()
+    deck_switch("GROKHUB_DECK_TABS")
         .and_then(|v| v.parse().ok())
         .filter(|&n| n >= 3)
 }
 
 /// When set, the tab strip paints the overflow menu open for HARD DONE shots.
 pub(super) fn deck_overflow_open() -> bool {
-    std::env::var("GROKHUB_DECK_OVERFLOW")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    deck_switch("GROKHUB_DECK_OVERFLOW").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 pub(super) fn deck_last_chat_mode() -> Option<String> {
-    std::env::var("GROKHUB_DECK_LAST_CHAT")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
+    deck_switch("GROKHUB_DECK_LAST_CHAT")
+        .map(|v| v.to_ascii_lowercase())
         .filter(|v| v == "home" || v == "chat")
 }
 
@@ -779,7 +799,7 @@ fn deck_transcript() -> Vec<(String, String)> {
 }
 
 fn deck_chat_is_joke() -> bool {
-    std::env::var("GROKHUB_DECK_CHAT").is_ok_and(|v| v.trim() == "joke")
+    deck_switch_is("GROKHUB_DECK_CHAT", "joke")
 }
 
 fn joke_transcript() -> Vec<(String, String)> {
@@ -959,7 +979,7 @@ impl Cabin {
         // Slide 10's chat-first layout has no Activity popover or pending Ask
         // over the snapshot column.
         // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
-        let activity_off = std::env::var("GROKHUB_DECK_ACTIVITY").is_ok_and(|v| v.trim() == "0");
+        let activity_off = deck_switch_is("GROKHUB_DECK_ACTIVITY", "0");
         if !deck_chat_is_joke() && !self.cfg.chat_objectives && !activity_off {
             self.seed_activity_dock_for_deck();
         }
@@ -1008,7 +1028,7 @@ impl Cabin {
         // click or Ctrl+, — a miss left Hangout on screen in #958. After
         // last-chat / nav pin so Personality / Behavior wins.
         if super::settings::pinned_settings_sec().is_some()
-            || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
+            || deck_switch_is("GROKHUB_DECK_OPEN_SETTINGS", "1")
         {
             self.set_nav_id("settings");
         }

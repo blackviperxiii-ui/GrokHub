@@ -24,11 +24,12 @@ pub(super) struct WindDownState {
 }
 
 fn deck_check() -> bool {
-    std::env::var(DECK_ENV).is_ok_and(|v| matches!(v.trim(), "1" | "confirm"))
+    super::loadout_home::deck_switch(DECK_ENV)
+        .is_some_and(|v| matches!(v.as_str(), "1" | "confirm"))
 }
 
 fn deck_confirm() -> bool {
-    std::env::var(DECK_ENV).is_ok_and(|v| v.trim() == "confirm")
+    super::loadout_home::deck_switch_is(DECK_ENV, "confirm")
 }
 
 /// 2 AM, 45 min idle, nothing running.
@@ -238,6 +239,28 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_deck_switch_needs_a_deck_shot() {
+        let _lock = crate::config::hold_test_config();
+        let before = std::env::var(DECK_ENV).ok();
+        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::set_var(DECK_ENV, "confirm");
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        assert!(!deck_check(), "a stray switch never fakes an idle PC");
+        assert!(!deck_confirm(), "nor opens the sleep confirm");
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        assert!(deck_check());
+        assert!(deck_confirm());
+        match before {
+            Some(v) => std::env::set_var(DECK_ENV, v),
+            None => std::env::remove_var(DECK_ENV),
+        }
+        match before_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+    }
 
     fn late() -> LocalClock {
         LocalClock {
