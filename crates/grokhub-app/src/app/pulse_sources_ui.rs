@@ -16,6 +16,8 @@ use grokhub_core::pulse_sources::{
 use std::io::Read as _;
 
 /// Largest reply read from one source.
+/// The note when no interest or source is set up to check.
+pub(super) const NOTHING_TO_CHECK: &str = "Nothing to check yet. Add an interest or a source.";
 const BODY_CAP: u64 = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 8;
 const REDIRECTS_MAX: usize = 3;
@@ -306,7 +308,7 @@ impl Cabin {
         // Counted as a run either way, so an empty setup does not retry every tick.
         self.sources.last_run_ms = Some(now);
         if reqs.is_empty() {
-            self.sources.note = "Nothing to check yet. Add an interest or a source.".into();
+            self.sources.note = NOTHING_TO_CHECK.into();
             return;
         }
         let (tx, rx) = mpsc::channel();
