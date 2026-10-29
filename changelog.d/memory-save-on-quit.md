@@ -1,0 +1,1 @@
+- Quitting right after switching memory files no longer drops what you typed in the file you left: exit waits up to two seconds for that save.
