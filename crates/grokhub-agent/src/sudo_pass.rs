@@ -96,7 +96,7 @@ pub fn dialog_argv(kde: bool, has: &dyn Fn(&str) -> bool) -> Option<(String, Vec
         "kdialog",
         vec![
             "--title".into(),
-            format!("{product}", product = grokhub_core::brand::product_name()),
+            grokhub_core::brand::product_name().to_string(),
             "--password".into(),
             (*DIALOG_TEXT).into(),
         ],
