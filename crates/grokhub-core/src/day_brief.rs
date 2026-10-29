@@ -15,6 +15,10 @@ pub const CARD_TITLE: &str = "Start my day";
 pub const FILE_NAME: &str = "day_brief.json";
 /// Hard cap on ranked items shown on the card.
 pub const ITEM_CAP: usize = 5;
+/// Local hours the brief may post when rhythm has not learned yet and no
+/// brief hour is set: 5 AM up to 2 PM. A cabin left in the tray overnight
+/// waits for the morning instead of posting on a midnight tick.
+pub const FALLBACK_HOURS: std::ops::Range<u32> = 5..14;
 
 /// Which proactive bucket an item came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -72,6 +76,9 @@ pub struct DayBriefSeed {
     pub prompt: String,
     /// Reaction category used for ranking (e.g. `"game news"`).
     pub category: String,
+    /// The Pulse card this line came from, so a one-tap on it counts as
+    /// using that card.
+    pub card_id: Option<String>,
 }
 
 impl DayBriefSeed {
@@ -86,7 +93,13 @@ impl DayBriefSeed {
             body: body.into(),
             prompt: prompt.into(),
             category: category.into(),
+            card_id: None,
         }
+    }
+
+    pub fn from_card(mut self, card_id: impl Into<String>) -> Self {
+        self.card_id = Some(card_id.into());
+        self
     }
 }
 
@@ -150,6 +163,7 @@ pub struct DayBriefItem {
     pub prompt: String,
     pub category: String,
     pub score: i32,
+    pub card_id: Option<String>,
 }
 
 /// One generated start-my-day brief. Empty sections never appear.
@@ -221,15 +235,15 @@ impl DayBrief {
         out
     }
 
-    /// `(label, prompt)` pairs for per-item one-taps. Label is the short
-    /// section + title clip.
-    pub fn one_taps(&self) -> Vec<(String, String)> {
+    /// `(label, prompt, source card)` for per-item one-taps. Label is the
+    /// short section + title clip.
+    pub fn one_taps(&self) -> Vec<(String, String, Option<String>)> {
         self.items
             .iter()
             .filter(|i| !i.prompt.trim().is_empty())
             .map(|i| {
                 let label = format!("{}: {}", i.section.short(), clip(&i.title, 36));
-                (label, i.prompt.clone())
+                (label, i.prompt.clone(), i.card_id.clone())
             })
             .collect()
     }
@@ -250,7 +264,7 @@ pub fn is_day_brief_card(source_id: &str) -> bool {
 
 /// Whether the daily brief may post now: new day key, at the usual active
 /// hour (or the brief hour when set). When rhythm has not learned yet, the
-/// first open of the day posts immediately.
+/// first open of the day inside [`FALLBACK_HOURS`] posts.
 pub fn day_brief_due(
     last_day: Option<&str>,
     today: &str,
@@ -278,7 +292,7 @@ pub fn delivery_ok(
     if rhythm_enough {
         return usually_active;
     }
-    true
+    FALLBACK_HOURS.contains(&clock.hour)
 }
 
 /// Build the brief. Empty / quiet / off signals produce no section. Items are
@@ -364,6 +378,7 @@ fn push_seed(
         prompt: seed.prompt.trim().to_string(),
         category,
         score,
+        card_id: seed.card_id.clone(),
     });
 }
 
@@ -557,6 +572,25 @@ mod tests {
     }
 
     #[test]
+    fn quiet_items_drop_before_the_cap() {
+        let input = DayBriefInputs {
+            day_key: "2026-10-28".into(),
+            game_news: (0..6)
+                .map(|n| seed(&format!("Sale {n}"), "game news"))
+                .collect(),
+            backups: vec![seed("Notes backup due", "backups")],
+            category_scores: vec![("game news".into(), 9, true)],
+            ..DayBriefInputs::default()
+        };
+        let titles: Vec<String> = build_brief(&input)
+            .items
+            .into_iter()
+            .map(|i| i.title)
+            .collect();
+        assert_eq!(titles, ["Notes backup due"]);
+    }
+
+    #[test]
     fn shows_once_per_day_at_active_or_brief_hour() {
         let clock = LocalClock {
             now_ms: 1,
@@ -591,15 +625,30 @@ mod tests {
             Some(8),
             true
         ));
-        // Rhythm not learned yet → first open of the day, any hour.
-        assert!(day_brief_due(
-            None,
-            "2026-10-28",
-            &LocalClock { hour: 3, ..clock },
-            false,
-            None,
-            false
-        ));
+        // Rhythm not learned yet → first open of the day in the morning
+        // window; a tray cabin's midnight tick waits.
+        for (hour, due) in [
+            (0, false),
+            (3, false),
+            (5, true),
+            (9, true),
+            (13, true),
+            (14, false),
+            (23, false),
+        ] {
+            assert_eq!(
+                day_brief_due(
+                    None,
+                    "2026-10-28",
+                    &LocalClock { hour, ..clock },
+                    false,
+                    None,
+                    false
+                ),
+                due,
+                "hour {hour}"
+            );
+        }
         assert!(!day_brief_due(None, "", &clock, true, None, false));
     }
 

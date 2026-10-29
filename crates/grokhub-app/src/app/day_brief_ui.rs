@@ -36,6 +36,9 @@ struct BriefFile {
 struct TapRow {
     label: String,
     prompt: String,
+    /// The Pulse card the line came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    card: Option<String>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -62,6 +65,11 @@ impl Cabin {
         let now = grokhub_core::now_ms();
         let clock = Self::local_clock();
         let today = Self::local_day();
+        // The launch resume scan has not landed yet: wait for it rather than
+        // spend today's brief without the resume line.
+        if self.day_brief_waits_for_resume() {
+            return;
+        }
         let state = load_state();
         let rhythm = self.rhythm_now().clone();
         let usually_active = rhythm.usually_active(clock.hour);
@@ -90,7 +98,11 @@ impl Cabin {
         let taps: Vec<TapRow> = brief
             .one_taps()
             .into_iter()
-            .map(|(label, prompt)| TapRow { label, prompt })
+            .map(|(label, prompt, card)| TapRow {
+                label,
+                prompt,
+                card,
+            })
             .collect();
         state.last_day = Some(day_key.to_string());
         state.latest_day = Some(brief.day_key.clone());
@@ -121,12 +133,41 @@ impl Cabin {
             .collect()
     }
 
+    /// A one-tap on a brief line: the brief and the card the line came from
+    /// count as used (opened, a Tapped reaction), then the prompt runs.
+    pub(super) fn day_brief_tap(&mut self, brief_id: &str, prompt: String) {
+        self.note_day_brief_tap(brief_id, &prompt);
+        self.send_chat(prompt);
+    }
+
+    fn note_day_brief_tap(&mut self, brief_id: &str, prompt: &str) {
+        let source = load_state()
+            .latest_taps
+            .into_iter()
+            .find(|t| t.prompt == *prompt)
+            .and_then(|t| t.card);
+        let mut changed = feed::mark_update_opened(&mut self.updates, brief_id);
+        if let Some(source) = source {
+            if let Some(card) = self.updates.iter().find(|c| c.id == source).cloned() {
+                self.react(&card, rx::Outcome::Tapped);
+                changed |= feed::mark_update_opened(&mut self.updates, &source);
+            }
+        }
+        if changed {
+            self.persist_updates();
+        }
+    }
+
+    fn day_brief_waits_for_resume(&self) -> bool {
+        self.cfg.resume_code && !self.cfg.code_folders.is_empty() && self.focus.resume.pending()
+    }
+
     pub(super) fn build_day_brief(&mut self, day_key: &str, now: u64) -> DayBrief {
         let resume = self.day_brief_resume();
-        let watchers = self.day_brief_from_cards(DayGather::Watchers);
-        let game_news = self.day_brief_from_cards(DayGather::GameNews);
-        let prints = self.day_brief_from_cards(DayGather::Prints);
-        let backups = self.day_brief_from_cards(DayGather::Backups);
+        let watchers = self.day_brief_from_cards(DayGather::Watchers, now);
+        let game_news = self.day_brief_from_cards(DayGather::GameNews, now);
+        let prints = self.day_brief_from_cards(DayGather::Prints, now);
+        let backups = self.day_brief_from_cards(DayGather::Backups, now);
         let next_step = self.day_brief_next_step(now);
         let scores: Vec<(String, i32, bool)> = self
             .reactions_now()
@@ -168,10 +209,13 @@ impl Cabin {
         ))
     }
 
-    fn day_brief_from_cards(&self, kind: DayGather) -> Vec<DayBriefSeed> {
+    /// Every card of one kind still showing in Pulse: not dismissed, held or
+    /// snoozed, and not news from a Steam game the user muted. No cap here:
+    /// `build_brief` drops quiet categories first, then caps.
+    fn day_brief_from_cards(&self, kind: DayGather, now: u64) -> Vec<DayBriefSeed> {
         let mut out = Vec::new();
         for card in &self.updates {
-            if card.status == UpdateStatus::Dismissed || card.held {
+            if !grokhub_core::pulse::pulse_visible(card, now) || self.steam_muted(card) {
                 continue;
             }
             if !kind.matches(card) {
@@ -191,23 +235,37 @@ impl Cabin {
             let category = rx::card_category_tag(card)
                 .map(|(c, _)| c)
                 .unwrap_or_else(|| kind.default_category().to_string());
-            out.push(DayBriefSeed::new(title, body, prompt, category));
-            if out.len() >= db::ITEM_CAP {
-                break;
-            }
+            out.push(DayBriefSeed::new(title, body, prompt, category).from_card(card.id.clone()));
         }
         out
     }
 
+    /// The top proactive step the normal cards would also show: not a topic
+    /// muted by "Not this", and not one the user said never to.
     fn day_brief_next_step(&mut self, now: u64) -> Option<DayBriefSeed> {
         let ranked = self.proactive_candidates(now);
-        let top = ranked.first()?;
+        let mind = self.proactive_mind();
+        let top = ranked
+            .iter()
+            .find(|c| self.day_brief_allows(c, &mind, now))?;
         Some(DayBriefSeed::new(
             upper_first(&top.action),
             top.why.clone(),
             top.action.clone(),
             rx::source_category(top.source).to_string(),
         ))
+    }
+
+    fn day_brief_allows(
+        &self,
+        c: &grokhub_core::proactive::Candidate,
+        mind: &grokhub_agent::harness::MindCheck,
+        now: u64,
+    ) -> bool {
+        let never = mind
+            .prior(&super::proactive_ui::proactive_key(&c.topic))
+            .is_some_and(|p| p.never);
+        !never && !self.proactive.muted(&c.topic, now)
     }
 
     fn post_day_brief_card(&mut self, brief: &DayBrief, details: &str, now: u64) {
@@ -398,5 +456,163 @@ mod tests {
         drop(cabin);
         let _ = std::fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    fn watcher(n: usize, now: u64) -> UpdateCard {
+        nudge_watcher_card(
+            &WatcherResult {
+                id: WatcherId::SteamPatch,
+                title: format!("Patch {n}"),
+                body: "A new patch landed.".into(),
+                dedupe_key: format!("w{n}"),
+                prompt: Some(format!("Check patch {n}")),
+                action: None,
+                evidence: vec!["patch notes".into()],
+            },
+            now,
+        )
+    }
+
+    #[test]
+    fn gathering_skips_snoozed_held_and_muted_cards_and_leaves_the_cap_to_the_brief() {
+        let now = 1_700_000_000_000u64;
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.updates.clear();
+        for n in 0..8 {
+            cabin.updates.push(watcher(n, now));
+        }
+        cabin.updates[0].pulse.snoozed_until = now + 60_000;
+        cabin.updates[1].held = true;
+        let seeds = cabin.day_brief_from_cards(DayGather::Watchers, now);
+        assert_eq!(
+            seeds.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            ["Patch 2", "Patch 3", "Patch 4", "Patch 5", "Patch 6", "Patch 7"],
+            "six visible watchers, more than the card shows: build_brief caps after it drops quiet ones"
+        );
+        assert_eq!(
+            seeds[0].card_id.as_deref(),
+            Some(cabin.updates[2].id.as_str())
+        );
+        assert_eq!(
+            cabin
+                .day_brief_from_cards(DayGather::Watchers, now + 60_000)
+                .len(),
+            7,
+            "the snooze ended"
+        );
+
+        let mut news = feed::digest_card("source:steam-news:10", "Old Save patch", "Notes", now);
+        news.pulse.source_name = Some("Old Save on Steam".into());
+        cabin.updates.push(news);
+        cabin.sources.steam = super::super::steam_ui::SteamState::for_test(
+            vec![grokhub_core::steam::SteamGame {
+                app_id: 10,
+                name: "Old Save".into(),
+                last_played: 1,
+                playtime_min: 0,
+            }],
+            now,
+        );
+        let games = |c: &Cabin| {
+            c.day_brief_from_cards(DayGather::GameNews, now)
+                .into_iter()
+                .map(|s| s.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(games(&cabin), ["Old Save patch"]);
+        cabin.sources.steam.mute_for_test(10);
+        assert!(games(&cabin).is_empty(), "news from a muted game stays out");
+    }
+
+    #[test]
+    fn the_brief_waits_for_the_launch_resume_scan() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.resume_code = true;
+        cabin.cfg.code_folders = vec!["/home/user/code".into()];
+        assert!(cabin.day_brief_waits_for_resume(), "scan not started yet");
+        cabin.focus.resume.seed_repos_for_test(Vec::new());
+        assert!(!cabin.day_brief_waits_for_resume(), "scan landed");
+        let mut off = Cabin::quiet_for_test();
+        off.cfg.resume_code = true;
+        assert!(
+            !off.day_brief_waits_for_resume(),
+            "no code folders: nothing to wait for"
+        );
+    }
+
+    #[test]
+    fn the_next_step_skips_muted_and_never_topics() {
+        use grokhub_agent::harness as hx;
+        use grokhub_core::proactive::{Candidate, CandidateSource};
+        let root = crate::config::test_config_root("day-brief-next");
+        std::fs::create_dir_all(&root).expect("config root");
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let now = 1_700_000_000_000u64;
+        let mut cabin = Cabin::quiet_for_test();
+        let step = |topic: &str| {
+            Candidate::soft(
+                CandidateSource::Workboard,
+                "Prep it",
+                topic,
+                0.9,
+                0.9,
+                "Due soon",
+            )
+        };
+        let mind = cabin.proactive_mind();
+        assert!(cabin.day_brief_allows(&step("standup prep"), &mind, now));
+        cabin.proactive.not_this("standup prep", now);
+        assert!(!cabin.day_brief_allows(&step("standup prep"), &mind, now));
+        assert!(cabin.day_brief_allows(&step("inbox triage"), &mind, now));
+        hx::note_proactive(
+            &root,
+            &hx::answer_span(
+                &super::super::proactive_ui::proactive_key("inbox triage"),
+                hx::DECISION_NEVER,
+                cabin.access_mode(),
+            ),
+        );
+        let mind = cabin.proactive_mind();
+        assert!(!cabin.day_brief_allows(&step("inbox triage"), &mind, now));
+        drop(cabin);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_one_tap_counts_as_using_the_brief_and_its_card() {
+        let root = crate::config::test_config_root("day-brief-tap");
+        std::fs::create_dir_all(&root).expect("config root");
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let now = 1_700_000_000_000u64;
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.updates.clear();
+        cabin.updates.push(watcher(0, now));
+        let watcher_id = cabin.updates[0].id.clone();
+        cabin.run_day_brief_now("2026-10-28", now, true);
+        let brief_id = cabin
+            .updates
+            .iter()
+            .find(|c| c.source_id.starts_with(db::CARD_SOURCE_PREFIX))
+            .map(|c| c.id.clone())
+            .expect("brief");
+        let (_, prompt) = cabin
+            .day_brief_taps()
+            .into_iter()
+            .find(|(_, p)| p == "Check patch 0")
+            .expect("the watcher's one-tap");
+        cabin.note_day_brief_tap(&brief_id, &prompt);
+        for id in [&brief_id, &watcher_id] {
+            let card = cabin.updates.iter().find(|c| &c.id == id).unwrap();
+            assert_eq!(card.status, UpdateStatus::Opened, "{}", card.title);
+        }
+        let mut learned = rx::Reactions::default();
+        assert!(
+            learned
+                .sweep_ignored(&cabin.updates, now + 2 * rx::IGNORED_AFTER_MS)
+                .is_empty(),
+            "a tapped line is not counted as ignored"
+        );
+        drop(cabin);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

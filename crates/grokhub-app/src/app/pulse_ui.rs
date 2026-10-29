@@ -267,7 +267,8 @@ pub(super) enum PulseAct {
     /// A backup reminder's one-tap, by chip id.
     BackupChip(String),
     /// Start-my-day brief: run one item's one-tap prompt.
-    DayTap(String),
+    /// A Start my day one-tap: the brief card's id and the line's prompt.
+    DayTap(String, String),
     /// Hobby learning-path tip feedback.
     HobbyDone(String),
     HobbySkip(String),
@@ -1733,7 +1734,7 @@ impl Cabin {
                     }
                     if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
                         if let Some(tap) = paint_day_brief_taps(ui, &self.day_brief_taps()) {
-                            act = Some(PulseAct::DayTap(tap));
+                            act = Some(PulseAct::DayTap(card.id.clone(), tap));
                         }
                     }
                 });
@@ -2023,9 +2024,7 @@ impl Cabin {
                     self.pulse_not_this(&id, &Self::local_day());
                 }
             }
-            PulseAct::DayTap(prompt) => {
-                self.send_chat(prompt);
-            }
+            PulseAct::DayTap(id, prompt) => self.day_brief_tap(&id, prompt),
             PulseAct::Always(id) => self.pulse_always(&id, &Self::local_day()),
             PulseAct::Accept(id) => self.pulse_accept(&id, &Self::local_day()),
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
