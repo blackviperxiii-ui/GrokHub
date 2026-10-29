@@ -1,0 +1,2 @@
+- Pulse: a failed achievements check tries again in an hour, doubling up to 12 hours, instead of waiting a week.
+- Chat: a web search reply's Sources list shows as compact chips with each site's name; hover shows the link and a click opens it.

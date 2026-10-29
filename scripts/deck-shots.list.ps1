@@ -88,6 +88,9 @@ Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1
 # Playbooks chat quality: joke replies show the character's playful response.
 Shot 1600 900 'chat-joke-1600x900' 'ops-dark' '02' -dock -chat 'joke'
 Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
+# Web search reply: the trailing Sources list paints as site-name chips.
+Shot 1600 900 'chat-sources-1600x900' 'ops-dark' '02' -dock -chat 'sources'
+Shot 1100 720 'chat-sources-1100x720' 'ops-dark' '02' -dock -chat 'sources'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst

@@ -789,9 +789,14 @@ pub(super) fn hangout_composer_layout(messages_empty: bool) -> bool {
 
 /// `GROKHUB_DECK_CHAT=joke` swaps in a joke exchange whose stored replies
 /// carry saved-turn labels, so a deck shot proves they never reach the screen.
+/// `GROKHUB_DECK_CHAT=sources` swaps in a web-search reply whose Sources list
+/// paints as site chips.
 fn deck_transcript() -> Vec<(String, String)> {
     if deck_chat_is_joke() {
         return joke_transcript();
+    }
+    if deck_switch_is("GROKHUB_DECK_CHAT", "sources") {
+        return sources_transcript();
     }
     vec![
         (
@@ -816,6 +821,25 @@ fn deck_transcript() -> Vec<(String, String)> {
 
 fn deck_chat_is_joke() -> bool {
     deck_switch_is("GROKHUB_DECK_CHAT", "joke")
+}
+
+fn sources_transcript() -> Vec<(String, String)> {
+    vec![
+        (
+            "user".into(),
+            "search the web: is the Framework 16 good on Linux?".into(),
+        ),
+        (
+            "assistant".into(),
+            "Yes. The Framework 16 has first-party Linux guides, and the Arch Wiki lists \
+             working suspend, Wi-Fi and the expansion bay GPU.\n\n\
+             Sources:\n\
+             1. https://frame.work/laptop16\n\
+             2. https://wiki.archlinux.org/title/Framework_Laptop_16\n\
+             3. https://www.phoronix.com/review/framework-16-linux"
+                .into(),
+        ),
+    ]
 }
 
 fn joke_transcript() -> Vec<(String, String)> {
@@ -996,7 +1020,8 @@ impl Cabin {
         // over the snapshot column.
         // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
         let activity_off = deck_switch_is("GROKHUB_DECK_ACTIVITY", "0");
-        if !deck_chat_is_joke() && !self.cfg.chat_objectives && !activity_off {
+        let canned_chat = deck_chat_is_joke() || deck_switch_is("GROKHUB_DECK_CHAT", "sources");
+        if !canned_chat && !self.cfg.chat_objectives && !activity_off {
             self.seed_activity_dock_for_deck();
         }
         // Windows proof: Home parks empty; Chat rail restores Hangout.
@@ -2189,6 +2214,19 @@ mod tests {
         bare.thermal = Thermal::Unknown;
         bare.ram_mb = 0;
         assert_eq!(pc_score(&bare), None);
+    }
+
+    #[test]
+    fn the_sources_deck_chat_ends_in_a_list_that_splits_into_chips() {
+        let chat = sources_transcript();
+        let (answer, sources) = grokhub_core::reply_sources::split_sources(&chat[1].1)
+            .expect("deck reply ends in Sources");
+        assert!(answer.ends_with("expansion bay GPU."), "{answer}");
+        let sites: Vec<&str> = sources.iter().map(|s| s.site.as_str()).collect();
+        assert_eq!(
+            sites,
+            vec!["frame.work", "wiki.archlinux.org", "phoronix.com"]
+        );
     }
 
     #[test]
