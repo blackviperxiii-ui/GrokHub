@@ -132,16 +132,25 @@ impl Cabin {
         self.note_downloads(&downloads(), first);
     }
 
-    /// Scan `dir`; the first new model is prepared off the UI thread.
+    /// Scan `dir`; every new model is prepared off the UI thread, one after
+    /// another, and each gets its own offer.
     fn note_downloads(&mut self, dir: &Path, first: bool) {
         let state = &mut self.focus.models;
-        let Some(file) = md::scan_new(dir, &mut state.seen, first).into_iter().next() else {
+        let files = md::scan_new(dir, &mut state.seen, first);
+        if files.is_empty() {
             return;
-        };
+        }
         let (tx, rx) = mpsc::channel();
         state.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(prepare(file, &super::pulse_ui::pulse_image_path));
+            for file in files {
+                if tx
+                    .send(prepare(file, &super::pulse_ui::pulse_image_path))
+                    .is_err()
+                {
+                    return;
+                }
+            }
         });
     }
 
@@ -149,20 +158,31 @@ impl Cabin {
         let Some(rx) = self.focus.models.rx.take() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(offer) => self.post_model_offer(offer),
-            Err(mpsc::TryRecvError::Empty) => self.focus.models.rx = Some(rx),
-            Err(mpsc::TryRecvError::Disconnected) => {}
+        // Every offer ready now posts, then the feed is written once.
+        let mut posted = false;
+        loop {
+            match rx.try_recv() {
+                Ok(offer) => posted |= self.post_model_offer(offer),
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.focus.models.rx = Some(rx);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        if posted {
+            self.persist_updates();
         }
     }
 
-    fn post_model_offer(&mut self, offer: ModelOffer) {
+    /// Posts the card and makes `offer` the composer's; true when the feed changed.
+    fn post_model_offer(&mut self, offer: ModelOffer) -> bool {
         let slicer = self.first_slicer();
-        if grokhub_core::post_update(&mut self.updates, offer.card(slicer.as_ref(), now_ms())) {
-            self.persist_updates();
-        }
+        let posted =
+            grokhub_core::post_update(&mut self.updates, offer.card(slicer.as_ref(), now_ms()));
         self.focus.models.offer = Some(offer);
         self.chip_paint_key.clear();
+        posted
     }
 
     /// The new model's one-taps, unless dismissed.
@@ -195,7 +215,7 @@ impl Cabin {
         if crate::cards::settings_toggle(
             ui,
             "Offer next steps for new 3D models",
-            "When an .stl, .3mf, .obj or .step file lands in Downloads, show a preview and offer to open it in your slicer, suggest a print profile, or move it to your models folder. Only files with those extensions are looked at. Printing always asks first.",
+            "When an .stl, .3mf, .obj, .step or .stp file lands in Downloads, show a preview and offer to open it in your slicer, suggest a print profile, or move it to your models folder. Only files with those extensions are looked at. Printing always asks first.",
             &mut on,
         ) {
             self.cfg.model_drop = on;
@@ -315,6 +335,44 @@ mod tests {
             .any(|c| c.title == "New model: new.stl"));
         cabin.cfg.model_drop = false;
         assert!(cabin.model_chips().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_model_from_one_scan_gets_an_offer() {
+        let root = crate::config::test_config_root("model-drop-many");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.model_drop = true;
+        cabin.focus.models.slicers = Some(Vec::new());
+        let dir = tmp("many");
+        cabin.note_downloads(&dir, true);
+        for name in ["arm.stl", "base.stl", "lid.stl"] {
+            std::fs::write(dir.join(name), STL).unwrap();
+        }
+        cabin.note_downloads(&dir, false);
+        let started = std::time::Instant::now();
+        while cabin.focus.models.rx.is_some() && started.elapsed().as_secs() < 30 {
+            cabin.take_model_offer();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let mut titles: Vec<&str> = cabin
+            .updates
+            .iter()
+            .filter(|c| c.title.starts_with("New model: "))
+            .map(|c| c.title.as_str())
+            .collect();
+        titles.sort();
+        assert_eq!(
+            titles,
+            vec![
+                "New model: arm.stl",
+                "New model: base.stl",
+                "New model: lid.stl"
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
