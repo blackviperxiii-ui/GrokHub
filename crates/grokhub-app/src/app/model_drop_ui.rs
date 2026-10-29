@@ -158,25 +158,31 @@ impl Cabin {
         let Some(rx) = self.focus.models.rx.take() else {
             return;
         };
+        // Every offer ready now posts, then the feed is written once.
+        let mut posted = false;
         loop {
             match rx.try_recv() {
-                Ok(offer) => self.post_model_offer(offer),
+                Ok(offer) => posted |= self.post_model_offer(offer),
                 Err(mpsc::TryRecvError::Empty) => {
                     self.focus.models.rx = Some(rx);
-                    return;
+                    break;
                 }
-                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Disconnected) => break,
             }
+        }
+        if posted {
+            self.persist_updates();
         }
     }
 
-    fn post_model_offer(&mut self, offer: ModelOffer) {
+    /// Posts the card and makes `offer` the composer's; true when the feed changed.
+    fn post_model_offer(&mut self, offer: ModelOffer) -> bool {
         let slicer = self.first_slicer();
-        if grokhub_core::post_update(&mut self.updates, offer.card(slicer.as_ref(), now_ms())) {
-            self.persist_updates();
-        }
+        let posted =
+            grokhub_core::post_update(&mut self.updates, offer.card(slicer.as_ref(), now_ms()));
         self.focus.models.offer = Some(offer);
         self.chip_paint_key.clear();
+        posted
     }
 
     /// The new model's one-taps, unless dismissed.
