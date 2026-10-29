@@ -221,7 +221,8 @@ impl Cabin {
                 let version = m.version.clone();
                 self.start_runtime_download(m);
                 self.status = format!(
-                    "Local AI is on, so GrokHub is downloading its engine (llama.cpp {version}) to {}.",
+                    "Local AI is on, so {} is downloading its engine (llama.cpp {version}) to {}.",
+                    grokhub_core::brand::product_name(),
                     rd::bin_dir(&self.config_dir()).display()
                 );
             }

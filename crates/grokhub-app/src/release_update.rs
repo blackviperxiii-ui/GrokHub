@@ -220,7 +220,8 @@ fn install_release_with(
         swap_in(dest, &files).map_err(Refusal::Download)?;
         let _ = std::fs::remove_dir_all(work);
         Ok(format!(
-            "Installed GrokHub {} into {} (checked against SHA256SUMS).",
+            "Installed {} {} into {} (checked against SHA256SUMS).",
+            grokhub_core::brand::product_name(),
             rel.version(),
             dest.display()
         ))
@@ -329,9 +330,9 @@ mod tests {
     fn the_release_step_reads_as_a_host_receipt() {
         let ok = release_step_receipt_for(
             grokhub_core::release_verify::RELEASE_INSTALL_STEP,
-            Ok("Installed GrokHub 2.13.1 into /x (checked against SHA256SUMS).".into()),
+            Ok("Installed Loadout 2.13.1 into /x (checked against SHA256SUMS).".into()),
         );
-        assert_eq!(ok, "$ grokhub: install the verified release\nexit 0\nInstalled GrokHub 2.13.1 into /x (checked against SHA256SUMS).");
+        assert_eq!(ok, "$ grokhub: install the verified release\nexit 0\nInstalled Loadout 2.13.1 into /x (checked against SHA256SUMS).");
         assert!(!crate::update::host_receipt_failed(&ok));
         let bad = release_step_receipt_for(
             "grokhub: switch to the beta release",
@@ -451,7 +452,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                "Installed GrokHub 2.13.1-beta (29e8ac5) into {} (checked against SHA256SUMS).",
+                "Installed Loadout 2.13.1-beta (29e8ac5) into {} (checked against SHA256SUMS).",
                 dest.display()
             )
         );

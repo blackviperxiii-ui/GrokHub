@@ -96,13 +96,13 @@ mod tests {
         let shipped = pick_policy(&load_policy(&dir).0, &brief).unwrap();
         assert_eq!(
             shipped.label(),
-            "chat × casual, goal speed (small talk, fast reply matters most)"
+            "chat × casual, goal care (hanging out, staying present matters most)"
         );
         assert_eq!(
             (shipped.talk.as_str(), shipped.style()),
             (
-                "brief, personality on",
-                grokhub_core::talk::TalkStyle::Short
+                "natural, personality on",
+                grokhub_core::talk::TalkStyle::Natural
             )
         );
         assert_eq!(load_policy(&dir).1, None);

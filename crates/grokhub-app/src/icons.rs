@@ -8,8 +8,9 @@ egui_phosphor::subset! {
     pub mod ph {
         use regular::{
             ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
-            DESKTOP, FILE, FOLDER, GITHUB_LOGO, IMAGE, KANBAN, LIGHTNING, LIST, MAGNIFYING_GLASS,
-            MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, QUESTION, SQUARES_FOUR, SUN,
+            DESKTOP, FILE, FOLDER, GEAR, GITHUB_LOGO, HOUSE, IMAGE, KANBAN, LIGHTNING, LIST,
+            BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, PULSE,
+            QUESTION, SQUARES_FOUR, SUN, TARGET, USER,
         };
     }
 }
@@ -60,6 +61,13 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Chat => ph::regular::CHAT,
         RailIcon::File => ph::regular::FILE,
         RailIcon::Pin => ph::regular::PUSH_PIN,
+        RailIcon::Home => ph::regular::HOUSE,
+        RailIcon::Objectives => ph::regular::TARGET,
+        RailIcon::Pulse => ph::regular::PULSE,
+        RailIcon::Library => ph::regular::SQUARES_FOUR,
+        RailIcon::Pc => ph::regular::DESKTOP,
+        RailIcon::Profile => ph::regular::USER,
+        RailIcon::Settings => ph::regular::GEAR,
     }
 }
 
@@ -114,21 +122,35 @@ pub enum RailIcon {
     Imagine,
     Clock,
     History,
+    #[allow(dead_code)]
     Grid,
     Folder,
     Chat,
     File,
     Pin,
+    Home,
+    Objectives,
+    Pulse,
+    Library,
+    Pc,
+    Profile,
+    Settings,
 }
 
 pub fn rail_icon_for(id: &str) -> RailIcon {
     match id {
+        "home" => RailIcon::Home,
         "chat" => RailIcon::Chat,
         "imagine" => RailIcon::Imagine,
         "automations" => RailIcon::Clock,
         "skills" | "connectors" => RailIcon::Grid,
+        "library" => RailIcon::Library,
+        "objectives" => RailIcon::Objectives,
         "workboard" => RailIcon::Folder,
-        "pulse" | "ideas" => RailIcon::File,
+        "pulse" | "ideas" => RailIcon::Pulse,
+        "devices" | "pc" => RailIcon::Pc,
+        "profile" => RailIcon::Profile,
+        "settings" => RailIcon::Settings,
         "history" => RailIcon::History,
         "search" => RailIcon::Search,
         "new" => RailIcon::Compose,

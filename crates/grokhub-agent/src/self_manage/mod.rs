@@ -10,7 +10,8 @@
 //! ([`scope_guard`]).
 //!
 //! Rule 4: the agent never widens its own permissions. These tools reach
-//! skills, connections, automations, Pulse's Steam source, and nothing else.
+//! skills, connections, automations, Pulse's Steam source, the Know me tags
+//! (read only), and nothing else.
 
 mod ops;
 
@@ -78,6 +79,7 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),
     ("pulse_steam", SelfClass::Soft),
+    ("know_me_tags", SelfClass::Read),
 ];
 
 /// The table name for a native name (`skill_create`) or a Grok Build MCP name
@@ -272,6 +274,7 @@ pub fn mcp_tools() -> Vec<Value> {
             "unmute": { "type": "array", "items": { "type": "string" }, "description": "Game names to let back in." },
             "reason": reason,
         }), &[])),
+        tool("know_me_tags", "Know me tags from this PC, with sources. Cite them, never guess.", obj(json!({}), &[])),
     ]
 }
 

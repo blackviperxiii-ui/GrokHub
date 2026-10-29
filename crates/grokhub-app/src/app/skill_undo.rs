@@ -12,7 +12,13 @@ use super::*;
 use grokhub_agent::harness::{self as hx, ChangeOp, Origin};
 
 /// First line of the `/skills changes` report; the chat pane finds the bubble by it.
-pub(super) const SKILL_CHANGES_HEAD: &str = "/skills changes — what GrokHub changed in your skills";
+pub(super) static SKILL_CHANGES_HEAD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        format!(
+            "/skills changes — what {} changed in your skills",
+            grokhub_core::brand::product_name()
+        )
+    });
 /// Ledger lines the report lists.
 const SKILL_CHANGES_SHOWN: usize = 12;
 /// Undo / Restore rows under the bubble.
@@ -51,7 +57,7 @@ pub(super) struct SkillRow {
 fn who(origin: Origin) -> &'static str {
     match origin {
         Origin::User => "you",
-        _ => "GrokHub",
+        _ => grokhub_core::brand::product_name(),
     }
 }
 
@@ -77,10 +83,10 @@ fn short(text: &str) -> String {
 /// `/skills changes` text: the newest ledger lines. No skill text: the
 /// ledger holds ids, reasons (redacted), and hashes only.
 pub(super) fn skill_changes_report(ledger: &hx::ChangeLedger, now_ms: u64) -> String {
-    let mut out = vec![SKILL_CHANGES_HEAD.to_string(), String::new()];
+    let mut out = vec![SKILL_CHANGES_HEAD.as_str().to_string(), String::new()];
     let recent = ledger.recent(SKILL_CHANGES_SHOWN);
     if recent.is_empty() {
-        out.push("- Nothing yet. When GrokHub adds, changes, or removes a skill on its own, it shows here with Undo.".into());
+        out.push(format!("- Nothing yet. When {} adds, changes, or removes a skill on its own, it shows here with Undo.", grokhub_core::brand::product_name()));
     }
     for c in recent {
         let why = match c.op {
@@ -293,7 +299,7 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
                 size,
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    ui.add_space(super::chat_ui::result_text_inset());
                     ui.label(
                         RichText::new(&row.label)
                             .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
@@ -316,7 +322,7 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
 /// The newest `/skills changes` report among the painted rows, if any.
 pub(super) fn newest_skill_changes_row(views: &[grokhub_core::ChatView]) -> Option<usize> {
     views.iter().rposition(|v| {
-        v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(SKILL_CHANGES_HEAD)
+        v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(SKILL_CHANGES_HEAD.as_str())
     })
 }
 
@@ -387,11 +393,11 @@ mod tests {
         assert_eq!(
             skill_changes_report(&ledger, now),
             [
-                "/skills changes — what GrokHub changed in your skills",
+                "/skills changes — what Loadout changed in your skills",
                 "",
                 "- board-status · undone by you · 2h ago",
-                "- board-status · added by GrokHub · learned from a host run · 2h ago",
-                "- weekly-report · changed by GrokHub · nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as… · 2h ago",
+                "- board-status · added by Loadout · learned from a host run · 2h ago",
+                "- weekly-report · changed by Loadout · nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as… · 2h ago",
                 "",
                 "Each skill keeps its last 20 versions. Undo puts back the one before. It runs only when you type it or click it.",
             ]
@@ -413,7 +419,7 @@ mod tests {
             ]
         );
         let empty = skill_changes_report(&hx::ChangeLedger::default(), now);
-        assert!(empty.contains("- Nothing yet. When GrokHub adds, changes, or removes a skill on its own, it shows here with Undo."), "{empty}");
+        assert!(empty.contains("- Nothing yet. When Loadout adds, changes, or removes a skill on its own, it shows here with Undo."), "{empty}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -498,6 +504,8 @@ mod tests {
                     true,
                     grokhub_core::ThoughtFold::Expanded,
                     false,
+                    false,
+                    1,
                 );
                 let _ = paint_skill_undo_rows(ui, &rows);
             });
@@ -521,7 +529,7 @@ mod tests {
                 .find(|(t, _)| t.starts_with(want))
                 .map(|(_, x)| *x)
         };
-        let head = left(SKILL_CHANGES_HEAD).expect("bubble head");
+        let head = left(SKILL_CHANGES_HEAD.as_str()).expect("bubble head");
         for row in &rows {
             let at = lefts
                 .iter()

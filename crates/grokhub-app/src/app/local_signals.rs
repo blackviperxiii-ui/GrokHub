@@ -90,6 +90,18 @@ fn sample_loop(config_dir: &Path) {
     }
 }
 
+/// One fresh reading for the wind-down reminder (`wind_down_ui`), slow
+/// signals included. Blocks on the OS readers, so call it off the UI thread.
+pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
+    let s = Reader::default().sample(None);
+    grokhub_core::wind_down::Machine {
+        idle_secs: s.idle_secs,
+        game: s.game,
+        fullscreen: s.fullscreen,
+        external_gpu_pct: s.external_gpu_pct,
+    }
+}
+
 #[derive(Default)]
 struct Reader {
     tick: u32,
@@ -272,7 +284,7 @@ fn compositor_hint() -> (Option<bool>, Option<String>) {
 
 /// Every process's name and command line.
 #[cfg(target_os = "linux")]
-fn processes() -> Option<Vec<(String, String)>> {
+pub(super) fn processes() -> Option<Vec<(String, String)>> {
     let entries = std::fs::read_dir("/proc").ok()?;
     Some(
         entries
@@ -788,6 +800,27 @@ impl Os {
 
     fn fast(&mut self, _own: Option<u32>) -> Fast {
         Fast::default()
+    }
+}
+
+/// The foreground app's process name, read once for focus help. `None`
+/// where no reader sees it (macOS, and Wayland compositors other than
+/// Hyprland and Sway). Never a window title.
+pub(super) fn foreground_process() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if wayland() {
+            return compositor_hint().1;
+        }
+        X11::connect()?.front()?.1
+    }
+    #[cfg(windows)]
+    {
+        win_foreground().1
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
     }
 }
 

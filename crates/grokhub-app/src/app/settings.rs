@@ -3,7 +3,11 @@
 use super::*;
 
 /// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
-pub(super) const DESKTOP_CONTROL_HINT: &str = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+pub(super) static DESKTOP_CONTROL_HINT: std::sync::LazyLock<String> = std::sync::LazyLock::new(
+    || {
+        format!("Grok can see the screen and use the mouse and keyboard through {}. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
+    },
+);
 
 #[derive(Clone, Default)]
 struct PermDraft {
@@ -29,6 +33,7 @@ pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
+        SettingsSec::Privacy => "Privacy & data",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
         SettingsSec::Update => "Update",
@@ -42,6 +47,65 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Pulse => "Pulse",
         SettingsSec::Background => "Background",
     }
+}
+
+/// `/fix` and the palette Health row open Settings → About.
+pub(super) fn health_settings_sec() -> SettingsSec {
+    SettingsSec::About
+}
+
+/// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
+/// (`scripts/deck-shots.ps1` / `web-search-shots.ps1`), so Ctrl+, lands on
+/// Personality / Behavior / Privacy / Cabin defaults without a fragile click.
+pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
+    static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
+    super::loadout_home::launch_pin(&PIN, || {
+        match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("personality") => Some(SettingsSec::Personality),
+            Some("privacy") => Some(SettingsSec::Privacy),
+            Some("behavior") => Some(SettingsSec::Behavior),
+            // Cabin defaults holds Models & providers → Web search (optional
+            // SearXNG URL / Brave key). Used by web-search-shots.ps1.
+            Some("defaults") | Some("cabin") | Some("websearch") | Some("web_search") => {
+                Some(SettingsSec::Defaults)
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Settings modal size: Personality needs room for the slide 19 grid + detail panel.
+pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui::Vec2 {
+    let margin = egui::vec2(48.0, 48.0);
+    let max = (screen - margin).max(egui::vec2(320.0, 240.0));
+    let want = if sec == SettingsSec::Personality && crate::theme::is_loadout_paint() {
+        egui::vec2(1180.0, 720.0)
+    } else if sec == SettingsSec::Defaults && super::loadout_home::web_search_settings_shot() {
+        // Proof shot: taller pane so Web search (SearXNG URL) stays on screen.
+        egui::vec2(920.0, 780.0)
+    } else {
+        egui::vec2(920.0, 620.0)
+    };
+    want.min(max)
+}
+
+/// Where Settings sits. Loadout fills the window right of the rail and under
+/// the titlebar, as a page (deck slide 12 / #966); other themes keep the
+/// centred sheet. Keeps the Personality picker inside the window at every size.
+pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSec) -> egui::Rect {
+    if page {
+        return egui::Rect::from_min_max(
+            screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
+            screen.max,
+        );
+    }
+    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
 }
 
 /// Chat catalog ids plus Auto. Auto persists an empty model pin.
@@ -102,9 +166,12 @@ pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static s
     &[("ask", "Ask"), ("auto", "Auto")]
 }
 
-/// Ask or Auto only. Always collapses to Ask.
+/// Settings dropdown is Ask or Auto. Always stays on the composer pill.
 pub(super) fn cabin_default_permission_id(raw: &str) -> String {
-    crate::config::persistable_permission_mode(raw)
+    match grokhub_core::wire::PermissionMode::parse(raw) {
+        Some(grokhub_core::wire::PermissionMode::Auto) => "auto".into(),
+        _ => "ask".into(),
+    }
 }
 
 pub(super) fn cabin_default_sessions() -> &'static [(&'static str, &'static str)] {
@@ -395,26 +462,31 @@ impl Cabin {
         let mut next_sec: Option<SettingsSec> = None;
         let sec = self.settings_sec;
         let screen = ctx.content_rect();
+        let page = crate::theme::is_loadout_paint();
+        let modal = settings_page_rect(screen, page, sec);
+        // A page leaves the rail and titlebar live; the sheet dims them.
+        let cover = if page { modal } else { screen };
         egui::Area::new(egui::Id::new("settings-overlay"))
-            .fixed_pos(screen.min)
+            .fixed_pos(cover.min)
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(ctx, |ui| {
-                ui.set_min_size(screen.size());
-                ui.painter()
-                    .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
-                let modal = egui::Rect::from_center_size(
-                    screen.center(),
-                    egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
-                );
+                ui.set_min_size(cover.size());
+                ui.set_max_size(cover.size());
+                if !page {
+                    ui.painter()
+                        .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
+                }
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
+                    ui.set_clip_rect(modal);
                     egui::Frame::NONE
                         .fill(crate::theme::bg())
-                        .corner_radius(crate::theme::SHEET_RADIUS)
+                        .corner_radius(if page { 0.0 } else { crate::theme::SHEET_RADIUS })
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
                             ui.set_min_size(modal.size());
+                            ui.set_max_size(modal.size());
                             ui.horizontal(|ui| {
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(220.0, modal.height()),
@@ -431,6 +503,7 @@ impl Cabin {
                                                 }
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
+                                                    (SettingsSec::Privacy, "Privacy & data"),
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Personality, "Personality"),
                                                     (SettingsSec::Playbooks, "Playbooks"),
@@ -461,10 +534,12 @@ impl Cabin {
                                             });
                                     },
                                 );
+                                let body_w = (modal.width() - 220.0).max(280.0);
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2((modal.width() - 220.0).max(320.0), modal.height()),
+                                    egui::vec2(body_w, modal.height()),
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
+                                        ui.set_max_width(body_w);
                                         ui.add_space(16.0);
                                         ui.horizontal(|ui| {
                                             ui.add_space(20.0);
@@ -498,12 +573,18 @@ impl Cabin {
                                             );
                                         });
                                         ui.add_space(12.0);
+                                        // Personality owns its own grid scroll; keep the body
+                                        // height capped so the panel never grows past the window.
+                                        let body_h = (ui.available_height() - 8.0).max(120.0);
                                         egui::ScrollArea::vertical()
                                             .auto_shrink([false, false])
+                                            .max_height(body_h)
                                             .show(ui, |ui| {
-                                                ui.set_width((modal.width() - 260.0).max(280.0));
+                                                ui.set_width((body_w - 40.0).max(240.0));
+                                                ui.set_max_width((body_w - 40.0).max(240.0));
                                                 ui.add_space(8.0);
                                                 ui.indent("settings-body", |ui| {
+                                                    ui.set_max_width(ui.available_width());
                                                     match sec {
                                                         SettingsSec::Account => {
                                                             let name_before = self.cfg.display_name.clone();
@@ -585,6 +666,7 @@ impl Cabin {
                                                                 );
                                                                 crate::theme::paint_loadout_token_strip(ui);
                                                             }
+                                                            self.ui_chat_layout_row(ui);
                                                         }
                                                         SettingsSec::Behavior => {
                                                             crate::ui_kit::section_header(
@@ -629,6 +711,16 @@ impl Cabin {
                                                                     composer_autocomplete,
                                                                 );
                                                             }
+                                                            self.ui_focus_help_row(ui);
+                                                            self.ui_screenshot_explain_settings(ui);
+                                                            self.ui_pc_health_row(ui);
+                                                            self.ui_code_resume_row(ui);
+                                                            self.ui_wind_down_row(ui);
+                                                            self.ui_downloads_tidy_row(ui);
+                                                            self.ui_backup_row(ui);
+                                                            self.ui_net_log_row(ui);
+                                                            self.ui_game_companion_row(ui);
+                                                            self.ui_model_drop_row(ui);
                                                             let mut dock_panels = self.cfg.dock_panels;
                                                             if settings_toggle(
                                                                 ui,
@@ -669,6 +761,8 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            self.ui_rhythm_rows(ui);
+                                                            self.ui_ask_offers(ui);
                                                             self.ui_dream_time_row(ui);
                                                             self.ui_quiet_self_review_rows(ui);
                                                             self.ui_self_change_history(ui);
@@ -746,7 +840,7 @@ impl Cabin {
                                                             if self.update_can_restart
                                                                 && crate::cards::settings_action(
                                                                     ui,
-                                                                    "Restart GrokHub",
+                                                                    &format!("Restart {}", grokhub_core::brand::product_name()),
                                                                     "Reload hub, then start a new cabin and exit this one.",
                                                                     "Restart",
                                                                 )
@@ -768,7 +862,7 @@ impl Cabin {
                                                                 .color(crate::theme::fg()),
                                                             );
                                                             ui.add_space(6.0);
-                                                            crate::cards::settings_note(ui, "Runs on GrokHub's own engine.");
+                                                            crate::cards::settings_note(ui, &format!("Runs on {}'s own engine.", grokhub_core::brand::product_name()));
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
@@ -814,8 +908,19 @@ impl Cabin {
                                                             ) {
                                                                 self.refresh_models_now();
                                                             }
-                                                            self.ui_local_model_rows(ui);
-                                                            self.ui_provider_rows(ui);
+                                                            // Proof shot pins Web search above the
+                                                            // long local-model block so the optional
+                                                            // SearXNG / Brave fields stay on screen.
+                                                            if super::loadout_home::web_search_settings_shot()
+                                                            {
+                                                                self.ui_web_search_rows(ui);
+                                                                self.ui_local_model_rows(ui);
+                                                                self.ui_provider_rows(ui);
+                                                            } else {
+                                                                self.ui_local_model_rows(ui);
+                                                                self.ui_provider_rows(ui);
+                                                                self.ui_web_search_rows(ui);
+                                                            }
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
                                                             crate::ui_kit::section_header(
@@ -836,7 +941,7 @@ impl Cabin {
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_PERMISSION,
-                                                                "Ask or Auto. Always stays on the composer for this launch.",
+                                                                "Ask or Auto. Always is on the composer and sticks until you change it.",
                                                                 &perm_selected,
                                                                 &perm_labels,
                                                             ) {
@@ -858,7 +963,7 @@ impl Cabin {
                                                             if settings_toggle(
                                                                 ui,
                                                                 ROW_DESKTOP,
-                                                                DESKTOP_CONTROL_HINT,
+                                                                DESKTOP_CONTROL_HINT.as_str(),
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
@@ -999,7 +1104,7 @@ impl Cabin {
                                                                 if self.update_can_restart
                                                                     && crate::cards::settings_action(
                                                                         ui,
-                                                                        "Restart GrokHub",
+                                                                        &format!("Restart {}", grokhub_core::brand::product_name()),
                                                                         "Reload hub, then start a new cabin and exit this one.",
                                                                         "Restart",
                                                                     )
@@ -1023,6 +1128,8 @@ impl Cabin {
                                                             );
                                                             let cwd = self.grok_cwd();
                                                             crate::native_plugins::paint(ui, &cwd);
+                                                            ui.add_space(12.0);
+                                                            self.ui_labs_diagnostics(ui);
                                                             ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")
@@ -1052,6 +1159,7 @@ impl Cabin {
                                                         SettingsSec::Playbooks => self.ui_settings_playbooks(ui),
                                                         SettingsSec::Pulse => self.ui_settings_pulse(ui),
                                                         SettingsSec::Background => self.ui_settings_background(ui),
+                                                        SettingsSec::Privacy => self.ui_settings_privacy(ui),
                                                     }
                                                 });
                                             });
@@ -1270,7 +1378,7 @@ impl Cabin {
     }
 
     /// Next cabin turn picks up a Settings pin the same way a composer pill does.
-    fn drop_turn_for_pin(&mut self) {
+    pub(super) fn drop_turn_for_pin(&mut self) {
         self.confirm = None;
         if self.running {
             self.halt_in_flight();

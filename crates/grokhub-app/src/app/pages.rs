@@ -513,10 +513,22 @@ impl Cabin {
                         );
                     });
                 ui.add_space(8.0);
-                if crate::cards::white_pill(ui, "Send a task home") {
-                    let t = std::mem::take(&mut self.task_prompt);
-                    self.nav = Nav::Chat;
-                    self.send_chat(t);
+                if self.has_key() {
+                    if crate::cards::white_pill(ui, "Send a task home") {
+                        let t = std::mem::take(&mut self.task_prompt);
+                        self.nav = Nav::Chat;
+                        self.send_chat(t);
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        crate::cards::settings_note(
+                            ui,
+                            "Sign in with Grok in Settings → Account, or add an API key.",
+                        );
+                        if crate::cards::ghost_pill(ui, "Sign in") {
+                            self.set_nav_id("settings");
+                        }
+                    });
                 }
             });
     }
@@ -620,7 +632,11 @@ impl Cabin {
 
     /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
     pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
-        if self.has_key() || self.imagine_native.tokens.is_some() || self.ui_wants_get_started() {
+        if super::loadout_home::proof_shot_requested()
+            || self.has_key()
+            || self.imagine_native.tokens.is_some()
+            || self.ui_wants_get_started()
+        {
             return;
         }
         ui.horizontal(|ui| {
@@ -680,6 +696,9 @@ impl Cabin {
                 self.delete_all_history();
             }
             ui.add_space(8.0);
+            // Projects + History list (moved off the Chat rail drawer).
+            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
                 ui.horizontal_wrapped(|ui| {
@@ -1362,6 +1381,55 @@ impl Cabin {
                 });
             }
             ui.add_space(16.0);
+            crate::cards::section_label(ui, "Built-in skills");
+            crate::cards::help_text(
+                ui,
+                "Shipped with Loadout (vstack QA, AV QA, verify, follow-through). Use in chat sends /name.",
+            );
+            ui.add_space(8.0);
+            let builtins: Vec<_> = self
+                .native_skills
+                .iter()
+                .filter(|s| s.source == grokhub_agent::SkillSource::Builtin)
+                .filter(|s| {
+                    q.is_empty()
+                        || s.name.to_ascii_lowercase().contains(&q)
+                        || s.description.to_ascii_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect();
+            if builtins.is_empty() {
+                ui.label(
+                    RichText::new(if q.is_empty() {
+                        "Built-ins load with the native engine."
+                    } else {
+                        "None matched."
+                    })
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                crate::cards::tile_row(ui, builtins.len(), |ui, i| {
+                    let s = &builtins[i];
+                    let body = if s.description.is_empty() {
+                        "builtin".to_string()
+                    } else {
+                        format!("builtin · {}", s.description)
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::icon_for_label(&s.name),
+                        &s.name,
+                        &body,
+                        Some("Use in chat"),
+                        false,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        use_skill = Some(s.name.clone());
+                    }
+                });
+            }
+            ui.add_space(16.0);
             crate::cards::section_label(ui, "Project and user skills");
             crate::cards::help_text(
                 ui,
@@ -1371,6 +1439,7 @@ impl Cabin {
             let skills: Vec<_> = self
                 .native_skills
                 .iter()
+                .filter(|s| s.source != grokhub_agent::SkillSource::Builtin)
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)

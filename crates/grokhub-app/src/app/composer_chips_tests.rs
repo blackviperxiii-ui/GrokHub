@@ -229,7 +229,7 @@ fn composer_stack_drops_approve_slots() {
     let title = src
         .split("fn ui_titlebar(")
         .nth(1)
-        .and_then(|s| s.split("fn nav_row(").next())
+        .and_then(|s| s.split("fn ui_sidebar(").next())
         .expect("titlebar");
     let min = title.find("ChromeBtn::Minimize").expect("minimize");
     let ham = title.find("paint_session_actions_menu").expect("menu");
@@ -262,6 +262,7 @@ fn composer_stack_drops_approve_slots() {
             super::ComposerStackSlot::SessionTools,
             super::ComposerStackSlot::LiveWork,
             super::ComposerStackSlot::SlashPalette,
+            super::ComposerStackSlot::ScreenshotOffer,
             super::ComposerStackSlot::Attach,
             super::ComposerStackSlot::Voice,
             super::ComposerStackSlot::Pill,
@@ -423,8 +424,15 @@ fn voice_mode_has_indicator_and_stop() {
     );
     let perm = fn_src(&src, "set_permission_mode");
     assert!(
-        perm.contains("persistable_permission_mode"),
-        "Always must not persist: {perm}"
+        perm.contains("persistable_permission_mode") && perm.contains("always_confirmed"),
+        "Ask/Auto/Always persist; Always marks the one-time confirm: {perm}"
+    );
+    let arm = include_str!("confirm.rs");
+    assert!(
+        arm.contains("fn arm_session_always")
+            && arm.contains("always_confirmed")
+            && arm.contains("apply_session_always"),
+        "Always confirm runs once, then sticks"
     );
 }
 
@@ -517,7 +525,8 @@ fn chat_composer_pins_stop_on_the_right() {
         "vertical_centered_justified fills leftover height and drops the chips: {home}"
     );
     let stack = src
-        .find("for slot in composer_stack_order()")
+        .find("for slot in composer_stack_slots(")
+        .or_else(|| src.find("for slot in composer_stack_order()"))
         .expect("stack");
     let cap = &src[stack.saturating_sub(280)..stack];
     assert!(
@@ -952,7 +961,7 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     assert_eq!(mode.cfg.mode, "fast");
     assert_eq!(
         mode.status,
-        super::mode_status_line("fast", &mode.cfg.model)
+        super::slash::mode_status_line("fast", &mode.cfg.model)
     );
     assert!(!mode.running);
 

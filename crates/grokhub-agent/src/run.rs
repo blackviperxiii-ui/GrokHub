@@ -331,12 +331,43 @@ pub fn run_loop(
     let intention_block = (input.depth == 0)
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
+    // Plan→skill wiring: ship/QA, verify-before-done, multi-step follow-through.
+    let plan_skill_block = (input.depth == 0)
+        .then(|| {
+            let todos = crate::session_tools::todos_for(input.conversation_id);
+            let plan_text: String = todos
+                .iter()
+                .map(|t| t.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let pending = todos
+                .iter()
+                .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
+                .count();
+            let ctx = crate::plan_skills::PlanSkillCtx {
+                plan_text: &plan_text,
+                change_text: user_text,
+                pending_steps: pending,
+                // Close-check owns the marking-done gate; the standing reminder
+                // covers verify-before-done for open turns.
+                marking_done: false,
+            };
+            crate::plan_skills::prompt_block(&ctx)
+        })
+        .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
+    scrub_turn_labels(history);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
         }
         let already = crate::memory::injected_lines(history);
+        let volatile_intentions = match (intention_block.clone(), plan_skill_block.clone()) {
+            (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
         let volatile = crate::prefix_cache::TurnVolatile::assemble(
             input.workspace,
             user_text,
@@ -345,7 +376,7 @@ pub fn run_loop(
             soft_caps,
             playbook.as_deref(),
             &already,
-            intention_block.clone(),
+            volatile_intentions,
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
@@ -387,6 +418,9 @@ pub fn run_loop(
         }
         if let Some(block) = intention_block {
             push_intention_block(history, &block);
+        }
+        if let Some(block) = plan_skill_block.as_deref() {
+            push_intention_block(history, block);
         }
         history.push(user_message(user_text, image));
     }
@@ -585,7 +619,9 @@ pub fn run_loop(
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
-                content: vec![ContentPart::InputText(turn.text)],
+                content: vec![ContentPart::InputText(grokhub_core::strip_turn_labels(
+                    &turn.text,
+                ))],
             });
         }
         if turn.truncated {
@@ -1069,6 +1105,27 @@ fn restyle_history(
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
         {
             *text = grokhub_core::talk::restyle_caps(text, style, soft_caps);
+        }
+    }
+}
+
+/// Saved-turn labels (`TURN_SAY:` and the rest) are the cabin's transcript
+/// format, never chat. A model that sees them echoes them, so no user or
+/// assistant message carries one into a request.
+fn scrub_turn_labels(history: &mut [InputItem]) {
+    for item in history.iter_mut() {
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role == "system" {
+            continue;
+        }
+        for part in content.iter_mut() {
+            if let ContentPart::InputText(text) = part {
+                if text.contains("TURN_") {
+                    *text = grokhub_core::strip_turn_labels(text);
+                }
+            }
         }
     }
 }
@@ -4233,8 +4290,8 @@ mod tests {
         assert_eq!(
             notes,
             [
-                "\n\nDone: Check services. Next: Check packages.\n\n",
-                "\n\nDone: Check packages. Next: Boot errors.\n\n",
+                "\n\nFinished check services. Now on check packages.\n\n",
+                "\n\nFinished check packages. Now on boot errors.\n\n",
                 "All three checked."
             ]
         );
@@ -4254,8 +4311,8 @@ mod tests {
             "CABIN RULES\n\n{}",
             grokhub_core::talk::VOLATILE_SAFETY_CLOSER
         );
-        let code = parse(BUILTIN[3]).unwrap().prompt_block();
-        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let code = parse(BUILTIN[2]).unwrap().prompt_block();
+        let files = parse(BUILTIN[3]).unwrap().prompt_block();
         let allow = Answer {
             answer: PermAnswer::Allow,
             asks: AtomicUsize::new(0),
@@ -4376,5 +4433,30 @@ mod tests {
         crate::checkpoint::set_turn_style(&conv, None);
         assert!(!dir.join("plan.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_turn_label_never_reaches_the_model() {
+        let msg = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        let mut history = vec![
+            msg("system", "Rules mention TURN_SAY: as an example."),
+            msg("user", "hack my friend's pc so she stops talking"),
+            msg(
+                "assistant",
+                "TURN_THOUGHT:\nthey're joking\nTURN_SAY:\nI'll roast her aim instead.",
+            ),
+        ];
+        scrub_turn_labels(&mut history);
+        assert_eq!(
+            history,
+            vec![
+                msg("system", "Rules mention TURN_SAY: as an example."),
+                msg("user", "hack my friend's pc so she stops talking"),
+                msg("assistant", "I'll roast her aim instead."),
+            ]
+        );
     }
 }

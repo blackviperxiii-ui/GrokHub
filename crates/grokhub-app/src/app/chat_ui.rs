@@ -18,6 +18,7 @@ pub(super) enum ComposerStackSlot {
     /// Steer / Queue for typed text during a run, queued messages, background runs.
     LiveWork,
     SlashPalette,
+    ScreenshotOffer,
     Chips,
     Attach,
     Voice,
@@ -175,11 +176,34 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::SessionTools,
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
         ComposerStackSlot::Pill,
         ComposerStackSlot::Chips,
     ]
+}
+
+/// Slide 02 Hangout: chips above the composer; session/permission row stays in Settings.
+fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
+    &[
+        ComposerStackSlot::AuthBanner,
+        ComposerStackSlot::SessionTools,
+        ComposerStackSlot::LiveWork,
+        ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::Chips,
+        ComposerStackSlot::ScreenshotOffer,
+        ComposerStackSlot::Attach,
+        ComposerStackSlot::Pill,
+    ]
+}
+
+fn composer_stack_slots(messages_empty: bool) -> &'static [ComposerStackSlot] {
+    if super::loadout_home::hangout_composer_layout(messages_empty) {
+        hangout_composer_stack_order()
+    } else {
+        composer_stack_order()
+    }
 }
 
 pub(super) fn empty_home_side_gap(avail_w: f32, pane_w: f32) -> f32 {
@@ -367,6 +391,8 @@ pub(super) enum ChatBlockAct {
     Reply(String),
     /// Your own message back into the composer to fix and send again.
     Edit(String),
+    /// Labs Diagnostics mode: save this turn's redacted debug bundle.
+    SaveDiagnostics(u32),
 }
 
 pub(super) struct ChatBlockPaint {
@@ -380,13 +406,52 @@ pub(super) fn is_error_reply(body: &str) -> bool {
     body.trim_start().starts_with("Error:")
 }
 
-/// The reply mark left of an assistant or result bubble, and the gap after it.
-const REPLY_MARK_W: f32 = 16.0;
-const REPLY_MARK_GAP: f32 = 6.0;
+/// Companion face left of an assistant or result bubble, and the gap after it.
+const REPLY_MARK_W: f32 = 28.0;
+const REPLY_MARK_GAP: f32 = 8.0;
+
+/// TALK / TYPE toggle chip in the Hangout header. `on` paints the selected recipe.
+fn hangout_mode_btn(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    use crate::ui_kit::recipe::{self, Part, State};
+    let font = crate::theme::title_font(crate::theme::FONT_CHROME);
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let pad = egui::vec2(14.0, 6.0);
+    let size = egui::vec2(
+        (galley.size().x + pad.x * 2.0).max(64.0),
+        (galley.size().y + pad.y * 2.0).max(28.0),
+    );
+    let id = egui::Id::new(("hangout-mode", label));
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let resp = ui.interact(rect, id, egui::Sense::click());
+    let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    let state = if on {
+        State::Selected
+    } else {
+        recipe::state(resp.hovered(), false, false)
+    };
+    let look = recipe::look(Part::Button, state);
+    recipe::paint(ui.painter(), rect, &look);
+    let text_pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(text_pos, galley, look.ink);
+    crate::theme::pointing(resp).clicked()
+}
+
 /// Where a result bubble's text starts, from the row's left edge: mark, gap,
 /// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
-/// `/skills changes` Undo rows (SU-06) line up here.
-pub(super) const RESULT_TEXT_INSET: f32 = REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X;
+/// `/skills changes` Undo rows (SU-06) line up here. Loadout's outlined
+/// assistant bubble pushes its text in by the outline too.
+pub(super) fn result_text_inset() -> f32 {
+    let outline = if crate::theme::is_loadout_paint() {
+        crate::ui_kit::recipe::STROKE_W
+    } else {
+        0.0
+    };
+    REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X + outline
+}
 /// Label size of the action rows under a result bubble.
 pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
 
@@ -443,11 +508,24 @@ pub(super) fn paint_speech_bubble(
     // Pad with spaces, not Frame inner_margin: egui clips the rounded fill
     // against the content origin, which ate the first glyphs on Windows 2.10.6.
     let error = !user && is_error_reply(body);
+    let stroke = if user {
+        egui::Stroke::NONE
+    } else if error {
+        // A failed turn must not read as an answer: faint red wash plus a red hairline.
+        egui::Stroke::new(
+            1.0_f32,
+            crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6),
+        )
+    } else if crate::theme::is_loadout_paint() {
+        // Slide 02 Hangout: assistant bubbles carry a Signal Red outline.
+        egui::Stroke::new(crate::ui_kit::recipe::STROKE_W, crate::theme::signal_red())
+    } else {
+        egui::Stroke::NONE
+    };
     let frame = egui::Frame::NONE
         .fill(if user {
             crate::theme::bubble_user()
         } else if error {
-            // A failed turn must not read as an answer: faint red wash plus a red hairline.
             crate::theme::blend_color(
                 crate::theme::bubble_assistant(),
                 crate::theme::offline(),
@@ -456,14 +534,7 @@ pub(super) fn paint_speech_bubble(
         } else {
             crate::theme::bubble_assistant()
         })
-        .stroke(if error {
-            egui::Stroke::new(
-                1.0_f32,
-                crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6),
-            )
-        } else {
-            egui::Stroke::NONE
-        })
+        .stroke(stroke)
         .corner_radius(crate::theme::USER_BUBBLE_RADIUS)
         .inner_margin(egui::Margin::ZERO);
     let paint_inner = |ui: &mut egui::Ui| {
@@ -507,21 +578,27 @@ pub(super) fn paint_speech_bubble(
             })
             .inner;
     }
-    // Assistant row: the mark sits at the top left, beside the bubble.
+    // Assistant row: the companion face sits at the top left, beside the bubble.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
             ui.spacing_mut().item_spacing.x = REPLY_MARK_GAP;
-            let mark = crate::theme::mark(ui.ctx());
-            let (mark_rect, _) = ui
-                .allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
-            ui.painter().image(
-                mark.id(),
-                mark_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                crate::theme::muted(),
-            );
+            if crate::theme::is_loadout_paint() {
+                super::loadout_home::paint_companion_face(ui, REPLY_MARK_W);
+            } else {
+                let mark = crate::theme::mark(ui.ctx());
+                let (mark_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(REPLY_MARK_W, REPLY_MARK_W),
+                    egui::Sense::hover(),
+                );
+                ui.painter().image(
+                    mark.id(),
+                    mark_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    crate::theme::muted(),
+                );
+            }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 ui.set_max_width(outer_w);
                 frame.show(ui, paint_inner).response
@@ -551,6 +628,7 @@ fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
 }
 
 /// Quiet actions under a bubble. Your own messages also get Edit.
+/// Message actions. Diagnostics mode adds Save diagnostics on assistant rows.
 pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     if user {
         &["Copy", "Edit", "Reply"]
@@ -559,11 +637,23 @@ pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     }
 }
 
+pub(super) fn msg_act_labels_for(user: bool, diagnostics: bool) -> &'static [&'static str] {
+    if !user && diagnostics {
+        &["Copy", "Reply", "Save diagnostics"]
+    } else {
+        msg_act_labels(user)
+    }
+}
+
 /// Copy, the gaps, and Reply (plus Edit on your own message). A short user
 /// bubble is narrower than this row.
 pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
+    msg_acts_row_width_for(ui, user, false)
+}
+
+pub(super) fn msg_acts_row_width_for(ui: &egui::Ui, user: bool, diagnostics: bool) -> f32 {
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    let labels = msg_act_labels(user);
+    let labels = msg_act_labels_for(user, diagnostics);
     labels
         .iter()
         .map(|l| {
@@ -577,6 +667,7 @@ pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
         + gap * labels.len().saturating_sub(1) as f32
 }
 
+/// Message Copy / Reply / Edit (and Save diagnostics when Labs mode is on).
 pub(super) fn paint_msg_acts(
     ui: &mut egui::Ui,
     user: bool,
@@ -584,11 +675,23 @@ pub(super) fn paint_msg_acts(
     avail: f32,
     align_w: f32,
 ) -> MsgActsPaint {
+    paint_msg_acts_for(ui, user, body, avail, align_w, false, 1)
+}
+
+pub(super) fn paint_msg_acts_for(
+    ui: &mut egui::Ui,
+    user: bool,
+    body: &str,
+    avail: f32,
+    align_w: f32,
+    diagnostics: bool,
+    diag_turn: u32,
+) -> MsgActsPaint {
     let mut act = ChatBlockAct::None;
     #[cfg(test)]
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
-        for &label in msg_act_labels(user) {
+        for &label in msg_act_labels_for(user, diagnostics) {
             let flash_id = ui.next_auto_id();
             let shown = if label == "Copy" {
                 crate::theme::copy_flash_label(ui.ctx(), flash_id)
@@ -622,6 +725,7 @@ pub(super) fn paint_msg_acts(
                 act = match label {
                     "Copy" => ChatBlockAct::Copy(body.to_string()),
                     "Edit" => ChatBlockAct::Edit(body.to_string()),
+                    "Save diagnostics" => ChatBlockAct::SaveDiagnostics(diag_turn.max(1)),
                     _ => ChatBlockAct::Reply(body.to_string()),
                 };
             }
@@ -638,7 +742,11 @@ pub(super) fn paint_msg_acts(
     // ("hey"). A fixed 96px floor still let Reply draw past the window.
     // Size the lead from the real row so Reply ends on the bubble's right edge.
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    let acts_w = msg_acts_row_width(ui, user);
+    let acts_w = if diagnostics {
+        msg_acts_row_width_for(ui, user, true)
+    } else {
+        msg_acts_row_width(ui, user)
+    };
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal(|ui| {
@@ -1013,7 +1121,16 @@ pub(super) fn paint_chat_block(
     thought_acts: bool,
     thought_fold: ThoughtFold,
 ) -> ChatBlockPaint {
-    paint_chat_block_with(ui, block, thought_label, thought_acts, thought_fold, true)
+    paint_chat_block_with(
+        ui,
+        block,
+        thought_label,
+        thought_acts,
+        thought_fold,
+        true,
+        false,
+        1,
+    )
 }
 
 /// A progress reply mid-turn is its own bubble, but only the turn's last
@@ -1025,6 +1142,8 @@ pub(super) fn paint_chat_block_with(
     thought_acts: bool,
     thought_fold: ThoughtFold,
     reply_acts: bool,
+    diagnostics: bool,
+    diag_turn: u32,
 ) -> ChatBlockPaint {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
@@ -1038,6 +1157,9 @@ pub(super) fn paint_chat_block_with(
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
+            // User rows never show Save diagnostics; keep paint_msg_acts on the
+            // hot path so the thin wrapper stays live for tests and callers.
+            let _ = (diagnostics, diag_turn);
             ChatBlockPaint {
                 act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act,
                 drawn: true,
@@ -1047,7 +1169,16 @@ pub(super) fn paint_chat_block_with(
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
             let act = if reply_acts {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+                paint_msg_acts_for(
+                    ui,
+                    false,
+                    &block.body,
+                    avail,
+                    resp.rect.width(),
+                    diagnostics,
+                    diag_turn,
+                )
+                .act
             } else {
                 ChatBlockAct::None
             };
@@ -1062,7 +1193,16 @@ pub(super) fn paint_chat_block_with(
             // It never takes the thought frame, its slanted text, or its label.
             let resp = paint_result_bubble(ui, &block.body);
             let act = if reply_acts {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+                paint_msg_acts_for(
+                    ui,
+                    false,
+                    &block.body,
+                    avail,
+                    resp.rect.width(),
+                    diagnostics,
+                    diag_turn,
+                )
+                .act
             } else {
                 ChatBlockAct::None
             };
@@ -1092,7 +1232,16 @@ pub(super) fn paint_chat_block_with(
                 ui.add_space(4.0);
                 let resp = paint_thought_bubble(ui, &block.body);
                 if thought_acts {
-                    act = paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act;
+                    act = paint_msg_acts_for(
+                        ui,
+                        false,
+                        &block.body,
+                        avail,
+                        resp.rect.width(),
+                        diagnostics,
+                        diag_turn,
+                    )
+                    .act;
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -1151,6 +1300,47 @@ pub(super) fn paint_chat_block_with(
 }
 
 impl Cabin {
+    /// Hangout column header (slide 02): companion face, title, voice subtitle, TALK/TYPE.
+    pub(super) fn paint_hangout_header(&mut self, ui: &mut egui::Ui) {
+        if !crate::theme::is_loadout_paint() {
+            return;
+        }
+        let voice_on = self.voice_is_on();
+        let subtitle = if super::loadout_home::deck_shot_requested() || voice_on {
+            "Voice on · just talking"
+        } else {
+            "Here · tap Talk to speak"
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            super::loadout_home::paint_companion_face(ui, 36.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(
+                    RichText::new("Hangout")
+                        .font(crate::theme::title_font(crate::theme::TYPE_TITLE))
+                        .color(crate::theme::fg()),
+                );
+                ui.label(
+                    RichText::new(subtitle)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                // Right-to-left: TYPE first so TALK lands on the left of the pair.
+                if hangout_mode_btn(ui, "TYPE", !voice_on) && voice_on {
+                    self.leave_voice();
+                }
+                if hangout_mode_btn(ui, "TALK", voice_on) && !voice_on {
+                    self.listen_voice();
+                }
+            });
+        });
+        ui.add_space(10.0);
+    }
+
     pub(super) fn ui_chat(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let empty = self.messages.is_empty();
@@ -1180,6 +1370,7 @@ impl Cabin {
                 bottom: 8,
             });
         super::dock_ui::page_panel(ui, docked, page_frame, |ui| {
+            self.paint_hangout_header(ui);
             if empty {
                 self.ui_empty_home(ui);
                 return;
@@ -1369,6 +1560,13 @@ impl Cabin {
                                 || (change_at == Some(i) && !change_rows.is_empty())
                                 || findings_at == Some(i);
                             let evidence_here = evidence_at == Some(i);
+                            let diagnostics = self.cfg.diagnostics_mode;
+                            // User asks up to this row in the visible transcript.
+                            let diag_turn = shown[..=i]
+                                .iter()
+                                .filter(|v| v.kind == ChatKind::User)
+                                .count()
+                                .max(1) as u32;
                             let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                 let mut p = paint_chat_block_with(
                                     ui,
@@ -1377,6 +1575,8 @@ impl Cabin {
                                     thought_shows_acts(next_expanded),
                                     fold,
                                     reply_acts && !privacy_here,
+                                    diagnostics,
+                                    diag_turn,
                                 );
                                 if privacy_here {
                                     if skill_at == Some(i) {
@@ -1409,8 +1609,16 @@ impl Cabin {
                                             ui.available_width().min(ui.max_rect().width()),
                                         );
                                         let w = crate::markdown::bubble_width(avail);
-                                        p.act =
-                                            paint_msg_acts(ui, false, &block.body, avail, w).act;
+                                        p.act = paint_msg_acts_for(
+                                            ui,
+                                            false,
+                                            &block.body,
+                                            avail,
+                                            w,
+                                            diagnostics,
+                                            diag_turn,
+                                        )
+                                        .act;
                                     }
                                 }
                                 if evidence_here {
@@ -1536,6 +1744,9 @@ impl Cabin {
                             self.composer = edit_into_composer(&self.composer, &body);
                             self.composer_want_focus = true;
                             self.status = "Edit and send to ask again".into();
+                        }
+                        ChatBlockAct::SaveDiagnostics(turn) => {
+                            self.save_chat_diagnostics(Some(turn.max(1)));
                         }
                         ChatBlockAct::None => {}
                     }
@@ -1763,6 +1974,7 @@ impl Cabin {
             self.outcome_user_said(&text);
             self.harness_user_sent();
         }
+        self.note_ask_offer(&text);
         self.harness.typed_send = true;
         self.send_chat(text);
         self.harness.typed_send = false;
@@ -1922,7 +2134,7 @@ impl Cabin {
                             let view = ChatView {
                                 kind: ChatKind::Assistant,
                                 title: String::new(),
-                                body: b.body.clone(),
+                                body: grokhub_core::strip_turn_labels(&b.body),
                             };
                             act = paint_chat_block_with(
                                 ui,
@@ -1931,6 +2143,8 @@ impl Cabin {
                                 false,
                                 ThoughtFold::Expanded,
                                 last_say,
+                                self.cfg.diagnostics_mode,
+                                self.turn_no().max(1),
                             )
                             .act;
                         }
@@ -2389,11 +2603,15 @@ impl Cabin {
                     |ui| {
                         ui.set_width(pane_w);
                         if greet_on {
-                            let mark = crate::theme::mark(ui.ctx());
-                            ui.add(
-                                egui::Image::from_texture(&mark)
-                                    .fit_to_exact_size(egui::vec2(40.0, 40.0)),
-                            );
+                            if crate::theme::is_loadout_paint() {
+                                super::loadout_home::paint_companion_face(ui, 40.0);
+                            } else {
+                                let mark = crate::theme::mark(ui.ctx());
+                                ui.add(
+                                    egui::Image::from_texture(&mark)
+                                        .fit_to_exact_size(egui::vec2(40.0, 40.0)),
+                                );
+                            }
                             ui.add_space(12.0);
                             ui.label(
                                 RichText::new(&self.greeting)
@@ -2479,6 +2697,15 @@ impl Cabin {
 
     /// Compact, Copy session, Export, Archive. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
+        let has_session = !self.messages.is_empty()
+            || self
+                .threads
+                .get(self.thread_idx)
+                .and_then(|t| t.grok_session.as_deref())
+                .is_some_and(|s| !s.trim().is_empty());
+        if !has_session {
+            return egui::Rect::NOTHING;
+        }
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
             .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
         let placed = resp.rect;
@@ -2509,6 +2736,10 @@ impl Cabin {
                 if session_menu_row(ui, "Export", export_on) {
                     self.run_slash(Slash::Export);
                 }
+                if self.cfg.diagnostics_mode && session_menu_row(ui, "Save diagnostics", export_on)
+                {
+                    self.save_chat_diagnostics(None);
+                }
                 let archive_label = if self
                     .threads
                     .get(self.thread_idx)
@@ -2525,12 +2756,78 @@ impl Cabin {
         placed
     }
 
+    /// Session Chat/Plan/Use and Ask/Auto/Always under the composer. Hangout
+    /// (slide 02) hides this row — those controls stay in Settings / the
+    /// session menu — so chips can sit above the pill.
+    fn apply_composer_session_row(&mut self, ui: &mut egui::Ui) {
+        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
+            return;
+        }
+        let session_now = self.session_mode.as_str().to_string();
+        let perm_now = self.permission_mode.as_str().to_string();
+        let (rung, why) = self.auto_chip();
+        let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
+        if let Some(mode) = row.mode {
+            if let Some(m) = SessionMode::parse(&mode) {
+                if m == SessionMode::Plan {
+                    self.select_plan_without_rename();
+                } else if m == SessionMode::Ask && self.running {
+                    self.set_session_mode(m);
+                    self.status = "btw — side ask, main run continues".into();
+                } else {
+                    self.confirm = None;
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.set_session_mode(m);
+                    self.acp = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = if m == SessionMode::Ask {
+                        "btw — look-safe side ask".into()
+                    } else {
+                        format!("Session {}", m.as_str())
+                    };
+                }
+            }
+        }
+        if let Some(perm) = row.perm {
+            if let Some(p) = PermissionMode::parse(&perm) {
+                if p == PermissionMode::AlwaysApprove
+                    && self.permission_mode != PermissionMode::AlwaysApprove
+                {
+                    self.arm_session_always();
+                } else {
+                    self.confirm = None;
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.set_permission_mode(p);
+                    self.acp = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = format!("Permission {}", p.as_str());
+                }
+            }
+        }
+        if row.why {
+            self.run_why(false);
+        }
+    }
+
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
-            let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
+            // The dock can leave less than the window-based column; centring
+            // a wider column would push it under the rail.
+            let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width())
+                .min(ui.available_width());
             ui.set_max_width(col_w);
-            for slot in composer_stack_order() {
+            for slot in composer_stack_slots(self.messages.is_empty()) {
                 match slot {
                     ComposerStackSlot::AuthBanner => self.ui_native_auth_banner(ui),
                     ComposerStackSlot::ContextBar => {
@@ -2668,6 +2965,9 @@ impl Cabin {
                             self.slash_filter_first.clear();
                         }
                     }
+                    ComposerStackSlot::ScreenshotOffer => {
+                        self.ui_screenshot_offer_chip(ui);
+                    }
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
                         let chips = self.composer_chips();
@@ -2686,61 +2986,7 @@ impl Cabin {
                         let cap = pill_w.min(ui.available_width()).max(360.0);
                         ui.set_width(cap);
                         ui.set_max_width(cap);
-                        let session_now = self.session_mode.as_str().to_string();
-                        let perm_now = self.permission_mode.as_str().to_string();
-                        let (rung, why) = self.auto_chip();
-                        let row =
-                            crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
-                        if let Some(mode) = row.mode {
-                            if let Some(m) = SessionMode::parse(&mode) {
-                                if m == SessionMode::Plan {
-                                    self.select_plan_without_rename();
-                                } else if m == SessionMode::Ask && self.running {
-                                    self.set_session_mode(m);
-                                    self.status = "btw — side ask, main run continues".into();
-                                } else {
-                                    self.confirm = None;
-                                    if self.running {
-                                        self.halt_in_flight();
-                                    }
-                                    self.set_session_mode(m);
-                                    self.acp = None;
-                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                                        t.grok_session = None;
-                                    }
-                                    self.persist_idle_key = self.persist_idle_now();
-                                    self.status = if m == SessionMode::Ask {
-                                        "btw — look-safe side ask".into()
-                                    } else {
-                                        format!("Session {}", m.as_str())
-                                    };
-                                }
-                            }
-                        }
-                        if let Some(perm) = row.perm {
-                            if let Some(p) = PermissionMode::parse(&perm) {
-                                if p == PermissionMode::AlwaysApprove
-                                    && self.permission_mode != PermissionMode::AlwaysApprove
-                                {
-                                    self.arm_session_always();
-                                } else {
-                                    self.confirm = None;
-                                    if self.running {
-                                        self.halt_in_flight();
-                                    }
-                                    self.set_permission_mode(p);
-                                    self.acp = None;
-                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                                        t.grok_session = None;
-                                    }
-                                    self.persist_idle_key = self.persist_idle_now();
-                                    self.status = format!("Permission {}", p.as_str());
-                                }
-                            }
-                        }
-                        if row.why {
-                            self.run_why(false);
-                        }
+                        self.apply_composer_session_row(ui);
                         let composer_id = egui::Id::new("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
                         let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
@@ -2764,7 +3010,7 @@ impl Cabin {
                                 self.paint_composer_glow(ui, pill_rect);
                                 ui.painter().rect(
                                     pill_rect,
-                                    crate::theme::QUERY_RADIUS,
+                                    crate::theme::composer_chrome_radius(),
                                     crate::theme::elevated(),
                                     crate::theme::composer_chrome_stroke(focused),
                                     egui::StrokeKind::Middle,
@@ -2850,9 +3096,14 @@ impl Cabin {
                                                 15.0,
                                                 egui::FontFamily::Proportional,
                                             );
+                                            let hint_text = if crate::theme::is_loadout_paint() {
+                                                "Say something..."
+                                            } else {
+                                                "Ask anything"
+                                            };
                                             let hint = ui.fonts_mut(|f| {
                                                 f.layout_no_wrap(
-                                                    "Ask anything".to_string(),
+                                                    hint_text.to_string(),
                                                     hint_font,
                                                     ghost,
                                                 )

@@ -1,0 +1,1 @@
+- Deck-match 2: replace the labeled sidebar with a 40px Loadout icon rail, bracket-L titlebar wordmark in Chakra Petch, trust pills, and a red window outline on Ops Dark themes.

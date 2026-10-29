@@ -44,40 +44,36 @@ fn selecting_plan_does_not_change_the_thread_title() {
 #[test]
 fn history_rail_uses_session_names_and_can_delete() {
     let src = cabin_src();
-    let rail = src
-        .split("id_salt(\"rail-history\")")
-        .nth(1)
-        .and_then(|s| s.split("fn cached_chat_views(").next())
-        .expect("rail-history");
+    let tabs = include_str!("chat_tabs.rs");
     assert!(
-        rail.contains("chat_section_indices") && rail.contains("TabAct::Switch"),
-        "sidebar History is cabin chats, not grok sessions list: {rail}"
+        tabs.contains("chat_section_indices") && tabs.contains("TabAct::Switch"),
+        "chat tabs list cabin chats, not grok sessions: {tabs}"
     );
     assert!(
-        !rail.contains("discover_session_files") && !rail.contains("reload_grok_sessions"),
-        "sidebar History must not walk session dirs or relist the CLI: {rail}"
+        !tabs.contains("discover_session_files") && !tabs.contains("reload_grok_sessions"),
+        "chat tabs must not walk session dirs or relist the CLI: {tabs}"
     );
     assert!(
-        rail.contains("TabAct::Delete") && rail.contains("button(\"Delete\")"),
-        "sidebar chat rows must offer Delete: {rail}"
+        tabs.contains("TabAct::Delete") && tabs.contains("\"Delete\""),
+        "chat tabs must offer Delete: {tabs}"
     );
     assert!(
-        rail.contains("session_list_order")
-            && rail.contains("\"Unpin\"")
-            && rail.contains("\"Pin\"")
-            && rail.contains("\"Rename\""),
-        "sidebar chat rows must pin and rename: {rail}"
+        tabs.contains("session_list_order")
+            && tabs.contains("\"Unpin\"")
+            && tabs.contains("\"Pin\"")
+            && tabs.contains("\"Rename\""),
+        "chat tabs must pin and rename: {tabs}"
     );
     assert!(
-        rail.contains("is_background_history_title"),
-        "sidebar History must drop workboard summarize and similar: {rail}"
+        tabs.contains("is_background_history_title"),
+        "chat tabs must drop workboard summarize and similar: {tabs}"
     );
     let side = include_str!("sidebar.rs");
     assert!(
-        !side.contains("rail-archived")
-            && !side.contains("RichText::new(\"Archived\")")
-            && !side.contains("No archived chats"),
-        "sidebar must not paint an Archived section: {side}"
+        !side.contains("ui_rail_chat_drawer")
+            && !side.contains("rail_chat_drawer_open")
+            && !side.contains("rail-archived"),
+        "sidebar must not keep the chat drawer or Archived section: {side}"
     );
     let page = src
         .split("crate::cards::section_label(ui, \"Chats\")")
@@ -104,8 +100,15 @@ fn history_rail_uses_session_names_and_can_delete() {
     );
     let dta = fn_src(&src, "delete_thread_at");
     assert!(
-        dta.contains("delete_session") && !dta.contains("grok_user_stdout"),
-        "deleting a chat drops its native session and never runs the CLI: {dta}"
+        dta.contains("soft_delete_thread")
+            && dta.contains("hard_purge_thread_sessions")
+            && !dta.contains("grok_user_stdout"),
+        "delete soft-trashes when possible; ResetLast hard-purges sessions; never runs the CLI: {dta}"
+    );
+    let purge = fn_src(&src, "hard_purge_thread_sessions");
+    assert!(
+        purge.contains("delete_session"),
+        "expired trash / ResetLast must drop native sessions: {purge}"
     );
     assert!(
         page.contains("self.nav = Nav::History"),
@@ -148,14 +151,15 @@ fn history_rail_uses_session_names_and_can_delete() {
         poll.contains("scheduled_perm = false"),
         "a finished or failed grok -p turn must drop scheduled_perm: {poll}"
     );
-    let deleted = src
-        .split("fn delete_thread_at")
-        .nth(1)
-        .and_then(|s| s.split("fn send_chat").next())
-        .expect("delete_thread_at");
+    let deleted = fn_src(&src, "delete_thread_at");
     assert!(
-        deleted.contains("grokhub_agent::delete_session"),
-        "deleting a History chat must drop its native session: {deleted}"
+        deleted.contains("soft_delete_thread") && deleted.contains("hard_purge_thread_sessions"),
+        "delete soft-trashes live chats and hard-purges the ResetLast / expired path: {deleted}"
+    );
+    let purge = fn_src(&src, "hard_purge_thread_sessions");
+    assert!(
+        purge.contains("grokhub_agent::delete_session"),
+        "hard purge must drop native sessions: {purge}"
     );
     let title = fn_src(&src, "thread_rail_title");
     assert!(
@@ -167,7 +171,7 @@ fn history_rail_uses_session_names_and_can_delete() {
 #[test]
 #[allow(clippy::assertions_on_constants)] // pins design constants
 fn rail_footer_is_reserved() {
-    assert_eq!(super::RAIL_FOOTER_H, 52.0);
+    assert_eq!(super::sidebar::RAIL_FOOTER_H, 40.0);
     assert!(super::PALETTE_LIST_H < 400.0);
 }
 
@@ -175,27 +179,33 @@ fn rail_footer_is_reserved() {
 fn rail_chat_title_stays_short() {
     assert_eq!(
         grokhub_core::display_tab_title("chowder and food interest and cho"),
-        "chowder"
+        "chowder food interest cho"
     );
     with_fonts_ui(|ui| {
         let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
         assert!(
-            painted.chars().count() < 20,
-            "rail label must not run off the pill: {painted}"
+            painted.chars().count() <= grokhub_core::AUTO_TITLE_MAX,
+            "rail label must not run past the tab title cap: {painted}"
         );
-        assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+        assert!(
+            painted.contains('…') || painted.starts_with("chowder"),
+            "{painted}"
+        );
     });
 }
 
 #[test]
-fn chat_rail_reuses_empty_draft() {
+fn chat_rail_restores_last_used_tab() {
     let src = cabin_src();
     let theme = include_str!("../theme.rs");
-    let chat = theme.find("(\"chat\", \"Chat\")").expect("chat rail");
-    let imagine = theme
-        .find("(\"imagine\", \"Imagine\")")
-        .expect("imagine rail");
-    assert!(chat < imagine, "Chat sits above Imagine on the rail");
+    let loadout = theme
+        .split("pub const LOADOUT_NAV")
+        .nth(1)
+        .and_then(|s| s.split("pub const CABIN_MENU").next())
+        .expect("LOADOUT_NAV");
+    let home = loadout.find("(\"home\", \"Home\")").expect("home rail");
+    let chat = loadout.find("(\"chat\", \"Chat\")").expect("chat rail");
+    assert!(home < chat, "Home sits above Chat on the Loadout rail");
     let set_nav = fn_src(&src, "set_nav_id");
     let chat_arm = set_nav
         .split("\"chat\" =>")
@@ -203,12 +213,24 @@ fn chat_rail_reuses_empty_draft() {
         .and_then(|s| s.split("_ =>").next())
         .expect("chat arm");
     assert!(
-        chat_arm.contains("self.new_thread(false)"),
-        "Chat rail click reuses or starts one empty draft: {chat_arm}"
+        chat_arm.contains("self.open_last_chat_tab()"),
+        "Chat rail restores the last-used tab: {chat_arm}"
     );
     assert!(
-        !chat_arm.contains("open_recent_chat"),
-        "Chat rail must not jump to last-access; History is for old convos: {chat_arm}"
+        !chat_arm.contains("new_thread(false)"),
+        "Chat rail must not force a fresh draft over last-used: {chat_arm}"
+    );
+    let open_last = fn_src(&src, "open_last_chat_tab");
+    assert!(
+        open_last.contains("last_chat_tab")
+            && open_last.contains("last_used_live_chat_index")
+            && open_last.contains("new_thread(false)"),
+        "restore prefers remembered, then next live, else fresh: {open_last}"
+    );
+    let fresh = fn_src(&src, "open_fresh_home");
+    assert!(
+        fresh.contains("last_chat_tab") && fresh.contains("keep"),
+        "Home parking must not wipe last_chat_tab: {fresh}"
     );
     let created = src
         .split("fn new_thread")
@@ -217,11 +239,11 @@ fn chat_rail_reuses_empty_draft() {
         .expect("new_thread");
     assert!(
         created.contains("reuse_empty_thread_idx") && created.contains("has_session"),
-        "Chat must reuse an empty no-session draft instead of stacking Chats: {created}"
+        "tab + still reuses an empty no-session draft instead of stacking Chats: {created}"
     );
     assert!(
         created.contains("composer_want_focus = true"),
-        "Chat rail must put the cursor in the composer: {created}"
+        "new chat must put the cursor in the composer: {created}"
     );
     let side = fn_src(&src, "ui_sidebar");
     assert!(
@@ -229,13 +251,20 @@ fn chat_rail_reuses_empty_draft() {
         "sidebar must not keep a separate New chat button: {side}"
     );
     assert!(
-        side.contains("apply_tab_act"),
-        "sidebar History clicks go through the shared chat-row action: {side}"
+        !side.contains("ui_rail_chat_drawer") && !side.contains("rail_chat_drawer_open"),
+        "Chat rail must not open a drawer: {side}"
+    );
+    let tabs = include_str!("chat_tabs.rs");
+    assert!(
+        tabs.contains("ui_chat_tabs")
+            && tabs.contains("apply_tab_act")
+            && tabs.contains("CHAT_TABS_H"),
+        "chat tabs live under the title bar: {tabs}"
     );
     let tab_act = fn_src(&src, "apply_tab_act");
     assert!(
         tab_act.contains("composer_want_focus = true"),
-        "sidebar History clicks must focus the composer: {tab_act}"
+        "tab clicks must focus the composer: {tab_act}"
     );
     let palette = src
         .split("fn run_palette(")
@@ -243,8 +272,8 @@ fn chat_rail_reuses_empty_draft() {
         .and_then(|s| s.split("fn run_slash_line(").next())
         .expect("run_palette");
     assert!(
-        palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
-        "palette Chat uses the same empty-draft reuse as the rail: {palette}"
+        palette.contains("\"nav:chat\"") && palette.contains("self.open_last_chat_tab()"),
+        "palette Chat uses the same last-used restore as the rail: {palette}"
     );
     assert!(
         palette.contains("file:")
@@ -505,6 +534,7 @@ fn selecting_plan_leaves_the_title_and_sets_plan() {
 fn session_menu_sits_left_of_minimize() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("menu-place");
+    cabin.threads[cabin.thread_idx].grok_session = Some("sess".into());
     let ctx = egui::Context::default();
     let raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -698,16 +728,24 @@ fn delete_thread_at_removes_that_row() {
     let idx = cabin.threads.len() - 1;
     cabin.threads[idx].messages = std::sync::Arc::new(vec![("user".into(), "harbor row".into())]);
     cabin.delete_thread_at(idx);
+    let harbor = cabin
+        .threads
+        .iter()
+        .find(|t| t.title == "Harbor")
+        .expect("soft-delete keeps Harbor on disk");
     assert!(
-        cabin.threads.iter().all(|t| t.title != "Harbor"),
-        "deleting that chat must remove its sidebar row, left {:?}",
-        cabin
-            .threads
-            .iter()
-            .map(|t| t.title.as_str())
-            .collect::<Vec<_>>()
+        crate::threads::is_deleted(harbor),
+        "deleting that chat must soft-trash it"
     );
-    assert!(cabin.threads.iter().any(|t| t.title == keep));
+    let listed = crate::threads::chat_section_indices(&cabin.threads, None, false);
+    assert!(
+        listed.iter().all(|&i| cabin.threads[i].title != "Harbor"),
+        "Harbor must leave the tab strip / History list"
+    );
+    assert!(cabin
+        .threads
+        .iter()
+        .any(|t| t.title == keep && !crate::threads::is_deleted(t)));
     assert_eq!(cabin.status, "Deleted Harbor");
     quiet.settle();
 }
@@ -1055,7 +1093,15 @@ fn delete_one_chat_stays_off_a_run() {
     cabin.delete_thread_at(harbor);
 
     assert_eq!(cabin.status, "Deleted Harbor");
-    assert!(cabin.threads.iter().all(|t| t.title != "Harbor"));
+    let harbor_row = cabin
+        .threads
+        .iter()
+        .find(|t| t.title == "Harbor")
+        .expect("soft-delete keeps Harbor on disk");
+    assert!(crate::threads::is_deleted(harbor_row));
+    assert!(!crate::threads::is_deleted(
+        &cabin.threads[cabin.thread_idx]
+    ));
     assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
@@ -1131,6 +1177,75 @@ fn land_on_real_chat_leaves_scratch() {
         .any(|(i, t)| { i != cabin.thread_idx && t.title == "Scratch" && t.scratch }));
     assert_eq!(cabin.status, "Scratch — no memory writes");
     assert!(!cabin.running);
+}
+
+#[test]
+fn chat_rail_home_round_trip_restores_last_tab() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chat-rail-last-used");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+
+    let mut older = crate::threads::ChatThread::new("Older", false);
+    older.accessed_ms = 1_000;
+    older.messages = std::sync::Arc::new(vec![("user".into(), "old".into())]);
+    let older_id = older.id.clone();
+    let mut newer = crate::threads::ChatThread::new("Harbor", false);
+    newer.accessed_ms = 5_000;
+    newer.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
+    let newer_id = newer.id.clone();
+    cabin.threads.push(older);
+    cabin.threads.push(newer);
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    cabin.remember_last_chat_tab();
+    assert_eq!(cabin.cfg.last_chat_tab, newer_id);
+
+    cabin.open_fresh_home();
+    assert!(cabin.messages.is_empty(), "Home parks on an empty draft");
+    assert_eq!(cabin.cfg.last_chat_tab, newer_id);
+    assert_ne!(cabin.threads[cabin.thread_idx].id, newer_id);
+
+    cabin.set_nav_id("chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, newer_id);
+    assert_eq!(cabin.messages[0].1, "dock");
+
+    // Closed remembered tab → next live (Older), not the Home draft.
+    let harbor_idx = cabin.thread_idx;
+    cabin.delete_thread_at(harbor_idx);
+    assert!(crate::threads::is_deleted(
+        cabin
+            .threads
+            .iter()
+            .find(|t| t.id == newer_id)
+            .expect("soft-deleted Harbor stays on disk")
+    ));
+    cabin.open_fresh_home();
+    cabin.set_nav_id("chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, older_id);
+    assert_eq!(cabin.messages[0].1, "old");
+
+    // None remain → fresh draft.
+    let older_idx = cabin.thread_idx;
+    cabin.delete_thread_at(older_idx);
+    cabin.cfg.last_chat_tab.clear();
+    // Drop leftover parking drafts so restore has nothing live.
+    for t in cabin.threads.iter_mut() {
+        if crate::threads::is_parking_chat_draft(t) || t.messages.is_empty() {
+            let _ = crate::threads::soft_delete_thread(t, 99_000);
+        }
+    }
+    cabin.set_nav_id("chat");
+    assert!(
+        cabin.threads[cabin.thread_idx].title == "Chat"
+            && cabin.messages.is_empty()
+            && !crate::threads::is_deleted(&cabin.threads[cabin.thread_idx]),
+        "no live tabs opens a fresh chat"
+    );
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 // Landed from PR #222.

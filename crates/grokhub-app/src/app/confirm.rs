@@ -19,12 +19,27 @@
 use super::*;
 
 /// Ask-card Always second beat. Named so tests can lock the inherit line.
-pub(super) const ALWAYS_CONFIRM_LINE1: &str =
-    "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes.";
+pub(super) static ALWAYS_CONFIRM_LINE1: std::sync::LazyLock<String> = std::sync::LazyLock::new(
+    || {
+        format!("Skip every tool prompt until you change it. {} only stops for money, sending, deleting your data, credentials and irreversible system changes.", grokhub_core::brand::product_name())
+    },
+);
+static DISCONNECT_LINE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{} stops using this connector and forgets its sign-in.",
+        grokhub_core::brand::product_name()
+    )
+});
+static SAVE_KEY_LINE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{} seals this key with your keychain key and sends it only to this connector.",
+        grokhub_core::brand::product_name()
+    )
+});
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
-    "Night, loops, and /send inherit --always-approve until quit.";
+    "Night, loops, and /send inherit Always. This confirm only shows once.";
 
-pub(super) const ALWAYS_SESSION_TITLE: &str = "Always this launch";
+pub(super) const ALWAYS_SESSION_TITLE: &str = "Turn on Always";
 pub(super) const HOST_CONFIRM_TITLE: &str = "Destructive host";
 pub(super) const HOST_CONFIRM_PRIMARY: &str = "Run";
 pub(super) const REMOVE_JOB_PRIMARY: &str = "Remove";
@@ -95,6 +110,8 @@ pub(super) enum ConfirmKind {
     Disconnect {
         name: String,
     },
+    /// The wind-down card's Sleep the PC.
+    SleepPc,
     /// Legacy Marketplace confirm; CN2 uses the credentials hard card instead.
     #[expect(dead_code)]
     SaveKey {
@@ -112,6 +129,7 @@ impl ConfirmKind {
             | Self::LastRun { .. }
             | Self::DeleteRecording { .. }
             | Self::Disconnect { .. }
+            | Self::SleepPc
             | Self::SaveKey { .. } => true,
         }
     }
@@ -134,7 +152,7 @@ pub(super) struct ConfirmSpec {
 pub(super) fn always_session_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: ALWAYS_SESSION_TITLE,
-        consequence: ALWAYS_CONFIRM_LINE1,
+        consequence: ALWAYS_CONFIRM_LINE1.as_str(),
         primary: "Confirm",
         danger: false,
     }
@@ -170,17 +188,26 @@ pub(super) fn delete_recording_spec() -> ConfirmSpec {
 pub(super) fn disconnect_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Disconnect",
-        consequence: "GrokHub stops using this connector and forgets its sign-in.",
+        consequence: DISCONNECT_LINE.as_str(),
         primary: "Disconnect",
         danger: true,
+    }
+}
+
+pub(super) fn sleep_pc_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Sleep the PC",
+        consequence:
+            "Open windows stay as they are, but save your work first in case the power goes.",
+        primary: "Sleep",
+        danger: false,
     }
 }
 
 pub(super) fn save_key_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Save key",
-        consequence:
-            "GrokHub seals this key with your keychain key and sends it only to this connector.",
+        consequence: SAVE_KEY_LINE.as_str(),
         primary: "Save key",
         danger: false,
     }
@@ -307,6 +334,11 @@ impl Cabin {
                 super::connectors_ui::disconnect_question(name),
                 super::connectors_ui::DISCONNECT_DETAIL.to_string(),
             ),
+            ConfirmKind::SleepPc => (
+                sleep_pc_spec(),
+                "Sleep the PC now?".to_string(),
+                String::new(),
+            ),
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
                 format!("Save the key for {label}?"),
@@ -362,6 +394,7 @@ impl Cabin {
                 title,
             } => self.delete_recording(&card_id, &dir, &title),
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
+            ConfirmKind::SleepPc => self.sleep_pc_confirmed(),
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }
@@ -406,6 +439,12 @@ impl Cabin {
     }
 
     pub(super) fn arm_session_always(&mut self) {
+        // First Always pick shows the sheet once. After that, Always sticks
+        // without asking again until the user picks Ask or Auto.
+        if self.cfg.always_confirmed {
+            self.apply_session_always();
+            return;
+        }
         // Arm the sheet only. Cancel drops confirm. Confirm applies Always
         // and then tears the live job down. Doing that on arm would clear
         // the sheet and kill the job before it can paint.
@@ -419,21 +458,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn always_confirm_runs_once_then_sticks() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("always-confirm-once");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = Cabin::quiet_for_test();
+        assert!(!cabin.cfg.always_confirmed);
+        cabin.arm_session_always();
+        assert!(matches!(cabin.confirm, Some(ConfirmKind::AlwaysSession)));
+        cabin.apply_session_always();
+        assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+        assert_eq!(cabin.cfg.permission_mode, "always-approve");
+        assert!(cabin.cfg.always_confirmed);
+        assert!(cabin.confirm.is_none());
+        cabin.set_permission_mode(PermissionMode::Ask);
+        cabin.arm_session_always();
+        assert!(
+            cabin.confirm.is_none(),
+            "second Always pick skips the sheet"
+        );
+        assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+        // Restart: Always and the confirm flag survive app.json.
+        cabin.persist_svc.flush();
+        crate::config::save(&cabin.cfg).expect("save always");
+        let loaded = crate::config::load();
+        assert_eq!(loaded.permission_mode, "always-approve");
+        assert!(loaded.always_confirmed);
+        let mut again = Cabin::quiet_for_test();
+        again.cfg = loaded;
+        again.permission_mode = PermissionMode::AlwaysApprove;
+        again.arm_session_always();
+        assert!(again.confirm.is_none());
+        assert_eq!(again.permission_mode, PermissionMode::AlwaysApprove);
+        std::env::remove_var("GROKHUB_CONFIG");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn always_confirm_names_session_skip_and_scheduled_inherit() {
         assert_eq!(
-            ALWAYS_CONFIRM_LINE1,
-            "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
+            ALWAYS_CONFIRM_LINE1.as_str(),
+            "Skip every tool prompt until you change it. Loadout only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
-        assert!(crate::cards::composer_perm_tip("always-approve")
-            .is_some_and(|(_, tip)| tip.contains(
-                "money, sending, deleting your data, credentials and irreversible system changes"
-            )));
         assert!(
-            ALWAYS_CONFIRM_LINE2.contains("--always") && ALWAYS_CONFIRM_LINE2.contains("approve")
+            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
+                .contains("money, sending, deleting, credentials and irreversible changes")
+                && tip.contains("Stays until Ask or Auto")
+                && tip.len() < 160)
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("/send"));
+        assert!(ALWAYS_CONFIRM_LINE2.contains("once"));
+        assert_eq!(ALWAYS_SESSION_TITLE, "Turn on Always");
         let a = serde_json::json!(1);
         let b = serde_json::json!(2);
         assert!(always_confirm_matches_rpc(Some(&a), &a));
