@@ -220,8 +220,10 @@ impl Cabin {
         self.wind_now().on
     }
 
-    /// False when the switch couldn't be saved; the status says why.
+    /// False when the switch couldn't be saved; the status says why and the
+    /// switch stays as it was, so nothing acts on a change that isn't on disk.
     pub(super) fn set_wind_on(&mut self, on: bool) -> bool {
+        let before = self.wind_now().clone();
         if on {
             self.wind_now().on = true;
             self.focus.wind.last_read = None;
@@ -229,7 +231,11 @@ impl Cabin {
             self.wind_now().turn_off();
             self.focus.wind.rx = None;
         }
-        self.save_wind()
+        let saved = self.save_wind();
+        if !saved {
+            *self.wind_now() = before;
+        }
+        saved
     }
 
     /// Settings → Behavior: the wind-down toggle.
