@@ -27,6 +27,8 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "")
 PROJECT = os.environ.get("CARDS_PROJECT") or "Loadout"
 CAP = 2
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
+# GitHub's closing keywords, with or without a colon ("Fixes #12", "Fixes: #12").
+CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
 CODERS = {
     "claude": {"label": "claude", "authors": set(), "branch": "claude/"},
     "copilot": {"label": "copilot", "authors": {"Copilot", "copilot-swe-agent", "app/copilot-swe-agent"}, "branch": "copilot/"},
@@ -312,8 +314,7 @@ def merged_beta_pr(number):
             continue
         pr = gh(f"/repos/{REPO}/pulls/{src['number']}")
         # A bare mention ("see #12") is not a fix; only a closing keyword counts.
-        if not re.search(rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#{number}\b",
-                         pr.get("body") or "", re.I):
+        if str(number) not in CLOSES_RE.findall(pr.get("body") or ""):
             continue
         if pr.get("merged") and pr["base"]["ref"] == "beta":
             return pr["html_url"]
@@ -345,7 +346,7 @@ def done():
         m = MARK_RE.search(pr.get("body") or "")
         if m:
             mark_done(m.group(1).replace("-", ""), pr["html_url"])
-        for n in set(re.findall(r"(?i)\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)\s+#(\d+)", pr.get("body") or "")):
+        for n in set(CLOSES_RE.findall(pr.get("body") or "")):
             issue = gh(f"/repos/{REPO}/issues/{n}")
             m = MARK_RE.search(issue.get("body") or "")
             if m:
