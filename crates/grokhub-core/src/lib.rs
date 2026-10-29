@@ -135,6 +135,7 @@ pub mod slash;
 pub mod ssrf;
 pub mod state;
 pub mod steam;
+pub mod steam_achievements;
 pub mod steam_wishlist;
 pub mod stream;
 pub mod systems_brief;
@@ -154,6 +155,7 @@ pub mod week_recap;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;
+pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;

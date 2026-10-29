@@ -139,6 +139,7 @@ mod persist;
 mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod achievements_ui;
 mod activity_dock;
 mod ask_offers_ui;
 mod attach_tray;
@@ -246,6 +247,7 @@ mod threads_nav;
 mod voice;
 mod web_search_ui;
 mod week_recap_ui;
+mod wind_down_ui;
 mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;
@@ -4275,7 +4277,7 @@ impl Cabin {
             return;
         }
         self.persist();
-        self.status = "Restarting GrokHub…".into();
+        self.status = format!("Restarting {}…", grokhub_core::brand::product_name());
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
                 if let Some(tray) = self.tray.take() {

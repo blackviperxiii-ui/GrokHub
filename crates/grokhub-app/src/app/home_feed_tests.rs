@@ -374,11 +374,19 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .nth(1)
         .and_then(|s| s.split("fn ensure_useful_ideas(").next())
         .expect("accept_automate_offer");
+    let seed = pulse
+        .split("fn offer_seed(")
+        .nth(1)
+        .and_then(|s| s.split("fn open_offer_on_automations(").next())
+        .expect("offer_seed");
     assert!(
-        offer.contains("c.title.clone()")
+        offer.contains("self.offer_seed(id)")
             && offer.contains("route_schedule")
-            && !offer.contains("c.body"),
-        "Accept seeds the schedule from the title, not the canned offer body: {offer}"
+            && !offer.contains("c.body")
+            && seed.contains("automate_accept_seed(c)")
+            && seed.contains("c.title.clone()")
+            && !seed.contains("c.body"),
+        "Accept seeds the schedule from the preview, else the title, never the canned offer body: {offer} {seed}"
     );
     let build = pulse
         .split("fn build_idea(")
@@ -1434,6 +1442,35 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         }
         .card(now),
         "Fake Quest",
+    ));
+    rows.push((
+        "finish_wind_down",
+        grokhub_core::wind_down::Offer::Late { idle_min: 45 }.card(
+            &grokhub_core::LocalClock {
+                now_ms: now,
+                weekday: 3,
+                hour: 2,
+                minute: 0,
+            },
+            grokhub_core::wind_down::Voice::Plain,
+        ),
+        "Sleep the PC",
+    ));
+    rows.push((
+        "finish_achievements",
+        grokhub_core::steam_achievements::Nudge {
+            app_id: 1145360,
+            game: "Hades".into(),
+            kind: grokhub_core::steam_achievements::Kind::Close,
+            done: 48,
+            total: 50,
+            left: vec![grokhub_core::steam_achievements::Left {
+                name: "Is There No Escape?".into(),
+                percent: Some(21.4),
+            }],
+        }
+        .card(now),
+        "Hades",
     ));
     rows.push((
         "take_tidy_scan",

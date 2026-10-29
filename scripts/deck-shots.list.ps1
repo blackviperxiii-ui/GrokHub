@@ -40,6 +40,16 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Wind-down: the 2 AM post on Pulse, then its confirm sheet. The runner never
+# sleeps: nothing clicks Sleep.
+Shot 1600 900 'wind-down-1600x900' 'ops-dark' '14' -pulse -windDown '1' -nav 'pulse'
+Shot 1100 720 'wind-down-1100x720-scrolled' 'ops-dark' '14' -pulse -windDown '1' -nav 'pulse' -wheel 12
+Shot 1600 900 'wind-down-confirm-1600x900' 'ops-dark' '14' -pulse -windDown 'confirm' -nav 'pulse'
+Shot 1100 720 'wind-down-confirm-1100x720' 'ops-dark' '14' -pulse -windDown 'confirm' -nav 'pulse'
+# Achievement nudges: the close-to-100% post on top of Pulse; at 1100x720
+# the feed sits under Up next, so that shot scrolls down to it.
+Shot 1600 900 'achievements-1600x900' 'ops-dark' '14' -pulse -achievements -nav 'pulse'
+Shot 1100 720 'achievements-1100x720-scrolled' 'ops-dark' '14' -pulse -achievements -nav 'pulse' -wheel 12
 # Backup reminders: the unpushed-work post on top of Pulse.
 Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup -nav 'pulse'
 Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup -nav 'pulse'
@@ -59,6 +69,9 @@ Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop -nav 'puls
 Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
 # At 1100x720 the feed sits under Up next; scroll down to the post.
 Shot 1100 720 'model-drop-1100x720-scrolled' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse' -wheel 12
+# Repeated asks: the Automate offer the cabin posts from three seeded asks.
+Shot 1600 900 'ask-offer-1600x900' 'ops-dark' '14' -askOffer -nav 'pulse'
+Shot 1100 720 'ask-offer-1100x720' 'ops-dark' '14' -askOffer -nav 'pulse'
 # Library is the fifth icon on the 40 px rail, below the chat tab strip.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258

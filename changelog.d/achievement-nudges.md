@@ -1,0 +1,1 @@
+- Pulse can nudge you when a Steam game is close to 100% achievements, or well through with a rare one next, with links to Steam's free community guides. Opt-in under Settings → Pulse → Sources; it reads your public Steam stats once a week and posts nothing for a private profile.

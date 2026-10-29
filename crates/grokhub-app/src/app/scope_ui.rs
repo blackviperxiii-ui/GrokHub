@@ -14,7 +14,8 @@ use super::*;
 use grokhub_agent::harness as hx;
 
 /// The heading over the scope rows, in Settings and in `/privacy`.
-pub(super) const SCOPES_HEAD: &str = "What GrokHub can read";
+pub(super) static SCOPES_HEAD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("What {} can read", grokhub_core::brand::product_name()));
 /// SB-09: the screen's setting is named in quotes, with where it lives.
 pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults.";
 /// Browsers the history row offers: (scope id, name the user reads).
@@ -46,6 +47,19 @@ pub(super) const fn folder_hint_for(os: hx::KeyringOs) -> &'static str {
     }
 }
 
+static NO_CALENDAR_READER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Not read yet: {} has no calendar reader, so allowing it reads nothing today.",
+        grokhub_core::brand::product_name()
+    )
+});
+static NO_MAIL_READER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Not read yet: {} has no mail reader, so allowing it reads nothing today.",
+        grokhub_core::brand::product_name()
+    )
+});
+
 /// What one scope would read, for its row hint.
 fn scope_reads(kind: &str) -> &'static str {
     match kind {
@@ -54,10 +68,8 @@ fn scope_reads(kind: &str) -> &'static str {
         "browser_history" => "Pages you visited in one browser. Never cookies or saved logins.",
         // Nothing reads calendar or mail yet (`idx::has_reader`), so the row
         // says so instead of promising a reader.
-        "calendar" => {
-            "Not read yet: GrokHub has no calendar reader, so allowing it reads nothing today."
-        }
-        "mail" => "Not read yet: GrokHub has no mail reader, so allowing it reads nothing today.",
+        "calendar" => NO_CALENDAR_READER.as_str(),
+        "mail" => NO_MAIL_READER.as_str(),
         "system_state" => "Disk, services, logs and updates. Read only.",
         _ => "",
     }
@@ -162,7 +174,10 @@ fn pick_folder() -> mpsc::Receiver<FolderPick> {
     let pick = move || {
         let start = std::time::Instant::now();
         let got = rfd::FileDialog::new()
-            .set_title("Choose a folder GrokHub may read")
+            .set_title(format!(
+                "Choose a folder {} may read",
+                grokhub_core::brand::product_name()
+            ))
             .pick_folder()
             .map(|p| p.display().to_string());
         let _ = tx.send(FolderPick::from_answer(got, start.elapsed()));
@@ -179,7 +194,7 @@ fn pick_folder() -> mpsc::Receiver<FolderPick> {
 impl Cabin {
     /// Settings → Permissions, after "Leaving this computer".
     pub(super) fn ui_scope_rows(&mut self, ui: &mut egui::Ui) {
-        crate::cards::section_heading(ui, SCOPES_HEAD);
+        crate::cards::section_heading(ui, SCOPES_HEAD.as_str());
         crate::cards::settings_note(ui, SCOPES_NOTE);
         let ledger = self.consent().clone();
         // A refused click says why right here (the status line is behind the
@@ -353,7 +368,7 @@ impl Cabin {
                     self.harness.scope_folder.clear();
                 }
                 self.status = if grokhub_agent::indexers::has_reader(scope) {
-                    format!("{label} allowed. GrokHub learns from it on this computer. Revoke it here any time.")
+                    format!("{label} allowed. {} learns from it on this computer. Revoke it here any time.", grokhub_core::brand::product_name())
                 } else {
                     format!("{label} allowed. Nothing reads it yet. Revoke it here any time.")
                 };

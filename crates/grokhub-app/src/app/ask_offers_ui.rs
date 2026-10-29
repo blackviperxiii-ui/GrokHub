@@ -99,7 +99,7 @@ impl Cabin {
         crate::cards::section_label(ui, "Repeated asks");
         crate::cards::help_text(
             ui,
-            "When you ask the same kind of thing around the same hour, GrokHub offers once to schedule it or save a skill. Asks stay on this computer.",
+            &format!("When you ask the same kind of thing around the same hour, {} offers once to schedule it or save a skill. Asks stay on this computer.", grokhub_core::brand::product_name()),
         );
         ui.add_space(8.0);
         let mut on = self.cfg.ask_offers.enabled;

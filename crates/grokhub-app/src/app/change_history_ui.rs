@@ -148,8 +148,10 @@ impl Cabin {
             let over = state.saved_ideas.len().saturating_sub(SAVED_IDEAS_CAP);
             state.saved_ideas.drain(..over);
         });
-        self.status =
-            "Idea saved in Settings → Behavior. GrokHub never changes its own code.".into();
+        self.status = format!(
+            "Idea saved in Settings → Behavior. {} never changes its own code.",
+            grokhub_core::brand::product_name()
+        );
         true
     }
 
@@ -183,7 +185,7 @@ impl Cabin {
             return;
         };
         self.harness.self_review.copy_out = Some(Self::issue_for(&title, &pending.md));
-        self.status = ISSUE_COPIED.into();
+        self.status = ISSUE_COPIED.as_str().into();
     }
 
     /// Settings: the self-change history and the saved code ideas.
@@ -223,7 +225,7 @@ impl Cabin {
                 "Copy as GitHub issue",
             ) {
                 ui.ctx().copy_text(Self::issue_for(&idea.title, &idea.text));
-                self.status = ISSUE_COPIED.into();
+                self.status = ISSUE_COPIED.as_str().into();
             }
         }
     }
@@ -252,4 +254,9 @@ impl Cabin {
     }
 }
 
-const ISSUE_COPIED: &str = "Issue copied. Paste it on GitHub yourself; GrokHub sent nothing.";
+static ISSUE_COPIED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Issue copied. Paste it on GitHub yourself; {} sent nothing.",
+        grokhub_core::brand::product_name()
+    )
+});
