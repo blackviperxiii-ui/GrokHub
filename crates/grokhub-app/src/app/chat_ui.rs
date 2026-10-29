@@ -2616,7 +2616,7 @@ impl Cabin {
                             ui.label(
                                 RichText::new(&self.greeting)
                                     .font(crate::theme::title_font(crate::theme::GREET_HERO))
-                                    .color(crate::theme::muted()),
+                                    .color(crate::theme::fg()),
                             );
                         }
                     },

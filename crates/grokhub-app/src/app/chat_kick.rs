@@ -12,6 +12,7 @@ impl Cabin {
         if text.is_empty() {
             return;
         }
+        let typed = text.clone();
         grokhub_agent::timing::note_enter();
         let _lap = grokhub_agent::timing::lap("ui:send_chat");
         if self.running && self.job_is_idea_talk() {
@@ -101,8 +102,14 @@ impl Cabin {
             self.eyes_attach = false;
             self.speak_next = false;
             self.status = self.no_agent_note().into();
+            // Signed out: hand the typed text back and offer sign-in inline.
+            if self.composer.trim().is_empty() {
+                self.composer = typed;
+            }
+            self.signin_card = true;
             return;
         }
+        self.signin_card = false;
         if !self.attach_tray.is_empty() {
             self.append_pending_attach_lines(&mut text);
         } else if let Some(name) = self.attach_name.clone() {

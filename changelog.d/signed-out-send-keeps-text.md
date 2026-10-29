@@ -1,0 +1,2 @@
+- A send while signed out keeps the typed message in the box and shows a sign-in card with a Sign in button, instead of clearing the text behind a faint status line.
+- The empty chat's headline uses full-contrast ink.

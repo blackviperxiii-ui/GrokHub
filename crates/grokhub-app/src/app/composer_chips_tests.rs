@@ -677,6 +677,19 @@ fn send_from_composer_runs_help_and_refuses_without_grok() {
             .all(|m| !m.1.contains("paint the harbor")),
         "the refused prompt must stay off the transcript"
     );
+    assert_eq!(
+        cabin.composer, "paint the harbor",
+        "a signed-out send hands the typed text back to the composer"
+    );
+    assert!(
+        cabin.signin_card,
+        "a signed-out send raises the inline sign-in card"
+    );
+
+    // Text typed after the refusal is not overwritten by the earlier prompt.
+    cabin.composer = "a newer draft".into();
+    cabin.send_from_composer("paint the harbor".into());
+    assert_eq!(cabin.composer, "a newer draft");
     quiet.settle();
 }
 

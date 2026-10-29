@@ -211,6 +211,8 @@ function Seed-Tidy([string]$root) {
         }
         (Get-Item $path).LastWriteTime = (Get-Date).AddDays(-$f[2])
     }
+}
+
 # Backup reminder: a repo under code\my-app whose last two commits, from four
 # days ago, were never pushed to its (local, bare) upstream.
 function Seed-Backup([string]$root) {
