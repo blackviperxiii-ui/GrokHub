@@ -1,0 +1,1 @@
+- Personality "Try it" drops the call it replaces or that timed out, so a late reply no longer lands over the new one. Every route now ends within the 45-second limit: a provider call is bounded by it, and a Grok call shares it across its Responses and Chat Completions attempts and skips the second once cancelled.

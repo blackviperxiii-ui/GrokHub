@@ -608,6 +608,18 @@ pub trait ProviderTransport: Send + Sync {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<HttpReply, String>;
+    /// `post` that gives up after `limit` (the request's `call_timeout`).
+    /// Fakes that never block can keep this default.
+    fn post_within(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpReply, String> {
+        let _ = limit;
+        self.post(url, headers, body)
+    }
 }
 
 /// The real wire. Every call reaches it only after [`guard_provider`].
@@ -667,7 +679,20 @@ impl ProviderTransport for UreqTransport {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<HttpReply, String> {
+        self.post_within(url, headers, body, None)
+    }
+
+    fn post_within(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpReply, String> {
         let mut req = agent().post(url);
+        if let Some(limit) = limit {
+            req = req.timeout(limit);
+        }
         for (k, v) in headers {
             req = req.set(k, v);
         }
@@ -1130,8 +1155,12 @@ pub fn call_model(
     }
     let body = body.to_string();
     let r = transport_for(config_dir)
-        .post(&url, &p.headers(&key), &body)
+        .post_within(&url, &p.headers(&key), &body, req.call_timeout)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    // Cancelled while on the wire (a replaced or timed-out request): drop the reply.
+    if cancel.is_cancelled() {
+        return Err(ClientError::Cancelled);
+    }
     if !(200..300).contains(&r.status) {
         return Err(error_of(r.status, &r.body));
     }

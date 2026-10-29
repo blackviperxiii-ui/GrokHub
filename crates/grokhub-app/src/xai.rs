@@ -50,6 +50,9 @@ fn json_error(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// A bounded Grok ask that ran out of time or was cancelled.
+const TRY_STOPPED: &str = "Grok call stopped";
+
 fn xai_agent(timeout_secs: u64) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
@@ -129,6 +132,26 @@ pub fn grok_chat(
     })
 }
 
+/// A quick routed ask that ends within `limit` in total and stops between
+/// its two requests once `cancelled` says so.
+pub fn grok_chat_within(
+    api_key: &str,
+    model: &str,
+    messages: &[(String, String)],
+    limit: std::time::Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, None, "chat:quick");
+    let deadline = std::time::Instant::now() + limit;
+    route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
+        grok_chat_bounded(key, call, messages, &[], deadline, cancelled)
+    })
+}
+
 /// A quick routed ask with several stills on the last user message, in order.
 pub fn grok_chat_images(
     api_key: &str,
@@ -154,13 +177,40 @@ fn grok_chat_once(
     messages: &[(String, String)],
     images: &[&str],
 ) -> Result<(String, hx::ModelUsage), String> {
-    let timeout = chat_timeout_secs(call.effort);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(2 * chat_timeout_secs(call.effort));
+    grok_chat_bounded(key, call, messages, images, deadline, &|| false)
+}
+
+/// Responses first, then Chat Completions, each within what is left before
+/// `deadline`. Neither starts once `cancelled` says so.
+fn grok_chat_bounded(
+    key: &str,
+    call: &route::cabin::ModelCall<'_>,
+    messages: &[(String, String)],
+    images: &[&str],
+    deadline: std::time::Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(String, hx::ModelUsage), String> {
+    let per_call = chat_timeout_secs(call.effort);
+    let left = || {
+        let secs = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_secs();
+        (secs > 0 && !cancelled()).then_some(secs.min(per_call))
+    };
+    let Some(timeout) = left() else {
+        return Err(TRY_STOPPED.into());
+    };
     let responses = responses_request_body_images(call.model, messages, images, call.effort);
     if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
         if let Some(text) = merge_reply(&v) {
             return Ok((text, route::cabin::xai_usage(&v)));
         }
     }
+    let Some(timeout) = left() else {
+        return Err(TRY_STOPPED.into());
+    };
     let body = chat_request_body_images(call.model, messages, images, call.effort);
     let v = grok_json(&format!("{XAI_BASE}/chat/completions"), key, body, timeout)?;
     let text = merge_reply(&v).ok_or_else(|| "empty Grok reply".to_string())?;
@@ -508,6 +558,36 @@ pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bounded_grok_ask_sends_nothing_once_cancelled_or_out_of_time() {
+        let _lock = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("grok-within");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let msgs = vec![("user".to_string(), "hi".to_string())];
+        let started = std::time::Instant::now();
+        let cancelled = super::grok_chat_within(
+            "sk-abcdefghijklmnopqrstuv",
+            "grok-4-fast",
+            &msgs,
+            std::time::Duration::from_secs(45),
+            &|| true,
+        );
+        assert_eq!(cancelled, Err(super::TRY_STOPPED.to_string()));
+        let spent = super::grok_chat_within(
+            "sk-abcdefghijklmnopqrstuv",
+            "grok-4-fast",
+            &msgs,
+            std::time::Duration::ZERO,
+            &|| false,
+        );
+        assert_eq!(spent, Err(super::TRY_STOPPED.to_string()));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "neither call reached the network"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn imagine_download_sends_the_bearer() {
         let src = include_str!("xai.rs");
