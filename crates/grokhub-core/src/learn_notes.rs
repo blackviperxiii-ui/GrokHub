@@ -53,17 +53,26 @@ pub struct Note {
     pub text: String,
 }
 
+/// Whether `text` may be written to a memory file: one short plain line
+/// with nothing for recall redaction to hide (emails, secrets, numbers) and
+/// no adult content. User messages and the model's `USER_FACT:` lines both
+/// pass through this.
+pub fn is_safe_note_text(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty()
+        && text.chars().count() <= NOTE_MAX_CHARS
+        && !text.contains('\n')
+        && is_plain_text(text)
+        && redact_recall(text).0 == text
+        && adult_guard::check(text) == Risk::Clean
+}
+
 /// The note one user message teaches, if any.
 pub fn note_from_message(message: &str) -> Option<Note> {
     let msg = message.trim();
-    if msg.is_empty()
-        || msg.chars().count() > NOTE_MAX_CHARS
+    if !is_safe_note_text(msg)
         || msg.starts_with('/')
-        || msg.contains('\n')
         || msg.ends_with('?')
-        || !is_plain_text(msg)
-        || redact_recall(msg).0 != msg
-        || adult_guard::check(msg) != Risk::Clean
         || is_greeting_chitchat(msg)
     {
         return None;

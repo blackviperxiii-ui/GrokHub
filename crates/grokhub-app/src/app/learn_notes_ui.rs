@@ -36,7 +36,7 @@ pub(super) fn notes_from(messages: &[String], user_facts: &[String]) -> Vec<Note
 /// A model `USER_FACT:` line is already a summary; it goes to USER.md as is.
 fn fact_note(fact: &str) -> Option<Note> {
     let text = fact.trim().trim_end_matches('.').trim();
-    if text.len() < 8 || !grokhub_core::is_plain_text(text) {
+    if text.len() < 8 || !grokhub_core::learn_notes::is_safe_note_text(text) {
         return None;
     }
     let line = format!("- {text}.");
@@ -127,14 +127,23 @@ impl Cabin {
     /// After a turn: what the user's last message and the model's
     /// `USER_FACT:` lines teach goes into the files now, not at the next
     /// idle reflect. AMR keeps its own store; scratch chats write nothing.
+    /// Notes queue while another write or a reflect is in flight.
     pub(super) fn learn_from_turn(&mut self, user: &str, user_facts: &[String]) {
-        if self.amr_on() || self.scratch() || self.learn_rx.is_some() {
+        if self.amr_on() || self.scratch() {
             return;
         }
-        let notes = notes_from(&[user.to_string()], user_facts);
-        if notes.is_empty() {
+        self.learn_pending
+            .extend(notes_from(&[user.to_string()], user_facts));
+        self.start_learn_write();
+    }
+
+    /// Write the queued notes, one writer at a time: each write starts from
+    /// the bodies the last one adopted, so no line is overwritten.
+    pub(super) fn start_learn_write(&mut self) {
+        if self.learn_pending.is_empty() || self.learn_rx.is_some() || self.reflect_rx.is_some() {
             return;
         }
+        let notes = std::mem::take(&mut self.learn_pending);
         let day = Self::local_day();
         let open = Some((self.mem_name.clone(), self.mem_body.clone()));
         let (tx, rx) = mpsc::channel();
@@ -154,9 +163,16 @@ impl Cabin {
                     self.adopt_memory_write(name, edit.next);
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => self.learn_rx = Some(rx),
+            Err(mpsc::TryRecvError::Empty) => {
+                self.learn_rx = Some(rx);
+                return;
+            }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
+        if std::mem::take(&mut self.reflect_after_learn) {
+            self.run_reflect();
+        }
+        self.start_learn_write();
     }
 
     /// A memory file changed on disk: refresh its cached body, and the editor
@@ -287,6 +303,73 @@ mod tests {
             config::read_memory("USER.md"),
             "# User\n\nWho you are. Edit this.\n"
         );
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    /// A model `USER_FACT:` gets the same privacy and safety checks as a
+    /// user message, so an email or a secret never lands in USER.md.
+    #[test]
+    fn model_facts_with_contact_details_or_secrets_are_dropped() {
+        let facts = [
+            "Email is sam@example.com".to_string(),
+            "Api key is sk-abcdefghijklmnopqrstuv".to_string(),
+            "Works night shifts at a diner".to_string(),
+        ];
+        let notes = notes_from(&[], &facts);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].text, "Works night shifts at a diner.");
+    }
+
+    /// A turn that ends while the last write is still running queues its
+    /// notes instead of dropping them.
+    #[test]
+    fn back_to_back_turns_queue_and_both_land() {
+        let _g = config::hold_test_config();
+        let _root = temp_root("learn-loop-queue");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.new_thread(false);
+        cabin.learn_from_turn("My name is Sam", &[]);
+        cabin.learn_from_turn("I play chess most nights", &[]);
+        assert!(cabin.learn_rx.is_some());
+        assert_eq!(cabin.learn_pending.len(), 1);
+        wait_learn(&mut cabin);
+        assert!(cabin.learn_pending.is_empty());
+        assert_eq!(
+            config::read_memory("USER.md"),
+            "# User\n\n- Name: Sam.\n- Plays chess most nights.\n"
+        );
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    /// A reflect asked for mid-write runs after it, on top of its lines.
+    #[test]
+    fn reflect_waits_for_the_turn_write_and_keeps_its_line() {
+        let _g = config::hold_test_config();
+        let _root = temp_root("learn-loop-reflect");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.new_thread(false);
+        cabin.mem_name = "USER.md".into();
+        cabin.mem_body = config::read_memory("USER.md");
+        cabin.learn_from_turn("I use a standing desk", &[]);
+        cabin
+            .live_mut()
+            .push(("user".into(), "I play chess most nights".into()));
+        cabin.run_reflect();
+        assert!(cabin.reflect_rx.is_none() && cabin.reflect_after_learn);
+        let start = std::time::Instant::now();
+        while (cabin.learn_rx.is_some() || cabin.reflect_rx.is_some())
+            && start.elapsed() < std::time::Duration::from_secs(5)
+        {
+            cabin.poll_learn();
+            cabin.poll_reflect();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(cabin.status, "Reflected USER.md");
+        assert_eq!(
+            config::read_memory("USER.md"),
+            "# User\n\n- Uses a standing desk.\n- Plays chess most nights.\n"
+        );
+        assert_eq!(cabin.mem_body, config::read_memory("USER.md"));
         std::env::remove_var("GROKHUB_CONFIG");
     }
 

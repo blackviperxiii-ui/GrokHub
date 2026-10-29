@@ -868,6 +868,10 @@ pub struct Cabin {
     reflect_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
     /// The USER/SOUL/MEMORY lines a finished turn is writing.
     learn_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
+    /// Turn notes waiting for the write or reflect in flight to finish.
+    learn_pending: Vec<grokhub_core::learn_notes::Note>,
+    /// A reflect asked for while a turn's notes were being written.
+    reflect_after_learn: bool,
     /// The one-time AMR import ran this session (AMR mode only).
     amr_imported: bool,
     /// The local day the AMR dream ran or was skipped (Halt), this session.
@@ -1450,6 +1454,8 @@ impl Cabin {
             inhabit_rx: None,
             reflect_rx: None,
             learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -1918,6 +1924,8 @@ impl Cabin {
             inhabit_rx: None,
             reflect_rx: None,
             learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -4370,6 +4378,12 @@ impl Cabin {
             self.status = "Reflecting…".into();
             return;
         }
+        if self.learn_rx.is_some() {
+            // A turn's notes are being written; reflect on top of them.
+            self.reflect_after_learn = true;
+            self.status = "Reflecting…".into();
+            return;
+        }
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         let facts = if job.is_none() || job == Some(vis.as_str()) {
@@ -4494,11 +4508,13 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.reflect_rx = Some(rx);
+                return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.status = "Reflect failed".into();
             }
         }
+        self.start_learn_write();
     }
 
     fn run_skill_verify(&mut self) {
