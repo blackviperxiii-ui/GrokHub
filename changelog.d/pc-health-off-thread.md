@@ -1,0 +1,1 @@
+- PC health while gaming: sensor and process checks now run in the background with a 5 second limit, so a stuck `nvidia-smi` can't freeze the app. Windows games from Steam, Epic, GOG and Xbox libraries are detected. CPU use comes from real CPU time on Linux instead of load average. The summary tracks the hottest GPU and only flags throttling against clocks seen so far.
