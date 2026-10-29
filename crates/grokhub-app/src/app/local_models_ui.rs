@@ -247,7 +247,7 @@ impl Cabin {
         ui.indent("pulse-local-models", |ui| {
             crate::cards::help_text(
                 ui,
-                "Once a week, from this PC's memory and the official model publishers on Hugging Face. Only models in GrokHub's checked catalog download, from Settings.",
+                &format!("Once a week, from this PC's memory and the official model publishers on Hugging Face. Only models in {}'s checked catalog download, from Settings.", grokhub_core::brand::product_name()),
             );
             if crate::cards::ghost_pill(ui, "Check now") {
                 self.news_now().last_check_ms = 0;

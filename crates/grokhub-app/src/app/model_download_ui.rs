@@ -47,8 +47,9 @@ pub(super) fn drafters_dir() -> std::path::PathBuf {
 /// What the draft model offer says.
 pub(super) fn drafter_offer_line(d: &LocalModel) -> String {
     format!(
-        "Optional: {} can draft replies for this model, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps.",
-        d.name
+        "Optional: {} can draft replies for this model, which can make them faster on some machines. {} only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+        d.name,
+        grokhub_core::brand::product_name()
     )
 }
 
@@ -479,7 +480,7 @@ mod tests {
         assert_eq!(ld::offer(g12.file, &drafters).map(|d| d.id), Some(e2b.id));
         assert_eq!(
             drafter_offer_line(e2b),
-            "Optional: Gemma 4 E2B can draft replies for this model, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps."
+            "Optional: Gemma 4 E2B can draft replies for this model, which can make them faster on some machines. Loadout only downloads it if you ask, and keeps it only if the speed test finds it helps."
         );
         let body = b"tiny fake drafter".to_vec();
         // Pinned to the fake body, under the fake's repo and file.

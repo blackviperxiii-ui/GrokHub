@@ -877,7 +877,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
             cabin.status.clear();
             cabin.run_slash_line(line);
             assert_eq!(
-                cabin.status, "Workflows were a grok CLI feature and are not in GrokHub",
+                cabin.status, "Workflows were a grok CLI feature and are not in Loadout",
                 "{line} (thread: {with_thread})"
             );
             assert!(cabin.running, "{line} must not touch the live turn");

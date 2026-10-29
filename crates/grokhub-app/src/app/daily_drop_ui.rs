@@ -114,7 +114,7 @@ impl Cabin {
         ui.add_space(2.0);
         crate::cards::help_text(
             ui,
-            "Once a night after dream time, GrokHub may add up to ten ranked source posts to the Feed. Off until you turn it on; each source is opt-in. No model calls.",
+            &format!("Once a night after dream time, {} may add up to ten ranked source posts to the Feed. Off until you turn it on; each source is opt-in. No model calls.", grokhub_core::brand::product_name()),
         );
         ui.add_space(8.0);
         let mut changed = false;

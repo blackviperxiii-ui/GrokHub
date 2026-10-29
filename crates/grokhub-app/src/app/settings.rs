@@ -3,7 +3,11 @@
 use super::*;
 
 /// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
-pub(super) const DESKTOP_CONTROL_HINT: &str = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+pub(super) static DESKTOP_CONTROL_HINT: std::sync::LazyLock<String> = std::sync::LazyLock::new(
+    || {
+        format!("Grok can see the screen and use the mouse and keyboard through {}. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
+    },
+);
 
 #[derive(Clone, Default)]
 struct PermDraft {
@@ -834,7 +838,7 @@ impl Cabin {
                                                             if self.update_can_restart
                                                                 && crate::cards::settings_action(
                                                                     ui,
-                                                                    "Restart GrokHub",
+                                                                    &format!("Restart {}", grokhub_core::brand::product_name()),
                                                                     "Reload hub, then start a new cabin and exit this one.",
                                                                     "Restart",
                                                                 )
@@ -856,7 +860,7 @@ impl Cabin {
                                                                 .color(crate::theme::fg()),
                                                             );
                                                             ui.add_space(6.0);
-                                                            crate::cards::settings_note(ui, "Runs on GrokHub's own engine.");
+                                                            crate::cards::settings_note(ui, &format!("Runs on {}'s own engine.", grokhub_core::brand::product_name()));
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
@@ -957,7 +961,7 @@ impl Cabin {
                                                             if settings_toggle(
                                                                 ui,
                                                                 ROW_DESKTOP,
-                                                                DESKTOP_CONTROL_HINT,
+                                                                DESKTOP_CONTROL_HINT.as_str(),
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
@@ -1098,7 +1102,7 @@ impl Cabin {
                                                                 if self.update_can_restart
                                                                     && crate::cards::settings_action(
                                                                         ui,
-                                                                        "Restart GrokHub",
+                                                                        &format!("Restart {}", grokhub_core::brand::product_name()),
                                                                         "Reload hub, then start a new cabin and exit this one.",
                                                                         "Restart",
                                                                     )

@@ -4274,7 +4274,7 @@ impl Cabin {
             return;
         }
         self.persist();
-        self.status = "Restarting GrokHub…".into();
+        self.status = format!("Restarting {}…", grokhub_core::brand::product_name());
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
                 if let Some(tray) = self.tray.take() {

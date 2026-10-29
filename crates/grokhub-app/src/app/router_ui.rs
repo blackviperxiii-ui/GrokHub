@@ -352,7 +352,7 @@ impl Cabin {
                     grokhub_agent::route::live::DEFAULT_CLASS,
                 );
                 let word = grokhub_agent::route::effort_word(start.as_deref());
-                (word.to_string(), format!("{word}: everyday chat starts here. GrokHub picks how hard to think on each step. Click for /why."))
+                (word.to_string(), format!("{word}: everyday chat starts here. {} picks how hard to think on each step. Click for /why.", grokhub_core::brand::product_name()))
             }
         }
     }

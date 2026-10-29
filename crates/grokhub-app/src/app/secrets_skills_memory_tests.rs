@@ -320,7 +320,7 @@ fn the_model_cannot_undo_a_skill_change_on_its_own() {
     let shown = cabin
         .messages
         .iter()
-        .filter(|m| m.1.contains(super::skill_undo::SKILL_CHANGES_HEAD))
+        .filter(|m| m.1.contains(super::skill_undo::SKILL_CHANGES_HEAD.as_str()))
         .count();
     assert_eq!(shown, 3, "each refused undo shows the rows instead");
     assert!(!cabin.harness.typed_send, "the typed mark never sticks");

@@ -169,7 +169,7 @@ mod tests {
             Some(StatusToastKind::Success)
         );
         assert_eq!(
-            status_toast_kind("Channel switch finished — restart GrokHub"),
+            status_toast_kind("Channel switch finished — restart Loadout"),
             Some(StatusToastKind::Success)
         );
     }

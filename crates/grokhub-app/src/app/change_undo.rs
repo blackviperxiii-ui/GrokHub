@@ -16,10 +16,20 @@
 use super::*;
 use grokhub_agent::harness::{self as hx, ChangeKind, ChangeOp, Origin};
 
-pub(super) const CONNECTION_CHANGES_HEAD: &str =
-    "/connections changes — what GrokHub changed in your connections";
-pub(super) const AUTOMATION_CHANGES_HEAD: &str =
-    "/automations changes — what GrokHub changed in your automations";
+pub(super) static CONNECTION_CHANGES_HEAD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        format!(
+            "/connections changes — what {} changed in your connections",
+            grokhub_core::brand::product_name()
+        )
+    });
+pub(super) static AUTOMATION_CHANGES_HEAD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        format!(
+            "/automations changes — what {} changed in your automations",
+            grokhub_core::brand::product_name()
+        )
+    });
 /// Ledger lines a report lists.
 const CHANGES_SHOWN: usize = 12;
 /// Undo rows under a report bubble.
@@ -142,15 +152,15 @@ pub(super) struct ChangeRow {
 
 pub(super) fn changes_head(kind: ChangeKind) -> &'static str {
     match kind {
-        ChangeKind::Connection => CONNECTION_CHANGES_HEAD,
-        _ => AUTOMATION_CHANGES_HEAD,
+        ChangeKind::Connection => CONNECTION_CHANGES_HEAD.as_str(),
+        _ => AUTOMATION_CHANGES_HEAD.as_str(),
     }
 }
 
 fn who(origin: Origin) -> &'static str {
     match origin {
         Origin::User => "you",
-        _ => "GrokHub",
+        _ => grokhub_core::brand::product_name(),
     }
 }
 
@@ -181,7 +191,8 @@ pub(super) fn changes_report(ledger: &hx::ChangeLedger, now_ms: u64) -> String {
     let recent = ledger.recent(CHANGES_SHOWN);
     if recent.is_empty() {
         out.push(format!(
-            "- Nothing yet. When GrokHub adds, changes, or removes {} on its own, it shows here with Undo.",
+            "- Nothing yet. When {} adds, changes, or removes {} on its own, it shows here with Undo.",
+            grokhub_core::brand::product_name(),
             match kind {
                 ChangeKind::Connection => "a connection",
                 _ => "an automation",
@@ -210,7 +221,8 @@ pub(super) fn changes_report(ledger: &hx::ChangeLedger, now_ms: u64) -> String {
     ));
     if kind == ChangeKind::Automation {
         out.push(format!(
-            "GrokHub adds at most {} automations a week on its own until you keep one.",
+            "{} adds at most {} automations a week on its own until you keep one.",
+            grokhub_core::brand::product_name(),
             hx::SELF_AUTOMATION_WEEK_CAP
         ));
     }
@@ -320,9 +332,9 @@ pub(super) fn newest_change_report(
         if v.kind != grokhub_core::ChatKind::Result {
             return None;
         }
-        if v.body.starts_with(CONNECTION_CHANGES_HEAD) {
+        if v.body.starts_with(CONNECTION_CHANGES_HEAD.as_str()) {
             Some((i, ChangeKind::Connection))
-        } else if v.body.starts_with(AUTOMATION_CHANGES_HEAD) {
+        } else if v.body.starts_with(AUTOMATION_CHANGES_HEAD.as_str()) {
             Some((i, ChangeKind::Automation))
         } else {
             None
@@ -336,8 +348,14 @@ fn done_line(row: &ChangeRow, act: ChangeAct, done: &Result<Option<Vec<u8>>, Str
     match (act, done) {
         (_, Err(e)) => e.clone(),
         (ChangeAct::Keep, Ok(_)) => format!("Kept the {kind} {name}."),
-        (ChangeAct::Undo, Ok(None)) => format!("Removed the {kind} {name}: GrokHub had added it."),
-        (ChangeAct::Undo, Ok(Some(_))) => format!("Undid GrokHub's change to the {kind} {name}."),
+        (ChangeAct::Undo, Ok(None)) => format!(
+            "Removed the {kind} {name}: {} had added it.",
+            grokhub_core::brand::product_name()
+        ),
+        (ChangeAct::Undo, Ok(Some(_))) => format!(
+            "Undid {}'s change to the {kind} {name}.",
+            grokhub_core::brand::product_name()
+        ),
     }
 }
 
@@ -695,13 +713,13 @@ mod tests {
         assert_eq!(
             changes_report(&ledger, now),
             [
-                "/automations changes — what GrokHub changed in your automations",
+                "/automations changes — what Loadout changed in your automations",
                 "",
-                "- inbox sweep · added by GrokHub · scheduled every 60 min · 2h ago",
-                "- board digest · changed by GrokHub · every 15 min instead · 2h ago",
+                "- inbox sweep · added by Loadout · scheduled every 60 min · 2h ago",
+                "- board digest · changed by Loadout · every 15 min instead · 2h ago",
                 "",
                 "Each automation keeps its last 20 versions. Undo puts back the one before. It runs only when you click it.",
-                "GrokHub adds at most 2 automations a week on its own until you keep one.",
+                "Loadout adds at most 2 automations a week on its own until you keep one.",
             ]
             .join("\n")
         );
@@ -727,8 +745,8 @@ mod tests {
             now,
         );
         assert!(
-            empty.starts_with(CONNECTION_CHANGES_HEAD)
-                && empty.contains("- Nothing yet. When GrokHub adds, changes, or removes a connection on its own, it shows here with Undo."),
+            empty.starts_with(CONNECTION_CHANGES_HEAD.as_str())
+                && empty.contains("- Nothing yet. When Loadout adds, changes, or removes a connection on its own, it shows here with Undo."),
             "{empty}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -833,8 +851,8 @@ mod tests {
             body: body.into(),
         };
         let views = [
-            view(AUTOMATION_CHANGES_HEAD),
-            view(CONNECTION_CHANGES_HEAD),
+            view(AUTOMATION_CHANGES_HEAD.as_str()),
+            view(CONNECTION_CHANGES_HEAD.as_str()),
             view("other"),
         ];
         assert_eq!(
@@ -861,7 +879,7 @@ mod tests {
         assert_eq!(row.label_name(), "board digest");
         assert_eq!(
             done_line(&row, ChangeAct::Undo, &Ok(Some(vec![]))),
-            "Undid GrokHub's change to the automation board digest."
+            "Undid Loadout's change to the automation board digest."
         );
         assert_eq!(
             done_line(&row, ChangeAct::Keep, &Ok(Some(vec![]))),

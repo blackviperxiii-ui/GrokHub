@@ -19,8 +19,23 @@
 use super::*;
 
 /// Ask-card Always second beat. Named so tests can lock the inherit line.
-pub(super) const ALWAYS_CONFIRM_LINE1: &str =
-    "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes.";
+pub(super) static ALWAYS_CONFIRM_LINE1: std::sync::LazyLock<String> = std::sync::LazyLock::new(
+    || {
+        format!("Skip every tool prompt until you change it. {} only stops for money, sending, deleting your data, credentials and irreversible system changes.", grokhub_core::brand::product_name())
+    },
+);
+static DISCONNECT_LINE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{} stops using this connector and forgets its sign-in.",
+        grokhub_core::brand::product_name()
+    )
+});
+static SAVE_KEY_LINE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{} seals this key with your keychain key and sends it only to this connector.",
+        grokhub_core::brand::product_name()
+    )
+});
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
     "Night, loops, and /send inherit Always. This confirm only shows once.";
 
@@ -134,7 +149,7 @@ pub(super) struct ConfirmSpec {
 pub(super) fn always_session_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: ALWAYS_SESSION_TITLE,
-        consequence: ALWAYS_CONFIRM_LINE1,
+        consequence: ALWAYS_CONFIRM_LINE1.as_str(),
         primary: "Confirm",
         danger: false,
     }
@@ -170,7 +185,7 @@ pub(super) fn delete_recording_spec() -> ConfirmSpec {
 pub(super) fn disconnect_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Disconnect",
-        consequence: "GrokHub stops using this connector and forgets its sign-in.",
+        consequence: DISCONNECT_LINE.as_str(),
         primary: "Disconnect",
         danger: true,
     }
@@ -179,8 +194,7 @@ pub(super) fn disconnect_spec() -> ConfirmSpec {
 pub(super) fn save_key_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Save key",
-        consequence:
-            "GrokHub seals this key with your keychain key and sends it only to this connector.",
+        consequence: SAVE_KEY_LINE.as_str(),
         primary: "Save key",
         danger: false,
     }
@@ -464,8 +478,8 @@ mod tests {
     #[test]
     fn always_confirm_names_session_skip_and_scheduled_inherit() {
         assert_eq!(
-            ALWAYS_CONFIRM_LINE1,
-            "Skip every tool prompt until you change it. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
+            ALWAYS_CONFIRM_LINE1.as_str(),
+            "Skip every tool prompt until you change it. Loadout only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
         assert!(
             crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
