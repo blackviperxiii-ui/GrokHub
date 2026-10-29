@@ -428,6 +428,12 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: backup and unpushed-work reminders. Off by default.
+    #[serde(default)]
+    pub backup_nudge: bool,
+    /// Folders whose changes the backup reminder compares to the last backup.
+    #[serde(default)]
+    pub important_folders: Vec<String>,
     /// Settings → Behavior: the internet drop and speed log. Off by default.
     #[serde(default)]
     pub net_log: bool,
@@ -795,6 +801,8 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            backup_nudge: false,
+            important_folders: Vec::new(),
             net_log: false,
             game_companion: false,
             game_companion_ping: false,

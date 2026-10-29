@@ -40,6 +40,11 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Backup reminders: the unpushed-work post on top of Pulse.
+Shot 1600 900 'backup-1600x900' 'ops-dark' '14' -pulse -backup -nav 'pulse'
+Shot 1100 720 'backup-1100x720' 'ops-dark' '14' -pulse -backup -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'backup-1100x720-scrolled' 'ops-dark' '14' -pulse -backup -nav 'pulse' -wheel 12
 # Internet drop log: the daily pattern card on Pulse, using the single
 # GROKHUB_DECK_NAV handler in loadout_home.rs.
 Shot 1600 900 'net-log-1600x900' 'ops-dark' '14' -netLog -nav 'pulse'

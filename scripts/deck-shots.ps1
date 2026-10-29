@@ -182,6 +182,33 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Backup reminder: a repo under code\my-app whose last two commits, from four
+# days ago, were never pushed to its (local, bare) upstream.
+function Seed-Backup([string]$root) {
+    $code = Join-Path $root 'code'
+    $repo = Join-Path $code 'my-app'
+    $bare = Join-Path $root 'origin.git'
+    New-Item -ItemType Directory -Force -Path $repo | Out-Null
+    git init -q --bare $bare 2>&1 | Out-Null
+    git -C $repo init -q -b main 2>&1 | Out-Null
+    git -C $repo config user.name 'user' 2>&1 | Out-Null
+    git -C $repo config user.email 'user@example.com' 2>&1 | Out-Null
+    Write-Utf8 (Join-Path $repo 'README.md') 'my-app'
+    git -C $repo add -A 2>&1 | Out-Null
+    git -C $repo commit -q -m 'Start my-app' 2>&1 | Out-Null
+    git -C $repo remote add origin $bare 2>&1 | Out-Null
+    git -C $repo push -q -u origin main 2>&1 | Out-Null
+    $old = (Get-Date).AddDays(-4).ToString('yyyy-MM-ddTHH:mm:ss')
+    $env:GIT_AUTHOR_DATE = $old
+    $env:GIT_COMMITTER_DATE = $old
+    foreach ($m in 'Add the settings page', 'Fix the save button') {
+        Add-Content -Path (Join-Path $repo 'README.md') -Value $m
+        git -C $repo commit -q -a -m $m 2>&1 | Out-Null
+    }
+    Remove-Item Env:GIT_AUTHOR_DATE, Env:GIT_COMMITTER_DATE
+    return $code
+}
+
 # Internet drop log: on, with three drops between 1 and 3 AM UTC last night
 # and no daily card yet, so the first probe after launch posts the pattern
 # card through the real path. Runners keep UTC, so the hours read as local.
@@ -248,7 +275,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -267,6 +294,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($backup) {
+        $app.backupNudge = $true
+        $app.codeFolders = @(Seed-Backup $root)
+    }
     if ($netLog) {
         Seed-NetLog $cfg
         $app.netLog = $true
