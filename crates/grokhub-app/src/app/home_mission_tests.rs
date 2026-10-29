@@ -69,6 +69,14 @@ fn objectives_is_the_details_page_without_made_up_stats() {
         objectives.contains("ModuleAction::Nav(\"objectives\")"),
         "Home's objectives card opens the Objectives details: {objectives}"
     );
+    let details = objectives.find("\"Details\"").expect("Details button");
+    let list = objectives
+        .find("paint_objective_list(")
+        .expect("objective list");
+    assert!(
+        details < list,
+        "Details sits above the checklist so a long list in a clipped slot can't hide it"
+    );
 }
 
 #[test]

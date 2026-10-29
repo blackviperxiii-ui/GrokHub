@@ -170,6 +170,11 @@ fn paint_objectives(
                 }
             }
             ModuleSize::Medium | ModuleSize::Large => {
+                // Above the list: the slot clips, so a long checklist can't hide it.
+                if crate::cards::ghost_pill(ui, "Details") {
+                    actions.push(ModuleAction::Nav("objectives"));
+                }
+                ui.add_space(4.0);
                 let cap = if size == ModuleSize::Medium {
                     3
                 } else {
@@ -194,10 +199,6 @@ fn paint_objectives(
                     });
                 });
                 paint_streak(ui, &streak);
-                ui.add_space(4.0);
-                if crate::cards::ghost_pill(ui, "Details") {
-                    actions.push(ModuleAction::Nav("objectives"));
-                }
             }
         }
     });

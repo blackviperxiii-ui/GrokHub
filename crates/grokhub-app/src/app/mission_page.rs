@@ -115,13 +115,18 @@ impl Cabin {
                 let done = mission
                     .as_ref()
                     .map_or(0, |m| objective_progress(&m.checklist).0);
-                self.mission_header(ui, done);
+                // Same width as the checklist, so the XP bar sits above its right edge.
+                let width = ui.available_width().min(OBJECTIVES_MAX_W);
+                ui.scope(|ui| {
+                    ui.set_max_width(width);
+                    self.mission_header(ui, done);
+                });
                 ui.add_space(GAP);
                 egui::ScrollArea::vertical()
                     .id_salt("mission-control-body")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_max_width(ui.available_width().min(OBJECTIVES_MAX_W));
+                        ui.set_max_width(width);
                         self.mission_objectives(ui, mission.as_ref(), now)
                     });
             });
