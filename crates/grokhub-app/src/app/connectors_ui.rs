@@ -386,7 +386,7 @@ impl Cabin {
         let mut run_gh: Option<String> = None;
         crate::cards::section_label(ui, "GitHub");
         ui.label(
-            RichText::new("Read-only. Who am I and List repos use the PAT via run_connector. No writes. No other websites.")
+            RichText::new("Read-only. Who am I and List repos use your GitHub token. No writes. No other websites.")
                 .size(12.0)
                 .color(crate::theme::muted()),
         );

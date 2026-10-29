@@ -26,7 +26,8 @@ pub(super) fn support_link(url: &str) -> Option<&str> {
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
-        SettingsGroup::About => SettingsSec::Update,
+        // The About heading opens About (version and build), not Update.
+        SettingsGroup::About => SettingsSec::About,
     }
 }
 
@@ -78,6 +79,12 @@ pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
 }
 
 /// Settings modal size: Personality needs room for the slide 19 grid + detail panel.
+/// The sheet's smallest and largest size before the window caps it.
+const SHEET_MIN: egui::Vec2 = egui::vec2(920.0, 620.0);
+const SHEET_MAX: egui::Vec2 = egui::vec2(1280.0, 880.0);
+/// Share of the window the sheet takes between those bounds.
+const SHEET_SHARE: f32 = 0.8;
+
 pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui::Vec2 {
     let margin = egui::vec2(48.0, 48.0);
     let max = (screen - margin).max(egui::vec2(320.0, 240.0));
@@ -87,7 +94,8 @@ pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui:
         // Proof shot: taller pane so Web search (SearXNG URL) stays on screen.
         egui::vec2(920.0, 780.0)
     } else {
-        egui::vec2(920.0, 620.0)
+        // Grows with the window (maximized gets a bigger sheet), within bounds.
+        (screen * SHEET_SHARE).clamp(SHEET_MIN, SHEET_MAX)
     };
     want.min(max)
 }
@@ -102,7 +110,30 @@ pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSe
             screen.max,
         );
     }
-    egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
+    // The sheet centres under the titlebar, so the window buttons stay live.
+    let below = settings_sheet_cover(screen);
+    egui::Rect::from_center_size(below.center(), settings_modal_size(sec, below.size()))
+}
+
+/// What the sheet dims: the window under the custom titlebar.
+pub(super) fn settings_sheet_cover(screen: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        screen.min + egui::vec2(0.0, crate::theme::TITLEBAR_H),
+        screen.max,
+    )
+}
+
+/// True when `sec` wasn't on screen last frame: a section switch or a fresh
+/// open, so its panel starts at the top instead of an old scroll position.
+fn settings_fresh_view(ctx: &egui::Context, sec: SettingsSec) -> bool {
+    let id = egui::Id::new("settings-last-view");
+    let pass = ctx.cumulative_pass_nr();
+    let last = ctx.data_mut(|d| {
+        let last = d.get_temp::<(SettingsSec, u64)>(id);
+        d.insert_temp(id, (sec, pass));
+        last
+    });
+    !matches!(last, Some((was, at)) if was == sec && at + 1 >= pass)
 }
 
 pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
@@ -465,8 +496,13 @@ impl Cabin {
         let screen = ctx.content_rect();
         let page = crate::theme::is_loadout_paint();
         let modal = settings_page_rect(screen, page, sec);
-        // A page leaves the rail and titlebar live; the sheet dims them.
-        let cover = if page { modal } else { screen };
+        // A page leaves the rail and titlebar live; the sheet dims the rail
+        // but leaves the titlebar (and its window buttons) live.
+        let cover = if page {
+            modal
+        } else {
+            settings_sheet_cover(screen)
+        };
         egui::Area::new(egui::Id::new("settings-overlay"))
             .fixed_pos(cover.min)
             .order(egui::Order::Foreground)
@@ -476,7 +512,7 @@ impl Cabin {
                 ui.set_max_size(cover.size());
                 if !page {
                     ui.painter()
-                        .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
+                        .rect_filled(cover, 0.0, Color32::from_black_alpha(180));
                 }
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
                     ui.set_clip_rect(modal);
@@ -579,10 +615,14 @@ impl Cabin {
                                         // Personality owns its own grid scroll; keep the body
                                         // height capped so the panel never grows past the window.
                                         let body_h = (ui.available_height() - 8.0).max(120.0);
-                                        egui::ScrollArea::vertical()
+                                        let mut body = egui::ScrollArea::vertical()
+                                            .id_salt(("settings-body", sec))
                                             .auto_shrink([false, false])
-                                            .max_height(body_h)
-                                            .show(ui, |ui| {
+                                            .max_height(body_h);
+                                        if settings_fresh_view(ctx, sec) {
+                                            body = body.vertical_scroll_offset(0.0);
+                                        }
+                                        body.show(ui, |ui| {
                                                 ui.set_width((body_w - 40.0).max(240.0));
                                                 ui.set_max_width((body_w - 40.0).max(240.0));
                                                 ui.add_space(8.0);
@@ -871,6 +911,7 @@ impl Cabin {
                                                                 .color(crate::theme::fg()),
                                                             );
                                                             ui.add_space(6.0);
+                                                            crate::cards::settings_note(ui, &crate::update::build_detail_line());
                                                             crate::cards::settings_note(ui, &format!("Runs on {}'s own engine.", grokhub_core::brand::product_name()));
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
@@ -1453,6 +1494,49 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sheet_follows_the_window_and_leaves_the_titlebar_live() {
+        let sheet = |w: f32, h: f32| {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
+            settings_page_rect(screen, false, SettingsSec::Labs)
+        };
+        // 1280x800: 80% of the 760 px under the titlebar, floored at 920x620.
+        let r = sheet(1280.0, 800.0);
+        assert_eq!(r.size(), egui::vec2(1024.0, 620.0));
+        assert_eq!(r.center(), egui::pos2(640.0, 420.0));
+        // Maximized 1920x1080 grows, up to 1280 wide.
+        let r = sheet(1920.0, 1080.0);
+        assert_eq!(r.size(), egui::vec2(1280.0, 832.0));
+        assert_eq!(r.center(), egui::pos2(960.0, 560.0));
+        // A small window caps it with a 24 px margin, still under the titlebar.
+        let r = sheet(658.0, 458.0);
+        assert_eq!(r.size(), egui::vec2(610.0, 370.0));
+        assert!(r.min.y >= crate::theme::TITLEBAR_H, "{r:?}");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        assert_eq!(settings_sheet_cover(screen).min, egui::pos2(0.0, 40.0));
+    }
+
+    #[test]
+    fn a_section_opens_at_the_top_once_then_keeps_its_scroll() {
+        let ctx = egui::Context::default();
+        let mut seen = Vec::new();
+        let mut pass = |sec: Option<SettingsSec>| {
+            let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+                if let Some(sec) = sec {
+                    seen.push(settings_fresh_view(ui.ctx(), sec));
+                }
+            });
+        };
+        pass(Some(SettingsSec::Labs));
+        pass(Some(SettingsSec::Labs));
+        pass(Some(SettingsSec::Behavior));
+        pass(Some(SettingsSec::Behavior));
+        // Closed for a frame, then opened again on the same section.
+        pass(None);
+        pass(Some(SettingsSec::Behavior));
+        assert_eq!(seen, [true, false, true, false, true]);
+    }
 
     #[test]
     fn support_link_shows_only_for_a_web_url() {
