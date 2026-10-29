@@ -542,6 +542,28 @@ pub fn detect_chip_stage(chat: &[(String, String)], last_failed: bool) -> ChipSt
     ChipStage::Default
 }
 
+/// A context tag as stored on a habit: the draft part dropped. Tags are
+/// matched against the draft-free fingerprint, and older tags carried up to
+/// 24 raw draft characters (which may hold `+`) up to the `h{n}` hour bit.
+fn tag_without_draft(tag: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_draft = false;
+    for part in tag.split('+') {
+        if part.starts_with("d:") {
+            in_draft = true;
+            continue;
+        }
+        let hour_bit =
+            part.len() == 2 && part.starts_with('h') && part.as_bytes()[1].is_ascii_digit();
+        if in_draft && !hour_bit {
+            continue;
+        }
+        in_draft = false;
+        out.push(part);
+    }
+    out.join("+")
+}
+
 pub fn context_fingerprint(
     chat: &[(String, String)],
     draft: &str,
@@ -579,9 +601,12 @@ pub fn context_fingerprint(
     if c.incomplete {
         bits.push("todo".into());
     }
-    let draft_bit: String = draft.trim().chars().take(24).collect();
-    if !draft_bit.is_empty() {
-        bits.push(format!("d:{draft_bit}"));
+    // An opaque draft digest: the fingerprint still changes as the draft
+    // does, but no draft text rides along into a stored context tag.
+    let draft = normalize_chip_value(draft);
+    if !draft.is_empty() {
+        let hex = hex::encode(Sha256::digest(draft.as_bytes()));
+        bits.push(format!("d:{}", &hex[..8]));
     }
     bits.push(format!("h{}", hour / 6));
     let mode_bit = mode.trim().to_ascii_lowercase();
@@ -1405,9 +1430,9 @@ fn upsert_hit(
             h.last_dismissed_at = now_ms;
         }
         h.dismisses = h.dismisses.saturating_add(dismiss_delta);
-        if let Some(tag) = context_tag {
-            if !h.context_tags.iter().any(|t| t == tag) {
-                h.context_tags.insert(0, tag.to_string());
+        if let Some(tag) = context_tag.map(tag_without_draft) {
+            if !h.context_tags.contains(&tag) {
+                h.context_tags.insert(0, tag);
                 h.context_tags.truncate(12);
             }
         }
@@ -1434,7 +1459,9 @@ fn upsert_hit(
                 },
                 successes: 0,
                 failures: 0,
-                context_tags: context_tag.map(|t| vec![t.to_string()]).unwrap_or_default(),
+                context_tags: context_tag
+                    .map(|t| vec![tag_without_draft(t)])
+                    .unwrap_or_default(),
                 dismisses: dismiss_delta,
                 dismiss_hours: if dismiss_delta > 0 {
                     bump_hour(&[], hour)
@@ -2391,6 +2418,16 @@ pub fn scrub_chat_text_chip_keys(mem: &mut ChipMemory) -> bool {
         h.label.clear();
         h.value.clear();
     }
+    // Older context tags carried raw draft text.
+    for h in &mut mem.hits {
+        let mut tags: Vec<String> = Vec::new();
+        for tag in h.context_tags.iter().map(|t| tag_without_draft(t)) {
+            if !tag.is_empty() && !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+        h.context_tags = tags;
+    }
     let keys: std::collections::HashSet<String> = mem.hits.iter().map(|h| h.key.clone()).collect();
     mem.transitions.retain(|from, dests| {
         if embeds(from) {
@@ -3248,9 +3285,11 @@ mod tests {
                     inp.thread_title = "zephyrquill notes";
                     inp.max = 30;
                     let chips = build_quick_chips(inp);
+                    // The tag the app passes on a real click.
+                    let tag = context_fingerprint(chat, draft, false, 21, "auto");
                     for c in chips.iter().filter(|c| c.kind == ChipKind::Chat) {
                         seen += 1;
-                        remember_chip_click(&mut mem, c, Some("mid"), 1_000 + round, 21);
+                        remember_chip_click(&mut mem, c, Some(&tag), 1_000 + round, 21);
                         if round == 1 {
                             remember_chip_dismiss(&mut mem, c, 2_000, 21);
                         }
@@ -3867,6 +3906,44 @@ mod tests {
 
     /// A scrub that only empties a row's inner destinations, or only clears
     /// stored chip text, still reports a change so `load_chips` saves it.
+    #[test]
+    fn context_tags_keep_no_draft_text() {
+        let fp = context_fingerprint(&[], "fix zephyrquill login", false, 21, "auto");
+        assert_eq!(fp, "empty+d:a665f15e+h3+m:auto");
+        assert_eq!(tag_without_draft(&fp), "empty+h3+m:auto");
+        assert_eq!(
+            tag_without_draft("code+d:fix zephyr+quill h3x+h3+m:chat"),
+            "code+h3+m:chat"
+        );
+
+        let mut mem = ChipMemory {
+            version: CHIP_MEMORY_VERSION,
+            ..ChipMemory::default()
+        };
+        let brief = chip(
+            "empty-brief",
+            "Cabin brief",
+            "Give me a short cabin brief.",
+            ChipKind::Chat,
+            10.0,
+            "",
+        );
+        remember_chip_click(&mut mem, &brief, Some(&fp), 1_000, 21);
+        assert_eq!(
+            mem.hits[0].context_tags,
+            vec!["empty+h3+m:auto".to_string()]
+        );
+
+        mem.hits[0].context_tags = vec![
+            "code+d:fix zephyrquill+h3+m:chat".into(),
+            "code+h3+m:chat".into(),
+            "d:zephyrquill".into(),
+        ];
+        assert!(scrub_chat_text_chip_keys(&mut mem));
+        assert_eq!(mem.hits[0].context_tags, vec!["code+h3+m:chat".to_string()]);
+        assert!(!scrub_chat_text_chip_keys(&mut mem), "idempotent");
+    }
+
     #[test]
     fn scrub_reports_inner_row_and_text_only_changes() {
         let hit = |key: &str, label: &str, value: &str, kind: ChipKind| ChipHit {
