@@ -62,6 +62,7 @@ pub fn source_chips(ui: &mut egui::Ui, sources: &[ReplySource]) -> Option<String
                     crate::theme::muted()
                 },
             );
+            crate::theme::paint_focus_ring(ui, rect, radius, &resp);
             if crate::theme::pointing(resp.on_hover_text(&source.url)).clicked() {
                 clicked = Some(source.url.clone());
             }

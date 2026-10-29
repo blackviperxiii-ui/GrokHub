@@ -51,6 +51,24 @@ pub(crate) use win::{
     window_geometry,
 };
 
+/// `\\?\Volume{GUID}\` → `{GUID}`, the volume's key under Explorer's
+/// `BitBucket\Volume`.
+#[cfg(any(windows, test))]
+pub(crate) fn volume_guid(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix(r"\\?\Volume")?;
+    let guid = rest.strip_suffix('\\').unwrap_or(rest);
+    (guid.starts_with('{') && guid.ends_with('}') && guid.len() == 38).then_some(guid)
+}
+
+/// A fixed volume's Recycle Bin is off when the shell can't query it, a
+/// policy in any hive turns recycling off (`NoRecycleFiles`; a user `0`
+/// doesn't hide a machine `1`), or the volume is set to delete right away
+/// (`NukeOnDelete`).
+#[cfg(any(windows, test))]
+pub(crate) fn recycle_bin_off(policies: &[Option<u32>], nuke: Option<u32>, query_ok: bool) -> bool {
+    !query_ok || policies.iter().flatten().any(|&v| v != 0) || nuke.is_some_and(|v| v != 0)
+}
+
 /// Outside Windows a trash move with no trash fails instead of deleting.
 #[cfg(not(windows))]
 pub(crate) fn no_recycle_bin(_path: &std::path::Path) -> bool {
@@ -621,9 +639,12 @@ mod win {
 
     use grokhub_core::desktop_mcp::{DesktopWindows, WindowGeom};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD,
+    };
     use windows_sys::Win32::UI::Shell::{
-        SHFileOperationW, ShellExecuteW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI,
-        FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
+        SHFileOperationW, SHQueryRecycleBinW, ShellExecuteW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
+        FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW, SHQUERYRBINFO,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, IsIconic,
@@ -766,8 +787,9 @@ mod win {
         Ok(got)
     }
 
-    /// Only a fixed drive has a Recycle Bin. On a network share, a removable
-    /// or unknown drive, `SHFileOperationW` with undo deletes for good (G2).
+    /// Only a fixed drive with recycling on has a Recycle Bin. On a network
+    /// share, a removable or unknown drive, or a volume whose bin is turned
+    /// off, `SHFileOperationW` with undo deletes for good (G2).
     pub(crate) fn no_recycle_bin(path: &std::path::Path) -> bool {
         use std::path::{Component, Prefix};
         let root = match path.components().next() {
@@ -779,7 +801,68 @@ mod win {
         };
         let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
         // DRIVE_FIXED
-        unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) != 3 }
+        if unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) != 3 } {
+            return true;
+        }
+        let policies = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
+            .map(|k| reg_dword(k, POLICY_KEY, "NoRecycleFiles"));
+        let nuke = volume_name(&wide)
+            .as_deref()
+            .and_then(super::volume_guid)
+            .and_then(|g| {
+                reg_dword(
+                    HKEY_CURRENT_USER,
+                    &format!(r"{BIN_KEY}\{g}"),
+                    "NukeOnDelete",
+                )
+            });
+        let mut info = SHQUERYRBINFO {
+            cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+            i64Size: 0,
+            i64NumItems: 0,
+        };
+        // SAFETY: a NUL-terminated root and an out-struct sized in cbSize.
+        let query_ok = unsafe { SHQueryRecycleBinW(wide.as_ptr(), &mut info) } == 0;
+        super::recycle_bin_off(&policies, nuke, query_ok)
+    }
+
+    const POLICY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
+    const BIN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume";
+
+    /// `\\?\Volume{GUID}\` for a drive root such as `C:\`.
+    fn volume_name(root: &[u16]) -> Option<String> {
+        use windows_sys::Win32::Storage::FileSystem::GetVolumeNameForVolumeMountPointW;
+        let mut buf = [0u16; 64];
+        // SAFETY: a NUL-terminated root and a buffer of the length passed.
+        let ok = unsafe {
+            GetVolumeNameForVolumeMountPointW(root.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
+        };
+        if ok == 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(String::from_utf16_lossy(&buf[..end]))
+    }
+
+    /// A DWORD registry value, or None when unset or unreadable.
+    fn reg_dword(root: HKEY, sub: &str, name: &str) -> Option<u32> {
+        let sub = wide(sub);
+        let name = wide(name);
+        let mut data = 0u32;
+        let mut len = std::mem::size_of::<u32>() as u32;
+        // SAFETY: NUL-terminated strings and a DWORD out-buffer of `len` bytes.
+        let status = unsafe {
+            RegGetValueW(
+                root,
+                sub.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                &mut data as *mut u32 as *mut core::ffi::c_void,
+                &mut len,
+            )
+        };
+        (status == 0).then_some(data)
     }
 
     /// Recycle Bin: `SHFileOperationW` delete with undo, no dialogs.
@@ -796,7 +879,12 @@ mod win {
             wFunc: FO_DELETE,
             pFrom: from.as_ptr(),
             pTo: std::ptr::null(),
-            fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI) as u16,
+            // A file too big for the bin asks before it's deleted for good.
+            fFlags: (FOF_ALLOWUNDO
+                | FOF_NOCONFIRMATION
+                | FOF_SILENT
+                | FOF_NOERRORUI
+                | FOF_WANTNUKEWARNING) as u16,
             fAnyOperationsAborted: 0,
             hNameMappings: std::ptr::null_mut(),
             lpszProgressTitle: std::ptr::null(),
@@ -815,6 +903,35 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turned_off_recycle_bin_reads_as_none() {
+        let guid = "{0a1b2c3d-1111-2222-3333-444455556666}";
+        assert_eq!(volume_guid(&format!(r"\\?\Volume{guid}\")), Some(guid));
+        assert_eq!(volume_guid(r"\\?\Volume{short}\"), None);
+        assert_eq!(volume_guid(r"C:\"), None);
+        assert!(
+            !recycle_bin_off(&[None, None], None, true),
+            "a normal fixed drive"
+        );
+        assert!(!recycle_bin_off(&[Some(0), Some(0)], Some(0), true));
+        assert!(
+            recycle_bin_off(&[None, None], Some(1), true),
+            "volume set to delete right away"
+        );
+        assert!(
+            recycle_bin_off(&[Some(1), None], None, true),
+            "policy turns recycling off"
+        );
+        assert!(
+            recycle_bin_off(&[Some(0), Some(1)], None, true),
+            "a user 0 doesn't hide a machine 1"
+        );
+        assert!(
+            recycle_bin_off(&[None, None], None, false),
+            "the shell can't query the bin"
+        );
+    }
 
     #[test]
     fn pick_title_is_first_match_any_case() {
