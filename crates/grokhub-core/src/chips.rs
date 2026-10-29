@@ -356,7 +356,7 @@ fn last_of(chat: &[(String, String)], role: &str) -> String {
             // tool rows and TURN_ markers are not the reply.
             let c = chip_scan(c);
             if role == "assistant" {
-                crate::turn_timeline::turn_says(c).unwrap_or_else(|| c.to_string())
+                crate::turn_timeline::strip_turn_labels(c)
             } else {
                 c.to_string()
             }
@@ -2848,12 +2848,7 @@ pub fn chip_suggest_prompt(
         .filter_map(|(role, content)| {
             let who = if role == "user" { "User" } else { "Asst" };
             let capped = chip_scan(content);
-            let says = if role == "assistant" {
-                crate::turn_timeline::turn_says(capped)
-            } else {
-                None
-            };
-            let content = says.as_deref().unwrap_or(capped);
+            let content = crate::turn_timeline::strip_turn_labels(capped);
             let body: String = content
                 .replace("```", "[code]")
                 .split_whitespace()

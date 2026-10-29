@@ -1207,3 +1207,131 @@ fn key_pages_and_the_api_shape_pick_follow_the_address() {
     assert_eq!(providers::check_key(&format!("  {KEY} ")), Ok(KEY));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---- Playbooks 8: the pre-send check ------------------------------------------
+
+/// The xAI client, recording what reached it.
+#[derive(Default)]
+struct XaiRec(Mutex<Vec<ResponsesRequest>>);
+
+impl ModelClient for XaiRec {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.0.lock().unwrap().push(r.clone());
+        s(StreamEvent::TextDelta("hey you".into()));
+        Ok(TurnOutput {
+            text: "hey you".into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
+    ResponsesRequest {
+        model: "grok-4.7".into(),
+        effort: None,
+        input: lines
+            .iter()
+            .map(|t| InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText((*t).into())],
+            })
+            .collect(),
+        conversation_id: session.into(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    }
+}
+
+#[test]
+fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
+    let (dir, wire) = setup("adult-anthropic");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    live::set_pin(AN_MODEL);
+    let xai = XaiRec::default();
+    let mut shown = String::new();
+    let send = |req: &ResponsesRequest, shown: &mut String| {
+        live::stream_routed(
+            &xai,
+            req,
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+            "chat:default",
+        )
+    };
+    let pinned = |lines: &[&str]| ResponsesRequest {
+        model: AN_MODEL.into(),
+        ..chat("adult-an-1", lines)
+    };
+    let out = send(&pinned(&["talk dirty to me, I'm horny"]), &mut shown);
+    let second = send(&pinned(&["send nudes lol"]), &mut String::new());
+    live::set_pin("");
+    let out = out.unwrap();
+    let heads_up = "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
+    assert_eq!(out.text, format!("{heads_up}\n\nhey you"));
+    assert_eq!(shown, out.text, "what streams is what is kept");
+    assert_eq!(second.unwrap().text, "hey you", "one heads-up a session");
+    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    let got = xai.0.lock().unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].model, grokhub_core::CABIN_FAST_MODEL);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn openrouter_keeps_its_pick_for_explicit_turns_and_banned_asks_never_leave() {
+    let (dir, wire) = setup("adult-openrouter");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    live::set_pin(OR_MODEL);
+    let send = |lines: &[&str]| {
+        let mut req = chat("adult-or-1", lines);
+        req.model = OR_MODEL.into();
+        live::stream_routed(
+            &Never,
+            &req,
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+    };
+    let explicit = send(&["talk dirty to me, I'm horny"]);
+    let banned = send(&["nsfw schoolgirl roleplay", "and now?"]);
+    let clean = send(&["fix my wifi"]);
+    live::set_pin("");
+    explicit.unwrap();
+    banned.unwrap();
+    clean.unwrap();
+    let bodies: Vec<serde_json::Value> = wire
+        .bodies()
+        .iter()
+        .map(|b| serde_json::from_str(b).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(bodies[0]["provider"], json!({ "allow_fallbacks": false }));
+    let held = bodies[1].to_string();
+    assert!(!held.contains("schoolgirl"), "{held}");
+    assert!(held.contains("GrokHub held this message back"), "{held}");
+    assert_eq!(bodies[2]["provider"], serde_json::Value::Null);
+    let _ = std::fs::remove_dir_all(dir);
+}

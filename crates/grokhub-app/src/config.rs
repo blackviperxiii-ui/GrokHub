@@ -470,6 +470,10 @@ pub struct AppConfig {
     /// in every picker, and a chat set to one speaks in the default voice.
     #[serde(default)]
     pub explicit_personalities: bool,
+    /// Playbooks 8: the user confirmed once that they are 18 or older. Asked the
+    /// first time adults-only turns on, then never again.
+    #[serde(default)]
+    pub adult_confirmed: bool,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -803,6 +807,7 @@ impl Default for AppConfig {
             self_improve_quiet: false,
             personality: String::new(),
             explicit_personalities: false,
+            adult_confirmed: false,
             diagnostics_mode: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
@@ -986,6 +991,10 @@ pub fn load() -> AppConfig {
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
         rewrite_personality = true;
+    }
+    // Adults-only already on from before the 18+ check: that was the user's own opt-in.
+    if cfg.explicit_personalities {
+        cfg.adult_confirmed = true;
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.

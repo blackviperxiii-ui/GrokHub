@@ -61,6 +61,9 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
 # synthetic tile click didn't register on the runner, so the seed picks it.
 Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
 Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
+# Playbooks chat quality: joke replies show the character's playful response.
+Shot 1600 900 'chat-joke-1600x900' 'ops-dark' '02' -dock -chat 'joke'
+Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
@@ -95,6 +98,9 @@ Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality
 Shot 1920 1080 'personality-1920x1080' 'ops-dark' '19' -pinPersonality
 # Narrow: stacked Selected panel above the wrapping grid (body under TWO_COL_MIN_W).
 Shot 900 720 'personality-900x720' 'ops-dark' '19' -pinPersonality
+# Playbooks 8: the one-time 18+ check, with adults-only still off.
+Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
+Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
 # Nyx's corner box in each mode, beside the approved pictures in
 # docs/design/loadout-baseline-v1/nyx-modes/.
 foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {

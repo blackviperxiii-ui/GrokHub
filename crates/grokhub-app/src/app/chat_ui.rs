@@ -2134,7 +2134,7 @@ impl Cabin {
                             let view = ChatView {
                                 kind: ChatKind::Assistant,
                                 title: String::new(),
-                                body: b.body.clone(),
+                                body: grokhub_core::strip_turn_labels(&b.body),
                             };
                             act = paint_chat_block_with(
                                 ui,

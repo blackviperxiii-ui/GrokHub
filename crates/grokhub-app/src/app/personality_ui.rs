@@ -15,12 +15,23 @@ include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
     "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
+/// Playbooks 8: the one-time 18+ check, the first time adults-only turns on.
+fn age_check_line() -> String {
+    format!(
+        "Adults-only personalities are for people 18 or older. Confirm once and {} remembers it.",
+        grokhub_core::brand::product_name()
+    )
+}
+const AGE_YES: &str = "I'm 18 or older";
+const AGE_NO: &str = "Not now";
 /// Width of the selected detail panel beside the grid (slide 19).
 const DETAIL_W: f32 = 320.0;
 /// Below this the detail panel stacks under the grid.
 const TWO_COL_MIN_W: f32 = 640.0;
 const GRID_GAP: f32 = 10.0;
-const CARD_MIN_W: f32 = 140.0;
+/// Wide enough that no word in a built-in name ("Lawyer-precise",
+/// "Shakespearean") breaks mid-word beside the letter tile.
+const CARD_MIN_W: f32 = 170.0;
 /// Big letter icon on the Selected card (slide 19).
 const DETAIL_ICON: f32 = 96.0;
 /// Slots build.rs watches under `assets/personalities/<id>/`.
@@ -51,8 +62,27 @@ pub(super) struct PickerState {
     pub draft: Option<Draft>,
     /// Which preset the detail panel shows. Empty means the current default.
     pub focus: Option<String>,
+    /// Adults-only was switched on before the 18+ check: the confirm row shows.
+    pub age_check: bool,
     /// Card under the pointer; the Selected panel follows this when set.
     pub hover: Option<String>,
+}
+
+/// Deck shots (`scripts/deck-shots.ps1`) set this to open with the 18+ check
+/// showing, since a click inside Settings is too fragile on the runner.
+const DECK_AGE_CHECK_ENV: &str = "GROKHUB_DECK_AGE_CHECK";
+
+/// The 18+ check deck shot is running.
+pub(super) fn deck_age_check() -> bool {
+    std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1")
+}
+
+/// The picker a window starts with: the 18+ row only for that deck shot.
+pub(super) fn first_picker() -> PickerState {
+    PickerState {
+        age_check: deck_age_check(),
+        ..Default::default()
+    }
 }
 
 /// A custom preset open in the editor.
@@ -217,6 +247,12 @@ impl Cabin {
     /// Settings → Adults-only personalities. Turning it off hides the explicit presets;
     /// the stored picks stay, and speak in the default voice until it is back on.
     pub(super) fn set_explicit_personalities(&mut self, on: bool) {
+        // The first time it turns on, the one-time 18+ check comes first.
+        if on && !self.cfg.adult_confirmed {
+            self.picker.age_check = true;
+            return;
+        }
+        self.picker.age_check = false;
         self.cfg.explicit_personalities = on;
         self.persist_cfg();
         self.status = if on {
@@ -224,6 +260,15 @@ impl Cabin {
         } else {
             "Adults-only personalities off".into()
         };
+    }
+
+    /// The 18+ confirm row: yes is remembered for good and turns adults-only on.
+    pub(super) fn answer_age_check(&mut self, adult: bool) {
+        self.picker.age_check = false;
+        if adult {
+            self.cfg.adult_confirmed = true;
+            self.set_explicit_personalities(true);
+        }
     }
 
     /// Chat header → Make default: the open chat's pick becomes everyone's default.
@@ -398,6 +443,22 @@ impl Cabin {
                         self.picker.focus = None;
                     }
                 }
+            }
+        }
+        if self.picker.age_check {
+            ui.add_space(6.0);
+            crate::cards::settings_note(ui, &age_check_line());
+            let mut answer = None;
+            ui.horizontal(|ui| {
+                if crate::cards::white_pill(ui, AGE_YES) {
+                    answer = Some(true);
+                }
+                if crate::cards::ghost_pill(ui, AGE_NO) {
+                    answer = Some(false);
+                }
+            });
+            if let Some(adult) = answer {
+                self.answer_age_check(adult);
             }
         }
         ui.add_space(10.0);
@@ -914,7 +975,8 @@ fn paint_grid_card(
             egui::Stroke::new(1.0, crate::theme::border()),
         )
     };
-    let inner_w = (width - 24.0).max(64.0);
+    // 24 px of margin and the stroke on each side.
+    let inner_w = (width - 24.0 - 2.0 * stroke.width).max(64.0);
     // Allocate a fixed-width top-down child: the grid row is horizontal_top, and
     // a plain scope/Frame inherits that so a wrapped description sits in a
     // 1-char leftover beside the title.
@@ -995,7 +1057,8 @@ fn paint_detail_panel(
             egui::Stroke::new(1.5, crate::theme::fg()),
         )
     };
-    let inner_w = (width - 32.0).max(140.0);
+    // 32 px of margin and the stroke on each side, or the right rim is clipped.
+    let inner_w = (width - 32.0 - 2.0 * stroke.width).max(140.0);
     egui::Frame::NONE
         .fill(fill)
         .corner_radius(if loadout {
@@ -1187,8 +1250,16 @@ mod tests {
         assert_eq!(cabin.threads[0].personality, "");
         assert_eq!(cabin.chat_personality().id, "nyx");
 
+        // The first time, the one-time 18+ check comes first.
         cabin.set_explicit_personalities(true);
+        assert!(
+            !cabin.cfg.explicit_personalities,
+            "not before the 18+ check"
+        );
+        assert!(cabin.picker.age_check);
+        cabin.answer_age_check(true);
         assert!(cabin.cfg.explicit_personalities);
+        assert!(cabin.cfg.adult_confirmed);
         crate::config::save(&cabin.cfg).unwrap();
         assert!(
             crate::config::load().explicit_personalities,
@@ -1209,6 +1280,47 @@ mod tests {
         assert_eq!(cabin.personality_id(), "nyx");
         assert_eq!(cabin.chat_personality().id, "nyx");
         assert_eq!(cabin.open_chat_personality(), "nyx");
+    }
+
+    #[test]
+    fn a_deck_shot_opens_with_the_18_plus_check_showing() {
+        let before = std::env::var(DECK_AGE_CHECK_ENV).ok();
+        std::env::remove_var(DECK_AGE_CHECK_ENV);
+        assert!(!first_picker().age_check, "never shown on a normal start");
+        std::env::set_var(DECK_AGE_CHECK_ENV, " 1 ");
+        assert!(first_picker().age_check);
+        std::env::set_var(DECK_AGE_CHECK_ENV, "0");
+        assert!(!first_picker().age_check);
+        match before {
+            Some(v) => std::env::set_var(DECK_AGE_CHECK_ENV, v),
+            None => std::env::remove_var(DECK_AGE_CHECK_ENV),
+        }
+    }
+
+    #[test]
+    fn the_18_plus_check_is_asked_once_and_remembered() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        assert!(!cabin.cfg.adult_confirmed, "not confirmed on a new install");
+        // Not now: adults-only stays off and nothing is remembered.
+        cabin.set_explicit_personalities(true);
+        cabin.answer_age_check(false);
+        assert!(!cabin.cfg.explicit_personalities && !cabin.cfg.adult_confirmed);
+        assert!(!cabin.picker.age_check);
+        // Yes: on, and remembered across a restart.
+        cabin.set_explicit_personalities(true);
+        cabin.answer_age_check(true);
+        crate::config::save(&cabin.cfg).unwrap();
+        let mut back = crate::config::load();
+        assert!(back.explicit_personalities && back.adult_confirmed);
+        // Off and on again never asks.
+        cabin.set_explicit_personalities(false);
+        cabin.set_explicit_personalities(true);
+        assert!(cabin.cfg.explicit_personalities);
+        assert!(!cabin.picker.age_check, "never re-asked");
+        // A profile that had adults-only on before the check counts as its opt-in.
+        back.adult_confirmed = false;
+        crate::config::save(&back).unwrap();
+        assert!(crate::config::load().adult_confirmed);
     }
 
     #[test]
@@ -1496,10 +1608,85 @@ mod tests {
     }
 
     #[test]
+    fn the_18_plus_line_names_the_app_from_brand_json() {
+        assert_eq!(
+            age_check_line(),
+            "Adults-only personalities are for people 18 or older. Confirm once and Loadout remembers it."
+        );
+    }
+
+    #[test]
+    fn no_built_in_name_breaks_mid_word_on_the_narrowest_card() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        // Name column: card minus margins, a 2 px stroke each side, the tile and its gap.
+        let room = CARD_MIN_W - 24.0 - 4.0 - 36.0;
+        let mut widest = (String::new(), 0.0_f32);
+        let raw = egui::RawInput::default();
+        crate::theme::test_pass(&ctx, raw, |ui| {
+            for p in personality::builtins() {
+                for word in p.name.split_whitespace() {
+                    let w = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(
+                            word.to_string(),
+                            egui::FontId::proportional(crate::theme::FONT_BODY),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                    });
+                    if w > widest.1 {
+                        widest = (word.to_string(), w);
+                    }
+                }
+            }
+        });
+        assert!(
+            widest.1 <= room,
+            "\"{}\" is {} px; the name column has {room}",
+            widest.0,
+            widest.1
+        );
+    }
+
+    #[test]
+    fn a_grid_card_wraps_its_line_inside_its_width() {
+        // In a grid row the card used to lay its line out beside the name, unwrapped,
+        // and push the row past the Settings panel at 1100x720.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let p = personality::builtins()
+            .into_iter()
+            .max_by_key(|p| p.description.len())
+            .unwrap();
+        let mut card = egui::Rect::NOTHING;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        crate::theme::test_pass(&ctx, raw, |ui| {
+            ui.horizontal_top(|ui| {
+                card = ui
+                    .scope(|ui| {
+                        paint_grid_card(ui, &p, false, 200.0);
+                    })
+                    .response
+                    .rect;
+            });
+        });
+        assert!(card.width() <= 200.5, "card is {} wide", card.width());
+        assert!(card.height() >= 108.0, "card is {} tall", card.height());
+    }
+
+    #[test]
     fn grid_cols_cap_at_four_and_need_room_for_each() {
         assert_eq!(grid_cols(100.0), 1);
-        assert_eq!(grid_cols(300.0), 2);
-        assert_eq!(grid_cols(460.0), 3);
+        assert_eq!(grid_cols(349.0), 1);
+        assert_eq!(grid_cols(350.0), 2);
+        assert_eq!(grid_cols(530.0), 3);
         assert_eq!(grid_cols(900.0), 4);
         assert_eq!(grid_cols(2000.0), 4);
     }
