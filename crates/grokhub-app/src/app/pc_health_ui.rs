@@ -18,7 +18,7 @@ use grokhub_core::pc_health::{
     parse_proc_stat_cpu, temps_from_hwmon,
 };
 #[cfg(any(target_os = "linux", windows))]
-use grokhub_core::pc_health::{game_running, parse_nvidia_sensor_csv};
+use grokhub_core::pc_health::{game_running, nvidia_max_util, parse_nvidia_sensor_csv};
 
 use super::*;
 use crate::config;
@@ -161,9 +161,10 @@ fn probe_cmd(cmd: &str, args: &[&str]) -> Option<String> {
     grokhub_core::proc_util::output_within(&mut c, PROBE_TIMEOUT, 1024 * 1024)
 }
 
-/// `nvidia-smi` temp, util and clock for the hottest card.
+/// `nvidia-smi`: temp, util and clock for the hottest card, and the busiest
+/// card's util for the GPU-busy game check.
 #[cfg(any(target_os = "linux", windows))]
-fn nvidia_sensors() -> Option<(f32, u8, u32)> {
+fn nvidia_sensors() -> Option<((f32, u8, u32), Option<u8>)> {
     let text = probe_cmd(
         "nvidia-smi",
         &[
@@ -171,7 +172,7 @@ fn nvidia_sensors() -> Option<(f32, u8, u32)> {
             "--format=csv,noheader,nounits",
         ],
     )?;
-    parse_nvidia_sensor_csv(&text)
+    Some((parse_nvidia_sensor_csv(&text)?, nvidia_max_util(&text)))
 }
 
 /// Process list + light sensors, read on a worker thread.
@@ -204,10 +205,12 @@ fn collect_linux(now: u64, cpu_prev: Option<(u64, u64)>) -> Probe {
         game_label: game_label_from_procs(&procs),
         ..Default::default()
     };
-    if let Some((t, u, c)) = nvidia_sensors() {
+    let mut busiest = None;
+    if let Some(((t, u, c), max_u)) = nvidia_sensors() {
         sample.gpu_temp_c = Some(t);
         sample.gpu_util_pct = Some(u);
         sample.gpu_clock_mhz = Some(c);
+        busiest = max_u;
     }
     if sample.gpu_util_pct.is_none() {
         if let Some(busy) = read_first_amdgpu_busy() {
@@ -229,7 +232,7 @@ fn collect_linux(now: u64, cpu_prev: Option<(u64, u64)>) -> Probe {
         .ok()
         .and_then(|t| parse_proc_stat_cpu(&t));
     sample.cpu_util_pct = cpu_prev.zip(cpu).and_then(|(a, b)| cpu_util_between(a, b));
-    let game_up = game_running(&procs, sample.gpu_util_pct);
+    let game_up = game_running(&procs, busiest.or(sample.gpu_util_pct));
     Probe {
         game_up,
         sample: game_up.then_some(sample),
@@ -247,13 +250,15 @@ fn collect_windows(now: u64) -> Probe {
         game_label: game_label_from_exe_paths(&paths),
         ..Default::default()
     };
-    if let Some((t, u, c)) = nvidia_sensors() {
+    let mut busiest = None;
+    if let Some(((t, u, c), max_u)) = nvidia_sensors() {
         sample.gpu_temp_c = Some(t);
         sample.gpu_util_pct = Some(u);
         sample.gpu_clock_mhz = Some(c);
+        busiest = max_u;
     }
     let game_up = grokhub_core::local_governor::game_in_process_list(&paths) == Some(true)
-        || game_running(&[], sample.gpu_util_pct);
+        || game_running(&[], busiest.or(sample.gpu_util_pct));
     Probe {
         game_up,
         sample: game_up.then_some(sample),

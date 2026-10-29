@@ -46,9 +46,11 @@ pub fn silence_windows_hard_errors() {
     }
 }
 
-/// Run `cmd` and return its stdout if it exits successfully within
-/// `timeout`; otherwise kill it and return `None`. Keeps at most `cap` bytes.
-/// stdout is drained on a side thread so a full pipe can't stall the child.
+/// Run `cmd` and return its stdout if it exits successfully and its stdout
+/// closes within `timeout`; otherwise kill it and return `None`. Keeps at
+/// most `cap` bytes. stdout is drained on a side thread so a full pipe can't
+/// stall the child, and that thread is never waited on past the deadline
+/// (a grandchild still holding the pipe only keeps the side thread alive).
 pub fn output_within(cmd: &mut Command, timeout: Duration, cap: u64) -> Option<String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -56,11 +58,12 @@ pub fn output_within(cmd: &mut Command, timeout: Duration, cap: u64) -> Option<S
     hide_windows_console(cmd);
     let mut child = cmd.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = (&mut stdout).take(cap).read_to_end(&mut buf);
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-        buf
+        let _ = tx.send(buf);
     });
     let start = Instant::now();
     let status = loop {
@@ -76,7 +79,9 @@ pub fn output_within(cmd: &mut Command, timeout: Duration, cap: u64) -> Option<S
             }
         }
     };
-    let buf = reader.join().ok()?;
+    let buf = rx
+        .recv_timeout(timeout.saturating_sub(start.elapsed()))
+        .ok()?;
     status
         .success()
         .then(|| String::from_utf8_lossy(&buf).into_owned())
@@ -119,6 +124,24 @@ mod tests {
         assert_eq!(
             output_within(&mut shell("exit 3"), Duration::from_secs(10), 64),
             None
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn output_within_does_not_wait_on_a_grandchild_holding_stdout() {
+        // The shell exits at once; the backgrounded sleep keeps stdout open.
+        let start = Instant::now();
+        let out = output_within(
+            &mut shell("sleep 30 & echo early"),
+            Duration::from_millis(500),
+            64,
+        );
+        assert_eq!(out, None);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
         );
     }
 

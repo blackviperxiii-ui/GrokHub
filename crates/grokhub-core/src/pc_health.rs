@@ -169,6 +169,15 @@ pub fn parse_nvidia_sensor_csv(text: &str) -> Option<(f32, u8, u32)> {
     best
 }
 
+/// The busiest card's util from the same `nvidia-smi` CSV. A game on a
+/// cooler card still counts as GPU work.
+pub fn nvidia_max_util(text: &str) -> Option<u8> {
+    text.lines()
+        .filter_map(|l| l.split(',').nth(1)?.trim().parse::<f32>().ok())
+        .map(|u| u.clamp(0.0, 100.0) as u8)
+        .max()
+}
+
 /// AMDGPU sysfs `gpu_busy_percent` file contents.
 pub fn parse_amdgpu_busy(text: &str) -> Option<u8> {
     text.trim()
@@ -280,10 +289,12 @@ pub fn game_label_from_exe_paths(paths: &[String]) -> Option<String> {
             return None;
         }
         let file = p.rsplit(['\\', '/']).next()?;
-        let stem = file
-            .strip_suffix(".exe")
-            .or_else(|| file.strip_suffix(".EXE"))
-            .unwrap_or(file);
+        let stem = match file.len().checked_sub(4) {
+            Some(i) if file.is_char_boundary(i) && file[i..].eq_ignore_ascii_case(".exe") => {
+                &file[..i]
+            }
+            _ => file,
+        };
         (!stem.is_empty()).then(|| stem.to_string())
     })
 }
@@ -681,6 +692,8 @@ mod tests {
         assert_eq!(parse_nvidia_sensor_csv(text), Some((88.0, 30, 1800)));
         let text = "80, 30, 1700\n80, 90, 1900\n";
         assert_eq!(parse_nvidia_sensor_csv(text), Some((80.0, 90, 1900)));
+        assert_eq!(nvidia_max_util("88, 30, 1800\n70, 99, 1500\n"), Some(99));
+        assert_eq!(nvidia_max_util(""), None);
     }
 
     #[test]
@@ -707,6 +720,11 @@ mod tests {
             r"C:\Program Files (x86)\Steam\steamapps\common\Hades\x64\Hades.exe".to_string(),
         ];
         assert_eq!(game_label_from_exe_paths(&paths).as_deref(), Some("Hades"));
+        let upper = [r"D:\XboxGames\Forza\Content\ForzaHorizon5.Exe".to_string()];
+        assert_eq!(
+            game_label_from_exe_paths(&upper).as_deref(),
+            Some("ForzaHorizon5")
+        );
         assert_eq!(
             game_label_from_exe_paths(&[r"C:\Windows\explorer.exe".to_string()]),
             None
