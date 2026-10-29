@@ -198,6 +198,16 @@ function Seed-NetLog([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'net-log.json') ($log | ConvertTo-Json -Depth 4)
 }
 
+# Release radar: on, never checked, and a release-day reminder that came due
+# an hour ago, so launch posts "Out today" through the real reminder path and
+# the live store check runs for the seeded library.
+function Seed-Radar([string]$cfg) {
+    $due = [DateTimeOffset]::UtcNow.AddHours(-1).ToUnixTimeMilliseconds()
+    $radar = @{ on = $true; lastCheckMs = 0; posted = @();
+                reminders = @{ '1030300' = @{ name = 'Hollow Knight: Silksong'; dateMs = $due } } }
+    Write-Utf8 (Join-Path $cfg 'release-radar.json') ($radar | ConvertTo-Json -Depth 4)
+}
+
 # 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
 # after launch, since the first scan only marks what is already there.
 function Write-ModelDrop([string]$root) {
@@ -234,7 +244,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$netLog, [switch]$gameLaunch, [switch]$localModels, [switch]$modelDrop, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$netLog, [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -256,6 +266,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($netLog) {
         Seed-NetLog $cfg
         $app.netLog = $true
+    }
+    if ($radar) {
+        Seed-Radar $cfg
+        # The launch source check (and so the reminder) skips quiet hours.
+        $app.quietStart = '00:00'; $app.quietEnd = '00:00'
     }
     if ($gameLaunch) {
         # Game launch companion: a real Steam game last played 30 days ago, so
@@ -284,6 +299,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
         $env:GROKHUB_DECK_LOCAL_MODELS = '1'
@@ -291,7 +307,6 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
     elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
     else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }

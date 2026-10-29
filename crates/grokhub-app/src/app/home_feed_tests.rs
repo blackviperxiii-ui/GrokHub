@@ -1449,6 +1449,31 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "internet",
     ));
     rows.push((
+        "finish_release_radar",
+        grokhub_core::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: grokhub_core::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        }
+        .radar_card(now),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
+        "post_due_reminders",
+        grokhub_core::release_radar::out_today_card(
+            9,
+            &grokhub_core::release_radar::Reminder {
+                name: "Fake Quest: Frontier".into(),
+                date_ms: 1,
+            },
+            now,
+        ),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
         "post_companion",
         grokhub_core::game_companion::Companion {
             game: grokhub_core::steam::SteamGame {
@@ -1679,6 +1704,42 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "tick_nudge_watchers",
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
+    ));
+    let mut health_session = None;
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now,
+            cpu_temp_c: Some(70.0),
+            gpu_temp_c: Some(75.0),
+            cpu_util_pct: Some(40),
+            gpu_util_pct: Some(85),
+            cpu_clock_mhz: Some(4000),
+            gpu_clock_mhz: Some(1800),
+            game_label: Some("Hades".into()),
+        },
+        now,
+    );
+    grokhub_core::pc_health::note_sample(
+        &mut health_session,
+        grokhub_core::SensorSample {
+            at_ms: now + 70_000,
+            cpu_temp_c: Some(72.0),
+            gpu_temp_c: Some(78.0),
+            cpu_util_pct: Some(42),
+            gpu_util_pct: Some(88),
+            cpu_clock_mhz: Some(4100),
+            gpu_clock_mhz: Some(1850),
+            game_label: Some("Hades".into()),
+        },
+        now + 70_000,
+    );
+    let health =
+        grokhub_core::pc_health::summarize(health_session.as_ref().expect("session"), now + 70_000);
+    rows.push((
+        "tick_pc_health",
+        grokhub_core::summary_card(&health, now),
+        "Hades",
     ));
     rows.push((
         "tick_ask_offers",

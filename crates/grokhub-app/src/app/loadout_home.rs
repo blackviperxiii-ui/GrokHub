@@ -800,9 +800,8 @@ fn deck_shot_env() -> bool {
     })
 }
 
-/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
-/// trimmed and lowercased. Home→Chat last-used proof: `home` parks on Home;
-/// `chat` restores Hangout.
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`), trimmed and
+/// lowercased so the shot never depends on a synthetic click landing.
 fn deck_nav() -> Option<String> {
     std::env::var("GROKHUB_DECK_NAV")
         .ok()

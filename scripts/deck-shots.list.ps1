@@ -23,6 +23,11 @@ Shot 1600 900 'lastchat-chat-1600x900' 'ops-dark' '02' -dock -tabs 3 -lastChat '
 Shot 1100 720 'lastchat-chat-1100x720' 'ops-dark' '02' -dock -tabs 3 -lastChat 'chat'
 Shot 1600 900 'pulse-1600x900' 'ops-dark' '14' -pulse
 Shot 1100 720 'pulse-1100x720' 'ops-dark' '14' -pulse
+# Release radar: the release-day post on top of Pulse.
+Shot 1600 900 'radar-1600x900' 'ops-dark' '14' -library -radar -nav 'pulse'
+Shot 1100 720 'radar-1100x720' 'ops-dark' '14' -library -radar -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'radar-1100x720-scrolled' 'ops-dark' '14' -library -radar -nav 'pulse' -wheel 12
 # Deck-match 6 proof: same Pulse page beside slides 13 (loadout style) and 15
 # (card close-up), at the HARD DONE sizes.
 Shot 1600 900 'pulse-1600x900-slide13' 'ops-dark' '13' -pulse
