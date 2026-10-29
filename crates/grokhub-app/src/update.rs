@@ -207,7 +207,8 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
             hint => hint.to_string(),
         };
         return Some(format!(
-            "Beta caught up to main, but GrokHub couldn't switch back to stable: {why}"
+            "Beta caught up to main, but {} couldn't switch back to stable: {why}",
+            grokhub_core::brand::product_name()
         ));
     }
     write_installed_channel(Channel::Stable).ok()?;
@@ -1320,7 +1321,7 @@ mod tests {
         } else {
             assert_eq!(
                 msg.as_deref(),
-                Some("Beta caught up to main, but GrokHub couldn't switch back to stable: Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
+                Some("Beta caught up to main, but Loadout couldn't switch back to stable: Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
             );
         }
         assert_eq!(receipt_channel(), Channel::Beta);

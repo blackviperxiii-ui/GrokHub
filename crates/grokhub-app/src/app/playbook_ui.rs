@@ -174,7 +174,7 @@ impl Cabin {
                 crate::cards::section_label(ui, &format!("Edit {}", draft.name));
                 crate::cards::help_text(
                     ui,
-                    "Saved as playbooks/<id>.toml in the cabin's settings folder. Steps go look-only, then safe, then risky. A step that deletes, sends, pays, touches sign-ins or can't be undone must be risky, and commands GrokHub never runs are refused.",
+                    &format!("Saved as playbooks/<id>.toml in the cabin's settings folder. Steps go look-only, then safe, then risky. A step that deletes, sends, pays, touches sign-ins or can't be undone must be risky, and commands {} never runs are refused.", grokhub_core::brand::product_name()),
                 );
                 ui.add_space(6.0);
                 ui.add(

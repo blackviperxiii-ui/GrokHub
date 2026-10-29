@@ -779,7 +779,7 @@ impl Cabin {
         ui.add_space(4.0);
         crate::cards::help_text(
             ui,
-            "Checks run every two hours, once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
+            &format!("Checks run every two hours, once when {} opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.", grokhub_core::brand::product_name()),
         );
         let today = self.summary_calls_today(now_ms());
         ui.label(

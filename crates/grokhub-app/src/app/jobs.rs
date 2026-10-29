@@ -256,7 +256,10 @@ impl Cabin {
                     .iter()
                     .any(|c| crate::update::is_channel_switch_cmd(c));
                 self.status = if ok && channel_switch {
-                    "Channel switch finished — restart GrokHub".into()
+                    format!(
+                        "Channel switch finished — restart {}",
+                        grokhub_core::brand::product_name()
+                    )
                 } else if ok {
                     view.status
                 } else {

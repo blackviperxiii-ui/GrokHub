@@ -15,7 +15,9 @@ use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
 pub(super) const RULES_HEAD: &str = "Command rules";
 /// Under "Leaving this computer" in Settings → Permissions.
-pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The grok CLI's own traffic, when a Google connector runs through it, is outside GrokHub. /privacy shows what left.";
+pub(super) static PRIVACY_NOTE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The grok CLI's own traffic, when a Google connector runs through it, is outside {}. /privacy shows what left.", grokhub_core::brand::product_name())
+});
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
 /// The one user-facing name for the hub sync data (SY-02). Logs and files keep
 /// the scope ids (`chat`, `personal`).
@@ -137,10 +139,10 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
             hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then Try again.".into(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("Put this data's GrokHub key back in your {name}, then Try again.")
+            format!("Put this data's {} key back in your {name}, then Try again.", grokhub_core::brand::product_name())
         }
         hx::Locked::Busy => "Wait a moment for the other window, then Try again.".into(),
-        hx::Locked::Unwritable => "Check that GrokHub's config folder can be written, then Try again.".into(),
+        hx::Locked::Unwritable => format!("Check that {}'s config folder can be written, then Try again.", grokhub_core::brand::product_name()),
     }
 }
 
@@ -154,12 +156,16 @@ pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> Strin
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
             format!(
-                "put this data's GrokHub key back in your {}",
+                "put this data's {} key back in your {}",
+                grokhub_core::brand::product_name(),
                 hx::keyring_name_for(os)
             )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
-        hx::Locked::Unwritable => "check that GrokHub's config folder can be written".to_string(),
+        hx::Locked::Unwritable => format!(
+            "check that {}'s config folder can be written",
+            grokhub_core::brand::product_name()
+        ),
     };
     format!("Next: {step}, then Try again in Settings → Permissions.")
 }
@@ -310,7 +316,7 @@ pub(super) fn privacy_report(
         ));
     }
     out.push(String::new());
-    out.push("Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
+    out.push(format!("Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()));
     out.join("\n")
 }
 
@@ -519,7 +525,7 @@ impl Cabin {
     /// written (rule 4). Revoke is a ghost: it only takes access away (SY-05).
     pub(super) fn ui_privacy_rows(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_heading(ui, LEAVING_HEAD);
-        crate::cards::settings_note(ui, PRIVACY_NOTE);
+        crate::cards::settings_note(ui, PRIVACY_NOTE.as_str());
         // Spike-4b: said once, at the top, because it holds every row below.
         // SB-02: with one next step for this OS and a Try again that asks the
         // keyring again.
@@ -874,7 +880,7 @@ mod tests {
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
-                "Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
+                "Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else Loadout sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
             ]
             .join("\n")
         );
@@ -936,7 +942,12 @@ mod tests {
             assert!(compact.contains(HUB_SCOPE_LABEL), "{compact}");
             assert!(!compact.contains(HUB_SCOPE_PROSE), "{compact}");
         }
-        for user_text in [HUB_CARD_ACTION, HUB_CARD_NOTE, HUB_OFF, PRIVACY_NOTE] {
+        for user_text in [
+            HUB_CARD_ACTION,
+            HUB_CARD_NOTE,
+            HUB_OFF,
+            PRIVACY_NOTE.as_str(),
+        ] {
             assert!(!user_text.contains("chat, personal"), "{user_text}");
         }
         let src = include_str!("privacy_ui.rs");
@@ -971,10 +982,17 @@ mod tests {
             "Sends chats and memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
         );
         assert!(
-            PRIVACY_NOTE.contains("allowed for chats and memory."),
-            "{PRIVACY_NOTE}"
+            PRIVACY_NOTE
+                .as_str()
+                .contains("allowed for chats and memory."),
+            "{}",
+            *PRIVACY_NOTE
         );
-        assert!(!PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
+        assert!(
+            !PRIVACY_NOTE.as_str().contains("chats, memory"),
+            "{}",
+            *PRIVACY_NOTE
+        );
         assert!(!HUB_CARD_NOTE.contains("chats, memory"), "{HUB_CARD_NOTE}");
         let dir = crate::config::test_config_root("privacy-prose");
         let _ = std::fs::remove_dir_all(&dir);

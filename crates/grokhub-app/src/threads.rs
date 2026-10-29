@@ -159,7 +159,8 @@ pub fn native_carry_recap(messages: &[(String, String)]) -> String {
         return String::new();
     }
     format!(
-        "Earlier in this chat (before GrokHub ran it natively):\n{}\n\n",
+        "Earlier in this chat (before {} ran it natively):\n{}\n\n",
+        grokhub_core::brand::product_name(),
         lines.join("\n")
     )
 }
@@ -2285,7 +2286,7 @@ mod tests {
         msgs.push(("assistant".into(), long));
         msgs.push(("user".into(), "now".into()));
         let recap = native_carry_recap(&msgs);
-        assert!(recap.starts_with("Earlier in this chat (before GrokHub ran it natively):\n"));
+        assert!(recap.starts_with("Earlier in this chat (before Loadout ran it natively):\n"));
         assert!(recap.ends_with("…\n\n"), "{recap}");
         assert!(
             !recap.contains("ask 2\n"),
