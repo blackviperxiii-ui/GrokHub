@@ -580,7 +580,8 @@ impl Cabin {
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
         // One-shot chips act here and are not learned: replayed later they would mean nothing.
-        if self.take_backup_chip(&chip) || self.take_radar_chip(&chip) || self.take_game_chip(&chip) {
+        if self.take_backup_chip(&chip) || self.take_radar_chip(&chip) || self.take_game_chip(&chip)
+        {
             return;
         }
         let hour = Self::chip_hour();
