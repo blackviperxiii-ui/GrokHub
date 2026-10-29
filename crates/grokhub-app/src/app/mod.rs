@@ -167,6 +167,7 @@ mod feed_ui;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
+mod game_companion_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -201,6 +202,7 @@ mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;
+mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -215,6 +217,7 @@ mod pulse;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
+mod release_radar_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
@@ -579,6 +582,7 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
+    pc_health: pc_health_ui::PcHealthState,
     print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
@@ -1206,6 +1210,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
@@ -1674,6 +1679,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
@@ -5423,6 +5429,7 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.paint_focus_overlays(&ctx);
         self.tick_setup_wizard();
         self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);

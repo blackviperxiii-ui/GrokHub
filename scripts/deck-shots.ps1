@@ -182,6 +182,16 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Release radar: on, never checked, and a release-day reminder that came due
+# an hour ago, so launch posts "Out today" through the real reminder path and
+# the live store check runs for the seeded library.
+function Seed-Radar([string]$cfg) {
+    $due = [DateTimeOffset]::UtcNow.AddHours(-1).ToUnixTimeMilliseconds()
+    $radar = @{ on = $true; lastCheckMs = 0; posted = @();
+                reminders = @{ '1030300' = @{ name = 'Hollow Knight: Silksong'; dateMs = $due } } }
+    Write-Utf8 (Join-Path $cfg 'release-radar.json') ($radar | ConvertTo-Json -Depth 4)
+}
+
 # 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
 # after launch, since the first scan only marks what is already there.
 function Write-ModelDrop([string]$root) {
@@ -218,7 +228,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$chat = '', [switch]$ageCheck, [switch]$localModels, [switch]$modelDrop, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$chat = '', [switch]$ageCheck, [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -237,6 +247,20 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($radar) {
+        Seed-Radar $cfg
+        # The launch source check (and so the reminder) skips quiet hours.
+        $app.quietStart = '00:00'; $app.quietEnd = '00:00'
+    }
+    if ($gameLaunch) {
+        # Game launch companion: a real Steam game last played 30 days ago, so
+        # the card has its news since then; Steam's RunningAppID marks the launch.
+        $app.gameCompanion = $true
+        # A game already running at start is not a launch: clear it first.
+        if (Test-Path 'HKCU:\Software\Valve\Steam') { Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord }
+        $last = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 30 * 86400
+        Write-Utf8 (Join-Path $root '.steam/steam/steamapps/appmanifest_1086940.acf') "`"AppState`"`n{`n`"appid`" `"1086940`"`n`"name`" `"Baldur's Gate 3`"`n`"LastPlayed`" `"$last`"`n}`n"
+    }
     if ($modelDrop) {
         $app.modelDrop = $true
         New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
@@ -255,6 +279,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
         $env:GROKHUB_DECK_LOCAL_MODELS = '1'
@@ -264,7 +289,6 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:GROKHUB_DECK_MOOD = $mood
     $env:GROKHUB_DECK_CHAT = $chat
     if ($ageCheck) { $env:GROKHUB_DECK_AGE_CHECK = '1' } else { Remove-Item Env:GROKHUB_DECK_AGE_CHECK -ErrorAction SilentlyContinue }
-    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
     elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
     else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
@@ -289,6 +313,12 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($gameLaunch) {
+        if (-not (Test-Path 'HKCU:\Software\Valve\Steam')) { New-Item -Path 'HKCU:\Software\Valve\Steam' -Force | Out-Null }
+        Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 1086940 -Type DWord
+        # Sampled every 5 s; the news comes back from Steam on a worker.
+        Start-Sleep -Seconds 20
+    }
     if ($modelDrop) {
         # Downloads is listed every 20 s; the next scan finds the new file.
         Write-ModelDrop $root

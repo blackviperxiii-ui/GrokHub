@@ -428,6 +428,12 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: the game launch companion card. Off by default.
+    #[serde(default)]
+    pub game_companion: bool,
+    /// Also a quiet desktop notification when the companion card posts.
+    #[serde(default)]
+    pub game_companion_ping: bool,
     /// Settings → Behavior: offer next steps for new 3D models in Downloads.
     /// Off by default.
     #[serde(default)]
@@ -529,6 +535,12 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Pulse / Behavior: PC health while gaming (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PcHealthSettings::is_default"
+    )]
+    pub pc_health: grokhub_core::PcHealthSettings,
     /// Settings → Behavior: offer to automate repeated local asks.
     #[serde(
         default,
@@ -777,6 +789,8 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            game_companion: false,
+            game_companion_ping: false,
             model_drop: false,
             models_folder: String::new(),
             dock_panels: false,
@@ -805,6 +819,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            pc_health: grokhub_core::PcHealthSettings::default(),
             ask_offers: grokhub_core::AskOfferSettings::default(),
             print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
@@ -1232,6 +1247,24 @@ mod tests {
         assert!(on.dream_model);
         let saved = serde_json::to_string(&on).unwrap();
         assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
+    fn pc_health_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("pcHealth") && !json.contains("pc_health"),
+            "default config must omit pc_health: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.pc_health.enabled);
+        let on: AppConfig = serde_json::from_str(r#"{"pcHealth":{"enabled":true}}"#).unwrap();
+        assert!(on.pc_health.enabled);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"pcHealth\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
     }
 
     #[test]

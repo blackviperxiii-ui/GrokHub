@@ -1,0 +1,547 @@
+//! Release radar: upcoming DLC and sequels for the games the user owns or
+//! wishlisted. Opt-in. Once a day the cabin asks Steam's public store API
+//! about the most-played games: each one's DLC list, and a store search for
+//! the series name. Anything marked "coming soon" that the user does not own
+//! becomes one Pulse post with its art and date; "Not interested" and "Save"
+//! on those posts move how many the next check may post. A one-tap keeps a
+//! reminder that posts again on release day.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::chips::{ChipKind, QuickChip};
+use crate::steam_wishlist::{capsule_url, store_url};
+use crate::update_feed::UpdateCard;
+
+pub const FILE_NAME: &str = "release-radar.json";
+pub const SOURCE_NAME: &str = "Release radar";
+pub const CHECK_EVERY_MS: u64 = 24 * 60 * 60 * 1000;
+/// Games asked about on one check.
+pub const SEEDS_PER_CHECK: usize = 6;
+/// DLC and search hits looked up per game.
+pub const LOOKUPS_PER_SEED: usize = 4;
+pub const POSTS_PER_CHECK: i32 = 3;
+pub const POSTS_MAX: i32 = 5;
+pub const REMIND_PREFIX: &str = "radar:remind:";
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+pub fn details_url(app_id: u32) -> String {
+    format!("https://store.steampowered.com/api/appdetails?appids={app_id}&l=english")
+}
+
+pub fn search_url(term: &str) -> String {
+    format!(
+        "https://store.steampowered.com/api/storesearch/?term={}&l=english&cc=US",
+        crate::pulse_sources::query_value(term)
+    )
+}
+
+/// What the store says about one app.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Details {
+    pub name: String,
+    pub dlc: Vec<u32>,
+    pub coming_soon: bool,
+    pub date_text: String,
+}
+
+/// One `appdetails` reply.
+pub fn parse_details(body: &str, app_id: u32) -> Option<Details> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let data = v.pointer(&format!("/{app_id}/data"))?;
+    let name = data.get("name")?.as_str()?.trim().to_string();
+    let dlc = data
+        .get("dlc")
+        .and_then(|d| d.as_array())
+        .map(|d| {
+            d.iter()
+                .filter_map(|x| u32::try_from(x.as_u64()?).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let release = data.get("release_date");
+    let coming_soon = release
+        .and_then(|r| r.get("coming_soon"))
+        .and_then(|c| c.as_bool())
+        .unwrap_or(false);
+    let date_text = release
+        .and_then(|r| r.get("date"))
+        .and_then(|d| d.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Some(Details {
+        name,
+        dlc,
+        coming_soon,
+        date_text,
+    })
+}
+
+/// App id and name from a `storesearch` reply.
+pub fn parse_search(body: &str) -> Vec<(u32, String)> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    v.get("items")
+        .and_then(|i| i.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|it| {
+                    let id = u32::try_from(it.get("id")?.as_u64()?).ok()?;
+                    let name = it.get("name")?.as_str()?.trim().to_string();
+                    Some((id, name))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The series name: the part before a subtitle, without a trailing number
+/// ("Factorio: Space Age" and "Hades II" give "Factorio" and "Hades").
+pub fn series_name(name: &str) -> String {
+    let head = name.split([':', '–', '—']).next().unwrap_or(name);
+    let head = head.split(" - ").next().unwrap_or(head).trim();
+    let words: Vec<&str> = head.split_whitespace().collect();
+    let numbered = |w: &str| {
+        w.chars().all(|c| c.is_ascii_digit()) || w.chars().all(|c| matches!(c, 'I' | 'V' | 'X'))
+    };
+    let keep = match words.split_last() {
+        Some((last, rest)) if !rest.is_empty() && numbered(last) => rest,
+        _ => &words[..],
+    };
+    keep.join(" ")
+}
+
+fn month(word: &str) -> Option<u32> {
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let w = word.to_ascii_lowercase();
+    MONTHS
+        .iter()
+        .position(|m| w.starts_with(m))
+        .map(|i| i as u32 + 1)
+}
+
+/// Unix ms of an exact store date ("14 Nov, 2026", "Nov 14, 2026"); `None`
+/// for "Coming soon", "Q4 2026" and other loose dates.
+pub fn release_day_ms(text: &str) -> Option<u64> {
+    let words: Vec<&str> = text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() != 3 {
+        return None;
+    }
+    let num = |w: &str| w.parse::<u32>().ok();
+    let (day, mon, year) = match (num(words[0]), month(words[0])) {
+        (Some(d), _) => (d, month(words[1])?, num(words[2])?),
+        (None, Some(m)) => (num(words[1])?, m, num(words[2])?),
+        _ => return None,
+    };
+    if !(1..=31).contains(&day) || year < 1970 {
+        return None;
+    }
+    // Days from civil (Howard Hinnant's algorithm).
+    let y = i64::from(year) - i64::from(mon <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (i64::from(mon) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days).ok().map(|d| d * DAY_MS)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Dlc,
+    Sequel,
+}
+
+/// Something coming for a game the user has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Upcoming {
+    pub app_id: u32,
+    pub name: String,
+    /// The owned or wishlisted game it belongs to.
+    pub base: String,
+    pub kind: Kind,
+    pub date_text: String,
+    pub date_ms: Option<u64>,
+}
+
+impl Upcoming {
+    pub fn title(&self) -> String {
+        format!("Coming: {}", self.name)
+    }
+
+    pub fn body(&self) -> String {
+        let what = match self.kind {
+            Kind::Dlc => format!("New DLC for {}", self.base),
+            Kind::Sequel => format!("New in the {} series", series_name(&self.base)),
+        };
+        let when =
+            if self.date_text.is_empty() || self.date_text.eq_ignore_ascii_case("coming soon") {
+                "No date yet.".to_string()
+            } else {
+                format!("Out {}.", self.date_text)
+            };
+        format!("{what}. {when}")
+    }
+
+    pub fn radar_card(&self, now_ms: u64) -> UpdateCard {
+        let source_id = format!("source:release-radar:{}", self.app_id);
+        let mut card =
+            crate::update_feed::digest_card(&source_id, &self.title(), &self.body(), now_ms);
+        card.citations = vec![store_url(self.app_id)];
+        card.pulse.source_name = Some(SOURCE_NAME.to_string());
+        card.pulse.image_urls = vec![capsule_url(self.app_id)];
+        card.pulse.because = Some(format!("You have {}", self.base));
+        card
+    }
+
+    /// "Remind me on release day", when the store gives an exact day.
+    pub fn chip(&self) -> Option<QuickChip> {
+        self.date_ms?;
+        Some(QuickChip {
+            id: format!("{REMIND_PREFIX}{}", self.app_id),
+            label: format!("Remind me when {} is out", self.name),
+            value: format!("{REMIND_PREFIX}{}", self.app_id),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: format!("Posts again on {}", self.date_text),
+            primary: false,
+        })
+    }
+}
+
+/// Look up what is coming for `seeds` (app id, name), skipping anything in
+/// `owned`. `get` fetches a URL.
+pub fn scan(
+    seeds: &[(u32, String)],
+    owned: &BTreeSet<u32>,
+    get: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Result<Vec<Upcoming>, String> {
+    let mut out: Vec<Upcoming> = Vec::new();
+    let mut asked: BTreeSet<u32> = BTreeSet::new();
+    let mut reached = false;
+    let mut last_err = String::new();
+    for (seed_id, seed_name) in seeds.iter().take(SEEDS_PER_CHECK) {
+        let mut candidates: Vec<(u32, Kind)> = Vec::new();
+        match get(&details_url(*seed_id)) {
+            Ok(body) => {
+                reached = true;
+                if let Some(d) = parse_details(&body, *seed_id) {
+                    candidates.extend(
+                        d.dlc
+                            .iter()
+                            .take(LOOKUPS_PER_SEED)
+                            .map(|id| (*id, Kind::Dlc)),
+                    );
+                }
+            }
+            Err(e) => last_err = e,
+        }
+        let series = series_name(seed_name);
+        if series.chars().count() >= 4 {
+            if let Ok(body) = get(&search_url(&series)) {
+                reached = true;
+                let lower = series.to_ascii_lowercase();
+                candidates.extend(
+                    parse_search(&body)
+                        .into_iter()
+                        .filter(|(id, name)| {
+                            *id != *seed_id && name.to_ascii_lowercase().starts_with(&lower)
+                        })
+                        .take(LOOKUPS_PER_SEED)
+                        .map(|(id, _)| (id, Kind::Sequel)),
+                );
+            }
+        }
+        for (id, kind) in candidates {
+            if owned.contains(&id) || !asked.insert(id) {
+                continue;
+            }
+            let Ok(body) = get(&details_url(id)) else {
+                continue;
+            };
+            let Some(d) = parse_details(&body, id) else {
+                continue;
+            };
+            if d.coming_soon {
+                out.push(Upcoming {
+                    app_id: id,
+                    date_ms: release_day_ms(&d.date_text),
+                    name: d.name,
+                    base: seed_name.clone(),
+                    kind,
+                    date_text: d.date_text,
+                });
+            }
+        }
+    }
+    if !reached && !seeds.is_empty() {
+        return Err(last_err);
+    }
+    Ok(out)
+}
+
+/// How many posts one check may make, moved by the feedback score the user
+/// gave this source's posts.
+pub fn posts_allowed(source_bias: i32) -> usize {
+    usize::try_from((POSTS_PER_CHECK + source_bias).clamp(0, POSTS_MAX)).unwrap_or(0)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reminder {
+    pub name: String,
+    pub date_ms: u64,
+}
+
+/// What the radar remembers: when it last looked, what it already posted,
+/// and the release-day reminders.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Radar {
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default)]
+    pub last_check_ms: u64,
+    #[serde(default)]
+    pub posted: BTreeSet<u32>,
+    #[serde(default)]
+    pub reminders: BTreeMap<u32, Reminder>,
+}
+
+impl Radar {
+    pub fn due(&self, now_ms: u64) -> bool {
+        self.on && now_ms.saturating_sub(self.last_check_ms) >= CHECK_EVERY_MS
+    }
+
+    /// The items not posted before, at most `allowed`, soonest first; they
+    /// count as posted from now on.
+    pub fn fresh(&mut self, mut found: Vec<Upcoming>, allowed: usize) -> Vec<Upcoming> {
+        found.sort_by_key(|u| (u.date_ms.unwrap_or(u64::MAX), u.app_id));
+        let mut out = Vec::new();
+        for u in found {
+            if out.len() >= allowed {
+                break;
+            }
+            if self.posted.insert(u.app_id) {
+                out.push(u);
+            }
+        }
+        out
+    }
+
+    pub fn remind(&mut self, u: &Upcoming) -> bool {
+        let Some(date_ms) = u.date_ms else {
+            return false;
+        };
+        self.reminders.insert(
+            u.app_id,
+            Reminder {
+                name: u.name.clone(),
+                date_ms,
+            },
+        );
+        true
+    }
+
+    /// Reminders whose day has come; they are taken off the list.
+    pub fn take_due(&mut self, now_ms: u64) -> Vec<(u32, Reminder)> {
+        let due: Vec<u32> = self
+            .reminders
+            .iter()
+            .filter(|(_, r)| r.date_ms <= now_ms)
+            .map(|(id, _)| *id)
+            .collect();
+        due.into_iter()
+            .filter_map(|id| self.reminders.remove(&id).map(|r| (id, r)))
+            .collect()
+    }
+}
+
+/// The release-day post for a reminder.
+pub fn out_today_card(app_id: u32, r: &Reminder, now_ms: u64) -> UpdateCard {
+    let source_id = format!("source:release-radar:out:{app_id}");
+    let mut card = crate::update_feed::digest_card(
+        &source_id,
+        &format!("Out today: {}", r.name),
+        "You asked to be reminded on release day.",
+        now_ms,
+    );
+    card.citations = vec![store_url(app_id)];
+    card.pulse.source_name = Some(SOURCE_NAME.to_string());
+    card.pulse.image_urls = vec![capsule_url(app_id)];
+    card
+}
+
+pub fn load(config_dir: &Path) -> Radar {
+    std::fs::read_to_string(config_dir.join(FILE_NAME))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save(config_dir: &Path, radar: &Radar) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(radar).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    crate::pulse_writer::write_atomic(&config_dir.join(FILE_NAME), &text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Made-up app ids and names.
+    fn details(id: u32, name: &str, dlc: &[u32], soon: bool, date: &str) -> String {
+        serde_json::json!({ id.to_string(): { "success": true, "data": {
+            "name": name, "dlc": dlc,
+            "release_date": { "coming_soon": soon, "date": date }
+        }}})
+        .to_string()
+    }
+
+    fn store() -> BTreeMap<String, String> {
+        let mut m = BTreeMap::new();
+        m.insert(
+            details_url(100),
+            details(100, "Star Forge", &[101, 102, 103], false, "3 Mar, 2021"),
+        );
+        m.insert(
+            details_url(101),
+            details(101, "Star Forge: Deep Space", &[], true, "14 Nov, 2026"),
+        );
+        m.insert(
+            details_url(102),
+            details(102, "Star Forge: Soundtrack", &[], false, "3 Mar, 2021"),
+        );
+        m.insert(
+            details_url(103),
+            details(103, "Star Forge: Owned Pack", &[], true, "Q1 2027"),
+        );
+        m.insert(
+            details_url(110),
+            details(110, "Star Forge II", &[], true, "Coming soon"),
+        );
+        m.insert(
+            search_url("Star Forge"),
+            serde_json::json!({ "items": [
+                { "id": 100, "name": "Star Forge" },
+                { "id": 110, "name": "Star Forge II" },
+                { "id": 101, "name": "Star Forge: Deep Space" },
+                { "id": 999, "name": "Starforged Tales" }
+            ]})
+            .to_string(),
+        );
+        m
+    }
+
+    #[test]
+    fn a_fixture_library_gives_upcoming_dlc_and_sequels() {
+        let store = store();
+        let mut fetched = Vec::new();
+        let mut get = |url: &str| {
+            fetched.push(url.to_string());
+            store.get(url).cloned().ok_or_else(|| "404".to_string())
+        };
+        let owned = BTreeSet::from([100, 103]);
+        let found = scan(&[(100, "Star Forge".into())], &owned, &mut get).unwrap();
+        let names: Vec<(&str, Kind, Option<u64>)> = found
+            .iter()
+            .map(|u| (u.name.as_str(), u.kind, u.date_ms))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                (
+                    "Star Forge: Deep Space",
+                    Kind::Dlc,
+                    release_day_ms("14 Nov, 2026")
+                ),
+                ("Star Forge II", Kind::Sequel, None),
+            ]
+        );
+        assert!(
+            !fetched.contains(&details_url(103)),
+            "owned DLC is not looked up"
+        );
+        assert_eq!(
+            fetched.iter().filter(|u| **u == details_url(101)).count(),
+            1,
+            "DLC found twice is looked up once"
+        );
+        assert_eq!(found[0].body(), "New DLC for Star Forge. Out 14 Nov, 2026.");
+        assert_eq!(
+            found[1].body(),
+            "New in the Star Forge series. No date yet."
+        );
+        let card = found[0].radar_card(5);
+        assert_eq!(card.title, "Coming: Star Forge: Deep Space");
+        assert_eq!(card.pulse.source_name.as_deref(), Some(SOURCE_NAME));
+        assert!(found[1].chip().is_none(), "no exact date, no reminder");
+    }
+
+    #[test]
+    fn no_reply_at_all_is_an_error() {
+        let mut get = |_: &str| Err::<String, String>("could not find the host".into());
+        assert_eq!(
+            scan(&[(100, "Star Forge".into())], &BTreeSet::new(), &mut get),
+            Err("could not find the host".into())
+        );
+    }
+
+    #[test]
+    fn series_names_and_store_dates() {
+        assert_eq!(series_name("Factorio: Space Age"), "Factorio");
+        assert_eq!(series_name("Hades II"), "Hades");
+        assert_eq!(series_name("Half-Life 2"), "Half-Life");
+        assert_eq!(series_name("Portal"), "Portal");
+        assert_eq!(release_day_ms("1 Jan, 1970"), Some(0));
+        assert_eq!(release_day_ms("Nov 14, 2023"), Some(1_699_920_000_000));
+        assert_eq!(release_day_ms("14 Nov, 2023"), Some(1_699_920_000_000));
+        assert_eq!(release_day_ms("Q4 2026"), None);
+        assert_eq!(release_day_ms("Coming soon"), None);
+    }
+
+    #[test]
+    fn posts_dedupe_and_reminders_come_due() {
+        let up = |id: u32, date_ms: Option<u64>| Upcoming {
+            app_id: id,
+            name: format!("Game {id}"),
+            base: "Star Forge".into(),
+            kind: Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms,
+        };
+        let mut radar = Radar::default();
+        let first = radar.fresh(vec![up(2, Some(900)), up(1, None), up(3, Some(500))], 2);
+        assert_eq!(
+            first.iter().map(|u| u.app_id).collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        let again = radar.fresh(vec![up(2, Some(900)), up(1, None)], 5);
+        assert_eq!(again.iter().map(|u| u.app_id).collect::<Vec<_>>(), vec![1]);
+        assert!(radar.remind(&up(3, Some(500))));
+        assert!(!radar.remind(&up(1, None)));
+        assert_eq!(radar.take_due(499), Vec::new());
+        let due = radar.take_due(500);
+        assert_eq!(due.len(), 1);
+        assert_eq!(
+            out_today_card(due[0].0, &due[0].1, 600).title,
+            "Out today: Game 3"
+        );
+        assert!(radar.reminders.is_empty());
+        assert_eq!(
+            (posts_allowed(-5), posts_allowed(0), posts_allowed(9)),
+            (0, 3, 5)
+        );
+    }
+}
