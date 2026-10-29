@@ -384,6 +384,18 @@ pub fn game_in_processes(procs: &[(String, String)]) -> bool {
     })
 }
 
+/// Windows: a running executable under a store's game library (Steam, Epic,
+/// GOG, Xbox), from full process paths. Launchers themselves don't count.
+pub fn game_in_exe_paths(paths: &[String]) -> bool {
+    paths.iter().any(|p| {
+        let p = p.to_ascii_lowercase().replace('/', "\\");
+        p.contains("\\steamapps\\common\\")
+            || (p.contains("\\epic games\\") && !p.contains("\\launcher\\"))
+            || p.contains("\\gog galaxy\\games\\")
+            || p.contains("\\xboxgames\\")
+    })
+}
+
 /// `gamemoded -s`: "gamemode is active".
 pub fn gamemode_active(text: &str) -> bool {
     let t = text.to_ascii_lowercase();

@@ -26,7 +26,7 @@ use grokhub_core::local_profile::{PowerInfo, Thermal};
 #[cfg(any(target_os = "linux", windows))]
 use super::local_probe;
 use super::setup_wizard::ram_mb;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use super::setup_wizard::run;
 
 /// Slow signals are read every this many samples.
@@ -94,12 +94,33 @@ fn sample_loop(config_dir: &Path) {
 /// signals included. Blocks on the OS readers, so call it off the UI thread.
 pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
     let s = Reader::default().sample(None);
+    let game = s.game;
+    // The sampler has no Windows game reader; wind-down fails closed without one.
+    #[cfg(windows)]
+    let game = game.or_else(windows_game);
     grokhub_core::wind_down::Machine {
         idle_secs: s.idle_secs,
-        game: s.game,
+        game,
         fullscreen: s.fullscreen,
         external_gpu_pct: s.external_gpu_pct,
     }
+}
+
+/// A game running from a store's library, by full process paths. `None`
+/// when the process list can't be read.
+#[cfg(windows)]
+fn windows_game() -> Option<bool> {
+    let text = run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Process | Where-Object Path | ForEach-Object Path",
+        ],
+    )?;
+    let paths: Vec<String> = text.lines().map(|l| l.trim().to_string()).collect();
+    Some(g::game_in_exe_paths(&paths))
 }
 
 #[derive(Default)]

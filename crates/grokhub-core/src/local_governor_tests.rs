@@ -550,3 +550,27 @@ fn macos_battery_from_pmset() {
     let s = desk(|s| s.power = Some(parse_pmset_batt(batt, "")));
     assert_eq!(reason(&s, &r), (Level::Unload, "the battery is low"));
 }
+
+#[test]
+fn windows_games_are_read_from_store_library_paths() {
+    let p = |s: &str| vec![s.to_string()];
+    assert!(game_in_exe_paths(&p(
+        r"C:\Program Files (x86)\Steam\steamapps\common\Hades\x64\Hades.exe"
+    )));
+    assert!(game_in_exe_paths(&p(
+        r"D:\Epic Games\Fortnite\FortniteClient-Win64-Shipping.exe"
+    )));
+    assert!(game_in_exe_paths(&p(
+        r"C:\GOG Galaxy\Games\Witcher 3\bin\witcher3.exe"
+    )));
+    assert!(game_in_exe_paths(&p(
+        r"C:\XboxGames\Starfield\Content\Starfield.exe"
+    )));
+    assert!(!game_in_exe_paths(&[
+        r"C:\Program Files (x86)\Steam\steam.exe".to_string(),
+        r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe"
+            .to_string(),
+        r"C:\Windows\explorer.exe".to_string(),
+    ]));
+    assert!(!game_in_exe_paths(&[]));
+}
