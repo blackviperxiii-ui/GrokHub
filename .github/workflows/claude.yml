@@ -63,7 +63,9 @@ jobs:
           label_trigger: claude
           trigger_phrase: "@claude"
           allowed_bots: github-actions
+          plugin_marketplaces: https://github.com/blackviperxiii-ui/vstack.git
+          plugins: vstack@vstack
           prompt: "${{ github.event_name == 'workflow_dispatch' && format('Implement GitHub issue #{0} in {1}. Read it with gh issue view {0}. Follow the repo rules below, then open one PR with gh pr create --base beta whose body says Fixes #{0}.', inputs.issue_number, github.repository) || '' }}"
           claude_args: |
-            --allowedTools "Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git:*),Bash(cargo:*),Bash(bash scripts/ci-guards.sh),Bash(python3 scripts/pii-guard/pii_guard.py:*)"
+            --allowedTools "Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git:*),Bash(cargo:*),Bash(bash scripts/ci-guards.sh),Bash(python3 scripts/pii-guard/pii_guard.py:*)"
             --append-system-prompt "Repo rules: base branch beta, never main; branch from origin/beta. One PR per issue. Small, in-card-only diff. Before pushing run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo nextest run --workspace, bash scripts/ci-guards.sh and python3 scripts/pii-guard/pii_guard.py origin/beta; then push once. Never force-push or rebase; merge origin/beta normally to catch up. No personal info (names, emails, home paths); use user and /home/user. New UI registers through beta's single GROKHUB_DECK_NAV handler, never a separate deck_nav() handler. If 2 Claude PRs (claude/ branches) are already open, do not start: comment on the issue and stop."
