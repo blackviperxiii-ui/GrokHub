@@ -267,8 +267,9 @@ pub(super) enum PulseAct {
     /// A backup reminder's one-tap, by chip id.
     BackupChip(String),
     /// Start-my-day brief: run one item's one-tap prompt.
-    /// A Start my day one-tap: the brief card's id and the line's prompt.
-    DayTap(String, String),
+    /// A Start my day one-tap: the brief card's id, the line's prompt and
+    /// the card the line came from.
+    DayTap(String, String, Option<String>),
     /// Hobby learning-path tip feedback.
     HobbyDone(String),
     HobbySkip(String),
@@ -1051,7 +1052,10 @@ pub(super) fn paint_post_body(
 }
 
 /// One-tap buttons under a Start my day Digest.
-fn paint_day_brief_taps(ui: &mut egui::Ui, taps: &[(String, String)]) -> Option<String> {
+fn paint_day_brief_taps(
+    ui: &mut egui::Ui,
+    taps: &[(String, String, Option<String>)],
+) -> Option<(String, Option<String>)> {
     if taps.is_empty() {
         return None;
     }
@@ -1059,7 +1063,7 @@ fn paint_day_brief_taps(ui: &mut egui::Ui, taps: &[(String, String)]) -> Option<
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (label, prompt) in taps.iter().take(grokhub_core::day_brief::ITEM_CAP) {
+        for (label, prompt, source) in taps.iter().take(grokhub_core::day_brief::ITEM_CAP) {
             let btn = ui.add(
                 egui::Button::new(
                     RichText::new(label)
@@ -1070,7 +1074,7 @@ fn paint_day_brief_taps(ui: &mut egui::Ui, taps: &[(String, String)]) -> Option<
                 .min_size(egui::vec2(0.0, 22.0)),
             );
             if btn.clicked() {
-                picked = Some(prompt.clone());
+                picked = Some((prompt.clone(), source.clone()));
             }
         }
     });
@@ -1733,8 +1737,10 @@ impl Cabin {
                         act = Some(PulseAct::BackupChip(id));
                     }
                     if grokhub_core::day_brief::is_day_brief_card(&card.source_id) {
-                        if let Some(tap) = paint_day_brief_taps(ui, &self.day_brief_taps()) {
-                            act = Some(PulseAct::DayTap(card.id.clone(), tap));
+                        if let Some((tap, source)) =
+                            paint_day_brief_taps(ui, &self.day_brief_taps())
+                        {
+                            act = Some(PulseAct::DayTap(card.id.clone(), tap, source));
                         }
                     }
                 });
@@ -2024,7 +2030,7 @@ impl Cabin {
                     self.pulse_not_this(&id, &Self::local_day());
                 }
             }
-            PulseAct::DayTap(id, prompt) => self.day_brief_tap(&id, prompt),
+            PulseAct::DayTap(id, prompt, source) => self.day_brief_tap(&id, prompt, source),
             PulseAct::Always(id) => self.pulse_always(&id, &Self::local_day()),
             PulseAct::Accept(id) => self.pulse_accept(&id, &Self::local_day()),
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),

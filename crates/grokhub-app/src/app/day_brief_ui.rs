@@ -124,33 +124,29 @@ impl Cabin {
         self.status = "Not today. See you tomorrow.".into();
     }
 
-    /// One-taps stored for the live start-my-day card, if any.
-    pub(super) fn day_brief_taps(&self) -> Vec<(String, String)> {
+    /// One-taps stored for the live start-my-day card, if any:
+    /// (`label`, `prompt`, the source card id).
+    pub(super) fn day_brief_taps(&self) -> Vec<(String, String, Option<String>)> {
         load_state()
             .latest_taps
             .into_iter()
-            .map(|t| (t.label, t.prompt))
+            .map(|t| (t.label, t.prompt, t.card))
             .collect()
     }
 
     /// A one-tap on a brief line: the brief and the card the line came from
     /// count as used (opened, a Tapped reaction), then the prompt runs.
-    pub(super) fn day_brief_tap(&mut self, brief_id: &str, prompt: String) {
-        self.note_day_brief_tap(brief_id, &prompt);
+    pub(super) fn day_brief_tap(&mut self, brief_id: &str, prompt: String, source: Option<String>) {
+        self.note_day_brief_tap(brief_id, source.as_deref());
         self.send_chat(prompt);
     }
 
-    fn note_day_brief_tap(&mut self, brief_id: &str, prompt: &str) {
-        let source = load_state()
-            .latest_taps
-            .into_iter()
-            .find(|t| t.prompt == *prompt)
-            .and_then(|t| t.card);
+    fn note_day_brief_tap(&mut self, brief_id: &str, source: Option<&str>) {
         let mut changed = feed::mark_update_opened(&mut self.updates, brief_id);
         if let Some(source) = source {
             if let Some(card) = self.updates.iter().find(|c| c.id == source).cloned() {
                 self.react(&card, rx::Outcome::Tapped);
-                changed |= feed::mark_update_opened(&mut self.updates, &source);
+                changed |= feed::mark_update_opened(&mut self.updates, source);
             }
         }
         if changed {
@@ -587,7 +583,11 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.updates.clear();
         cabin.updates.push(watcher(0, now));
-        let watcher_id = cabin.updates[0].id.clone();
+        let mut twin = watcher(1, now);
+        twin.prompt = Some("Check patch 0".into());
+        cabin.updates.push(twin);
+        let first_id = cabin.updates[0].id.clone();
+        let watcher_id = cabin.updates[1].id.clone();
         cabin.run_day_brief_now("2026-10-28", now, true);
         let brief_id = cabin
             .updates
@@ -595,16 +595,24 @@ mod tests {
             .find(|c| c.source_id.starts_with(db::CARD_SOURCE_PREFIX))
             .map(|c| c.id.clone())
             .expect("brief");
-        let (_, prompt) = cabin
-            .day_brief_taps()
+        let taps = cabin.day_brief_taps();
+        let same_prompt = taps.iter().filter(|(_, p, _)| p == "Check patch 0").count();
+        assert_eq!(same_prompt, 2, "both watchers keep their line: {taps:?}");
+        let (_, _, source) = taps
             .into_iter()
-            .find(|(_, p)| p == "Check patch 0")
-            .expect("the watcher's one-tap");
-        cabin.note_day_brief_tap(&brief_id, &prompt);
+            .find(|(_, _, card)| card.as_deref() == Some(watcher_id.as_str()))
+            .expect("the second watcher's one-tap");
+        cabin.note_day_brief_tap(&brief_id, source.as_deref());
         for id in [&brief_id, &watcher_id] {
             let card = cabin.updates.iter().find(|c| &c.id == id).unwrap();
             assert_eq!(card.status, UpdateStatus::Opened, "{}", card.title);
         }
+        let first = cabin.updates.iter().find(|c| c.id == first_id).unwrap();
+        assert_ne!(
+            first.status,
+            UpdateStatus::Opened,
+            "a line with the same prompt from another card stays unread"
+        );
         let mut learned = rx::Reactions::default();
         assert!(
             learned

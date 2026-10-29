@@ -105,7 +105,7 @@ impl Cabin {
             | PulseAct::Like(id)
             | PulseAct::HobbyDone(id)
             | PulseAct::HobbyTooEasy(id) => (id, Outcome::Accepted, None),
-            PulseAct::Open(id) | PulseAct::Discuss(id) | PulseAct::DayTap(id, _) => {
+            PulseAct::Open(id) | PulseAct::Discuss(id) | PulseAct::DayTap(id, ..) => {
                 (id, Outcome::Tapped, None)
             }
             PulseAct::Snooze(id) => (id, Outcome::Snoozed, None),
