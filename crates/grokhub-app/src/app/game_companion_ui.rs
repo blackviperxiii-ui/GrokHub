@@ -128,7 +128,7 @@ impl Cabin {
                         continue;
                     };
                     self.focus.game.playing = Some(game.clone());
-                    // A game switched away from keeps its note offer.
+                    // The game the user switched away from keeps its note offer.
                     if self
                         .focus
                         .game
@@ -149,7 +149,10 @@ impl Cabin {
                 }
                 Launch::Ended(id) => {
                     self.focus.game.playing = None;
-                    self.focus.game.ended = find(id).map(|g| (g, now));
+                    // An untracked app closing keeps the last library game's offer.
+                    if let Some(game) = find(id) {
+                        self.focus.game.ended = Some((game, now));
+                    }
                     self.chip_paint_key.clear();
                 }
             }
@@ -240,7 +243,15 @@ impl Cabin {
             Ok(()) => "Saved. It shows on the card next time you launch it.".into(),
             Err(err) => err,
         };
-        self.focus.game.ended = None;
+        if self
+            .focus
+            .game
+            .ended
+            .as_ref()
+            .is_some_and(|(g, _)| g.app_id == app_id)
+        {
+            self.focus.game.ended = None;
+        }
         self.chip_paint_key.clear();
     }
 
@@ -397,6 +408,10 @@ mod tests {
 
     #[test]
     fn a_direct_switch_closes_the_old_game_and_keeps_its_note_offer() {
+        let root = crate::config::test_config_root("game-companion-switch");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root);
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.game_companion = true;
         cabin.sources.steam = super::super::steam_ui::SteamState::for_test(
@@ -411,6 +426,17 @@ mod tests {
         // Straight to a game outside the library: Hades still closes.
         cabin.note_running(Some(99), 2_000);
         assert!(cabin.focus.game.playing.is_none());
+        assert_eq!(
+            cabin
+                .focus
+                .game
+                .ended
+                .as_ref()
+                .map(|(g, at)| (g.app_id, *at)),
+            Some((7, 2_000))
+        );
+        // The untracked app closing keeps Hades's offer.
+        cabin.note_running(None, 3_000);
         assert_eq!(
             cabin
                 .focus
@@ -440,6 +466,12 @@ mod tests {
                     "Leave a note for next time".to_string()
                 ),
             ]
+        );
+        // A note for the running game leaves the other game's offer.
+        cabin.save_game_note(8, "dash earlier");
+        assert_eq!(
+            cabin.focus.game.ended.as_ref().map(|(g, _)| g.app_id),
+            Some(7)
         );
         // Relaunching the same game drops its own offer.
         cabin.focus.game.playing = Some(game(7, "Hades"));
