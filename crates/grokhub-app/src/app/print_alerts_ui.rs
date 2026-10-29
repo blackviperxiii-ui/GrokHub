@@ -42,10 +42,13 @@ fn save_ledger(ledger: &PrintAlertsLedger) {
     }
 }
 
+/// No redirects: `egress_ok` checks only the printer URL, so a redirect
+/// could send the request (and its API key) off the LAN.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(pa::DISCOVER_TIMEOUT_MS))
         .timeout_read(Duration::from_millis(2_000))
+        .redirects(0)
         .build()
 }
 
@@ -67,6 +70,35 @@ fn printer_key(endpoint: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Save the printer's webcam snapshot where Pulse looks for card images.
+/// Only a 2xx body that decodes as an image is kept.
+fn cache_snapshot(agent: &ureq::Agent, url: &str) -> bool {
+    let path = super::pulse_ui::pulse_image_path(url);
+    if crate::xai::egress_ok(url, &[]).is_err() {
+        return false;
+    }
+    let Ok(resp) = agent.get(url).call() else {
+        return false;
+    };
+    if !(200..300).contains(&resp.status()) {
+        return false;
+    }
+    let mut buf = Vec::new();
+    if resp
+        .into_reader()
+        .take(4 * 1024 * 1024)
+        .read_to_end(&mut buf)
+        .is_err()
+        || image::load_from_memory(&buf).is_err()
+    {
+        return false;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    config::atomic_write(&path, &buf).is_ok()
+}
+
 fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<String> {
     crate::xai::egress_ok(url, &[]).ok()?;
     let mut req = agent.get(url);
@@ -74,6 +106,9 @@ fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<Str
         req = req.set("X-Api-Key", key);
     }
     let resp = req.call().ok()?;
+    if !(200..300).contains(&resp.status()) {
+        return None;
+    }
     let mut body = String::new();
     resp.into_reader()
         .take(512 * 1024)
@@ -489,10 +524,17 @@ impl Cabin {
             if let Some(alert) = pa::observe(&settings, &mut ledger, &key, &status, now) {
                 let mut card = alert_card(&alert, now);
                 if alert.camera_enabled {
+                    let base = base_url(&saved.endpoint);
+                    let query = format!("{base}{}", pa::webcam_query_path(saved.kind));
+                    status.camera_path = get_json(&agent, &query, saved.api_key.as_deref())
+                        .and_then(|body| pa::parse_webcam_path(saved.kind, &body));
                     if let Some(path) = status.camera_path.as_deref() {
-                        let snap = format!("{}{path}", base_url(&saved.endpoint));
-                        // Prefer a reachable snapshot URL; cabin never embeds credentials.
-                        card.pulse.image_urls = vec![snap];
+                        let snap = format!("{base}{path}");
+                        // Pulse only downloads public images, so the poll caches
+                        // the LAN snapshot itself; cabin never embeds credentials.
+                        if cache_snapshot(&agent, &snap) {
+                            card.pulse.image_urls = vec![snap];
+                        }
                     }
                 }
                 cards.push(card);
@@ -603,6 +645,85 @@ mod tests {
     use grokhub_core::print_alerts::{
         alert_card, observe, parse_moonraker_status, AlertKind, PrintAlertsSettings, PrintState,
     };
+
+    #[test]
+    fn printer_requests_never_follow_a_redirect() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/landed\r\n\
+                 Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            let _ = stream.write_all(reply.as_bytes());
+            listener
+        });
+        let url = format!("http://127.0.0.1:{port}/api/job");
+        let got = get_json(&agent(), &url, Some("sk-abcdefghijklmnopqrstuv"));
+        assert_eq!(got, None, "a 302 is not a printer reply");
+        let listener = served.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().map(|_| ()).map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::WouldBlock),
+            "the redirect was followed"
+        );
+    }
+
+    /// Answer each of `replies` once, in order, on a loopback port.
+    fn serve(replies: Vec<Vec<u8>>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || {
+            for reply in replies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(&reply);
+            }
+        });
+        (port, served)
+    }
+
+    fn http_ok(body: &[u8]) -> Vec<u8> {
+        let mut r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        r.extend_from_slice(body);
+        r
+    }
+
+    #[test]
+    fn lan_snapshot_lands_in_the_pulse_image_cache() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("printer-snapshot");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let (port, served) = serve(vec![http_ok(&png), http_ok(b"not an image")]);
+        let snap = format!("http://127.0.0.1:{port}/webcam/?action=snapshot");
+        assert!(cache_snapshot(&agent(), &snap));
+        let cached = super::super::pulse_ui::pulse_image_path(&snap);
+        assert!(cached.starts_with(&root));
+        assert_eq!(std::fs::read(&cached).unwrap(), png);
+        let junk = format!("http://127.0.0.1:{port}/webcam/junk");
+        assert!(!cache_snapshot(&agent(), &junk));
+        assert!(!super::super::pulse_ui::pulse_image_path(&junk).exists());
+        served.join().unwrap();
+        std::env::remove_var("GROKHUB_CONFIG");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn discover_targets_include_loopback_and_cap_lan() {

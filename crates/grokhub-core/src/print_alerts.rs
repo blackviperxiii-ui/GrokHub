@@ -385,13 +385,6 @@ pub fn parse_moonraker_status(body: &str) -> Option<PrinterStatus> {
         .trim()
         .to_string();
 
-    let camera_path = if body.to_ascii_lowercase().contains("webcam") {
-        Some("/webcam/?action=snapshot".into())
-    } else {
-        // Common Fluidd/Mainsail default; cabin only fetches when Settings → camera is on.
-        Some("/webcam/?action=snapshot".into())
-    };
-
     Some(PrinterStatus {
         name: if name.is_empty() {
             "Moonraker printer".into()
@@ -404,8 +397,70 @@ pub fn parse_moonraker_status(body: &str) -> Option<PrinterStatus> {
         eta_secs,
         filename,
         message,
-        camera_path,
+        // Filled from the printer's own webcam list when a camera is wanted.
+        camera_path: None,
     })
+}
+
+/// Where to ask the printer for its webcams: Moonraker's list, or
+/// OctoPrint's settings.
+pub fn webcam_query_path(kind: PrinterKind) -> &'static str {
+    match kind {
+        PrinterKind::Moonraker => "/server/webcams/list",
+        PrinterKind::OctoPrint => "/api/settings",
+    }
+}
+
+/// The snapshot path the printer reports, relative to its own base URL.
+/// `None` when it reports no enabled webcam, or only ones on another host.
+/// A loopback URL (OctoPi's `http://127.0.0.1:8080/?action=snapshot`) maps
+/// to the `/webcam/` proxy on the same host.
+pub fn parse_webcam_path(kind: PrinterKind, body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    match kind {
+        PrinterKind::Moonraker => v
+            .pointer("/result/webcams")?
+            .as_array()?
+            .iter()
+            .filter(|w| w.get("enabled").and_then(|e| e.as_bool()) != Some(false))
+            .find_map(|w| local_snapshot_path(w.get("snapshot_url")?.as_str()?)),
+        PrinterKind::OctoPrint => {
+            let cam = v.get("webcam")?;
+            if cam.get("webcamEnabled").and_then(|e| e.as_bool()) == Some(false) {
+                return None;
+            }
+            local_snapshot_path(cam.get("snapshotUrl")?.as_str()?)
+        }
+    }
+}
+
+/// A snapshot URL as a path on the printer's own host, or `None` for any
+/// other host. `webcam/?action=snapshot` is relative to the host root.
+fn local_snapshot_path(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with("//") {
+        return None;
+    }
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        if url.contains("://") {
+            return None;
+        }
+        return Some(format!("/{}", url.trim_start_matches('/')));
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(end);
+    if authority.contains('@') {
+        return None;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split_once(']')?.0,
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1";
+    loopback.then(|| format!("/webcam/{}", path.trim_start_matches('/')))
 }
 
 /// Parse an OctoPrint `/api/job` JSON body.
@@ -487,7 +542,7 @@ pub fn parse_octoprint_job(body: &str) -> Option<PrinterStatus> {
         eta_secs: print_time_left,
         filename,
         message: if text.is_empty() { None } else { Some(text) },
-        camera_path: Some("/webcam/?action=snapshot".into()),
+        camera_path: None,
     })
 }
 
@@ -814,6 +869,69 @@ mod tests {
             parse_moonraker_status(MOONRAKER_FILAMENT).unwrap().state,
             PrintState::Filament
         );
+    }
+
+    #[test]
+    fn webcam_path_only_when_the_printer_reports_one() {
+        assert_eq!(
+            parse_moonraker_status(MOONRAKER_PRINTING)
+                .unwrap()
+                .camera_path,
+            None
+        );
+        assert_eq!(
+            parse_octoprint_job(OCTO_PRINTING).unwrap().camera_path,
+            None
+        );
+        let mr = r#"{"result":{"webcams":[
+            {"name":"off","enabled":false,"snapshot_url":"/off/?action=snapshot"},
+            {"name":"cam","enabled":true,"snapshot_url":"/webcam/?action=snapshot"}]}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::Moonraker, mr).as_deref(),
+            Some("/webcam/?action=snapshot")
+        );
+        assert_eq!(
+            parse_webcam_path(PrinterKind::Moonraker, r#"{"result":{"webcams":[]}}"#),
+            None
+        );
+        let octo = r#"{"webcam":{"webcamEnabled":true,"snapshotUrl":"http://127.0.0.1:8080/?action=snapshot"}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::OctoPrint, octo).as_deref(),
+            Some("/webcam/?action=snapshot")
+        );
+        let off = r#"{"webcam":{"webcamEnabled":false,"snapshotUrl":"/webcam/?action=snapshot"}}"#;
+        assert_eq!(parse_webcam_path(PrinterKind::OctoPrint, off), None);
+        let elsewhere = r#"{"webcam":{"snapshotUrl":"http://203.0.113.9/snap.jpg"}}"#;
+        assert_eq!(parse_webcam_path(PrinterKind::OctoPrint, elsewhere), None);
+        let scheme_relative = r#"{"webcam":{"snapshotUrl":"//203.0.113.9/snap.jpg"}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::OctoPrint, scheme_relative),
+            None
+        );
+        let remote_first = r#"{"result":{"webcams":[
+            {"name":"remote","enabled":true,"snapshot_url":"http://203.0.113.9/snap.jpg"},
+            {"name":"local","enabled":true,"snapshot_url":"webcam2/?action=snapshot"}]}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::Moonraker, remote_first).as_deref(),
+            Some("/webcam2/?action=snapshot")
+        );
+        let v6 = r#"{"webcam":{"snapshotUrl":"http://[::1]:8080/snap.jpg"}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::OctoPrint, v6).as_deref(),
+            Some("/webcam/snap.jpg")
+        );
+        let user_info = r#"{"webcam":{"snapshotUrl":"http://127.0.0.1@203.0.113.9/snap.jpg"}}"#;
+        assert_eq!(parse_webcam_path(PrinterKind::OctoPrint, user_info), None);
+        let other_scheme = r#"{"webcam":{"snapshotUrl":"ftp://127.0.0.1/snap.jpg"}}"#;
+        assert_eq!(
+            parse_webcam_path(PrinterKind::OctoPrint, other_scheme),
+            None
+        );
+        assert_eq!(
+            webcam_query_path(PrinterKind::Moonraker),
+            "/server/webcams/list"
+        );
+        assert_eq!(webcam_query_path(PrinterKind::OctoPrint), "/api/settings");
     }
 
     #[test]
