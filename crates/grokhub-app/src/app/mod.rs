@@ -1491,7 +1491,7 @@ impl Cabin {
             grokhub_core::proc_util::silence_windows_hard_errors();
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
-            c.open_fresh_home();
+            c.open_launch_page();
             c.apply_deck_shot_seed();
             c.apply_web_search_shot_seed();
             #[cfg(not(test))]
@@ -5386,6 +5386,11 @@ impl eframe::App for Cabin {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
         self.publish_shown_personality(&ctx);
+        crate::titlebar::edge_resize(
+            &ctx,
+            maximized_now(ctx.input(|i| i.viewport().maximized), self.win_max)
+                || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)),
+        );
         self.ui_titlebar(ui);
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.

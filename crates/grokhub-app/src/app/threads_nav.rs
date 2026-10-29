@@ -565,6 +565,15 @@ impl Cabin {
         self.nav = Nav::Chat;
     }
 
+    /// A fresh launch: a clean draft ready in Chat, but the window opens on Home.
+    /// Proof shots (deck or web search) keep Chat, the page their seed is of.
+    pub(super) fn open_launch_page(&mut self) {
+        self.open_fresh_home();
+        if !super::loadout_home::proof_shot_requested() {
+            self.nav = Nav::Home;
+        }
+    }
+
     /// Empty home. Does not halt or drop the in-flight reply on the previous thread.
     pub(super) fn park_fresh_chat(&mut self) {
         let want_project = self.project_sel.clone();

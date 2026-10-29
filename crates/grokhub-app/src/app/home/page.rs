@@ -57,7 +57,7 @@ impl Cabin {
                     ui.painter().text(
                         edit_btn.center(),
                         egui::Align2::CENTER_CENTER,
-                        "✎",
+                        crate::icons::ph::regular::PENCIL_SIMPLE,
                         egui::FontId::proportional(12.0),
                         crate::theme::amber(),
                     );

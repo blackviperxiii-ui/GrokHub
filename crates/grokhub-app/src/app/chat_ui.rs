@@ -239,6 +239,18 @@ pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
 }
 
 /// Empty-composer placeholder. Sits on the pill fill: quiet, but still legible (~3:1).
+/// The empty composer's ghost line. A field wide enough also says files can be
+/// dropped in and where the shortcut list is.
+pub(super) fn composer_ghost_hint(text_w: f32) -> &'static str {
+    let wide = text_w >= 460.0;
+    match (crate::theme::is_loadout_paint(), wide) {
+        (true, true) => "Say something...  ·  drop files here  ·  Ctrl+/ for shortcuts",
+        (true, false) => "Say something...",
+        (false, true) => "Ask anything  ·  drop files here  ·  Ctrl+/ for shortcuts",
+        (false, false) => "Ask anything",
+    }
+}
+
 pub(super) fn composer_hint_ink() -> egui::Color32 {
     crate::theme::blend_color(crate::theme::subtle(), crate::theme::muted(), 0.5)
 }
@@ -3087,11 +3099,7 @@ impl Cabin {
                                                 15.0,
                                                 egui::FontFamily::Proportional,
                                             );
-                                            let hint_text = if crate::theme::is_loadout_paint() {
-                                                "Say something..."
-                                            } else {
-                                                "Ask anything"
-                                            };
+                                            let hint_text = composer_ghost_hint(text_w);
                                             let hint = ui.fonts_mut(|f| {
                                                 f.layout_no_wrap(
                                                     hint_text.to_string(),

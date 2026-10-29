@@ -41,6 +41,9 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     "…".into()
 }
 
+/// Space between the titlebar pills, so their rings never touch.
+const TITLEBAR_PILL_GAP: f32 = 8.0;
+
 impl Cabin {
     pub(super) fn paint_loadout_window_border(ui: &mut egui::Ui) {
         if !crate::theme::is_loadout_paint() {
@@ -187,30 +190,38 @@ impl Cabin {
         let name = self.titlebar_personality_label();
         let week = super::privacy_page::ledger_week(ui.ctx(), now_ms());
         let sent = crate::theme::titlebar_sent_label(week.total());
-        for (label, red_ring) in [
+        for (i, (label, red_ring)) in [
             (format!("PERSONALITY · {}", name.to_ascii_uppercase()), true),
             (sent, false),
-        ] {
-            let pill = ui.add(
-                egui::Label::new(
-                    RichText::new(label)
-                        .font(crate::theme::loadout_font(11.0))
-                        .color(crate::theme::steel()),
-                )
-                .sense(egui::Sense::click()),
-            );
-            let rect = pill.rect;
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i > 0 {
+                ui.add_space(TITLEBAR_PILL_GAP);
+            }
             let stroke = if red_ring {
                 crate::theme::signal_red()
             } else {
                 crate::theme::border()
             };
-            ui.painter().rect_stroke(
-                rect.expand2(egui::vec2(6.0, 3.0)),
-                20.0,
-                egui::Stroke::new(1.0, stroke),
-                egui::StrokeKind::Outside,
-            );
+            let pill = egui::Frame::NONE
+                .fill(crate::theme::bg())
+                .stroke(egui::Stroke::new(1.0, stroke))
+                .corner_radius(20.0)
+                .inner_margin(egui::Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(label)
+                                .font(crate::theme::loadout_font(11.0))
+                                .color(crate::theme::steel()),
+                        )
+                        .selectable(false),
+                    )
+                });
+            let id = egui::Id::new(("titlebar-pill", i));
+            let pill = ui.interact(pill.response.rect, id, egui::Sense::click());
             if red_ring && pill.clicked() {
                 self.open_personality_pill();
             }
@@ -1004,5 +1015,45 @@ impl Cabin {
             }
             TabAct::Delete(i) => self.delete_thread_at(i),
         }
+    }
+}
+
+#[cfg(test)]
+mod titlebar_pill_tests {
+    use eframe::egui;
+
+    #[test]
+    fn the_titlebar_pills_are_framed_and_never_touch() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let root = crate::config::test_config_root("titlebar-pills");
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = super::Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        for _ in 0..2 {
+            let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| cabin.paint_loadout_titlebar_pills(ui));
+                });
+            });
+        }
+        let rect = |i: usize| {
+            ctx.read_response(egui::Id::new(("titlebar-pill", i)))
+                .expect("pill painted")
+                .rect
+        };
+        let (personality, sent) = (rect(0), rect(1));
+        assert!(
+            sent.left() - personality.right() >= super::TITLEBAR_PILL_GAP - 0.5,
+            "pills touch: {personality:?} then {sent:?}"
+        );
+        // The pill's frame holds its 11 pt text plus 3 px top and bottom.
+        assert!(sent.height() >= 17.0, "LOCAL chip has no frame: {sent:?}");
+        cabin.persist_svc.flush();
+        drop(cabin);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

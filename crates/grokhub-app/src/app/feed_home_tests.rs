@@ -371,3 +371,20 @@ fn composer_hint_ink_blends_subtle_and_muted() {
         "hint ink is the subtle+muted mid blend"
     );
 }
+
+#[test]
+fn a_wide_empty_composer_names_file_drop_and_the_shortcut_list() {
+    let _paint = crate::theme::hold_paint_test();
+    crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+    assert_eq!(
+        super::composer_ghost_hint(600.0),
+        "Say something...  ·  drop files here  ·  Ctrl+/ for shortcuts"
+    );
+    assert_eq!(super::composer_ghost_hint(300.0), "Say something...");
+    crate::theme::set_paint_palette(crate::theme::PaintPalette::ClassicDark);
+    assert_eq!(
+        super::composer_ghost_hint(600.0),
+        "Ask anything  ·  drop files here  ·  Ctrl+/ for shortcuts"
+    );
+    assert_eq!(super::composer_ghost_hint(300.0), "Ask anything");
+}

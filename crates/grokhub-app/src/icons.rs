@@ -9,8 +9,8 @@ egui_phosphor::subset! {
         use regular::{
             ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
             DESKTOP, FILE, FOLDER, GEAR, GITHUB_LOGO, HOUSE, IMAGE, KANBAN, LIGHTNING, LIST,
-            BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, PULSE,
-            QUESTION, SQUARES_FOUR, SUN, TARGET, USER,
+            BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PENCIL_SIMPLE, PLUGS,
+            PUSH_PIN, PULSE, QUESTION, SQUARES_FOUR, SUN, TARGET, USER, X,
         };
     }
 }
@@ -853,6 +853,58 @@ pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Col
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every non-ASCII character in a string literal of the app's own code
+    /// (tests aside) must be in the bundled fonts, or it paints as a box.
+    /// The fonts are bundled, so this holds on Windows as it does on Linux.
+    #[test]
+    fn no_ui_string_paints_as_a_missing_glyph_box() {
+        fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    sources(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs")
+                    && !p.file_name().unwrap().to_string_lossy().contains("test")
+                {
+                    out.push(p);
+                }
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |_| {});
+        let font = egui::FontId::proportional(14.0);
+        let mut files = Vec::new();
+        sources(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let mut missing = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap();
+            let code = src.split("#[cfg(test)]\nmod ").next().unwrap_or("");
+            for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                // Characters inside "..." literals.
+                let mut inside = false;
+                let mut escaped = false;
+                for c in line.chars() {
+                    match c {
+                        '\\' if inside && !escaped => escaped = true,
+                        '"' if !escaped => inside = !inside,
+                        _ => {
+                            if inside && !c.is_ascii() && !ctx.fonts_mut(|t| t.has_glyph(&font, c))
+                            {
+                                missing.push(format!("{c} in {}", f.display()));
+                            }
+                            escaped = false;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "no glyph for: {missing:?}");
+    }
 
     #[test]
     fn label_icons_are_distinct() {

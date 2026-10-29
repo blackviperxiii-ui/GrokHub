@@ -213,7 +213,11 @@ impl Cabin {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if ui.button("✕").clicked() {
+                                        if ui
+                                            .button(crate::icons::ph::regular::X)
+                                            .on_hover_text("Close")
+                                            .clicked()
+                                        {
                                             close = true;
                                         }
                                     },
