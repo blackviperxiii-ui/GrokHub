@@ -296,9 +296,35 @@ impl Cabin {
             ),
             None => format!("Download {} ({})", m.name, ls::size_label(m.download_mb)),
         };
+        // A fresh download asks once, with its size and the free disk; a resume
+        // was already agreed to.
+        if part.is_none() && self.setup.confirm_dl == Some(m.id) {
+            let free = self.setup.hw.as_ref().map(|hw| hw.free_disk_mb);
+            let (line, fits) = download_confirm(m, free);
+            crate::cards::settings_note(ui, &line);
+            ui.horizontal(|ui| {
+                if fits
+                    && crate::cards::white_pill(
+                        ui,
+                        &format!("Download {}", ls::size_label(m.download_mb)),
+                    )
+                {
+                    self.setup.confirm_dl = None;
+                    self.start_model_download(m);
+                }
+                if crate::cards::ghost_pill(ui, "Not now") {
+                    self.setup.confirm_dl = None;
+                }
+            });
+            return;
+        }
         ui.horizontal(|ui| {
             if crate::cards::white_pill(ui, &label) {
-                self.start_model_download(m);
+                if part.is_some() {
+                    self.start_model_download(m);
+                } else {
+                    self.setup.confirm_dl = Some(m.id);
+                }
             }
             if part.is_some() && crate::cards::ghost_pill(ui, "Discard") {
                 self.cancel_model_download(m);
@@ -386,10 +412,153 @@ impl Cabin {
     }
 }
 
+/// The confirm line before a download, and whether it fits on the drive.
+/// `free_mb` is `None` until the hardware read lands (or when it failed).
+pub(super) fn download_confirm(m: &LocalModel, free_mb: Option<u64>) -> (String, bool) {
+    let size = ls::size_label(m.download_mb);
+    match free_mb.filter(|f| *f > 0) {
+        Some(free) if free < ls::disk_needed_mb(m) => (
+            format!(
+                "{} needs {} free, and this drive has {}. Free up space or pick a smaller model.",
+                m.name,
+                ls::size_label(ls::disk_needed_mb(m)),
+                ls::size_label(free)
+            ),
+            false,
+        ),
+        Some(free) => (
+            format!(
+                "Download {} ({size})? This drive has {} free.",
+                m.name,
+                ls::size_label(free)
+            ),
+            true,
+        ),
+        None => (format!("Download {} ({size})?", m.name), true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn the_confirm_names_the_size_and_the_free_disk() {
+        let e4b = ls::local_models()
+            .iter()
+            .find(|m| m.name == "Gemma 4 E4B")
+            .unwrap();
+        let size = ls::size_label(e4b.download_mb);
+        assert_eq!(
+            download_confirm(e4b, Some(200_000)),
+            (
+                format!("Download Gemma 4 E4B ({size})? This drive has 195.3 GB free."),
+                true
+            )
+        );
+        // Not enough room: no Download button, and it says how much is needed.
+        let (line, fits) = download_confirm(e4b, Some(1_024));
+        assert!(!fits);
+        assert_eq!(
+            line,
+            format!(
+                "Gemma 4 E4B needs {} free, and this drive has 1 GB. Free up space or pick a smaller model.",
+                ls::size_label(ls::disk_needed_mb(e4b))
+            )
+        );
+        // Free disk unknown: still asks, with the size.
+        assert_eq!(
+            download_confirm(e4b, None),
+            (format!("Download Gemma 4 E4B ({size})?"), true)
+        );
+    }
+
+    #[test]
+    fn one_click_asks_first_and_the_second_click_downloads() {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.job.text.clone(), shape.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let e2b = ls::local_models()
+            .iter()
+            .find(|m| m.name == "Gemma 4 E2B")
+            .unwrap();
+        let m: &'static LocalModel = Box::leak(Box::new(LocalModel {
+            id: "confirm-test-model",
+            name: "Confirm Model",
+            file: "confirm-test.gguf",
+            ..*e2b
+        }));
+        let mut app = Cabin::quiet_for_test();
+        app.setup.hw = Some(ls::Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 16_384,
+            free_disk_mb: 200_000,
+        });
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0));
+        let frame = |app: &mut Cabin, click: Option<egui::Pos2>| {
+            let mut raw = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            if let Some(at) = click {
+                raw.events = vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+            }
+            let out = crate::theme::test_pass(&ctx, raw, |ui| app.ui_download_button(ui, m));
+            let mut texts = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut texts);
+            }
+            texts
+        };
+        let at = |texts: &[(String, egui::Rect)], want: &str| {
+            texts
+                .iter()
+                .find(|(t, _)| t == want)
+                .map(|(_, r)| r.center())
+                .unwrap_or_else(|| panic!("{want} missing: {texts:?}"))
+        };
+        let size = ls::size_label(m.download_mb);
+        let texts = frame(&mut app, None);
+        let first = at(&texts, &format!("Download Confirm Model ({size})"));
+        frame(&mut app, Some(first));
+        // The first click only asks.
+        assert_eq!(app.setup.confirm_dl, Some("confirm-test-model"));
+        assert!(app.setup.dl.is_none(), "nothing downloads on one click");
+        let texts = frame(&mut app, None);
+        at(
+            &texts,
+            &format!("Download Confirm Model ({size})? This drive has 195.3 GB free."),
+        );
+        // Not now goes back to the plain button.
+        let not_now = at(&texts, "Not now");
+        frame(&mut app, Some(not_now));
+        assert_eq!(app.setup.confirm_dl, None);
+        assert!(app.setup.dl.is_none());
+    }
 
     struct FakeHf(Vec<u8>);
 

@@ -35,8 +35,18 @@ pub(super) fn choice_label(m: &LocalModel, suggested: Option<&LocalModel>) -> St
     line
 }
 
+/// The dropdown's closed line: short, so it fits beside the arrow.
+pub(super) fn choice_short(m: &LocalModel, suggested: Option<&LocalModel>) -> String {
+    let mut line = format!("{} · {}", m.name, ls::size_label(m.download_mb));
+    if suggested.is_some_and(|s| s.id == m.id) {
+        line.push_str(" · recommended");
+    }
+    line
+}
+
 /// The model the dropdown starts on: the one picked this session, the one
-/// running, the hardware's suggestion, then the first catalog entry.
+/// running, the hardware's suggestion, then the smallest model, never the
+/// biggest one just because the catalog lists it first.
 pub(super) fn default_choice(
     picked: Option<&str>,
     installed: Option<&Installed>,
@@ -47,7 +57,7 @@ pub(super) fn default_choice(
         .and_then(ls::model_by_id)
         .filter(|m| !m.is_drafter)
         .or(suggested)
-        .or_else(|| choices().into_iter().next())
+        .or_else(grokhub_core::local_picker::smallest)
 }
 
 impl Cabin {
@@ -68,7 +78,7 @@ impl Cabin {
         )?;
         let all = choices();
         let labels: Vec<String> = all.iter().map(|m| choice_label(m, suggested)).collect();
-        let shown = choice_label(current, suggested);
+        let shown = choice_short(current, suggested);
         let hint = "Pick before you download. You can switch later in Settings without reinstalling Loadout.";
         if let Some(i) = crate::cards::settings_dropdown(ui, "Local model", hint, &shown, &labels) {
             self.setup.choice = Some(all[i].id.to_string());
@@ -179,7 +189,21 @@ mod tests {
             default_choice(None, None, Some(b)).map(|m| m.id),
             Some(b.id)
         );
-        assert_eq!(default_choice(None, None, None).map(|m| m.id), Some(a.id));
+        // No hardware suggestion: the smallest model, not the catalog's first.
+        let small = grokhub_core::local_picker::smallest().unwrap();
+        assert_eq!(
+            default_choice(None, None, None).map(|m| m.id),
+            Some(small.id)
+        );
+        assert!(small.run_mb < a.run_mb, "{} vs {}", small.name, a.name);
+        assert_eq!(
+            choice_short(a, Some(a)),
+            format!(
+                "{} · {} · recommended",
+                a.name,
+                ls::size_label(a.download_mb)
+            )
+        );
         // A file the catalog no longer lists falls through to the suggestion.
         let old = Installed {
             id: "retired-model".into(),
