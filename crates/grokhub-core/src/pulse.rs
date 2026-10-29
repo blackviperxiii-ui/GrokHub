@@ -402,7 +402,10 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 }
 
 /// The bold line on an Ideas row, always in the cabin's own voice and at most
-/// `I_CAN_MAX` characters. The model writes it as the idea's title ("I can …");
+/// `I_CAN_MAX` characters. Two kinds keep their own title as written, bounded
+/// by the card's title limit instead: a written idea, and a repeated-ask offer,
+/// whose title is the user's question and must not be cut mid-sentence.
+/// The model writes it as the idea's title ("I can …");
 /// a card without one gets a plain line from its action: Do "I can {action}",
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {

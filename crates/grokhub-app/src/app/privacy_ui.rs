@@ -139,10 +139,11 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
             hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then Try again.".into(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("Put this data's {} key back in your {name}, then Try again.", grokhub_core::brand::product_name())
+            // The key is filed under its stable keychain service, not the display brand.
+            format!("Put this data's {} key back in your {name}, then Try again.", hx::KEY_SERVICE)
         }
         hx::Locked::Busy => "Wait a moment for the other window, then Try again.".into(),
-        hx::Locked::Unwritable => format!("Check that {}'s config folder can be written, then Try again.", grokhub_core::brand::product_name()),
+        hx::Locked::Unwritable => format!("Check that the {} config folder can be written, then Try again.", grokhub_core::brand::INTERNAL_ID),
     }
 }
 
@@ -157,14 +158,14 @@ pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> Strin
         hx::Locked::Missing | hx::Locked::WrongKey => {
             format!(
                 "put this data's {} key back in your {}",
-                grokhub_core::brand::product_name(),
+                hx::KEY_SERVICE,
                 hx::keyring_name_for(os)
             )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
         hx::Locked::Unwritable => format!(
-            "check that {}'s config folder can be written",
-            grokhub_core::brand::product_name()
+            "check that the {} config folder can be written",
+            grokhub_core::brand::INTERNAL_ID
         ),
     };
     format!("Next: {step}, then Try again in Settings → Permissions.")
