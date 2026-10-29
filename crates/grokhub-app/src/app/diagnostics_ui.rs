@@ -35,6 +35,7 @@ impl Cabin {
         self.cfg.diagnostics_mode = on;
         if !on {
             self.diagnostics_last_zip = None;
+            self.diagnostics_notice = false;
         }
         self.persist_cfg();
         self.status = "Saved".into();
@@ -69,6 +70,39 @@ impl Cabin {
                 self.open_diagnostics_folder();
             }
         }
+    }
+
+    /// Under the composer after a Save from a message or the chat menu: the
+    /// file name with Open folder, until opened or dismissed.
+    pub(super) fn paint_diagnostics_notice(&mut self, ui: &mut egui::Ui) {
+        if !self.diagnostics_notice {
+            return;
+        }
+        let Some(name) = self
+            .diagnostics_last_zip
+            .as_deref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+        else {
+            self.diagnostics_notice = false;
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                RichText::new(format!("Saved {name}"))
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::ghost_pill(ui, "Open folder") {
+                self.open_diagnostics_folder();
+                self.diagnostics_notice = false;
+            }
+            if crate::cards::ghost_pill(ui, "Dismiss") {
+                self.diagnostics_notice = false;
+            }
+        });
+        ui.add_space(4.0);
     }
 
     /// Open the Desktop folder that holds the last diagnostics zip.
@@ -110,8 +144,8 @@ impl Cabin {
         } else {
             thread.messages.as_ref().clone()
         };
-        // Use the chat-rules helper for active id/explicit (no direct field reads).
-        let active = self.chat_personality();
+        // The exported chat's own personality, not the running job's.
+        let active = self.thread_personality(self.thread_idx);
         let personality = active.id.clone();
         let content_level = content_level_label(self.cfg.explicit_personalities, active.explicit);
         let model = if self.cfg.model.trim().is_empty() {
@@ -132,19 +166,31 @@ impl Cabin {
         export.service_status = self.diagnostics_service_status();
         export.recent_logs = self.diagnostics_recent_logs(home_ref);
 
-        let turns = build_turn_pairs(&messages);
-        for (turn_no, user_text, assistant_raw) in turns {
+        // Each store is read once; turns look their records up by raw turn.
+        let all_spans =
+            grokhub_agent::harness::read_spans(&config_dir, &thread.id).unwrap_or_default();
+        let briefs: Vec<_> = grokhub_agent::brain::read_briefs(&config_dir)
+            .into_iter()
+            .filter(|l| l.chat_id == thread.id)
+            .collect();
+        let runs: std::collections::HashMap<String, grokhub_core::run_metrics::RunMetrics> =
+            grokhub_core::run_metrics::read_runs(&config_dir)
+                .into_iter()
+                .map(|m| (m.run.clone(), m))
+                .collect();
+
+        for group in build_turns(&messages) {
+            let turn_no = group.turn;
             if only_turn.is_some_and(|t| t != turn_no) {
                 continue;
             }
-            let brief = grokhub_agent::brain::brief_for_turn(&config_dir, &thread.id, turn_no);
-            let spans = grokhub_agent::harness::read_spans(&config_dir, &thread.id)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.turn == turn_no)
-                .collect::<Vec<_>>();
-            let run_key = format!("{}:{turn_no}", thread.id);
-            let metrics = grokhub_core::run_metrics::find_run(&config_dir, &run_key);
+            let raw = group.raw_first..=group.raw_last;
+            let (user_text, assistant_raw) = (group.user, group.assistant);
+            let brief = briefs.iter().rev().find(|l| raw.contains(&l.turn));
+            let spans: Vec<_> = all_spans.iter().filter(|s| raw.contains(&s.turn)).collect();
+            let metrics = raw
+                .clone()
+                .find_map(|t| runs.get(&format!("{}:{t}", thread.id)));
 
             let mut turn = DiagnosticsTurn {
                 turn: turn_no,
@@ -227,7 +273,7 @@ impl Cabin {
 
             let mut started = u64::MAX;
             let mut finished = 0u64;
-            for span in &spans {
+            for span in spans {
                 started = started.min(span.ts_ms);
                 finished = finished.max(span.ts_ms);
                 let summary = redact_for_diagnostics(&clip_chars(&span.result, 160), home_ref);
@@ -297,9 +343,10 @@ impl Cabin {
             }
         };
         match write_diagnostics_zip(&path, &export) {
-            Ok(()) => {
-                self.diagnostics_last_zip = Some(path.clone());
+            Ok(path) => {
                 self.status = diagnostics_saved_status(&path);
+                self.diagnostics_last_zip = Some(path);
+                self.diagnostics_notice = true;
             }
             Err(e) => self.status = format!("Couldn't save diagnostics: {e}"),
         }
@@ -357,42 +404,51 @@ impl Cabin {
     }
 }
 
-/// User/assistant pairs as (1-based turn, user text, assistant raw body).
-fn build_turn_pairs(messages: &[(String, String)]) -> Vec<(u32, String, String)> {
-    let mut out = Vec::new();
-    let mut turn = 0u32;
-    let mut pending_user: Option<String> = None;
+/// One ask as the chat shows it.
+#[derive(Debug, PartialEq, Eq)]
+struct TurnGroup {
+    /// 1-based among visible user rows (what a message's Save passes).
+    turn: u32,
+    /// The raw `user` message numbers this ask's run used. Traces, Briefs and
+    /// run metrics count every raw `user` row, hidden workload markers too.
+    raw_first: u32,
+    raw_last: u32,
+    user: String,
+    /// Every assistant body until the next ask.
+    assistant: String,
+}
+
+/// Visible asks with their replies. A hidden workload row (`HOST_RESULT`,
+/// `SKILL_SAVED`, …) belongs to the ask before it.
+fn build_turns(messages: &[(String, String)]) -> Vec<TurnGroup> {
+    let mut out: Vec<TurnGroup> = Vec::new();
+    let mut raw = 0u32;
     for (role, body) in messages {
         match role.as_str() {
             "user" => {
-                if let Some(prev) = pending_user.take() {
-                    turn += 1;
-                    out.push((turn, prev, String::new()));
+                raw += 1;
+                if !grokhub_core::is_workload_user(body) {
+                    out.push(TurnGroup {
+                        turn: out.len() as u32 + 1,
+                        raw_first: raw,
+                        raw_last: raw,
+                        user: body.clone(),
+                        assistant: String::new(),
+                    });
+                } else if let Some(last) = out.last_mut() {
+                    last.raw_last = raw;
                 }
-                pending_user = Some(body.clone());
             }
             "assistant" => {
-                if let Some(user) = pending_user.take() {
-                    turn += 1;
-                    out.push((turn, user, body.clone()));
-                } else if turn > 0 {
-                    // Continuation / repair reply: attach to last turn's raw if empty.
-                    if let Some(last) = out.last_mut() {
-                        if last.2.is_empty() {
-                            last.2 = body.clone();
-                        } else {
-                            last.2.push_str("\n\n");
-                            last.2.push_str(body);
-                        }
+                if let Some(last) = out.last_mut() {
+                    if !last.assistant.is_empty() {
+                        last.assistant.push_str("\n\n");
                     }
+                    last.assistant.push_str(body);
                 }
             }
             _ => {}
         }
-    }
-    if let Some(user) = pending_user {
-        turn += 1;
-        out.push((turn, user, String::new()));
     }
     out
 }
@@ -422,20 +478,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turn_pairs_number_user_assistant() {
-        let msgs = vec![
-            ("user".into(), "hi".into()),
-            ("assistant".into(), "TURN_SAY:\nhey\n".into()),
-            ("user".into(), "fix blender".into()),
-            ("assistant".into(), "ok".into()),
-        ];
-        let pairs = build_turn_pairs(&msgs);
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0].0, 1);
-        assert_eq!(pairs[0].1, "hi");
-        assert!(pairs[0].2.contains("TURN_SAY:"));
-        assert_eq!(pairs[1].0, 2);
-        assert_eq!(pairs[1].1, "fix blender");
+    fn turns_number_visible_asks_and_keep_raw_trace_numbers() {
+        let msgs: Vec<(String, String)> = [
+            ("user", "ask1"),
+            ("assistant", "reply1"),
+            ("user", "SKILL_SAVED"),
+            ("user", "ask2"),
+            ("assistant", "TOOL_CALL"),
+            ("user", "HOST_RESULT (facts only):\nok"),
+            ("assistant", "reply2"),
+        ]
+        .iter()
+        .map(|(r, b)| (r.to_string(), b.to_string()))
+        .collect();
+        assert_eq!(
+            build_turns(&msgs),
+            vec![
+                TurnGroup {
+                    turn: 1,
+                    raw_first: 1,
+                    raw_last: 2,
+                    user: "ask1".into(),
+                    assistant: "reply1".into(),
+                },
+                TurnGroup {
+                    turn: 2,
+                    raw_first: 3,
+                    raw_last: 4,
+                    user: "ask2".into(),
+                    assistant: "TOOL_CALL\n\nreply2".into(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -475,28 +549,52 @@ mod tests {
 
         let mut cabin = Cabin::quiet_for_test();
         let mut thread = crate::threads::ChatThread::new("Hangout", false);
+        thread.personality = "pirate".into();
         thread.messages = std::sync::Arc::new(vec![
             ("user".into(), "hi there".into()),
             ("assistant".into(), "TURN_SAY:\nHey — what's up?\n".into()),
+            ("user".into(), "SKILL_SAVED".into()),
+            ("user".into(), "fix blender".into()),
+            ("assistant".into(), "TURN_SAY:\nOn it.\n".into()),
         ]);
+        // Another chat is running with its own personality.
+        let mut running = crate::threads::ChatThread::new("Busy", false);
+        running.personality = "butler".into();
+        cabin.chat_job_thread = Some(running.id.clone());
         cabin.messages = thread.messages.clone();
-        cabin.threads = vec![thread];
+        cabin.threads = vec![thread, running];
         cabin.thread_idx = 0;
         cabin.set_diagnostics_mode(true);
-        cabin.save_chat_diagnostics(None);
-        assert!(
-            cabin.status.starts_with("Saved ") && cabin.status.contains("Open folder"),
-            "status={}",
-            cabin.status
-        );
-        let path = cabin.diagnostics_last_zip.expect("zip path");
+        cabin.save_chat_diagnostics(Some(2));
+        let path = cabin.diagnostics_last_zip.clone().expect("zip path");
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(cabin.status, format!("Saved {name} to your Desktop"));
+        assert!(cabin.diagnostics_notice);
         assert!(path.starts_with(&desk), "{path:?}");
-        assert!(path.is_file());
-        let name = path.file_name().unwrap().to_str().unwrap();
         assert!(
             name.starts_with("loadout-diagnostics-") && name.ends_with(".zip"),
             "{name}"
         );
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut json = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("diagnostics.json").unwrap(), &mut json)
+            .unwrap();
+        let export: DiagnosticsExport = serde_json::from_str(&json).unwrap();
+        assert_eq!(export.turns.len(), 1);
+        assert_eq!(export.turns[0].turn, 2);
+        assert_eq!(export.turns[0].user_text, "fix blender");
+        assert_eq!(export.turns[0].final_reply, "On it.");
+        assert_eq!(export.turns[0].personality, "pirate");
+
+        // A second Save never replaces the first bundle.
+        let at = SystemTime::now();
+        let same = grokhub_core::diagnostics_zip_path(at).unwrap();
+        std::fs::write(&same, b"earlier").unwrap();
+        cabin.save_chat_diagnostics(Some(2));
+        let second = cabin.diagnostics_last_zip.clone().unwrap();
+        assert_ne!(second, same);
+        assert_eq!(std::fs::read(&same).unwrap(), b"earlier");
+        assert!(path.is_file() && second.is_file());
 
         match old_home {
             Some(v) => std::env::set_var("HOME", v),
