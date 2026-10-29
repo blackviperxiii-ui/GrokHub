@@ -43,7 +43,9 @@ impl Cabin {
             now_ms: now,
         });
         save_ledger(&ledger);
-        for card in out.cards {
+        let quiet = self.quiet_now();
+        for mut card in out.cards {
+            grokhub_core::hold_if_quiet(&mut card, quiet);
             self.post_feed_card(card);
         }
     }
@@ -51,6 +53,11 @@ impl Cabin {
     /// Process fragment for the last focused app, for path tip preference.
     fn focus_process_hint(&self) -> Option<String> {
         let app = self.focus.app.as_ref()?;
+        // A recognized game is named by its title ("Hades"), which no
+        // catalog fragment matches; any game points to game modding.
+        if app.category == grokhub_core::focus_app::FocusCategory::Gaming {
+            return Some("steam".into());
+        }
         // Display names → process fragments the catalog understands.
         let key = match app.name.as_str() {
             "Blender" => "blender",
@@ -167,6 +174,8 @@ mod tests {
 
     #[test]
     fn settings_default_off_and_tick_posts_nothing() {
+        let root = config::test_config_root("hobby-tick-off");
+        let _pin = config::TestConfigDir::set(root.clone());
         let mut cabin = Cabin::quiet_for_test();
         assert!(!cabin.cfg.hobby_paths.any_on());
         cabin.tick_hobby_paths();
@@ -176,6 +185,63 @@ mod tests {
                 .iter()
                 .all(|c| !c.source_id.starts_with(hp::SOURCE_PREFIX)),
             "no tips while all hobbies off"
+        );
+        assert!(
+            root.join(FILE_NAME).is_file(),
+            "the tick saved its ledger in the test config folder"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_tip_posted_in_quiet_hours_is_held() {
+        let root = config::test_config_root("hobby-quiet");
+        let _pin = config::TestConfigDir::set(root.clone());
+        let know_me = grokhub_core::know_me::KnowMe {
+            on: true,
+            tags: vec![grokhub_core::know_me::Tag {
+                tag: "dev: Rust".into(),
+                signal: grokhub_core::know_me::Signal::Dev,
+                topic: Some("Rust".into()),
+            }],
+            ..Default::default()
+        };
+        grokhub_core::know_me::save(&root.join(grokhub_core::know_me::FILE_NAME), &know_me)
+            .unwrap();
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.hobby_paths.set_on(HobbyId::Rust, true);
+        // Quiet from this minute for an hour, so the tick lands inside it.
+        let now = Cabin::local_clock().hm();
+        let start = grokhub_core::organs::hm_min(&now).unwrap();
+        let end = (start + 60) % (24 * 60);
+        cabin.cfg.quiet_start = now;
+        cabin.cfg.quiet_end = format!("{:02}:{:02}", end / 60, end % 60);
+        assert!(cabin.quiet_now());
+        cabin.tick_hobby_paths();
+        let tips: Vec<_> = cabin
+            .updates
+            .iter()
+            .filter(|c| c.source_id.starts_with(hp::SOURCE_PREFIX))
+            .collect();
+        assert_eq!(tips.len(), 1);
+        assert_eq!(
+            tips[0].source_id,
+            hp::source_id(HobbyId::Rust, "rust-cargo-new")
+        );
+        assert!(tips[0].held, "quiet hours hold the tip until they end");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_recognized_game_points_to_game_modding() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.focus_help = true;
+        cabin.note_focus_process(Some("gamescope"));
+        let hint = cabin.focus_process_hint();
+        assert_eq!(hint.as_deref(), Some("steam"));
+        assert_eq!(
+            hp::hobby_for_process(hint.as_deref().unwrap()),
+            Some(HobbyId::GameModding)
         );
     }
 

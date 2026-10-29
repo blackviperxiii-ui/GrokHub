@@ -394,11 +394,14 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
 
 /// Ideas view: things to do. Feed view: things that happened or were found.
 /// The quiet-hours digest is news about what happened, so it reads on the Feed.
+/// A learning-path tip reads there too: its Done / Skip / Too easy / Too hard
+/// controls are painted on Feed posts.
 pub fn is_idea_card(card: &UpdateCard) -> bool {
     matches!(
         card.kind,
         UpdateKind::Idea | UpdateKind::Suggestion | UpdateKind::AutomateOffer
     ) && card.source_id != QUIET_DIGEST_SOURCE
+        && card.pulse.hobby_path.is_none()
 }
 
 /// The bold line on an Ideas row, always in the cabin's own voice and at most
