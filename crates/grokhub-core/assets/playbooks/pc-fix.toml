@@ -1,0 +1,261 @@
+# GrokHub playbook: fix a computer. One family for Linux (Arch, Debian or
+# Ubuntu, Fedora; KDE Plasma or any desktop), Windows and macOS. A step with
+# `os` runs only there; the turn's prompt keeps only this computer's steps.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps name repair probes (fixed, read-only checks with no shell) or
+# read-only commands. Safe steps can be undone. Risky steps ask you first,
+# every time.
+
+id = "pc-fix"
+name = "Fix this PC"
+summary = "Look first (services, errors, packages, disk, memory, network), back up, fix the real setting in small steps, restart before reinstalling, and check again after each fix."
+
+checklist = ["services", "recent errors", "packages and updates", "disk space", "network"]
+backup = "Take a restore point first (snapper or Timeshift on Linux, System Restore on Windows, a Time Machine backup on macOS) and copy each config file to a .bak before editing it."
+verify = "Run the same check again after each fix and compare. Say a fix is approved only after the user said yes, and done only after the check passed. After a restart you started, wait for the computer to come back, check what you fixed again, and say what you saw."
+rollback = "Put the .bak copies back and restart what was restarted; for a package or system change, go back to the restore point taken first."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["repair"]
+domain = ["system"]
+os = ["linux", "windows", "macos"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "List failed services"
+probe = "failed_services"
+os = ["linux"]
+
+[[phase.step]]
+name = "Read this boot's errors"
+probe = "boot_errors"
+os = ["linux"]
+
+[[phase.step]]
+name = "Check installed packages for missing files"
+probe = "package_health"
+os = ["linux"]
+
+[[phase.step]]
+name = "List pending updates from the lists already on disk"
+probe = "pending_updates"
+os = ["linux"]
+
+[[phase.step]]
+name = "Check disk space"
+probe = "disk_usage"
+os = ["linux"]
+
+[[phase.step]]
+name = "Check memory"
+probe = "memory"
+os = ["linux"]
+
+[[phase.step]]
+name = "Check network links"
+probe = "network_links"
+os = ["linux"]
+
+[[phase.step]]
+name = "Check name lookups (DNS)"
+probe = "dns"
+os = ["linux"]
+
+[[phase.step]]
+name = "List listening ports (ss -tuln) and name what owns each"
+os = ["linux"]
+
+[[phase.step]]
+name = "List services set to start that aren't running"
+probe = "services_stopped_auto"
+os = ["windows"]
+
+[[phase.step]]
+name = "Read the last day's system errors"
+probe = "event_errors_24h"
+os = ["windows"]
+
+[[phase.step]]
+name = "Check disk space"
+probe = "volumes"
+os = ["windows"]
+
+[[phase.step]]
+name = "Test the internet connection and name lookups"
+probe = "net_test"
+os = ["windows"]
+
+[[phase.step]]
+name = "List app updates"
+probe = "winget_upgrades"
+os = ["windows"]
+
+[[phase.step]]
+name = "Check Windows Update and pending restarts"
+probe = "wu_pending"
+os = ["windows"]
+
+[[phase.step]]
+name = "Check disk space (df -h)"
+os = ["macos"]
+
+[[phase.step]]
+name = "Read the last hour's errors from the system log"
+os = ["macos"]
+
+[[phase.step]]
+name = "List background services that keep failing (launchctl list)"
+os = ["macos"]
+
+[[phase.step]]
+name = "List macOS updates (softwareupdate --list)"
+os = ["macos"]
+
+[[phase.step]]
+name = "Check the network and name lookups"
+os = ["macos"]
+
+[[phase.step]]
+name = "A permission-denied answer means the check needs admin rights, not that something is missing; say that plainly"
+
+[[phase]]
+name = "Back up"
+tier = "safe"
+
+[[phase.step]]
+name = "Take a restore point before the first change"
+
+[[phase.step]]
+name = "Copy a config file before editing it"
+run = "cp -a /etc/example.conf /etc/example.conf.bak"
+os = ["linux", "macos"]
+
+[[phase]]
+name = "Fix"
+tier = "safe"
+
+[[phase.step]]
+name = "Restart a failed service"
+run = "systemctl restart example.service"
+os = ["linux"]
+
+[[phase.step]]
+name = "On KDE Plasma: restart the desktop shell"
+run = "systemctl --user restart plasma-plasmashell"
+os = ["linux"]
+
+[[phase.step]]
+name = "Clear cached website addresses"
+run = "resolvectl flush-caches"
+os = ["linux"]
+
+[[phase.step]]
+name = "Start a stopped service"
+run = "Start-Service -Name Spooler"
+os = ["windows"]
+
+[[phase.step]]
+name = "Clear cached website addresses"
+run = "ipconfig /flushdns"
+os = ["windows"]
+
+[[phase.step]]
+name = "Restart a stuck background service with launchctl kickstart"
+os = ["macos"]
+
+[[phase.step]]
+name = "Fix the setting itself, like a unit's path, keeping the .bak; a symlink around it is only a stopgap"
+
+[[phase.step]]
+name = "Re-check with the same probe"
+
+[[phase]]
+name = "Bigger fixes"
+tier = "risky"
+
+[[phase.step]]
+name = "On Arch: reinstall packages with missing files"
+run = "sudo pacman -S --noconfirm example-package"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Arch: install pending updates"
+run = "sudo pacman -Syu --noconfirm"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Arch: delete old installer copies to free space"
+run = "sudo paccache -rk1"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Debian or Ubuntu: reinstall a broken package"
+run = "sudo apt-get install --reinstall -y example-package"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Debian or Ubuntu: install pending updates"
+run = "sudo apt-get upgrade -y"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Debian or Ubuntu: delete old installer copies to free space"
+run = "sudo apt-get autoclean"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Fedora: reinstall a broken package"
+run = "sudo dnf reinstall -y example-package"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Fedora: install pending updates"
+run = "sudo dnf upgrade -y"
+os = ["linux"]
+
+[[phase.step]]
+name = "On Fedora: delete old installer copies to free space"
+run = "sudo dnf clean packages"
+os = ["linux"]
+
+[[phase.step]]
+name = "Repair system files"
+run = "sfc /scannow"
+os = ["windows"]
+
+[[phase.step]]
+name = "Repair the Windows image"
+run = "DISM /Online /Cleanup-Image /RestoreHealth"
+os = ["windows"]
+
+[[phase.step]]
+name = "Install app updates"
+run = "winget upgrade --all"
+os = ["windows"]
+
+[[phase.step]]
+name = "Delete temporary files to free space"
+run = "Remove-Item -Path $env:TEMP\\* -Recurse -Force"
+os = ["windows"]
+
+[[phase.step]]
+name = "Install macOS updates"
+run = "sudo softwareupdate --install --all"
+os = ["macos"]
+
+[[phase.step]]
+name = "Run First Aid on the startup disk"
+run = "diskutil repairVolume /"
+os = ["macos"]

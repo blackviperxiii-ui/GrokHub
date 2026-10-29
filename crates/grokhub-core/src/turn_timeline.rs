@@ -365,6 +365,65 @@ pub fn turn_says(content: &str) -> Option<String> {
     Some(says.join("\n\n"))
 }
 
+/// Text with no saved-turn labels, for a model prompt or the screen. A timeline,
+/// or a reply that echoes one, keeps only its replies: thoughts and tool rows go.
+/// A label left anywhere else in a line is dropped.
+pub fn strip_turn_labels(text: &str) -> String {
+    if !text.contains("TURN_") {
+        return text.to_string();
+    }
+    let mut cut = text.len();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if is_turn_marker(line.trim_start()) {
+            cut = at;
+            break;
+        }
+        at += line.len();
+    }
+    let (head, tail) = text.split_at(cut);
+    let mut kept: Vec<String> = Vec::new();
+    if !head.trim().is_empty() {
+        kept.push(head.trim().to_string());
+    }
+    let tail: String = tail
+        .lines()
+        .map(|l| {
+            if is_turn_marker(l.trim_start()) {
+                l.trim_start()
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(says) = turn_says(&tail) {
+        kept.extend(
+            says.split("\n\n")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        );
+    }
+    kept.join("\n\n")
+        .lines()
+        .map(|line| {
+            let mut out = line.to_string();
+            for label in [TURN_THOUGHT, TURN_TOOL, TURN_SAY] {
+                out = out.replace(label, "");
+            }
+            if out.len() == line.len() {
+                out
+            } else {
+                out.split_whitespace().collect::<Vec<_>>().join(" ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 /// The newest reply segment of a live turn.
 pub fn last_say(blocks: &[LiveBlock]) -> Option<&str> {
     blocks
@@ -834,5 +893,30 @@ mod tests {
         let kept = views_up_to_last_user(&views);
         assert_eq!(kept.len(), 3);
         assert_eq!(kept[2].body, "again");
+    }
+
+    #[test]
+    fn turn_labels_never_reach_a_prompt_or_the_screen() {
+        let echoed = "Haha, nope.\nTURN_THOUGHT:\nthey are joking about a friend\nTURN_SAY:\nI'd rather roast her aim.";
+        assert_eq!(
+            strip_turn_labels(echoed),
+            "Haha, nope.\n\nI'd rather roast her aim."
+        );
+        let mut b = Vec::new();
+        append_thought(&mut b, "Plan the reply.");
+        append_tool(&mut b, "t1", "Read notes", "done", "");
+        append_say(&mut b, "First line.");
+        append_thought(&mut b, "Second thought.");
+        append_say(&mut b, "Done.");
+        assert_eq!(strip_turn_labels(&encode_turn(&b)), "First line.\n\nDone.");
+        assert_eq!(strip_turn_labels("ok TURN_SAY: hi"), "ok hi");
+        assert_eq!(
+            strip_turn_labels("  TURN_SAY:\nIndented echo."),
+            "Indented echo."
+        );
+        assert_eq!(
+            strip_turn_labels("Plain reply.\n\nTwo lines."),
+            "Plain reply.\n\nTwo lines."
+        );
     }
 }

@@ -273,6 +273,7 @@ impl Cabin {
             self.persist_cfg();
         }
         self.tick_nudge_watchers();
+        self.tick_screenshot_offer();
         self.tick_ask_offers();
         self.tick_hobby_paths();
     }

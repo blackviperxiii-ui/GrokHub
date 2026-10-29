@@ -409,14 +409,14 @@ mod tests {
         (root, skills)
     }
 
-    /// Repair Linux as shipped, with LF line endings.
+    /// Fix this PC as shipped, with LF line endings.
     fn linux() -> String {
         grokhub_core::playbook::BUILTIN[1].replace("\r\n", "\n")
     }
 
-    /// Repair Linux with the listening-ports check moved to the front.
+    /// Fix this PC with the listening-ports check moved to the front.
     fn ports_first() -> String {
-        let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";
+        let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\nos = [\"linux\"]\n\n";
         let first = "[[phase.step]]\nname = \"List failed services\"";
         let text = linux();
         assert!(text.contains(ports) && text.contains(first));
@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn a_playbook_step_tweak_runs_as_a_trial_and_is_kept_with_a_named_note() {
         let (root, skills) = dirs("brain-tune-keep");
-        let target = "playbook:repair-linux";
+        let target = "playbook:pc-fix";
         assert_eq!(user_version(&root, target).unwrap(), "", "no user copy yet");
         let new = ports_first();
         let tweak = Tweak {
@@ -499,14 +499,14 @@ mod tests {
             ),
             (
                 "playbook",
-                "repair-linux",
-                "playbook:repair-linux",
+                "pc-fix",
+                "playbook:pc-fix",
                 100,
                 VersionStatus::Canary
             )
         );
         assert_eq!(v.diff, "+0 -0 lines", "a moved step adds and drops no line");
-        let path = root.join("playbooks").join("repair-linux.toml");
+        let path = root.join("playbooks").join("pc-fix.toml");
         assert_eq!(
             file(&path).as_deref(),
             Some(new.as_str()),
@@ -525,7 +525,7 @@ mod tests {
                 "self-tune: Linux repair checks ports before services"
             )
         );
-        let b = brain("repair × critical", "repair-linux");
+        let b = brain("repair × critical", "pc-fix");
         let all = runs(&v, &b, (12, 9), (9, 7));
         assert!(
             settle_trials(&root, &skills, &all, v.started_at + 100).is_empty(),
@@ -545,7 +545,8 @@ mod tests {
             "kept: the tweak stays"
         );
         let (books, _) = crate::brain::playbook::load(&root);
-        let picked = crate::brain::playbook::pick(&books, "repair", "system", "linux").unwrap();
+        let picked =
+            crate::brain::playbook::pick(&books, "repair", "system", "linux", "calm").unwrap();
         assert_eq!(
             picked.phases[0].steps[0].name,
             "List listening ports (ss -tuln) and name what owns each"
@@ -593,7 +594,7 @@ mod tests {
         );
         let all = runs(
             &v,
-            &brain("repair × critical", "repair-linux"),
+            &brain("repair × critical", "pc-fix"),
             (10, 10),
             (10, 12),
         );
@@ -624,12 +625,12 @@ mod tests {
     #[test]
     fn a_tweak_built_on_an_old_user_version_is_never_applied_over_the_newer_edit() {
         let (root, skills) = dirs("brain-tune-stale");
-        let target = "playbook:repair-linux";
+        let target = "playbook:pc-fix";
         let old_base = user_version(&root, target).unwrap();
-        // The user edits Repair Linux in Settings: a ledger line by the user.
+        // The user edits Fix this PC in Settings: a ledger line by the user.
         let mine = linux().replace("summary = \"", "summary = \"Mine. ");
         crate::brain::playbook::save(&root, &mine).unwrap();
-        let path = root.join("playbooks").join("repair-linux.toml");
+        let path = root.join("playbooks").join("pc-fix.toml");
         let lines = ChangeLedger::load_kind(&root, ChangeKind::Playbook);
         assert_eq!(
             lines
@@ -649,7 +650,7 @@ mod tests {
         };
         assert_eq!(
             propose(&root, &tweak, 1).unwrap_err(),
-            "Your playbook Repair Linux changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
+            "Your playbook Fix this PC changed since this tweak was proposed, so it was not applied; GrokHub proposes again on your version"
         );
         assert_eq!(
             file(&path).as_deref(),
@@ -677,7 +678,7 @@ mod tests {
         fs::write(&path, &by_hand).unwrap();
         let all = runs(
             &v,
-            &brain("repair × critical", "repair-linux"),
+            &brain("repair × critical", "pc-fix"),
             (10, 10),
             (10, 30),
         );
@@ -723,9 +724,9 @@ mod tests {
     fn protected_tweaks_are_refused_logged_and_write_nothing() {
         let (root, _) = dirs("brain-tune-guard");
         let text = linux();
-        let pb = "playbook:repair-linux";
+        let pb = "playbook:pc-fix";
         let restore = "[[phase.step]]\nname = \"Take a restore point before the first change\"\n\n";
-        let reinstall = "name = \"Reinstall packages with missing files\"\n";
+        let reinstall = "name = \"On Arch: reinstall packages with missing files\"\n";
         let backup = text.lines().find(|l| l.starts_with("backup = ")).unwrap();
         let critical = {
             let rows = grokhub_core::brain_policy::builtin_policy();
@@ -736,17 +737,17 @@ mod tests {
             policy_text(&[row]).unwrap()
         };
         let cases: Vec<(&str, String, &str)> = vec![
-            (pb, text.replace(restore, ""), "GrokHub never removes the \"Take a restore point before the first change\" step from Repair Linux on its own"),
+            (pb, text.replace(restore, ""), "GrokHub never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"),
             (
                 pb,
                 text.replace("\n[[phase.step]]\nname = \"Re-check with the same probe\"\n", "\n"),
-                "GrokHub never removes the \"Re-check with the same probe\" step from Repair Linux on its own",
+                "GrokHub never removes the \"Re-check with the same probe\" step from Fix this PC on its own",
             ),
-            (pb, text.replace(backup, "backup = \"\""), "GrokHub never empties the back-up or check of Repair Linux on its own"),
+            (pb, text.replace(backup, "backup = \"\""), "GrokHub never empties the back-up or check of Fix this PC on its own"),
             (
                 pb,
                 text.replace(reinstall, &format!("{reinstall}tier = \"safe\"\n")),
-                "GrokHub never lowers the care of Repair Linux on its own: \"Reinstall packages with missing files\" was risky, asks first",
+                "GrokHub never lowers the care of Fix this PC on its own: \"On Arch: reinstall packages with missing files\" was risky, asks first",
             ),
             ("policy:repair-critical", critical, "GrokHub never lowers the repair × critical row on its own"),
             ("policy:approval-critical", String::new(), "GrokHub never changes the gate on its own"),
@@ -847,7 +848,7 @@ mod tests {
 
     const NOW: u64 = 400 * DAY;
 
-    /// `n` repair runs on Repair Linux in the last week, `failed` of them
+    /// `n` repair runs on Fix this PC in the last week, `failed` of them
     /// failed; plus eight good runs on the same policy row with no playbook,
     /// so the row itself is not weak.
     fn weekly_runs(root: &Path, n: usize, failed: usize) -> Vec<RunMetrics> {
@@ -867,7 +868,7 @@ mod tests {
             ..Default::default()
         };
         for i in 0..n {
-            grokhub_core::run_metrics::append_run(root, &line(i, "repair-linux", i >= failed), 0)
+            grokhub_core::run_metrics::append_run(root, &line(i, "pc-fix", i >= failed), 0)
                 .unwrap();
         }
         for i in 0..8 {
@@ -910,12 +911,12 @@ mod tests {
                 ask.stats.failures,
                 ask.stats.verified
             ),
-            (BrainKind::Playbook, "repair-linux", 6, 3, 3)
+            (BrainKind::Playbook, "pc-fix", 6, 3, 3)
         );
-        assert_eq!(ask.stats.target(), "playbook:repair-linux");
+        assert_eq!(ask.stats.target(), "playbook:pc-fix");
         assert_eq!(
             ask.stats.numbers(),
-            "3 of 6 runs on the repair-linux playbook needed a fix"
+            "3 of 6 runs on the pc-fix playbook needed a fix"
         );
         assert_eq!(
             (ask.base.as_str(), ask.text.replace("\r\n", "\n")),
@@ -926,12 +927,12 @@ mod tests {
         let reply = format!(
             "{}{}{}",
             tweak_block(
-                "playbook:repair-linux",
+                "playbook:pc-fix",
                 "Linux repair checks ports before services",
                 &new
             ),
             tweak_block(
-                "playbook:repair-linux",
+                "playbook:pc-fix",
                 "A second try",
                 &linux().replace("summary = \"", "summary = \"Again. ")
             ),
@@ -943,8 +944,8 @@ mod tests {
         assert_eq!(asked.len(), 1, "one model call");
         assert!(
             asked[0].contains(
-                "Brain playbook this week: 3 of 6 runs on the repair-linux playbook needed a fix."
-            ) && asked[0].contains("TUNE_BRAIN: playbook:repair-linux | <short title>"),
+                "Brain playbook this week: 3 of 6 runs on the pc-fix playbook needed a fix."
+            ) && asked[0].contains("TUNE_BRAIN: playbook:pc-fix | <short title>"),
             "{}",
             asked[0]
         );
@@ -956,7 +957,7 @@ mod tests {
                 tweak.proposal.text.as_str()
             ),
             (
-                "playbook:repair-linux",
+                "playbook:pc-fix",
                 "Linux repair checks ports before services",
                 new.as_str()
             )
@@ -968,7 +969,7 @@ mod tests {
             .collect();
         assert_eq!(
             refused,
-            vec![("policy:repair-critical", "a weekly Brain tweak may only change the repair-linux playbook")],
+            vec![("policy:repair-critical", "a weekly Brain tweak may only change the pc-fix playbook")],
             "only one Brain tweak a pass: the second for the playbook is dropped, another target refused"
         );
         let v = apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap();
@@ -981,7 +982,7 @@ mod tests {
                 v.target
             ),
             (
-                "playbook:repair-linux",
+                "playbook:pc-fix",
                 "Linux repair checks ports before services",
                 100,
                 VersionStatus::Canary,
@@ -990,7 +991,7 @@ mod tests {
         );
         assert_eq!(read_versions(&root).len(), 1, "one trial");
         assert_eq!(
-            file(&root.join("playbooks").join("repair-linux.toml")).as_deref(),
+            file(&root.join("playbooks").join("pc-fix.toml")).as_deref(),
             Some(new.as_str())
         );
         assert_eq!(
@@ -1022,7 +1023,7 @@ mod tests {
         assert_eq!(brain_ask(&old, &runs, NOW + 8 * DAY), None);
         // Without an ask, a Brain tweak in the reply is refused and nothing is tried.
         let client = fake(tweak_block(
-            "playbook:repair-linux",
+            "playbook:pc-fix",
             "Ports first",
             &ports_first(),
         ));
@@ -1034,7 +1035,7 @@ mod tests {
                 .map(|r| (r.target.as_str(), r.why.as_str()))
                 .collect::<Vec<_>>(),
             vec![(
-                "playbook:repair-linux",
+                "playbook:pc-fix",
                 "this week's review asked for no Brain tweak"
             )]
         );
@@ -1050,14 +1051,14 @@ mod tests {
         let dropped = linux().replace(restore, "");
         assert_ne!(dropped, linux());
         let client = fake(tweak_block(
-            "playbook:repair-linux",
+            "playbook:pc-fix",
             "Skip the restore point",
             &dropped,
         ));
         let tweak = weekly(&root, &client, Some(&ask)).brain.expect("parsed");
         assert_eq!(
             apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap_err(),
-            "GrokHub never removes the \"Take a restore point before the first change\" step from Repair Linux on its own"
+            "GrokHub never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"
         );
         assert!(read_versions(&root).is_empty(), "no trial");
         assert!(!root.join("playbooks").exists(), "nothing written");

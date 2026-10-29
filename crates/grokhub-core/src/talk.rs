@@ -3,9 +3,9 @@
 //! repair or research run ends with a findings card, and background work
 //! stays quiet. The style is a short block in the volatile tail of the
 //! system prompt, after the personality voice and before the closing
-//! reminder that the cabin safety rules win. A personality sets tone only;
-//! the style sets length and shape. Approval questions stay plain in every
-//! style and every personality.
+//! reminder that the cabin safety rules win. A personality sets tone, and in
+//! natural chat its length too; every other style sets length and shape.
+//! Approval questions stay plain in every style and every personality.
 
 /// First words of every style block, so a later turn can swap it in place.
 pub const STYLE_HEAD: &str = "Talk style for this turn:";
@@ -17,6 +17,9 @@ pub const VOLATILE_SAFETY_CLOSER: &str =
 
 /// Closes every style block, the same layering rule as a personality's.
 pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+
+/// Closes the natural-chat block: there the personality sets length too.
+pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
@@ -47,7 +50,7 @@ pub enum TalkStyle {
     Quiet,
     /// Creative: the draft, then one line.
     Draft,
-    /// Care-first casual chat. The length is a target, not a hard stop.
+    /// Hanging out: the personality sets the length, and there is no cap.
     Natural,
 }
 
@@ -89,8 +92,7 @@ impl TalkStyle {
             Self::Findings => Some(AFTER_CARD_WORDS),
             Self::Summary => Some(SUMMARY_WORDS),
             Self::Quiet => Some(QUIET_WORDS),
-            Self::Draft => None,
-            Self::Natural => Some(SHORT_REPLY_WORDS),
+            Self::Draft | Self::Natural => None,
         }
     }
 
@@ -104,7 +106,7 @@ impl TalkStyle {
             Self::Summary => ("summary with links", "under"),
             Self::Quiet => ("quiet", "under"),
             Self::Draft => ("draft", ""),
-            Self::Natural => ("natural", "about"),
+            Self::Natural => return "natural, personality sets length".into(),
         };
         match self.reply_cap_words() {
             Some(words) => format!("{name}, {cap} {words} words"),
@@ -118,7 +120,7 @@ impl TalkStyle {
     }
 
     /// [`block`] with soft length targets on the 60, 150 and 120 styles.
-    /// Natural always uses the soft casual target. Other styles stay exact.
+    /// Natural has no target. Other styles stay exact.
     pub fn prompt_block(self, soft: bool) -> String {
         let body = match self {
             Self::Short if soft => format!(
@@ -149,9 +151,11 @@ impl TalkStyle {
                 "background work. Say only what the person needs, under {QUIET_WORDS} words; leave suggestions as one-tap cards."
             ),
             Self::Draft => "creative. Deliver the draft itself, then at most one line about it.".into(),
-            Self::Natural => format!(
-                "natural conversation. Aim for about {SHORT_REPLY_WORDS} words, and go longer when care needs it. No headings, lists or preamble."
-            ),
+            Self::Natural => {
+                return format!(
+                    "{STYLE_HEAD} natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n{NATURAL_LINE}"
+                )
+            }
         };
         format!("{STYLE_HEAD} {body}\n{STYLE_LINE}")
     }
@@ -172,7 +176,7 @@ pub fn soft_cap_words(style: TalkStyle) -> Option<usize> {
     let hard = style.reply_cap_words()?;
     let slack = matches!(
         style,
-        TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress | TalkStyle::Natural
+        TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress
     );
     Some(if slack { hard + hard / 5 * 2 } else { hard })
 }
@@ -183,7 +187,7 @@ pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
         .is_none_or(|cap| reply_words(reply) <= cap)
 }
 
-/// The care-first check. Short, concise, progress and natural may run past
+/// The care-first check. Short, concise and progress may run past
 /// the hard target up to [`soft_cap_words`].
 pub fn fits_soft_cap(style: TalkStyle, reply: &str) -> bool {
     soft_cap_words(style).is_none_or(|cap| reply_words(reply) <= cap)
@@ -227,7 +231,7 @@ mod tests {
 
     #[test]
     fn each_shipped_row_names_its_style() {
-        assert_eq!(style("chat", "casual"), TalkStyle::Short);
+        assert_eq!(style("chat", "casual"), TalkStyle::Natural);
         assert_eq!(style("question", "careful"), TalkStyle::Concise);
         assert_eq!(style("question", "casual"), TalkStyle::Concise);
         assert_eq!(style("task", "careful"), TalkStyle::Progress);
@@ -253,7 +257,7 @@ mod tests {
                 soft_cap_words(TalkStyle::Progress),
                 soft_cap_words(TalkStyle::Natural),
             ),
-            (Some(84), Some(210), Some(168), Some(84))
+            (Some(84), Some(210), Some(168), None)
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
         assert_eq!(TalkStyle::Concise.reply_cap_words(), Some(150));
@@ -269,15 +273,9 @@ mod tests {
         assert!(TalkStyle::Progress
             .prompt_block(true)
             .contains("about 120 words"));
-        assert!(TalkStyle::Natural.block().contains("about 60 words"));
-        assert!(TalkStyle::Natural
-            .block()
-            .contains("go longer when care needs it"));
-        let past_hard = "word ".repeat(61);
         let past_soft = "word ".repeat(85);
-        assert!(!fits_cap(TalkStyle::Natural, &past_hard));
-        assert!(fits_soft_cap(TalkStyle::Natural, &past_hard));
-        assert!(!fits_soft_cap(TalkStyle::Natural, &past_soft));
+        assert!(fits_cap(TalkStyle::Natural, &"word ".repeat(400)));
+        assert!(fits_soft_cap(TalkStyle::Natural, &"word ".repeat(400)));
         assert!(fits_soft_cap(TalkStyle::Short, &"word ".repeat(84)));
         assert!(!fits_soft_cap(TalkStyle::Short, &past_soft));
         assert_eq!(soft_cap_words(TalkStyle::Findings), Some(80));
@@ -301,6 +299,22 @@ mod tests {
         assert!(fits_cap(TalkStyle::Draft, &rambling));
         assert!(TalkStyle::Progress.progress_notes() && TalkStyle::Findings.progress_notes());
         assert!(!TalkStyle::Short.progress_notes() && !TalkStyle::Summary.progress_notes());
+    }
+
+    #[test]
+    fn hanging_out_lets_the_personality_set_length_and_never_signs_off() {
+        let block = TalkStyle::Natural.block();
+        assert_eq!(
+            block,
+            "Talk style for this turn: natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n\
+             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+        );
+        assert_eq!(TalkStyle::Natural.prompt_block(true), block);
+        assert!(!block.contains("words"));
+        assert!(!block.contains(STYLE_LINE));
+        // Task turns keep their caps.
+        assert!(TalkStyle::Progress.block().contains("under 120 words"));
+        assert!(TalkStyle::Concise.block().contains(STYLE_LINE));
     }
 
     #[test]
@@ -392,7 +406,7 @@ mod tests {
                 ("summary with links, under 200 words".to_string(), Some(200)),
                 ("quiet, under 40 words".to_string(), Some(40)),
                 ("draft, no length cap".to_string(), None),
-                ("natural, about 60 words".to_string(), Some(60)),
+                ("natural, personality sets length".to_string(), None),
             ]
         );
         for (style, reply) in GOLDEN {

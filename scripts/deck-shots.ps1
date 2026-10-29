@@ -182,6 +182,59 @@ function Seed-Pulse([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
 }
 
+# Backup reminder: a repo under code\my-app whose last two commits, from four
+# days ago, were never pushed to its (local, bare) upstream.
+function Seed-Backup([string]$root) {
+    $code = Join-Path $root 'code'
+    $repo = Join-Path $code 'my-app'
+    $bare = Join-Path $root 'origin.git'
+    New-Item -ItemType Directory -Force -Path $repo | Out-Null
+    git init -q --bare $bare 2>&1 | Out-Null
+    git -C $repo init -q -b main 2>&1 | Out-Null
+    git -C $repo config user.name 'user' 2>&1 | Out-Null
+    git -C $repo config user.email 'user@example.com' 2>&1 | Out-Null
+    Write-Utf8 (Join-Path $repo 'README.md') 'my-app'
+    git -C $repo add -A 2>&1 | Out-Null
+    git -C $repo commit -q -m 'Start my-app' 2>&1 | Out-Null
+    git -C $repo remote add origin $bare 2>&1 | Out-Null
+    git -C $repo push -q -u origin main 2>&1 | Out-Null
+    $old = (Get-Date).AddDays(-4).ToString('yyyy-MM-ddTHH:mm:ss')
+    $env:GIT_AUTHOR_DATE = $old
+    $env:GIT_COMMITTER_DATE = $old
+    foreach ($m in 'Add the settings page', 'Fix the save button') {
+        Add-Content -Path (Join-Path $repo 'README.md') -Value $m
+        git -C $repo commit -q -a -m $m 2>&1 | Out-Null
+    }
+    Remove-Item Env:GIT_AUTHOR_DATE, Env:GIT_COMMITTER_DATE
+    return $code
+}
+
+# Internet drop log: on, with three drops between 1 and 3 AM UTC last night
+# and no daily card yet, so the first probe after launch posts the pattern
+# card through the real path. Runners keep UTC, so the hours read as local.
+function Seed-NetLog([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow
+    $night = [DateTimeOffset]::new($now.UtcDateTime.Date, [TimeSpan]::Zero)
+    if ($now.Hour -lt 3) { $night = $night.AddDays(-1) }
+    $outages = @()
+    foreach ($d in @(@(108, 4), @(124, 11), @(151, 6))) {
+        $start = $night.AddMinutes($d[0]).ToUnixTimeMilliseconds()
+        $outages += @{ startMs = $start; endMs = $start + $d[1] * 60000; offsetMin = 0 }
+    }
+    $log = @{ on = $true; outages = $outages; slow = @(); speed = @(); lastInsightMs = 0 }
+    Write-Utf8 (Join-Path $cfg 'net-log.json') ($log | ConvertTo-Json -Depth 4)
+}
+
+# Release radar: on, never checked, and a release-day reminder that came due
+# an hour ago, so launch posts "Out today" through the real reminder path and
+# the live store check runs for the seeded library.
+function Seed-Radar([string]$cfg) {
+    $due = [DateTimeOffset]::UtcNow.AddHours(-1).ToUnixTimeMilliseconds()
+    $radar = @{ on = $true; lastCheckMs = 0; posted = @();
+                reminders = @{ '1030300' = @{ name = 'Hollow Knight: Silksong'; dateMs = $due } } }
+    Write-Utf8 (Join-Path $cfg 'release-radar.json') ($radar | ConvertTo-Json -Depth 4)
+}
+
 # Repeated asks: three evening "patch notes" asks on three days, so the
 # cabin's own clustering posts the Automate offer card at launch.
 function Seed-AskOffers([string]$cfg) {
@@ -224,12 +277,16 @@ function Write-ModelDrop([string]$root) {
 # selected, for slide 19 shots. $mood pins Nyx's corner box picture
 # (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
 # since no turn or game runs here; every shot defaults to hanging-out.
+# $pinBehavior opens Settings →
+# Behavior for the Screenshot explain toggle. $screenshotOffer seeds a live
+# Explain-this chip (path+mtime ledger only; no image bytes). $openSettings
+# opens Settings on that section at launch; $libraryPick selects a Steam app.
 # $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
 # home, pulse or library) instead of a rail click; the cabin closes the
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$localModels, [switch]$modelDrop, [string]$nav = '', [switch]$askOffer) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [switch]$askOffer) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -241,14 +298,39 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($personality) { $app.personality = $personality }
     if ($pinPersonality) {
         if (-not $personality) { $app.personality = 'viper' }
-        $app.explicit_personalities = $true
+        if (-not $ageCheck) { $app.explicit_personalities = $true }
     }
     if ($library) {
         Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday' $false
         Seed-Library $root
-    } elseif ($dock) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
+    } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
     if ($askOffer) { Seed-AskOffers $cfg }
+    if ($backup) {
+        $app.backupNudge = $true
+        $app.codeFolders = @(Seed-Backup $root)
+    }
+    if ($netLog) {
+        Seed-NetLog $cfg
+        $app.netLog = $true
+    }
+    if ($screenshotOffer -or $pinBehavior) {
+        $app.screenshotExplain = @{ enabled = $true }
+    }
+    if ($radar) {
+        Seed-Radar $cfg
+        # The launch source check (and so the reminder) skips quiet hours.
+        $app.quietStart = '00:00'; $app.quietEnd = '00:00'
+    }
+    if ($gameLaunch) {
+        # Game launch companion: a real Steam game last played 30 days ago, so
+        # the card has its news since then; Steam's RunningAppID marks the launch.
+        $app.gameCompanion = $true
+        # A game already running at start is not a launch: clear it first.
+        if (Test-Path 'HKCU:\Software\Valve\Steam') { Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 0 -Type DWord }
+        $last = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 30 * 86400
+        Write-Utf8 (Join-Path $root '.steam/steam/steamapps/appmanifest_1086940.acf') "`"AppState`"`n{`n`"appid`" `"1086940`"`n`"name`" `"Baldur's Gate 3`"`n`"LastPlayed`" `"$last`"`n}`n"
+    }
     if ($modelDrop) {
         $app.modelDrop = $true
         New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
@@ -257,6 +339,18 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # Viper is adults-only; without this the titlebar falls back to Nyx.
     if ($app.personality -eq 'viper') { $app.explicitPersonalities = $true }
     Write-Utf8 (Join-Path $cfg 'app.json') ($app | ConvertTo-Json -Depth 4)
+    if ($screenshotOffer) {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $ledger = @{
+            lastSeenModifiedMs = $now
+            lastTickMs = $now
+            pending = @{
+                path = 'C:\Users\user\Pictures\Screenshots\ExplainMe.png'
+                offeredAtMs = $now
+            }
+        }
+        Write-Utf8 (Join-Path $cfg 'screenshot-offer.json') ($ledger | ConvertTo-Json -Depth 4 -Compress)
+    }
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
     $env:USERPROFILE = $root
@@ -267,6 +361,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
         $env:GROKHUB_DECK_LOCAL_MODELS = '1'
@@ -274,16 +369,23 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($libraryPick) { $env:GROKHUB_DECK_LIBRARY_PICK = $libraryPick } else { Remove-Item Env:GROKHUB_DECK_LIBRARY_PICK -ErrorAction SilentlyContinue }
     if (-not $mood) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
-    if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
-    if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' }
-    elseif ($openSettings) { $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings }
-    else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
-    # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
-    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
+    $env:GROKHUB_DECK_CHAT = $chat
+    if ($ageCheck) { $env:GROKHUB_DECK_AGE_CHECK = '1' } else { Remove-Item Env:GROKHUB_DECK_AGE_CHECK -ErrorAction SilentlyContinue }
+    if ($pinPersonality) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'personality'
+    } elseif ($pinBehavior) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = 'behavior'
+    } elseif ($openSettings) {
+        $env:GROKHUB_DECK_SETTINGS_SEC = $openSettings
+    } else {
+        Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue
+    }
+    # $openSettings / $pinPersonality / $pinBehavior open Settings at launch, with no click.
+    $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality -or $pinBehavior) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
     # Home is never seeded. Other pinned $nav pages keep the seeded list (its
     # titlebar count) and the cabin closes the popover over them.
-    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
+    $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $pinBehavior -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -299,6 +401,12 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($gameLaunch) {
+        if (-not (Test-Path 'HKCU:\Software\Valve\Steam')) { New-Item -Path 'HKCU:\Software\Valve\Steam' -Force | Out-Null }
+        Set-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name 'RunningAppID' -Value 1086940 -Type DWord
+        # Sampled every 5 s; the news comes back from Steam on a worker.
+        Start-Sleep -Seconds 20
+    }
     if ($modelDrop) {
         # Downloads is listed every 20 s; the next scan finds the new file.
         Write-ModelDrop $root

@@ -15,6 +15,10 @@ pub const EXTENSIONS: &[&str] = &["stl", "3mf", "obj", "step", "stp"];
 pub const PREVIEW_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// Triangles drawn for a preview; bigger meshes are sampled.
 const PREVIEW_TRIS: usize = 200_000;
+/// Inflated size caps for the 3MF entries read for a preview, so a small
+/// archive can't expand without bound.
+const THREEMF_THUMB_MAX: u64 = 16 * 1024 * 1024;
+const THREEMF_MODEL_MAX: u64 = 256 * 1024 * 1024;
 
 /// Whether a file name has a model extension. The only test a file gets
 /// before the cabin looks at it any further.
@@ -166,14 +170,17 @@ pub fn parse_3mf(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Mesh>) {
     let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
         return (None, None);
     };
-    let mut read = |name: &str| -> Option<Vec<u8>> {
-        let mut file = zip.by_name(name).ok()?;
+    let mut read = |name: &str, max: u64| -> Option<Vec<u8>> {
+        let file = zip.by_name(name).ok()?;
+        if file.size() > max {
+            return None;
+        }
         let mut out = Vec::new();
-        file.read_to_end(&mut out).ok()?;
-        Some(out)
+        file.take(max + 1).read_to_end(&mut out).ok()?;
+        (out.len() as u64 <= max).then_some(out)
     };
-    let thumb = read("Metadata/thumbnail.png");
-    let mesh = read("3D/3dmodel.model")
+    let thumb = read("Metadata/thumbnail.png", THREEMF_THUMB_MAX);
+    let mesh = read("3D/3dmodel.model", THREEMF_MODEL_MAX)
         .and_then(|xml| String::from_utf8(xml).ok())
         .and_then(|xml| parse_3mf_model(&xml));
     (thumb, mesh)
@@ -434,13 +441,30 @@ pub fn windows_slicers(program_files: &[PathBuf]) -> Vec<Slicer> {
     out
 }
 
-fn quote(path: &Path) -> String {
-    format!("\"{}\"", path.to_string_lossy())
+/// `path` in double quotes for the host shell (PowerShell on Windows, bash
+/// elsewhere), escaping what the shell would still expand inside them, so a
+/// crafted file name can't end the quotes and run its own command.
+fn shell_quote(path: &Path, windows: bool) -> String {
+    let mut out = String::from("\"");
+    for c in path.to_string_lossy().chars() {
+        let special = if windows {
+            matches!(c, '`' | '$' | '"' | '\u{201c}' | '\u{201d}' | '\u{201e}')
+        } else {
+            matches!(c, '\\' | '$' | '`' | '"')
+        };
+        if special {
+            out.push(if windows { '`' } else { '\\' });
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 impl Slicer {
     /// The shell line that opens `model` in this slicer.
-    pub fn open_line(&self, model: &Path) -> String {
+    pub fn open_line(&self, model: &Path, windows: bool) -> String {
+        let quote = |p: &Path| shell_quote(p, windows);
         let mut parts = vec![quote(&self.program)];
         if self.program == Path::new("flatpak") {
             parts[0] = "flatpak".into();
@@ -532,7 +556,7 @@ impl ModelOffer {
             out.push(chip(
                 "open",
                 format!("Open {stem} in {}", s.name),
-                s.open_line(&self.file.path),
+                s.open_line(&self.file.path, windows),
                 ChipKind::Shell,
             ));
         }
@@ -555,7 +579,11 @@ impl ModelOffer {
         out.push(chip(
             "move",
             "Move to models".into(),
-            format!("{mv} \"{path}\" {}", quote(models)),
+            format!(
+                "{mv} {} {}",
+                shell_quote(&self.file.path, windows),
+                shell_quote(models, windows)
+            ),
             ChipKind::Shell,
         ));
         out
@@ -692,11 +720,11 @@ mod tests {
         assert_eq!(names, vec!["OrcaSlicer", "PrusaSlicer"]);
         let model = Path::new("/home/user/Downloads/benchy.stl");
         assert_eq!(
-            linux[0].open_line(model),
+            linux[0].open_line(model, false),
             "\"/usr/bin/orca-slicer\" \"/home/user/Downloads/benchy.stl\""
         );
         assert_eq!(
-            linux[1].open_line(model),
+            linux[1].open_line(model, false),
             "flatpak run com.prusa3d.PrusaSlicer \"/home/user/Downloads/benchy.stl\""
         );
         let pf = root.join("Program Files");
@@ -716,6 +744,66 @@ mod tests {
         );
         assert_eq!(win[0].program, creality.join("CrealityPrint.exe"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn zip_with(name: &str, body: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+        let opts = zip::write::SimpleFileOptions::default();
+        z.start_file(name, opts).unwrap();
+        std::io::Write::write_all(&mut z, body).unwrap();
+        z.finish().unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_3mf_entry_that_inflates_past_the_cap_is_not_read() {
+        let bomb = zip_with(
+            "Metadata/thumbnail.png",
+            &vec![0u8; THREEMF_THUMB_MAX as usize + 1],
+        );
+        assert!(bomb.len() < 1024 * 1024, "compressed {}", bomb.len());
+        assert_eq!(parse_3mf(&bomb).0.map(|t| t.len()), None);
+        let fits = zip_with("Metadata/thumbnail.png", b"\x89PNG fake");
+        assert_eq!(parse_3mf(&fits).0.as_deref(), Some(&b"\x89PNG fake"[..]));
+    }
+
+    #[test]
+    fn crafted_file_names_stay_inside_their_quotes() {
+        let orca = Slicer {
+            name: "OrcaSlicer",
+            program: "/usr/bin/orca-slicer".into(),
+            args: vec![],
+        };
+        let evil = Path::new("/home/user/Downloads/a\"; touch pwned; $(id) `id` \\\".stl");
+        assert_eq!(
+            orca.open_line(evil, false),
+            r#""/usr/bin/orca-slicer" "/home/user/Downloads/a\"; touch pwned; \$(id) \`id\` \\\".stl""#
+        );
+        let win = Slicer {
+            name: "Cura",
+            program: r"C:\Program Files\UltiMaker Cura 5.8.1\UltiMaker-Cura.exe".into(),
+            args: vec![],
+        };
+        let evil_win =
+            Path::new("C:\\Users\\user\\Downloads\\a\"; calc; $env:X `n \u{201c}x\u{201d}.stl");
+        assert_eq!(
+            win.open_line(evil_win, true),
+            "\"C:\\Program Files\\UltiMaker Cura 5.8.1\\UltiMaker-Cura.exe\" \"C:\\Users\\user\\Downloads\\a`\"; calc; `$env:X ``n `\u{201c}x`\u{201d}.stl\""
+        );
+        #[cfg(unix)]
+        {
+            let quoted = shell_quote(evil, false);
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!("printf '%s' {quoted}"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8(out.stdout).unwrap(),
+                evil.to_str().unwrap()
+            );
+        }
     }
 
     #[test]

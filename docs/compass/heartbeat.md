@@ -32,4 +32,4 @@
 - Throttle state is in memory: a relaunch starts a fresh budget. An act with no outcome after `ENGAGE_WINDOW_MS` counts as empty.
 - Halt drops an ideas or review reply still in flight; the HTTP call itself finishes in its thread.
 ## See also
-- [app-module](app-module.md), [app-config](app-config.md), [harness](harness.md), [grokhub-core](grokhub-core.md)
+- [app-module](app-module.md), [app-config](app-config.md), [harness](harness.md), [grokhub-core](grokhub-core.md), [self-improve](self-improve.md) (systems briefing / Start my day Digest)
