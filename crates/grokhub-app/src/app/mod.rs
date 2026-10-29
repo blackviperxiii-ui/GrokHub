@@ -5388,11 +5388,13 @@ impl eframe::App for Cabin {
         Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
+            // The rail goes first so it runs the full height on every page and
+            // its icons don't move when the Chat tab strip appears.
+            self.ui_sidebar(ui);
             // Chat tabs only in Chat — never on modular Home.
             if self.page_nav() == Nav::Chat {
                 self.ui_chat_tabs(ui);
             }
-            self.ui_sidebar(ui);
             self.ui_settings_menu(&ctx);
 
             if self.cfg.dock_panels && self.dock_covers_page() {
