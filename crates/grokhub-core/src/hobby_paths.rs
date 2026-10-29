@@ -776,6 +776,21 @@ mod tests {
     }
 
     #[test]
+    fn a_tip_reads_on_the_feed_where_its_controls_are() {
+        let step = next_step(HobbyId::Rust, &HobbyProgress::default()).expect("step");
+        let card = hobby_path_card(HobbyId::Rust, step, 5);
+        assert_eq!(card.kind, crate::UpdateKind::Suggestion);
+        assert!(!crate::pulse::is_idea_card(&card));
+        assert!(crate::pulse::is_feed_card(&card));
+        let mut plain = card.clone();
+        plain.pulse.hobby_path = None;
+        assert!(
+            crate::pulse::is_idea_card(&plain),
+            "other suggestions stay in Ideas"
+        );
+    }
+
+    #[test]
     fn path_generation_from_fixture_tags() {
         let tags = vec![
             tag("hobby: 3D printing", "3D printing"),
