@@ -37,7 +37,7 @@ pub fn appearance_choices() -> &'static [ThemeChoice] {
 }
 
 pub fn appearance_hint() -> &'static str {
-    "Ops Dark is the Loadout default. OLED Black and Soft Charcoal are variants. Dark, Light, and System keep the classic cabin look. System follows the desktop."
+    "Ops Dark is Loadout's default. OLED Black and Soft Charcoal are alternatives. Dark and Light keep the classic look; System follows your desktop."
 }
 
 pub fn theme_id(choice: ThemeChoice) -> &'static str {
@@ -202,8 +202,9 @@ mod tests {
         assert_eq!(theme_label(ThemeChoice::Dark), "Dark");
         assert_eq!(theme_label(ThemeChoice::Light), "Light");
         assert_eq!(theme_label(ThemeChoice::System), "System");
-        assert!(appearance_hint().contains("Ops Dark"));
-        assert!(appearance_hint().contains("System follows the desktop"));
+        assert!(appearance_hint().contains("Ops Dark is Loadout's default"));
+        assert!(!appearance_hint().contains("cabin"));
+        assert!(appearance_hint().contains("System follows your desktop"));
     }
 
     #[test]

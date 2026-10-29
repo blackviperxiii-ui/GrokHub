@@ -1764,7 +1764,7 @@ mod tests {
             "your edited action wins"
         );
         assert_eq!(
-            run_line(&idea("j", "Tidy the photos", "", 1)),
+            run_line(&idea("user", "Tidy the photos", "", 1)),
             "/bg Tidy the photos"
         );
         // 14:30 local → tomorrow 09:00; 07:15 local → today 09:00.

@@ -105,10 +105,11 @@ lockfile in step, and `bump --check` fails if they drift.
 - Tray: Show GrokHub and Quit. A left click shows the window.
 - `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
   plain-http loopback URLs are accepted, so it cannot move real traffic.
-- Tests: `npm test` in `ui/` (vitest), `cargo test` and clippy in
-  `src-tauri/`, and `node ui/e2e/smoke.mjs <binary>`. The smoke test drives the
-  built shell through tauri-driver, sends a chat to a mock model and waits for
-  the reply. tauri-driver has no macOS backend, so macOS only builds.
+- Tests: `npm run lint` and `npm test` in `ui/` (ESLint and Vitest),
+  `cargo test` and clippy in `src-tauri/`, and
+  `node ui/e2e/smoke.mjs <binary>`. The smoke test drives the built shell
+  through tauri-driver, sends a chat to a mock model and waits for the reply.
+  `tauri-driver` has no macOS backend, so macOS only builds.
 
 Build locally (Linux needs `libwebkit2gtk-4.1-dev`,
 `libayatana-appindicator3-dev` and `librsvg2-dev`):

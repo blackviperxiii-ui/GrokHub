@@ -289,11 +289,11 @@ fn general_section_opens_account() {
 }
 
 #[test]
-fn settings_cabin_defaults_section() {
+fn settings_defaults_section() {
     let settings = include_str!("settings.rs");
     assert!(
-        settings.contains("(SettingsSec::Defaults, \"Cabin defaults\")"),
-        "Cabin defaults is a Settings section"
+        settings.contains("(SettingsSec::Defaults, \"Defaults\")"),
+        "Defaults is a Settings section"
     );
     let defaults = settings
         .split("SettingsSec::Defaults => {")
@@ -322,6 +322,21 @@ fn settings_cabin_defaults_section() {
         cards.contains("pub fn session_row(") && cards.contains("(\"always-approve\", \"Always\")"),
         "composer pills stay the live session controls, including Always"
     );
+}
+
+#[test]
+fn appearance_applies_without_a_save_action() {
+    assert!(!super::settings::settings_save_visible(
+        super::SettingsSec::Appearance
+    ));
+    assert!(super::settings::settings_save_visible(
+        super::SettingsSec::Account
+    ));
+}
+
+#[test]
+fn home_api_key_hint_points_to_defaults() {
+    assert!(include_str!("pages.rs").contains("or add an API key in Settings → Defaults."));
 }
 
 #[test]

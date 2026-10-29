@@ -600,7 +600,10 @@ mod tests {
         assert_eq!(locked.destination_grant(HUB_DEST, &data), None);
         assert_eq!(locked.active().count(), 0);
         let why = grant_scope(&d, &Scope::Calendar, None, UserClick::from_click()).unwrap_err();
-        assert!(why.starts_with("Private data is locked"), "{why}");
+        assert!(
+            why.starts_with("Your private data is locked because"),
+            "{why}"
+        );
         assert_eq!(revoke_grant(&d, &g.id), Err(Locked::Unavailable.message()));
         assert_eq!(
             fs::read_to_string(consent_path(&d)).unwrap(),
