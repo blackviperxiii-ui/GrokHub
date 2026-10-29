@@ -285,7 +285,11 @@ impl Cabin {
             self.open_local_setup();
         }
         let dl_model = self.setup.dl.as_ref().map(|d| d.model);
-        if let Some(m) = self.ui_model_choice(ui) {
+        // The default comes from this PC's memory: read it before offering one.
+        self.read_setup_hardware();
+        if self.setup.hw.is_none() && self.setup.installed.is_none() && dl_model.is_none() {
+            crate::cards::settings_note(ui, super::setup_wizard::CHECKING_HW);
+        } else if let Some(m) = self.ui_model_choice(ui) {
             self.ui_model_pick_rows(ui, dl_model.unwrap_or(m));
         }
         if installed
@@ -517,6 +521,59 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_reads_this_pc_before_offering_a_default_model() {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("local-ai-default");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let texts = |cabin: &mut Cabin| {
+            let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+                cabin.ui_local_model_rows(ui)
+            });
+            let mut texts = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut texts);
+            }
+            texts
+        };
+        // Hardware not read yet: no dropdown to fall back to the catalog's biggest model.
+        let before = texts(&mut cabin);
+        assert!(
+            before
+                .iter()
+                .any(|t| t == super::super::setup_wizard::CHECKING_HW),
+            "{before:?}"
+        );
+        assert!(!before.iter().any(|t| t == "Local model"), "{before:?}");
+        // A 16 GB PC with no GPU: the dropdown starts on a model that fits.
+        cabin.setup.hw = Some(grokhub_core::local_setup::Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 16_384,
+            free_disk_mb: 200_000,
+        });
+        let after = texts(&mut cabin);
+        assert!(after.iter().any(|t| t == "Local model"), "{after:?}");
+        // The dropdown's closed line (recommended only where the CPU has AVX).
+        let shown = after
+            .iter()
+            .find(|t| t.starts_with("Gemma 4 "))
+            .unwrap_or_else(|| panic!("no model shown: {after:?}"));
+        assert!(shown.starts_with("Gemma 4 E"), "{shown}");
+        assert!(!shown.contains("31B"), "{shown}");
+    }
 
     #[test]
     fn the_hint_and_status_name_each_state() {

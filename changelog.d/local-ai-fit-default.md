@@ -1,0 +1,2 @@
+- Local AI: Settings reads this PC's memory before offering a model, and with no suggestion starts on the smallest model instead of the catalog's biggest.
+- Local AI: Download asks once with the size and the drive's free space (and refuses when it won't fit); the closed model dropdown uses a short line that fits.
