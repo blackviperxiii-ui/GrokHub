@@ -16,6 +16,10 @@ pub const FILE_NAME: &str = "pulse-steam-achievements.json";
 pub const SOURCE_NAME: &str = "Steam achievements";
 /// One check a week.
 pub const CHECK_EVERY_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// A failed check tries again after an hour, doubling each failure in a row.
+pub const RETRY_FIRST_MS: u64 = 60 * 60 * 1000;
+/// Retries never wait longer than this, so a failure is retried within a day.
+pub const RETRY_MAX_MS: u64 = 12 * 60 * 60 * 1000;
 /// Games read per check, most recently played first.
 pub const GAMES_PER_CHECK: usize = 8;
 /// Nudges one check posts before the feedback score moves it.
@@ -89,6 +93,9 @@ pub struct Tracker {
     /// The last check found the profile's game details private.
     #[serde(default)]
     pub private: bool,
+    /// Checks in a row that Steam didn't answer. Zero after any answer.
+    #[serde(default)]
+    pub failures: u32,
     /// Unlocked count each game was last nudged at, so a card posts once
     /// until the user unlocks another.
     #[serde(default)]
@@ -372,7 +379,25 @@ impl Nudge {
 
 impl Tracker {
     pub fn due(&self, now_ms: u64) -> bool {
-        self.on && now_ms.saturating_sub(self.last_check_ms) >= CHECK_EVERY_MS
+        self.on && now_ms.saturating_sub(self.last_check_ms) >= self.wait_ms()
+    }
+
+    /// How long after the last check the next one runs: a week after an
+    /// answer, an hour after a failure, doubling up to [`RETRY_MAX_MS`].
+    pub fn wait_ms(&self) -> u64 {
+        match self.failures {
+            0 => CHECK_EVERY_MS,
+            n => RETRY_FIRST_MS
+                .saturating_mul(1 << (n - 1).min(16))
+                .min(RETRY_MAX_MS),
+        }
+    }
+
+    /// Steam didn't answer a check that ended at `now_ms`; the retry wait
+    /// counts from then, not from when the check started.
+    pub fn failed(&mut self, now_ms: u64) {
+        self.last_check_ms = now_ms;
+        self.failures = self.failures.saturating_add(1);
     }
 
     /// Fold one check's picks in and return the ones to post, closest to
@@ -387,6 +412,7 @@ impl Tracker {
     ) -> Vec<Nudge> {
         self.last_check_ms = now_ms;
         self.private = private;
+        self.failures = 0;
         if private {
             return Vec::new();
         }
@@ -562,6 +588,34 @@ mod tests {
         assert!(t.due(400 + CHECK_EVERY_MS));
         t.turn_off();
         assert_eq!(t, Tracker::default());
+    }
+
+    #[test]
+    fn a_failed_check_retries_within_hours_and_an_answer_resets_it() {
+        let hour = 60 * 60 * 1000;
+        let mut t = Tracker {
+            on: true,
+            last_check_ms: 1_000,
+            ..Default::default()
+        };
+        t.failed(1_000);
+        assert_eq!(t.wait_ms(), hour);
+        assert!(!t.due(1_000 + hour - 1));
+        assert!(t.due(1_000 + hour));
+        // A check that hangs for 3 hours still waits 2 more after it fails.
+        t.failed(1_000 + 3 * hour);
+        assert_eq!(t.wait_ms(), 2 * hour);
+        assert!(!t.due(1_000 + 5 * hour - 1));
+        assert!(t.due(1_000 + 5 * hour));
+        for _ in 0..10 {
+            t.failed(1_000);
+        }
+        assert_eq!(t.wait_ms(), 12 * hour, "capped well inside a day");
+        assert!(t.due(1_000 + 12 * hour));
+        t.check(Vec::new(), false, 2, 5_000);
+        assert_eq!(t.failures, 0);
+        assert_eq!(t.wait_ms(), CHECK_EVERY_MS);
+        assert!(!t.due(5_000 + 12 * hour));
     }
 
     #[test]

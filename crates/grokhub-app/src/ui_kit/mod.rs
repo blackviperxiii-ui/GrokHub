@@ -5,10 +5,12 @@ mod card;
 mod chip;
 pub mod recipe;
 mod row;
+mod source_chips;
 
 pub use card::{card_frame, CardVariant};
 pub use chip::{badge, chip, BadgeTone};
 pub use row::{setting_row, SettingRowControl};
+pub use source_chips::{source_chips, source_chips_width};
 
 use eframe::egui::{self, RichText, Ui, Vec2};
 

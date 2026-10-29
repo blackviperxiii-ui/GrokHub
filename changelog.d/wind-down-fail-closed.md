@@ -1,0 +1,1 @@
+- Wind-down: the sleep offer stays off when this PC can't tell whether a game, a fullscreen app or GPU work is running, and Settings says why. Windows now detects games running from Steam, Epic, GOG and Xbox libraries.

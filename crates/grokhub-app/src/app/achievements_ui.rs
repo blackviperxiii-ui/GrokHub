@@ -133,8 +133,7 @@ impl Cabin {
                 Ok(run) => self.finish_achievements(run, now),
                 Err(mpsc::TryRecvError::Empty) => self.sources.ach.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.sources.ach.note =
-                        "The achievement check stopped before it finished.".into();
+                    self.ach_failed("The achievement check stopped before it finished", now);
                 }
             }
             return;
@@ -155,7 +154,7 @@ impl Cabin {
             };
             id
         };
-        // Counted as a check either way, so a failure waits a week like a success.
+        // Counted as a check either way; a failure shortens the wait (`ach_failed`).
         self.ach_now().last_check_ms = now;
         self.save_ach();
         let (tx, rx) = mpsc::channel();
@@ -174,7 +173,7 @@ impl Cabin {
 
     fn finish_achievements(&mut self, run: AchRun, now: u64) {
         if let Some(why) = run.error {
-            self.sources.ach.note = format!("Achievement check failed: {why}.");
+            self.ach_failed(&format!("Achievement check failed: {why}"), now);
             return;
         }
         // Switched off while it ran: the user's choice wins.
@@ -206,6 +205,23 @@ impl Cabin {
         } else {
             format!("Checked your games. {added} close to done.")
         };
+        self.save_ach();
+    }
+
+    /// A check Steam didn't answer: try again in hours, not a week. Nothing
+    /// when the source was switched off while it ran.
+    fn ach_failed(&mut self, why: &str, now: u64) {
+        if !self.ach_now().on {
+            return;
+        }
+        self.ach_now().failed(now);
+        let hours = self.ach_now().wait_ms() / (60 * 60 * 1000);
+        let when = if hours == 1 {
+            "an hour".to_string()
+        } else {
+            format!("{hours} hours")
+        };
+        self.sources.ach.note = format!("{why}. Trying again in {when}.");
         self.save_ach();
     }
 
@@ -347,6 +363,45 @@ mod tests {
             sa::load(&crate::config::config_dir()).nudged.get(&1145360),
             Some(&48)
         );
+    }
+
+    #[test]
+    fn a_failed_check_retries_in_an_hour_then_backs_off() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        let hour = 60 * 60 * 1000;
+        cabin.sources.ach.tracker = Some(Tracker {
+            on: true,
+            last_check_ms: 5_000,
+            ..Default::default()
+        });
+        let games = vec![(1, "A".to_string())];
+        let failed = || {
+            run_check(&games, FAKE_ID, &mut |_: &str| -> Result<String, String> {
+                Err("offline".into())
+            })
+        };
+        cabin.finish_achievements(failed(), 5_000);
+        assert_eq!(
+            cabin.sources.ach.note,
+            "Achievement check failed: Steam's stats pages didn't answer. Trying again in an hour."
+        );
+        assert!(cabin.ach_now().due(5_000 + hour));
+        assert_eq!(sa::load(&crate::config::config_dir()).failures, 1);
+        cabin.finish_achievements(failed(), 5_000);
+        assert_eq!(
+            cabin.sources.ach.note,
+            "Achievement check failed: Steam's stats pages didn't answer. Trying again in 2 hours."
+        );
+        assert!(!cabin.ach_now().due(5_000 + hour));
+        // A check that took 3 hours to fail waits from when it failed.
+        cabin.finish_achievements(failed(), 5_000 + 3 * hour);
+        assert!(!cabin.ach_now().due(5_000 + 3 * hour + 1));
+        assert!(cabin.ach_now().due(5_000 + 7 * hour));
+        let ok = run_check(&games, FAKE_ID, &mut deck_reply);
+        cabin.finish_achievements(ok, 9_000);
+        assert_eq!(cabin.ach_now().failures, 0);
+        assert!(!cabin.ach_now().due(9_000 + 2 * hour));
     }
 
     #[test]

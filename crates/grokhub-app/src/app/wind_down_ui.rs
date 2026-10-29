@@ -9,6 +9,9 @@ use grokhub_core::LocalClock;
 
 use super::*;
 
+/// Under the switch when the PC can't report what's running.
+const WIND_UNKNOWN_NOTE: &str = "This PC doesn't say whether a game, a fullscreen app or GPU work is running, so the sleep offer stays off.";
+
 /// How often the PC is read while the reminder is on.
 const READ_EVERY: Duration = Duration::from_secs(60);
 
@@ -21,6 +24,8 @@ pub(super) struct WindDownState {
     tracker: Option<Tracker>,
     rx: Option<mpsc::Receiver<Machine>>,
     last_read: Option<Instant>,
+    /// The last read couldn't see a game, fullscreen or GPU signal.
+    unknown: bool,
 }
 
 fn deck_check() -> bool {
@@ -176,6 +181,7 @@ impl Cabin {
         } else {
             self.wind_down_hour()
         };
+        self.focus.wind.unknown = machine.busy() == Some(Busy::Unknown);
         let busy = self.wind_down_busy().or(machine.busy());
         let Some(offer) = self
             .wind_now()
@@ -252,6 +258,9 @@ impl Cabin {
             &mut on,
         ) {
             self.set_wind_on(on);
+        }
+        if on && self.focus.wind.unknown {
+            crate::cards::settings_note(ui, WIND_UNKNOWN_NOTE);
         }
     }
 }
@@ -339,6 +348,25 @@ mod tests {
         cabin.finish_wind_down(gaming, &late());
         assert_eq!(cabin.updates.len(), before);
         assert_eq!(cabin.wind_now().last_night, None, "nothing offered yet");
+    }
+
+    #[test]
+    fn an_unreadable_signal_posts_nothing_and_says_why() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        armed(&mut cabin);
+        let before = cabin.updates.len();
+        let blind = Machine {
+            game: None,
+            ..deck_machine()
+        };
+        cabin.finish_wind_down(blind, &late());
+        assert_eq!(cabin.updates.len(), before);
+        assert!(cabin.focus.wind.unknown);
+        assert_eq!(cabin.wind_now().last_night, None, "nothing offered");
+        cabin.finish_wind_down(deck_machine(), &late());
+        assert_eq!(cabin.updates.len(), before + 1);
+        assert!(!cabin.focus.wind.unknown);
     }
 
     #[test]

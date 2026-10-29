@@ -45,6 +45,9 @@ pub enum Busy {
     Render,
     Download,
     Task,
+    /// This PC doesn't report one of the game, fullscreen or GPU signals, so
+    /// the offer fails closed.
+    Unknown,
 }
 
 impl Busy {
@@ -55,6 +58,9 @@ impl Busy {
             Busy::Render => "another app is busy on the GPU",
             Busy::Download => "a download is running",
             Busy::Task => "an agent task is running",
+            Busy::Unknown => {
+                "this PC can't tell whether a game, fullscreen app or GPU work is running"
+            }
         }
     }
 }
@@ -69,7 +75,8 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// The first OS-level reason not to offer, if any.
+    /// The first OS-level reason not to offer, if any. A signal the PC
+    /// can't read counts as busy: the offer fails closed.
     pub fn busy(&self) -> Option<Busy> {
         if self.game == Some(true) {
             Some(Busy::Game)
@@ -77,6 +84,11 @@ impl Machine {
             Some(Busy::Fullscreen)
         } else if self.external_gpu_pct.is_some_and(|p| p >= RENDER_GPU_PCT) {
             Some(Busy::Render)
+        } else if self.game.is_none()
+            || self.fullscreen.is_none()
+            || self.external_gpu_pct.is_none()
+        {
+            Some(Busy::Unknown)
         } else {
             None
         }
@@ -345,6 +357,43 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(light.busy(), None);
+    }
+
+    #[test]
+    fn an_unknown_signal_holds_the_card_back() {
+        let known = Machine {
+            idle_secs: Some(3 * 3600),
+            game: Some(false),
+            fullscreen: Some(false),
+            external_gpu_pct: Some(5),
+        };
+        assert_eq!(known.busy(), None);
+        let unknowns = [
+            Machine {
+                game: None,
+                ..known
+            },
+            Machine {
+                fullscreen: None,
+                ..known
+            },
+            Machine {
+                external_gpu_pct: None,
+                ..known
+            },
+        ];
+        for machine in unknowns {
+            assert_eq!(machine.busy(), Some(Busy::Unknown), "{machine:?}");
+            assert_eq!(
+                on().decide(&at(2, 0), Some(23), machine.idle_secs, machine.busy()),
+                None,
+                "{machine:?}"
+            );
+        }
+        assert_eq!(
+            on().decide(&at(2, 0), Some(23), known.idle_secs, known.busy()),
+            Some(Offer::Late { idle_min: 180 })
+        );
     }
 
     #[test]
