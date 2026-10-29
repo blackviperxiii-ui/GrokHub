@@ -22,7 +22,7 @@ pub const GPU_CRITICAL_C: f32 = 90.0;
 /// CPU millidegrees / °C that flag thermal pressure.
 pub const CPU_HOT_C: f32 = 90.0;
 pub const CPU_CRITICAL_C: f32 = 97.0;
-/// Clock drop from session peak that, with a hot temp, counts as throttle.
+/// Clock drop from the peak so far that, with a hot temp, counts as throttle.
 pub const CLOCK_DROP_PCT: f32 = 12.0;
 
 pub const SOURCE_PREFIX: &str = "pchealth:";
@@ -108,8 +108,6 @@ pub struct GameSession {
     pub started_ms: u64,
     pub samples: Vec<SensorSample>,
     pub game_label: Option<String>,
-    pub peak_gpu_clock: Option<u32>,
-    pub peak_cpu_clock: Option<u32>,
 }
 
 /// Post-session numbers for the summary card.
@@ -150,7 +148,7 @@ pub enum ObserveOut {
 
 /// `nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,clocks.current.graphics
 /// --format=csv,noheader,nounits` → (temp_c, util_pct, clock_mhz) for the
-/// hottest / busiest card.
+/// hottest card, the busiest one when two are equally hot.
 pub fn parse_nvidia_sensor_csv(text: &str) -> Option<(f32, u8, u32)> {
     let mut best: Option<(f32, u8, u32)> = None;
     for line in text.lines() {
@@ -163,9 +161,9 @@ pub fn parse_nvidia_sensor_csv(text: &str) -> Option<(f32, u8, u32)> {
         let util: u8 = cols.next()?.parse::<f32>().ok()?.clamp(0.0, 100.0) as u8;
         let clock: u32 = cols.next()?.parse::<f32>().ok()?.max(0.0) as u32;
         best = Some(match best {
-            None => (temp, util, clock),
-            Some((t, u, _)) if temp > t || util > u => (temp, util, clock),
+            Some((t, u, _)) if temp > t || (temp == t && util > u) => (temp, util, clock),
             Some(prev) => prev,
+            None => (temp, util, clock),
         });
     }
     best
@@ -251,6 +249,45 @@ pub fn parse_wmi_temp_util(text: &str) -> Option<(f32, u8)> {
     None
 }
 
+/// `/proc/stat`'s aggregate `cpu` line → (total jiffies, idle + iowait).
+pub fn parse_proc_stat_cpu(text: &str) -> Option<(u64, u64)> {
+    let line = text.lines().find(|l| l.starts_with("cpu "))?;
+    let v: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .map(|c| c.parse().ok())
+        .collect::<Option<_>>()?;
+    if v.len() < 4 {
+        return None;
+    }
+    let idle = v[3] + v.get(4).copied().unwrap_or(0);
+    Some((v.iter().sum(), idle))
+}
+
+/// Whole-system CPU use between two `parse_proc_stat_cpu` readings.
+pub fn cpu_util_between(prev: (u64, u64), cur: (u64, u64)) -> Option<u8> {
+    let total = cur.0.checked_sub(prev.0).filter(|t| *t > 0)?;
+    let idle = cur.1.checked_sub(prev.1)?.min(total);
+    Some(((total - idle) * 100 / total) as u8)
+}
+
+/// Windows: the game's exe name (no `.exe`) from the first store-library
+/// path in a process list (see `local_governor::game_in_exe_paths`).
+pub fn game_label_from_exe_paths(paths: &[String]) -> Option<String> {
+    paths.iter().find_map(|p| {
+        if !crate::local_governor::game_in_exe_paths(std::slice::from_ref(p)) {
+            return None;
+        }
+        let file = p.rsplit(['\\', '/']).next()?;
+        let stem = file
+            .strip_suffix(".exe")
+            .or_else(|| file.strip_suffix(".EXE"))
+            .unwrap_or(file);
+        (!stem.is_empty()).then(|| stem.to_string())
+    })
+}
+
 /// Game running: process hit (card 16.1 / local_governor) or sustained GPU busy.
 pub fn game_running(procs: &[(String, String)], gpu_util: Option<u8>) -> bool {
     if crate::local_governor::game_in_processes(procs) {
@@ -267,8 +304,6 @@ pub fn note_sample(session: &mut Option<GameSession>, sample: SensorSample, now_
             let mut s = GameSession {
                 started_ms: now_ms,
                 game_label: label,
-                peak_gpu_clock: sample.gpu_clock_mhz,
-                peak_cpu_clock: sample.cpu_clock_mhz,
                 samples: vec![sample],
             };
             s.samples.reserve(32);
@@ -278,19 +313,32 @@ pub fn note_sample(session: &mut Option<GameSession>, sample: SensorSample, now_
             if s.game_label.is_none() {
                 s.game_label = label;
             }
-            if let Some(c) = sample.gpu_clock_mhz {
-                s.peak_gpu_clock = Some(s.peak_gpu_clock.map_or(c, |p| p.max(c)));
-            }
-            if let Some(c) = sample.cpu_clock_mhz {
-                s.peak_cpu_clock = Some(s.peak_cpu_clock.map_or(c, |p| p.max(c)));
-            }
             s.samples.push(sample);
         }
     }
 }
 
-/// Scan one sample against session peaks for throttle events.
-pub fn throttle_on_sample(session: &GameSession, sample: &SensorSample) -> Vec<ThrottleEvent> {
+/// Peak clocks seen so far in a session, up to and including the sample
+/// being checked, so a later boost never flags an earlier sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PeakClocks {
+    pub gpu_mhz: Option<u32>,
+    pub cpu_mhz: Option<u32>,
+}
+
+impl PeakClocks {
+    pub fn note(&mut self, sample: &SensorSample) {
+        let up = |p: Option<u32>, c: Option<u32>| match (p, c) {
+            (Some(p), Some(c)) => Some(p.max(c)),
+            (p, c) => p.or(c),
+        };
+        self.gpu_mhz = up(self.gpu_mhz, sample.gpu_clock_mhz);
+        self.cpu_mhz = up(self.cpu_mhz, sample.cpu_clock_mhz);
+    }
+}
+
+/// Scan one sample against the peak clocks so far for throttle events.
+pub fn throttle_on_sample(peaks: PeakClocks, sample: &SensorSample) -> Vec<ThrottleEvent> {
     let mut out = Vec::new();
     if let Some(t) = sample.gpu_temp_c {
         if t >= GPU_CRITICAL_C {
@@ -300,7 +348,7 @@ pub fn throttle_on_sample(session: &GameSession, sample: &SensorSample) -> Vec<T
                 detail: format!("GPU {t:.0}°C"),
             });
         } else if t >= GPU_HOT_C {
-            if let (Some(cur), Some(peak)) = (sample.gpu_clock_mhz, session.peak_gpu_clock) {
+            if let (Some(cur), Some(peak)) = (sample.gpu_clock_mhz, peaks.gpu_mhz) {
                 if peak > 0
                     && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0 >= CLOCK_DROP_PCT
                 {
@@ -321,7 +369,7 @@ pub fn throttle_on_sample(session: &GameSession, sample: &SensorSample) -> Vec<T
                 detail: format!("CPU {t:.0}°C"),
             });
         } else if t >= CPU_HOT_C {
-            if let (Some(cur), Some(peak)) = (sample.cpu_clock_mhz, session.peak_cpu_clock) {
+            if let (Some(cur), Some(peak)) = (sample.cpu_clock_mhz, peaks.cpu_mhz) {
                 if peak > 0
                     && (peak.saturating_sub(cur) as f32) / peak as f32 * 100.0 >= CLOCK_DROP_PCT
                 {
@@ -436,8 +484,10 @@ pub fn tips_for(summary: &SessionSummary) -> Vec<String> {
 /// Build a summary from a finished session (pure).
 pub fn summarize(session: &GameSession, ended_ms: u64) -> SessionSummary {
     let mut throttles = Vec::new();
+    let mut peaks = PeakClocks::default();
     for s in &session.samples {
-        throttles.extend(throttle_on_sample(session, s));
+        peaks.note(s);
+        throttles.extend(throttle_on_sample(peaks, s));
     }
     // Collapse near-duplicate throttle kinds within 30s.
     throttles.sort_by_key(|e| (e.kind as u8, e.at_ms));
@@ -626,6 +676,41 @@ mod tests {
     fn parse_nvidia_sensor_csv_picks_hottest() {
         let text = "72, 40, 1500\n88, 95, 1800\n";
         assert_eq!(parse_nvidia_sensor_csv(text), Some((88.0, 95, 1800)));
+        // A busier but cooler card doesn't replace the hottest one.
+        let text = "88, 30, 1800\n70, 99, 1500\n";
+        assert_eq!(parse_nvidia_sensor_csv(text), Some((88.0, 30, 1800)));
+        let text = "80, 30, 1700\n80, 90, 1900\n";
+        assert_eq!(parse_nvidia_sensor_csv(text), Some((80.0, 90, 1900)));
+    }
+
+    #[test]
+    fn cpu_util_comes_from_proc_stat_deltas() {
+        let a = "cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 2 3 4\n";
+        let b = "cpu  400 0 200 1100 100 0 0 0 0 0\ncpu0 1 2 3 4\n";
+        let (pa, pb) = (
+            parse_proc_stat_cpu(a).unwrap(),
+            parse_proc_stat_cpu(b).unwrap(),
+        );
+        assert_eq!(pa, (1000, 800));
+        assert_eq!(pb, (1800, 1200));
+        // 800 jiffies passed, 400 idle: 50% busy.
+        assert_eq!(cpu_util_between(pa, pb), Some(50));
+        assert_eq!(cpu_util_between(pb, pb), None);
+        assert_eq!(cpu_util_between(pb, pa), None);
+        assert_eq!(parse_proc_stat_cpu("intr 1 2 3\n"), None);
+    }
+
+    #[test]
+    fn windows_game_label_is_the_store_exe_name() {
+        let paths = vec![
+            r"C:\Windows\explorer.exe".to_string(),
+            r"C:\Program Files (x86)\Steam\steamapps\common\Hades\x64\Hades.exe".to_string(),
+        ];
+        assert_eq!(game_label_from_exe_paths(&paths).as_deref(), Some("Hades"));
+        assert_eq!(
+            game_label_from_exe_paths(&[r"C:\Windows\explorer.exe".to_string()]),
+            None
+        );
     }
 
     #[test]
@@ -674,15 +759,45 @@ mod tests {
 
     #[test]
     fn throttle_on_hot_gpu_with_clock_drop() {
-        let mut opt = None;
-        note_sample(&mut opt, sample(0, 60.0, 70.0, 30, 80, 4500, 2100), 0);
-        let session = opt.expect("session");
+        let mut peaks = PeakClocks::default();
+        peaks.note(&sample(0, 60.0, 70.0, 30, 80, 4500, 2100));
         let s = sample(10_000, 70.0, 86.0, 40, 98, 4400, 1600);
-        let events = throttle_on_sample(&session, &s);
+        peaks.note(&s);
+        assert_eq!(peaks.gpu_mhz, Some(2100));
+        let events = throttle_on_sample(peaks, &s);
         assert!(
             events.iter().any(|e| e.kind == ThrottleKind::GpuClockDrop),
             "{events:?}"
         );
+    }
+
+    #[test]
+    fn a_later_boost_does_not_flag_earlier_samples() {
+        let mut session = None;
+        // Hot but steady at 1600 MHz, then a cool boost to 2100 at the end.
+        note_sample(&mut session, sample(0, 60.0, 86.0, 40, 98, 4400, 1600), 0);
+        note_sample(
+            &mut session,
+            sample(60_000, 60.0, 86.0, 40, 98, 4400, 1600),
+            60_000,
+        );
+        note_sample(
+            &mut session,
+            sample(120_000, 60.0, 70.0, 40, 98, 4400, 2100),
+            120_000,
+        );
+        let summary = summarize(session.as_ref().unwrap(), 120_000);
+        assert_eq!(summary.throttles, Vec::new());
+        // A drop after the boost, while hot, is still caught.
+        note_sample(
+            &mut session,
+            sample(180_000, 60.0, 86.0, 40, 98, 4400, 1600),
+            180_000,
+        );
+        let summary = summarize(session.as_ref().unwrap(), 180_000);
+        assert_eq!(summary.throttles.len(), 1);
+        assert_eq!(summary.throttles[0].kind, ThrottleKind::GpuClockDrop);
+        assert_eq!(summary.throttles[0].at_ms, 180_000);
     }
 
     #[test]

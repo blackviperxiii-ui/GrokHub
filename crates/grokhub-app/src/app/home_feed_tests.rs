@@ -1803,7 +1803,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let health =
         grokhub_core::pc_health::summarize(health_session.as_ref().expect("session"), now + 70_000);
     rows.push((
-        "tick_pc_health",
+        "observe_pc_health",
         grokhub_core::summary_card(&health, now),
         "Hades",
     ));

@@ -3,18 +3,29 @@
 //! posts one Pulse summary. Never changes fans, clocks, or drivers.
 
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 
+#[cfg(windows)]
+use grokhub_core::pc_health::game_label_from_exe_paths;
 use grokhub_core::pc_health::{
-    self as ph, game_running, observe, parse_nvidia_sensor_csv, summary_card, GameSession,
-    ObserveOut, PcHealthLedger, SensorSample, SAMPLE_EVERY_MS,
+    self as ph, observe, summary_card, GameSession, ObserveOut, PcHealthLedger, SensorSample,
+    SAMPLE_EVERY_MS,
 };
 #[cfg(target_os = "linux")]
 use grokhub_core::pc_health::{
-    parse_amdgpu_busy, parse_cpuinfo_mhz, parse_hwmon_temp_milli, temps_from_hwmon,
+    cpu_util_between, parse_amdgpu_busy, parse_cpuinfo_mhz, parse_hwmon_temp_milli,
+    parse_proc_stat_cpu, temps_from_hwmon,
 };
+#[cfg(any(target_os = "linux", windows))]
+use grokhub_core::pc_health::{game_running, parse_nvidia_sensor_csv};
 
 use super::*;
 use crate::config;
+
+/// A sensor or process-list command that hasn't answered by now is killed,
+/// and that sample counts as no reading.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn ledger_path() -> PathBuf {
     config::config_dir().join(ph::LEDGER_FILE)
@@ -41,6 +52,18 @@ fn save_ledger(ledger: &PcHealthLedger) {
 pub(super) struct PcHealthState {
     pub session: Option<GameSession>,
     last_sample_ms: u64,
+    /// The sample being read off the UI thread, if one is in flight.
+    probe: Option<mpsc::Receiver<Probe>>,
+    /// The last `/proc/stat` CPU reading, for the next sample's CPU use.
+    cpu_prev: Option<(u64, u64)>,
+}
+
+/// One off-thread reading: whether a game runs, its sensors, and the CPU
+/// counters to diff next time.
+struct Probe {
+    game_up: bool,
+    sample: Option<SensorSample>,
+    cpu: Option<(u64, u64)>,
 }
 
 impl Cabin {
@@ -68,12 +91,26 @@ impl Cabin {
         }
     }
 
-    /// Heartbeat: when enabled, detect a game and sample; when the game ends,
-    /// post one summary card. Zero sensor I/O when disabled.
+    /// Heartbeat: when enabled, start a reading off the UI thread when one is
+    /// due and fold in the last one that finished; when the game ends, post
+    /// one summary card. Zero sensor I/O when disabled.
     pub(super) fn tick_pc_health(&mut self) {
         if !self.cfg.pc_health.enabled {
             // Drop any leftover session without posting when the user turns it off mid-game.
             self.pc_health.session = None;
+            self.pc_health.probe = None;
+            return;
+        }
+        if let Some(rx) = &self.pc_health.probe {
+            match rx.try_recv() {
+                Ok(probe) => {
+                    self.pc_health.probe = None;
+                    self.pc_health.cpu_prev = probe.cpu.or(self.pc_health.cpu_prev);
+                    self.observe_pc_health(probe.game_up, probe.sample, now_ms());
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.pc_health.probe = None,
+            }
             return;
         }
         let now = now_ms();
@@ -83,8 +120,16 @@ impl Cabin {
             // Still in a session but not due for a sample — leave state alone.
             return;
         }
-        let (game_up, sample) = self.collect_pc_health_sample(now);
         self.pc_health.last_sample_ms = now;
+        let cpu_prev = self.pc_health.cpu_prev;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(collect_sample(now, cpu_prev));
+        });
+        self.pc_health.probe = Some(rx);
+    }
+
+    fn observe_pc_health(&mut self, game_up: bool, sample: Option<SensorSample>, now: u64) {
         match observe(true, game_up, sample, &mut self.pc_health.session, now) {
             ObserveOut::Idle | ObserveOut::Sampling => {}
             ObserveOut::Ended(summary) => {
@@ -106,102 +151,117 @@ impl Cabin {
             }
         }
     }
+}
 
-    /// Process list + light sensors. Returns (game_running, optional sample).
-    fn collect_pc_health_sample(&self, now: u64) -> (bool, Option<SensorSample>) {
-        #[cfg(target_os = "linux")]
-        {
-            self.collect_linux(now)
-        }
-        #[cfg(windows)]
-        {
-            self.collect_windows(now)
-        }
-        #[cfg(not(any(target_os = "linux", windows)))]
-        {
-            let _ = now;
-            (false, None)
-        }
-    }
+/// Run a sensor or process-list command with `PROBE_TIMEOUT`.
+#[cfg(any(target_os = "linux", windows))]
+fn probe_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+    let mut c = std::process::Command::new(cmd);
+    c.args(args);
+    grokhub_core::proc_util::output_within(&mut c, PROBE_TIMEOUT, 1024 * 1024)
+}
 
+/// `nvidia-smi` temp, util and clock for the hottest card.
+#[cfg(any(target_os = "linux", windows))]
+fn nvidia_sensors() -> Option<(f32, u8, u32)> {
+    let text = probe_cmd(
+        "nvidia-smi",
+        &[
+            "--query-gpu=temperature.gpu,utilization.gpu,clocks.current.graphics",
+            "--format=csv,noheader,nounits",
+        ],
+    )?;
+    parse_nvidia_sensor_csv(&text)
+}
+
+/// Process list + light sensors, read on a worker thread.
+fn collect_sample(now: u64, cpu_prev: Option<(u64, u64)>) -> Probe {
     #[cfg(target_os = "linux")]
-    fn collect_linux(&self, now: u64) -> (bool, Option<SensorSample>) {
-        let procs = linux_processes().unwrap_or_default();
-        let mut sample = SensorSample {
-            at_ms: now,
-            game_label: game_label_from_procs(&procs),
-            ..Default::default()
-        };
-        if let Some(text) = super::setup_wizard::run(
-            "nvidia-smi",
-            &[
-                "--query-gpu=temperature.gpu,utilization.gpu,clocks.current.graphics",
-                "--format=csv,noheader,nounits",
-            ],
-        ) {
-            if let Some((t, u, c)) = parse_nvidia_sensor_csv(&text) {
-                sample.gpu_temp_c = Some(t);
-                sample.gpu_util_pct = Some(u);
-                sample.gpu_clock_mhz = Some(c);
-            }
-        }
-        if sample.gpu_util_pct.is_none() {
-            if let Some(busy) = read_first_amdgpu_busy() {
-                sample.gpu_util_pct = Some(busy);
-            }
-        }
-        let hwmon = read_hwmon_temps();
-        let (cpu_t, gpu_t) = temps_from_hwmon(&hwmon);
-        if sample.cpu_temp_c.is_none() {
-            sample.cpu_temp_c = cpu_t;
-        }
-        if sample.gpu_temp_c.is_none() {
-            sample.gpu_temp_c = gpu_t;
-        }
-        if let Ok(text) = std::fs::read_to_string("/proc/cpuinfo") {
-            sample.cpu_clock_mhz = parse_cpuinfo_mhz(&text);
-        }
-        sample.cpu_util_pct = linux_cpu_util_rough();
-        let up = game_running(&procs, sample.gpu_util_pct);
-        if up {
-            (true, Some(sample))
-        } else {
-            (false, None)
-        }
+    {
+        collect_linux(now, cpu_prev)
     }
-
     #[cfg(windows)]
-    fn collect_windows(&self, now: u64) -> (bool, Option<SensorSample>) {
-        // Prefer nvidia-smi when present (same CSV as Linux). Process list via
-        // tasklist is enough for game hosts / shipping binaries.
-        let procs = windows_processes();
-        let mut sample = SensorSample {
-            at_ms: now,
-            game_label: game_label_from_procs(&procs),
-            ..Default::default()
-        };
-        if let Some(text) = super::setup_wizard::run(
-            "nvidia-smi",
-            &[
-                "--query-gpu=temperature.gpu,utilization.gpu,clocks.current.graphics",
-                "--format=csv,noheader,nounits",
-            ],
-        ) {
-            if let Some((t, u, c)) = parse_nvidia_sensor_csv(&text) {
-                sample.gpu_temp_c = Some(t);
-                sample.gpu_util_pct = Some(u);
-                sample.gpu_clock_mhz = Some(c);
-            }
-        }
-        let up = game_running(&procs, sample.gpu_util_pct);
-        if up {
-            (true, Some(sample))
-        } else {
-            (false, None)
+    {
+        let _ = cpu_prev;
+        collect_windows(now)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = (now, cpu_prev);
+        Probe {
+            game_up: false,
+            sample: None,
+            cpu: None,
         }
     }
 }
 
+#[cfg(target_os = "linux")]
+fn collect_linux(now: u64, cpu_prev: Option<(u64, u64)>) -> Probe {
+    let procs = super::local_signals::processes().unwrap_or_default();
+    let mut sample = SensorSample {
+        at_ms: now,
+        game_label: game_label_from_procs(&procs),
+        ..Default::default()
+    };
+    if let Some((t, u, c)) = nvidia_sensors() {
+        sample.gpu_temp_c = Some(t);
+        sample.gpu_util_pct = Some(u);
+        sample.gpu_clock_mhz = Some(c);
+    }
+    if sample.gpu_util_pct.is_none() {
+        if let Some(busy) = read_first_amdgpu_busy() {
+            sample.gpu_util_pct = Some(busy);
+        }
+    }
+    let hwmon = read_hwmon_temps();
+    let (cpu_t, gpu_t) = temps_from_hwmon(&hwmon);
+    if sample.cpu_temp_c.is_none() {
+        sample.cpu_temp_c = cpu_t;
+    }
+    if sample.gpu_temp_c.is_none() {
+        sample.gpu_temp_c = gpu_t;
+    }
+    if let Ok(text) = std::fs::read_to_string("/proc/cpuinfo") {
+        sample.cpu_clock_mhz = parse_cpuinfo_mhz(&text);
+    }
+    let cpu = std::fs::read_to_string("/proc/stat")
+        .ok()
+        .and_then(|t| parse_proc_stat_cpu(&t));
+    sample.cpu_util_pct = cpu_prev.zip(cpu).and_then(|(a, b)| cpu_util_between(a, b));
+    let game_up = game_running(&procs, sample.gpu_util_pct);
+    Probe {
+        game_up,
+        sample: game_up.then_some(sample),
+        cpu,
+    }
+}
+
+#[cfg(windows)]
+fn collect_windows(now: u64) -> Probe {
+    // Full exe paths, like the wind-down check: a game is an exe under a
+    // store's library (Steam, Epic, GOG, Xbox). nvidia-smi when present.
+    let paths = windows_process_paths();
+    let mut sample = SensorSample {
+        at_ms: now,
+        game_label: game_label_from_exe_paths(&paths),
+        ..Default::default()
+    };
+    if let Some((t, u, c)) = nvidia_sensors() {
+        sample.gpu_temp_c = Some(t);
+        sample.gpu_util_pct = Some(u);
+        sample.gpu_clock_mhz = Some(c);
+    }
+    let game_up = grokhub_core::local_governor::game_in_process_list(&paths) == Some(true)
+        || game_running(&[], sample.gpu_util_pct);
+    Probe {
+        game_up,
+        sample: game_up.then_some(sample),
+        cpu: None,
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn game_label_from_procs(procs: &[(String, String)]) -> Option<String> {
     for (comm, cmdline) in procs {
         let c = comm.to_ascii_lowercase();
@@ -216,32 +276,6 @@ fn game_label_from_procs(procs: &[(String, String)]) -> Option<String> {
         }
     }
     None
-}
-
-#[cfg(target_os = "linux")]
-fn linux_processes() -> Option<Vec<(String, String)>> {
-    let entries = std::fs::read_dir("/proc").ok()?;
-    Some(
-        entries
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-            })
-            .filter_map(|e| {
-                let comm = std::fs::read_to_string(e.path().join("comm"))
-                    .ok()?
-                    .trim()
-                    .to_string();
-                let cmdline = std::fs::read_to_string(e.path().join("cmdline"))
-                    .unwrap_or_default()
-                    .replace('\0', " ");
-                Some((comm, cmdline))
-            })
-            .collect(),
-    )
 }
 
 #[cfg(target_os = "linux")]
@@ -289,33 +323,25 @@ fn read_first_amdgpu_busy() -> Option<u8> {
     None
 }
 
-/// Rough whole-system CPU util from `/proc/stat` idle delta is heavy; use
-/// loadavg × cores as a light stand-in (0–100 clamped).
-#[cfg(target_os = "linux")]
-fn linux_cpu_util_rough() -> Option<u8> {
-    let load = std::fs::read_to_string("/proc/loadavg").ok()?;
-    let one: f32 = load.split_whitespace().next()?.parse().ok()?;
-    let cpus = std::thread::available_parallelism()
-        .map(|n| n.get() as f32)
-        .unwrap_or(1.0)
-        .max(1.0);
-    Some(((one / cpus) * 100.0).clamp(0.0, 100.0) as u8)
-}
-
+/// This session's processes, one line each: the full exe path, or `?name`
+/// when the path can't be read (see `game_in_process_list`).
 #[cfg(windows)]
-fn windows_processes() -> Vec<(String, String)> {
-    let Some(text) = super::setup_wizard::run("tasklist", &["/FO", "CSV", "/NH"]) else {
+fn windows_process_paths() -> Vec<String> {
+    let Some(text) = probe_cmd(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s = (Get-Process -Id $PID).SessionId; Get-Process | Where-Object SessionId -eq $s | ForEach-Object { if ($_.Path) { $_.Path } else { '?' + $_.ProcessName } }",
+        ],
+    ) else {
         return Vec::new();
     };
     text.lines()
-        .filter_map(|line| {
-            let name = line.split(',').next()?.trim().trim_matches('"');
-            if name.is_empty() {
-                return None;
-            }
-            Some((name.to_string(), String::new()))
-        })
-        .take(400)
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(1000)
         .collect()
 }
 
@@ -333,6 +359,60 @@ mod tests {
         });
         cabin.tick_pc_health();
         assert!(cabin.pc_health.session.is_none());
+    }
+
+    #[test]
+    fn a_finished_reading_is_folded_in_on_the_next_tick() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.pc_health.enabled = true;
+        let (tx, rx) = mpsc::channel();
+        cabin.pc_health.probe = Some(rx);
+        // Still reading: the tick leaves the session alone.
+        cabin.tick_pc_health();
+        assert!(cabin.pc_health.session.is_none());
+        assert!(cabin.pc_health.probe.is_some());
+        let sample = SensorSample {
+            at_ms: 5,
+            gpu_temp_c: Some(71.0),
+            cpu_util_pct: Some(40),
+            game_label: Some("hades".into()),
+            ..Default::default()
+        };
+        tx.send(Probe {
+            game_up: true,
+            sample: Some(sample.clone()),
+            cpu: Some((1_800, 1_200)),
+        })
+        .unwrap();
+        cabin.pc_health.last_sample_ms = now_ms();
+        cabin.tick_pc_health();
+        assert!(cabin.pc_health.probe.is_none());
+        assert_eq!(cabin.pc_health.cpu_prev, Some((1_800, 1_200)));
+        let session = cabin.pc_health.session.as_ref().expect("session");
+        assert_eq!(session.samples, vec![sample]);
+        assert_eq!(session.game_label.as_deref(), Some("hades"));
+        // Not due yet, so no new reading starts.
+        cabin.tick_pc_health();
+        assert!(cabin.pc_health.probe.is_none());
+    }
+
+    #[test]
+    fn the_heartbeat_never_runs_a_probe_itself() {
+        let src = include_str!("pc_health_ui.rs");
+        let tick = src
+            .split("pub(super) fn tick_pc_health(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn observe_pc_health(").next())
+            .expect("tick_pc_health");
+        let (before, after) = tick
+            .split_once("std::thread::spawn(")
+            .expect("worker thread");
+        assert!(!before.contains("collect_sample("), "{before}");
+        assert!(after.contains("collect_sample(now, cpu_prev)"), "{after}");
+        assert!(
+            !tick.contains(concat!(".out", "put()"))
+                && !tick.contains(concat!("setup_wizard", "::run"))
+        );
     }
 
     #[test]
