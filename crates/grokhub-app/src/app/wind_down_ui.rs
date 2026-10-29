@@ -226,16 +226,20 @@ impl Cabin {
         let before = self.wind_now().clone();
         if on {
             self.wind_now().on = true;
-            self.focus.wind.last_read = None;
         } else {
             self.wind_now().turn_off();
+        }
+        if !self.save_wind() {
+            *self.wind_now() = before;
+            return false;
+        }
+        // Only a saved switch drops the in-flight read or the last one.
+        if on {
+            self.focus.wind.last_read = None;
+        } else {
             self.focus.wind.rx = None;
         }
-        let saved = self.save_wind();
-        if !saved {
-            *self.wind_now() = before;
-        }
-        saved
+        true
     }
 
     /// Settings → Behavior: the wind-down toggle.
@@ -358,5 +362,29 @@ mod tests {
         cabin.tick_wind_down();
         assert!(cabin.focus.wind.rx.is_none());
         assert!(cabin.focus.wind.last_read.is_none());
+    }
+
+    #[test]
+    fn a_switch_that_cannot_be_saved_keeps_the_running_read() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        assert!(cabin.set_wind_on(true));
+        let (_tx, rx) = mpsc::channel();
+        cabin.focus.wind.rx = Some(rx);
+        let read_at = Instant::now();
+        cabin.focus.wind.last_read = Some(read_at);
+        let file = crate::config::config_dir().join(grokhub_core::wind_down::FILE_NAME);
+        let _ = std::fs::remove_file(&file);
+        std::fs::create_dir_all(&file).unwrap();
+
+        assert!(!cabin.set_wind_on(false));
+        assert!(cabin.wind_down_on(), "the switch stays on");
+        assert!(cabin.focus.wind.rx.is_some(), "the in-flight read is kept");
+        assert!(!cabin.set_wind_on(true));
+        assert_eq!(cabin.focus.wind.last_read, Some(read_at));
+
+        std::fs::remove_dir_all(&file).unwrap();
+        assert!(cabin.set_wind_on(false));
+        assert!(cabin.focus.wind.rx.is_none(), "a saved off drops the read");
     }
 }
