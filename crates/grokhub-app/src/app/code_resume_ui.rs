@@ -33,6 +33,11 @@ impl ResumeState {
         self.editor.as_deref()
     }
 
+    /// The launch scan has not started or not finished yet.
+    pub(super) fn pending(&self) -> bool {
+        !self.scanned || self.rx.is_some()
+    }
+
     /// Seed repos for tests (no git scan).
     #[cfg(test)]
     pub(super) fn seed_repos_for_test(&mut self, repos: Vec<RepoStatus>) {
