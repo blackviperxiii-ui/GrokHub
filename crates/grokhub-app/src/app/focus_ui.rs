@@ -117,7 +117,10 @@ impl Cabin {
         }
         self.cfg.focus_help = on;
         if !on {
+            // Downloads tidy is its own setting: keep its findings and review.
+            let tidy = std::mem::take(&mut self.focus.tidy);
             self.focus = FocusState::default();
+            self.focus.tidy = tidy;
             self.chip_paint_key.clear();
         }
         self.persist_cfg();

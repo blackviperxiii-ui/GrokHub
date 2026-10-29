@@ -178,7 +178,7 @@ pub fn classify(
 
     // Exact duplicates: same size, then same bytes. The oldest copy stays.
     let mut by_size: BTreeMap<u64, Vec<&FileInfo>> = BTreeMap::new();
-    for f in files.iter().filter(|f| f.bytes > 0) {
+    for f in files {
         by_size.entry(f.bytes).or_default().push(f);
     }
     for same in by_size.values().filter(|v| v.len() > 1) {
