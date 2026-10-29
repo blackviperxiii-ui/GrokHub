@@ -289,7 +289,18 @@ impl Cabin {
         self.read_setup_hardware();
         if self.setup.hw.is_none() && self.setup.installed.is_none() && dl_model.is_none() {
             crate::cards::settings_note(ui, super::setup_wizard::CHECKING_HW);
+            // The read lands on another thread; look again soon, not on the next input.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
         } else if let Some(m) = self.ui_model_choice(ui) {
+            if self
+                .setup
+                .hw
+                .as_ref()
+                .is_some_and(super::setup_wizard::hw_unknown)
+            {
+                crate::cards::settings_note(ui, super::setup_wizard::HW_UNKNOWN);
+            }
             self.ui_model_pick_rows(ui, dl_model.unwrap_or(m));
         }
         if installed
@@ -538,10 +549,17 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
+        let repaint = std::cell::Cell::new(std::time::Duration::MAX);
+        let clock = std::cell::Cell::new(0.0);
         let texts = |cabin: &mut Cabin| {
-            let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
-                cabin.ui_local_model_rows(ui)
-            });
+            // A second per frame, so any fade has settled and only real asks repaint.
+            clock.set(clock.get() + 1.0);
+            let raw = egui::RawInput {
+                time: Some(clock.get()),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_local_model_rows(ui));
+            repaint.set(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
             let mut texts = Vec::new();
             for c in &out.shapes {
                 walk(&c.shape, &mut texts);
@@ -550,6 +568,13 @@ mod tests {
         };
         // Hardware not read yet: no dropdown to fall back to the catalog's biggest model.
         let before = texts(&mut cabin);
+        // The first frame always repaints; the next one shows what the row asks for.
+        texts(&mut cabin);
+        assert!(
+            repaint.get() <= std::time::Duration::from_millis(250),
+            "the pending read looks again soon: {:?}",
+            repaint.get()
+        );
         assert!(
             before
                 .iter()
@@ -573,6 +598,28 @@ mod tests {
             .unwrap_or_else(|| panic!("no model shown: {after:?}"));
         assert!(shown.starts_with("Gemma 4 E"), "{shown}");
         assert!(!shown.contains("31B"), "{shown}");
+        assert!(!after
+            .iter()
+            .any(|t| t == super::super::setup_wizard::HW_UNKNOWN));
+        // A read that failed (memory 0): no recommendation from zeros, and it says so.
+        cabin.setup.hw = Some(grokhub_core::local_setup::Hardware::default());
+        assert_eq!(cabin.suggested_model().map(|m| m.id), None);
+        let failed = texts(&mut cabin);
+        assert!(
+            failed
+                .iter()
+                .any(|t| t == super::super::setup_wizard::HW_UNKNOWN),
+            "{failed:?}"
+        );
+        let small = grokhub_core::local_picker::smallest().unwrap();
+        assert!(
+            failed.iter().any(|t| t.starts_with(small.name)),
+            "the smallest is picked: {failed:?}"
+        );
+        assert!(
+            !failed.iter().any(|t| t.ends_with(" · recommended")),
+            "{failed:?}"
+        );
     }
 
     #[test]

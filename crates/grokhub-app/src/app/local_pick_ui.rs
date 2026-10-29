@@ -69,10 +69,11 @@ pub(super) fn default_choice(
 }
 
 impl Cabin {
-    fn suggested_model(&self) -> Option<&'static LocalModel> {
+    pub(super) fn suggested_model(&self) -> Option<&'static LocalModel> {
         self.setup
             .hw
             .as_ref()
+            .filter(|hw| !super::setup_wizard::hw_unknown(hw))
             .and_then(|hw: &Hardware| ls::suggest(hw))
     }
 

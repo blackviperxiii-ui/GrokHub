@@ -43,6 +43,9 @@ pub(super) struct SetupWizard {
     /// The model whose Download was clicked once: its size and free disk show
     /// with a second button before anything downloads.
     pub(super) confirm_dl: Option<&'static str>,
+    /// Free disk read when that confirm opened, so it isn't the figure from
+    /// launch after other downloads filled the drive.
+    pub(super) confirm_free_mb: Option<u64>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -68,6 +71,15 @@ pub(super) fn device_for(hw: &Hardware) -> Device {
 
 /// Shown where the model dropdown goes until the hardware read lands.
 pub(super) const CHECKING_HW: &str = "Checking this machine's GPU, memory and free disk…";
+
+/// The hardware read came back without the PC's memory, so nothing can be
+/// recommended from it.
+pub(super) const HW_UNKNOWN: &str = "Couldn't read this PC's memory, so there's no recommended model. The smallest is picked; choose a bigger one only if you know it fits.";
+
+/// A hardware read that failed: `detect_hardware` reports unread memory as 0.
+pub(super) fn hw_unknown(hw: &Hardware) -> bool {
+    hw.ram_mb == 0
+}
 
 pub(super) const SETUP_DONE_STATUS: &str =
     "Setup saved. Settings → Behavior → Setup opens it again.";
