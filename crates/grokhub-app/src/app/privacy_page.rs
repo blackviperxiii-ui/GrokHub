@@ -612,10 +612,11 @@ mod tests {
             // The nav column is 220 px and the body keeps a 40 px gutter.
             assert!(page.width() - 260.0 >= TWO_COL_MIN_W, "{w}x{h}");
         }
+        // The sheet takes 80% of the window under the 40 px titlebar.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
         let sheet = settings_page_rect(screen, false, SettingsSec::Privacy);
-        assert_eq!(sheet.size(), egui::vec2(920.0, 620.0));
-        assert_eq!(sheet.center(), egui::pos2(800.0, 450.0));
+        assert_eq!(sheet.size(), egui::vec2(1280.0, 688.0));
+        assert_eq!(sheet.center(), egui::pos2(800.0, 470.0));
     }
 
     #[test]

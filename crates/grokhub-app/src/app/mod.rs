@@ -289,7 +289,7 @@ enum Nav {
     Settings,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
     Privacy,

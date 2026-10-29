@@ -104,6 +104,13 @@ pub fn build_version_line() -> String {
     )
 }
 
+/// Settings › About, under the version: `Build 2.13.1-beta.3 (beta @ abc1234)`.
+pub fn build_detail_line() -> String {
+    let line = build_version_line();
+    let detail = line.split_once(' ').map_or(line.as_str(), |(_, rest)| rest);
+    format!("Build {detail}")
+}
+
 /// Labs line for the Beta channel toggle: receipt channel + build branch/SHA.
 pub fn channel_labs_status() -> String {
     channel_status_line(
@@ -656,6 +663,23 @@ mod tests {
         assert_eq!(installed_channel(), Channel::Stable);
         drop(_pin);
         let _ = fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn about_build_line_drops_the_old_product_name() {
+        let line = build_detail_line();
+        assert_eq!(
+            line,
+            format!(
+                "Build {}",
+                build_version_line().trim_start_matches("GrokHub ")
+            )
+        );
+        assert!(
+            line.starts_with(&format!("Build {}", build_version_label())),
+            "{line}"
+        );
+        assert!(!line.contains("GrokHub"), "{line}");
     }
 
     #[test]
