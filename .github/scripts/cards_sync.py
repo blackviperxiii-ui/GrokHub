@@ -303,14 +303,18 @@ def sync():
 
 
 def merged_beta_pr(number):
-    """URL of a same-repo PR merged into beta that references issue #number."""
+    """URL of a same-repo PR merged into beta whose body closes issue #number."""
     for ev in gh_all(f"/repos/{REPO}/issues/{number}/timeline"):
         src = (ev.get("source") or {}).get("issue") or {}
         if ev.get("event") != "cross-referenced" or not (src.get("pull_request") or {}).get("merged_at"):
             continue
-        if (src.get("repository") or {}).get("full_name", REPO) != REPO:
+        if (src.get("repository") or {}).get("full_name") != REPO:
             continue
         pr = gh(f"/repos/{REPO}/pulls/{src['number']}")
+        # A bare mention ("see #12") is not a fix; only a closing keyword counts.
+        if not re.search(rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#{number}\b",
+                         pr.get("body") or "", re.I):
+            continue
         if pr.get("merged") and pr["base"]["ref"] == "beta":
             return pr["html_url"]
     return None
