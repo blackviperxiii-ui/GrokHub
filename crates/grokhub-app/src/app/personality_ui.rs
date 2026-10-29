@@ -254,6 +254,18 @@ impl Cabin {
             .as_deref()
             .and_then(|id| self.threads.iter().position(|t| t.id == id))
             .unwrap_or(self.thread_idx);
+        self.thread_personality_id(idx)
+    }
+
+    /// The gated preset chat `idx` uses, whatever chat is running.
+    pub(super) fn thread_personality(&self, idx: usize) -> Personality {
+        personality::gated(
+            personality::lookup(&presets_dir(), &self.thread_personality_id(idx)),
+            self.cfg.explicit_personalities,
+        )
+    }
+
+    fn thread_personality_id(&self, idx: usize) -> String {
         let own = self
             .threads
             .get(idx)

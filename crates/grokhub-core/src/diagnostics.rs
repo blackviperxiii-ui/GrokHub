@@ -194,9 +194,16 @@ impl DiagnosticsExport {
     }
 }
 
-/// `~/Desktop` on Linux and Windows (`HOME` or `USERPROFILE`).
+/// The user's Desktop: the platform's own location (Windows known folder,
+/// which OneDrive can redirect; XDG `user-dirs.dirs` on Linux), else
+/// `<home>/Desktop`. The platform lookup only counts for the real home, so a
+/// `HOME`/`USERPROFILE` override (tests, portable runs) keeps its own Desktop.
 pub fn desktop_dir() -> Option<PathBuf> {
-    user_home().map(|h| h.join("Desktop"))
+    let home = user_home()?;
+    let platform = dirs::desktop_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
+        .filter(|d| d != &home);
+    Some(platform.unwrap_or_else(|| home.join("Desktop")))
 }
 
 /// `loadout-diagnostics-YYYYMMDD-HHMMSS.zip` from a wall-clock stamp.
@@ -210,42 +217,157 @@ pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
     Ok(dir.join(diagnostics_zip_name(at)))
 }
 
-/// Redact secrets, emails/PII, and home-rooted paths for a diagnostics export.
+/// Redact secrets, emails/PII, credential assignments (`DB_PASSWORD=…`,
+/// `"api_key": "…"`), and home-rooted paths for a diagnostics export.
 pub fn redact_for_diagnostics(input: &str, home: Option<&str>) -> String {
-    let (mut s, _) = crate::pii::redact_recall(input);
+    let (s, _) = crate::pii::redact_recall(input);
+    let mut s = redact_credential_values(&s);
     if let Some(home) = home.map(str::trim).filter(|h| !h.is_empty()) {
         s = redact_home_paths(&s, home);
     }
     s
 }
 
-/// Apply [`redact_for_diagnostics`] to every string field on a turn.
+/// Apply [`redact_for_diagnostics`] to every string field on a turn,
+/// metadata included (custom playbook names, policy reasons, tool names).
 pub fn redact_turn(mut turn: DiagnosticsTurn, home: Option<&str>) -> DiagnosticsTurn {
-    turn.user_text = redact_for_diagnostics(&turn.user_text, home);
-    turn.final_reply = redact_for_diagnostics(&turn.final_reply, home);
-    turn.raw_saved_turn = redact_for_diagnostics(&turn.raw_saved_turn, home);
-    turn.classifier.why_chat_vs_task =
-        redact_for_diagnostics(&turn.classifier.why_chat_vs_task, home);
-    turn.playbook.why = redact_for_diagnostics(&turn.playbook.why, home);
-    turn.errors = turn
-        .errors
-        .into_iter()
-        .map(|e| redact_for_diagnostics(&e, home))
-        .collect();
-    for t in &mut turn.tool_calls {
-        t.result_summary = redact_for_diagnostics(&t.result_summary, home);
+    let r = |s: &mut String| *s = redact_for_diagnostics(s, home);
+    r(&mut turn.user_text);
+    r(&mut turn.final_reply);
+    r(&mut turn.raw_saved_turn);
+    let c = &mut turn.classifier;
+    for s in [
+        &mut c.intent,
+        &mut c.care,
+        &mut c.domain,
+        &mut c.why_chat_vs_task,
+        &mut c.by,
+    ] {
+        r(s);
     }
-    turn.approvals_asked = turn
-        .approvals_asked
-        .into_iter()
-        .map(|e| redact_for_diagnostics(&e, home))
-        .collect();
-    turn.approvals_granted = turn
-        .approvals_granted
-        .into_iter()
-        .map(|e| redact_for_diagnostics(&e, home))
-        .collect();
+    let p = &mut turn.playbook;
+    for s in [&mut p.name, &mut p.id, &mut p.why] {
+        r(s);
+    }
+    if let Some(p) = &mut turn.brain_policy {
+        for s in [&mut p.row, &mut p.goal, &mut p.reason, &mut p.talk] {
+            r(s);
+        }
+    }
+    for s in [
+        &mut turn.personality,
+        &mut turn.content_level,
+        &mut turn.length_cap,
+        &mut turn.model,
+        &mut turn.provider,
+    ] {
+        r(s);
+    }
+    for t in &mut turn.tool_calls {
+        for s in [
+            &mut t.tool,
+            &mut t.decision,
+            &mut t.approval_class,
+            &mut t.result_summary,
+        ] {
+            r(s);
+        }
+    }
+    for s in turn
+        .errors
+        .iter_mut()
+        .chain(turn.approvals_asked.iter_mut())
+        .chain(turn.approvals_granted.iter_mut())
+    {
+        r(s);
+    }
     turn
+}
+
+/// Key names whose value is a credential, matched inside the key
+/// (`DATABASE_PASSWORD`, `x-api-key`, `client_secret`).
+const CREDENTIAL_KEYS: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "api-key",
+    "access_key",
+    "accesskey",
+    "private_key",
+    "privatekey",
+    "credential",
+    "authorization",
+];
+
+fn is_key_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
+}
+
+fn is_credential_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    CREDENTIAL_KEYS.iter().any(|k| key.contains(k))
+}
+
+/// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
+/// key names a credential. Numbers stay (`max_tokens: 4000`).
+fn redact_credential_values(input: &str) -> String {
+    let b = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < b.len() {
+        if !is_key_byte(b[i]) {
+            let ch = input[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_key_byte(b[i]) {
+            i += 1;
+        }
+        out.push_str(&input[start..i]);
+        if !is_credential_key(&input[start..i]) {
+            continue;
+        }
+        let mut j = i;
+        if j < b.len() && matches!(b[j], b'"' | b'\'') {
+            j += 1;
+        }
+        while j < b.len() && b[j] == b' ' {
+            j += 1;
+        }
+        if j >= b.len() || !matches!(b[j], b'=' | b':') {
+            continue;
+        }
+        j += 1;
+        while j < b.len() && b[j] == b' ' {
+            j += 1;
+        }
+        let quote = (j < b.len() && matches!(b[j], b'"' | b'\'')).then(|| b[j]);
+        if quote.is_some() {
+            j += 1;
+        }
+        let vstart = j;
+        while j < b.len()
+            && match quote {
+                Some(q) => b[j] != q && b[j] != b'\n',
+                None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
+            }
+        {
+            j += 1;
+        }
+        let value = &input[vstart..j];
+        if value.is_empty() || value.starts_with('[') || value.bytes().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        out.push_str(&input[i..vstart]);
+        out.push_str("[redacted]");
+        i = j;
+    }
+    out
 }
 
 /// Short reason line for intent (chat vs task and friends).
@@ -403,15 +525,17 @@ pub fn diagnostics_markdown(export: &DiagnosticsExport) -> String {
     out
 }
 
-/// Write `diagnostics.json` + `diagnostics.md` into a zip at `path`.
-pub fn write_diagnostics_zip(path: &Path, export: &DiagnosticsExport) -> Result<(), String> {
+/// Write `diagnostics.json` + `diagnostics.md` into a new zip at `path`, or
+/// at `name-2.zip`, `name-3.zip`… when that file exists. Never overwrites an
+/// earlier bundle. Returns the path written.
+pub fn write_diagnostics_zip(path: &Path, export: &DiagnosticsExport) -> Result<PathBuf, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Desktop folder: {e}"))?;
     }
     let json =
         serde_json::to_string_pretty(export).map_err(|e| format!("diagnostics json: {e}"))?;
     let md = diagnostics_markdown(export);
-    let file = std::fs::File::create(path).map_err(|e| format!("create zip: {e}"))?;
+    let (file, path) = create_new_numbered(path)?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -424,13 +548,41 @@ pub fn write_diagnostics_zip(path: &Path, export: &DiagnosticsExport) -> Result<
     zip.write_all(md.as_bytes())
         .map_err(|e| format!("zip md write: {e}"))?;
     zip.finish().map_err(|e| format!("zip finish: {e}"))?;
-    Ok(())
+    Ok(path)
 }
 
-/// Status line after a successful Desktop write (triggers a Saved toast).
+/// Create `path` only if it doesn't exist, else the first free `stem-N.ext`.
+fn create_new_numbered(path: &Path) -> Result<(std::fs::File, PathBuf), String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("diagnostics")
+        .to_string();
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("zip");
+    for n in 1..=99 {
+        let candidate = if n == 1 {
+            path.to_path_buf()
+        } else {
+            path.with_file_name(format!("{stem}-{n}.{ext}"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((f, candidate)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("create zip: {e}")),
+        }
+    }
+    Err("create zip: too many bundles with this name".into())
+}
+
+/// Status line after a successful Desktop write (triggers a Saved toast;
+/// the chat's notice carries the Open folder action).
 pub fn diagnostics_saved_status(path: &Path) -> String {
     format!(
-        "Saved {} — Open folder",
+        "Saved {} to your Desktop",
         path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("diagnostics.zip")
@@ -636,7 +788,7 @@ mod tests {
             },
             Some("/home/alice"),
         ));
-        write_diagnostics_zip(&path, &export).unwrap();
+        assert_eq!(write_diagnostics_zip(&path, &export).unwrap(), path);
         assert!(path.is_file());
         let meta = std::fs::metadata(&path).unwrap();
         assert!(meta.len() > 40, "zip should be non-empty");
@@ -660,9 +812,110 @@ mod tests {
         assert!(md.contains("Why chat vs task:"), "{md}");
         assert_eq!(
             diagnostics_saved_status(&path),
-            "Saved loadout-diagnostics-20231114-221320.zip — Open folder"
+            "Saved loadout-diagnostics-20231114-221320.zip to your Desktop"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn credential_assignments_are_redacted_in_env_json_and_yaml_forms() {
+        let raw = "DATABASE_PASSWORD=not-a-real-password\n\
+                   {\"api_key\": \"abc123xyz\", \"name\": \"harbor\"}\n\
+                   client_secret: hunter2\n\
+                   max_tokens: 4000\n\
+                   author: Pat";
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "DATABASE_PASSWORD=[redacted]\n\
+             {\"api_key\": \"[redacted]\", \"name\": \"harbor\"}\n\
+             client_secret: [redacted]\n\
+             max_tokens: 4000\n\
+             author: Pat"
+        );
+    }
+
+    #[test]
+    fn redact_turn_covers_playbook_policy_and_tool_metadata() {
+        let turn = redact_turn(
+            DiagnosticsTurn {
+                turn: 1,
+                playbook: DiagnosticsPlaybook {
+                    name: "mail pat@example.com".into(),
+                    id: "custom".into(),
+                    why: String::new(),
+                },
+                brain_policy: Some(DiagnosticsPolicy {
+                    row: "task × careful".into(),
+                    goal: "deploy".into(),
+                    reason: "token=abc123xyz".into(),
+                    talk: "short".into(),
+                }),
+                tool_calls: vec![DiagnosticsToolCall {
+                    tool: "bash /home/alice/bin/run".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            Some("/home/alice"),
+        );
+        assert_eq!(turn.playbook.name, "mail [email]");
+        assert_eq!(turn.brain_policy.unwrap().reason, "token=[redacted]");
+        assert_eq!(turn.tool_calls[0].tool, "bash /home/user/bin/run");
+    }
+
+    #[test]
+    fn a_second_save_with_the_same_name_gets_a_new_file() {
+        let dir = std::env::temp_dir().join(format!("gh-diag-clobber-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("loadout-diagnostics-20231114-221320.zip");
+        let first = DiagnosticsExport::with_defaults("1.0.0", "thr-1", "First");
+        let second = DiagnosticsExport::with_defaults("1.0.0", "thr-2", "Second");
+        assert_eq!(write_diagnostics_zip(&path, &first).unwrap(), path);
+        let next = write_diagnostics_zip(&path, &second).unwrap();
+        assert_eq!(next, dir.join("loadout-diagnostics-20231114-221320-2.zip"));
+        let read_title = |p: &Path| {
+            let mut zip = zip::ZipArchive::new(std::fs::File::open(p).unwrap()).unwrap();
+            let mut json = String::new();
+            zip.by_name("diagnostics.json")
+                .unwrap()
+                .read_to_string(&mut json)
+                .unwrap();
+            serde_json::from_str::<DiagnosticsExport>(&json)
+                .unwrap()
+                .chat_title
+        };
+        assert_eq!(read_title(&path), "First");
+        assert_eq!(read_title(&next), "Second");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A localized or moved Desktop from `user-dirs.dirs` wins over
+    /// `~/Desktop`; without one the bundle goes to `~/Desktop`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn desktop_follows_xdg_user_dirs() {
+        let home = std::env::temp_dir().join(format!("gh-diag-xdg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".config")).unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(desktop_dir(), Some(home.join("Desktop")));
+        std::fs::write(
+            home.join(".config/user-dirs.dirs"),
+            "XDG_DESKTOP_DIR=\"$HOME/Schreibtisch\"\n",
+        )
+        .unwrap();
+        assert_eq!(desktop_dir(), Some(home.join("Schreibtisch")));
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = old_xdg {
+            std::env::set_var("XDG_CONFIG_HOME", v);
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

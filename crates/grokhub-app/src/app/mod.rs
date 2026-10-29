@@ -901,6 +901,8 @@ pub struct Cabin {
     activity: activity_dock::DockState,
     /// Last Labs Diagnostics zip on the Desktop (Open folder).
     diagnostics_last_zip: Option<std::path::PathBuf>,
+    /// The chat shows "Saved … / Open folder" for the last bundle until dismissed.
+    diagnostics_notice: bool,
     /// Modular Home slot layout (`home_layout.json` v2).
     home_layout: grokhub_core::home::HomeLayout,
     /// Edit Home modules dialog draft (`None` = closed).
@@ -1477,6 +1479,7 @@ impl Cabin {
             status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics_last_zip: None,
+            diagnostics_notice: false,
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
             home_edit: None,
         };
@@ -1947,6 +1950,7 @@ impl Cabin {
             status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics_last_zip: None,
+            diagnostics_notice: false,
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
         }

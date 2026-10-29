@@ -2909,6 +2909,7 @@ impl Cabin {
                     }
                     ComposerStackSlot::LiveWork => {
                         self.paint_archive_toast(ui);
+                        self.paint_diagnostics_notice(ui);
                         self.paint_live_work(ui);
                     }
                     ComposerStackSlot::SlashPalette => {

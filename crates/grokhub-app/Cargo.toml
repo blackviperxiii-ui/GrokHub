@@ -87,6 +87,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_Networking_WinSock",
 ] }
 
+[dev-dependencies]
+# Diagnostics tests read the saved bundle back.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
 [features]
 default = ["fx"]
 fx = ["eframe/wgpu"]

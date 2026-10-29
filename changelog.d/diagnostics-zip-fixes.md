@@ -1,0 +1,1 @@
+- Labs Diagnostics: bundles now also redact credential lines (`DB_PASSWORD=…`, `"api_key": "…"`) and every metadata field, never overwrite an earlier bundle, land on your real Desktop (OneDrive or a localized XDG Desktop), export the turn you clicked with the chat's own personality, and show an Open folder action in the chat after saving.
