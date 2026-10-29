@@ -768,9 +768,15 @@ fn delete_all_history_clears_seeded_chats() {
     cabin.thread_idx = 0;
     cabin.messages = cabin.threads[0].messages.clone();
     cabin.delete_all_history();
-    wait_tree_contains(&cfg.root, "Chat");
+    // Drain the ordered writer before reading: polling the folder on a timer
+    // raced slow Windows runners.
     join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
     let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        saved.contains("\"Chat\""),
+        "the fresh chat is saved: {saved}"
+    );
     assert!(
         !saved.contains("Pier light") && !saved.contains("Salt lane"),
         "the pre-delete snapshot from halt_in_flight must not land last: {saved}"
