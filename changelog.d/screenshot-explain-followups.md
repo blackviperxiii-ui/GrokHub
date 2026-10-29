@@ -1,0 +1,1 @@
+- Screenshot Explain no longer stutters the app: the folder check and the image load run in the background. It finds screenshots in a Pictures folder moved to another drive or OneDrive, or set in Linux's user-dirs, says so when the attachment tray is full (and keeps the offer), and a file stamped with a future date no longer hides later screenshots.

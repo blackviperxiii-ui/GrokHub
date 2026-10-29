@@ -36,6 +36,8 @@ pub(super) struct FocusState {
     pub game: super::game_companion_ui::GameUi,
     /// New 3D models in Downloads.
     pub models: super::model_drop_ui::ModelDropState,
+    /// The screenshot Explain offer's folder scan and image load.
+    pub shot: super::screenshot_offer_ui::ShotState,
 }
 
 impl Cabin {
@@ -50,6 +52,7 @@ impl Cabin {
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_model_drop();
+        self.poll_screenshot_offer();
     }
 
     /// From the UI pass: what the focus helpers paint over the cabin.
