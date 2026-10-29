@@ -411,6 +411,11 @@ pub fn i_can_title(card: &UpdateCard) -> String {
     if crate::pulse_ideas::is_muse_idea(card) {
         return title.to_string();
     }
+    // A repeated-ask offer's title is its question ("You ask this most
+    // evenings around 7 PM, …"); the schedule line is in its preview.
+    if crate::ask_offers::is_ask_offer_card(card) {
+        return title.to_string();
+    }
     let lower = title.to_ascii_lowercase();
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();

@@ -574,7 +574,8 @@ impl Cabin {
     pub(super) fn post_code_idea_card(&mut self, idea: &sr::CodeIdea, now: u64) {
         let text = idea.text();
         let details = format!(
-            "{text}\n\nGrokHub never changes its own code. Save idea keeps this in Settings → Behavior; Copy as GitHub issue puts it on the clipboard with home paths, emails and keys taken out, for you to paste."
+            "{text}\n\n{} never changes its own code. Save idea keeps this in Settings → Behavior; Copy as GitHub issue puts it on the clipboard with home paths, emails and keys taken out, for you to paste.",
+            grokhub_core::brand::product_name()
         );
         let card = ProposalCard {
             source: sr::code_source(&idea.slug),

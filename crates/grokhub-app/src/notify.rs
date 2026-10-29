@@ -57,7 +57,7 @@ pub fn inhibit_sleep() -> Option<std::process::Child> {
         Command::new("systemd-inhibit")
             .args([
                 "--what=idle:sleep",
-                "--who=GrokHub",
+                &format!("--who={}", grokhub_core::brand::product_name()),
                 "--why=host-job",
                 "--mode=block",
                 "sleep",

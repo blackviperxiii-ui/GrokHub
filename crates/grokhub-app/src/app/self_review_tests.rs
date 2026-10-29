@@ -1140,7 +1140,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
         cabin.cfg.desktop_control,
     );
     assert!(
-        !plain.contains(super::canary_ui::NOTES_HEAD),
+        !plain.contains(super::canary_ui::NOTES_HEAD.as_str()),
         "nothing applied before Apply"
     );
 
@@ -1183,7 +1183,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
                 "{rules}"
             );
             let note_at = rules
-                .find(super::canary_ui::NOTES_HEAD)
+                .find(super::canary_ui::NOTES_HEAD.as_str())
                 .expect("the note sits in the chat rules");
             // Default voice layers ahead of notes; notes still beat cabin rules.
             let cabin_at = rules.find(&cabin_only).expect("cabin rules still present");
@@ -1196,7 +1196,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
             2
         } else {
             assert!(
-                !rules.contains(super::canary_ui::NOTES_HEAD),
+                !rules.contains(super::canary_ui::NOTES_HEAD.as_str()),
                 "control chats follow the rules alone"
             );
             control += 1;

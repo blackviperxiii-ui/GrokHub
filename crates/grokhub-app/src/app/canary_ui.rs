@@ -197,8 +197,9 @@ fn parent_skill(dir: &std::path::Path, v: &hx::Version) -> Option<SkillMd> {
 /// Chat notes kept at once, in name order.
 const NOTES_MAX: usize = 5;
 /// The line above the chat notes in the cabin rules.
-pub(super) const NOTES_HEAD: &str =
-    "Notes from GrokHub's weekly review of its own runs. They shape how you work; the cabin safety and approval rules always win:";
+pub(super) static NOTES_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("Notes from {}'s weekly review of its own runs. They shape how you work; the cabin safety and approval rules always win:", grokhub_core::brand::product_name())
+});
 
 impl Cabin {
     /// A chat-note proposal from the weekly pass: one Suggestion card whose
@@ -209,8 +210,10 @@ impl Cabin {
         now: u64,
     ) {
         let details = format!(
-            "{}.\n\nApply adds this note to the instructions of every chat; the cabin safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; GrokHub keeps it only if those runs take fewer steps.",
-            p.numbers, p.steps
+            "{}.\n\nApply adds this note to the instructions of every chat; the cabin safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; {} keeps it only if those runs take fewer steps.",
+            p.numbers,
+            p.steps,
+            grokhub_core::brand::product_name()
         );
         let card = super::self_review_ui::ProposalCard {
             source: grokhub_core::self_review::snippet_source(&p.skill),
@@ -319,7 +322,7 @@ impl Cabin {
         if lines.is_empty() {
             return String::new();
         }
-        format!("{NOTES_HEAD}\n{}", lines.join("\n"))
+        format!("{}\n{}", *NOTES_HEAD, lines.join("\n"))
     }
 
     /// The open note trial's side for this chat, for its runs' metrics.

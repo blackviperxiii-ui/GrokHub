@@ -341,7 +341,10 @@ impl Cabin {
                 let mut notes = BudgetNotes::load(&dir);
                 notes.nudge_muted_until_ms = now + budget::NUDGE_EVERY_MS;
                 notes.save(&dir);
-                self.status = "Not now. GrokHub won't bring this up for 30 days.".into();
+                self.status = format!(
+                    "Not now. {} won't bring this up for 30 days.",
+                    grokhub_core::brand::product_name()
+                );
             }
         }
     }

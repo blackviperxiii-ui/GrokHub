@@ -49,6 +49,8 @@ pub(super) struct SourcesState {
     pub rhythm: Option<grokhub_core::rhythm::Rhythm>,
     /// Steam wishlist sale alerts and their daily check.
     pub wish: super::wishlist_ui::WishState,
+    /// Achievement nudges and their weekly check.
+    pub ach: super::achievements_ui::AchState,
     /// Upcoming DLC and sequels, and release-day reminders.
     pub radar: super::release_radar_ui::RadarState,
     /// New local model suggestions and their weekly check.
@@ -332,6 +334,7 @@ impl Cabin {
         self.poll_source_summaries();
         self.poll_know_me();
         self.poll_wishlist();
+        self.tick_achievements(now_ms());
         self.poll_release_radar();
         self.tick_local_models(now_ms());
         let Some(rx) = self.sources.rx.take() else {
@@ -753,6 +756,7 @@ impl Cabin {
         }
         self.ui_steam_source(ui);
         self.ui_wishlist_source(ui);
+        self.ui_achievements_source(ui);
         self.ui_release_radar_source(ui);
         self.ui_local_models_source(ui);
         // The paid search extension point, shown off and not clickable.
@@ -775,7 +779,7 @@ impl Cabin {
         ui.add_space(4.0);
         crate::cards::help_text(
             ui,
-            "Checks run every two hours, once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
+            &format!("Checks run every two hours, once when {} opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.", grokhub_core::brand::product_name()),
         );
         let today = self.summary_calls_today(now_ms());
         ui.label(

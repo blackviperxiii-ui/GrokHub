@@ -633,13 +633,13 @@ fn connection_and_automation_changes_reports_post_a_bubble() {
     assert!(
         bodies
             .iter()
-            .any(|b| b.contains(super::change_undo::CONNECTION_CHANGES_HEAD)),
+            .any(|b| b.contains(super::change_undo::CONNECTION_CHANGES_HEAD.as_str())),
         "{bodies:?}"
     );
     assert!(
         bodies
             .iter()
-            .any(|b| b.contains(super::change_undo::AUTOMATION_CHANGES_HEAD)),
+            .any(|b| b.contains(super::change_undo::AUTOMATION_CHANGES_HEAD.as_str())),
         "{bodies:?}"
     );
     assert!(cabin

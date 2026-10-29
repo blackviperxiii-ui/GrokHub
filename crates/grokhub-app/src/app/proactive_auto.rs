@@ -139,7 +139,11 @@ impl Cabin {
             hx::AutoRun::Asked(_) => self.offer_card(&c, CeilingMiss::MindCheck, by_hand),
             hx::AutoRun::NoUndo => self.offer_card(&c, CeilingMiss::Reversibility, by_hand),
             hx::AutoRun::Failed(why) => {
-                self.status = format!("GrokHub tried {} on its own and stopped: {why}", c.tool)
+                self.status = format!(
+                    "{} tried {} on its own and stopped: {why}",
+                    grokhub_core::brand::product_name(),
+                    c.tool
+                )
             }
         }
     }
@@ -289,7 +293,10 @@ impl Cabin {
         let span = hx::answer_span(&done.mind_key, hx::DECISION_UNDO, self.access_mode());
         hx::note_proactive(&config::config_dir(), &span);
         self.mark_answered(id);
-        self.status = "Undone. GrokHub will ask before doing this again.".into();
+        self.status = format!(
+            "Undone. {} will ask before doing this again.",
+            grokhub_core::brand::product_name()
+        );
     }
 
     /// "Don't do this again": `p_mind` 1.0 for this class. It never acts on
@@ -301,7 +308,10 @@ impl Cabin {
         let span = hx::answer_span(&done.mind_key, hx::DECISION_NEVER, self.access_mode());
         hx::note_proactive(&config::config_dir(), &span);
         self.mark_answered(id);
-        self.status = "GrokHub won't do or suggest this again.".into();
+        self.status = format!(
+            "{} won't do or suggest this again.",
+            grokhub_core::brand::product_name()
+        );
     }
 }
 
@@ -505,7 +515,7 @@ mod tests {
         );
         assert_eq!(
             r.cabin.status,
-            "Undone. GrokHub will ask before doing this again."
+            "Undone. Loadout will ask before doing this again."
         );
         assert_eq!(
             done_cards(&r.cabin)[0]
@@ -711,7 +721,7 @@ mod tests {
         r.cabin.tick_auto_act();
         let id = done_cards(&r.cabin)[0].id.clone();
         r.cabin.done_for_you_never(&id);
-        assert_eq!(r.cabin.status, "GrokHub won't do or suggest this again.");
+        assert_eq!(r.cabin.status, "Loadout won't do or suggest this again.");
         let mind = hx::proactive_mind(&r.root, Arc::new(hx::SystemClock));
         assert_eq!(mind.mind_prior("proactive:connection_disable"), 1.0);
         let never = proactive_spans(&r.root)
