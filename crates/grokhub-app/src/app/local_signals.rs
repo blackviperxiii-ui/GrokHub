@@ -26,7 +26,7 @@ use grokhub_core::local_profile::{PowerInfo, Thermal};
 #[cfg(any(target_os = "linux", windows))]
 use super::local_probe;
 use super::setup_wizard::ram_mb;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use super::setup_wizard::run;
 
 /// Slow signals are read every this many samples.
@@ -94,12 +94,38 @@ fn sample_loop(config_dir: &Path) {
 /// signals included. Blocks on the OS readers, so call it off the UI thread.
 pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
     let s = Reader::default().sample(None);
+    let game = s.game;
+    // The sampler has no Windows game reader; wind-down fails closed without one.
+    #[cfg(windows)]
+    let game = game.or_else(windows_game);
     grokhub_core::wind_down::Machine {
         idle_secs: s.idle_secs,
-        game: s.game,
+        game,
         fullscreen: s.fullscreen,
         external_gpu_pct: s.external_gpu_pct,
     }
+}
+
+/// A game running from a store's library, by the full paths of this
+/// session's processes. `None` when the list can't be read or an unreadable
+/// process could be an elevated game.
+#[cfg(windows)]
+fn windows_game() -> Option<bool> {
+    let text = run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s = (Get-Process -Id $PID).SessionId; Get-Process | Where-Object SessionId -eq $s | ForEach-Object { if ($_.Path) { $_.Path } else { '?' + $_.ProcessName } }",
+        ],
+    )?;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    g::game_in_process_list(&lines)
 }
 
 #[derive(Default)]
@@ -657,24 +683,25 @@ impl Pdh {
     fn sample(&self, own: Option<u32>) -> Option<u8> {
         use windows_sys::Win32::System::Performance::{
             PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
-            PDH_FMT_DOUBLE,
+            PDH_FMT_DOUBLE, PDH_MORE_DATA,
         };
         // SAFETY: the first call sizes the buffer, the second fills it; every
         // item's name points into that buffer, which outlives the loop.
+        // No data or a failed read is `None`, never an idle GPU.
         unsafe {
             if PdhCollectQueryData(self.query) != 0 {
                 return None;
             }
             let (mut size, mut count) = (0u32, 0u32);
-            PdhGetFormattedCounterArrayW(
+            let sized = PdhGetFormattedCounterArrayW(
                 self.counter,
                 PDH_FMT_DOUBLE,
                 &mut size,
                 &mut count,
                 std::ptr::null_mut(),
             );
-            if size == 0 {
-                return Some(0);
+            if sized != PDH_MORE_DATA || size == 0 {
+                return None;
             }
             let item = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
             let mut buf: Vec<PDH_FMT_COUNTERVALUE_ITEM_W> =
