@@ -1,0 +1,5 @@
+- A fresh launch opens on Home. Chat still keeps a clean draft ready behind it.
+- The window resizes from its edges and corners, not only from the maximize button.
+- The titlebar's LOCAL chip is a proper pill with room beside the personality pill.
+- Home's edit pencil and the layout editor's close button no longer show as empty boxes.
+- A wide empty composer says files can be dropped in and that Ctrl+/ lists the shortcuts.

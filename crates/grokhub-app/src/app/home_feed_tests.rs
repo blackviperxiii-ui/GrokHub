@@ -1898,3 +1898,31 @@ fn greeting_galley_h_drives_empty_home_greet_top() {
         "galley height must not spawn a chat job"
     );
 }
+
+#[test]
+fn a_fresh_launch_opens_on_home_with_a_clean_chat_draft_behind_it() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("launch-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut old = crate::threads::ChatThread::new("Yesterday", false);
+    old.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+    let mut cabin = Cabin::quiet_cabin(vec![old], 0);
+    cabin.open_launch_page();
+    assert_eq!(cabin.nav, Nav::Home);
+    assert!(cabin.messages.is_empty(), "Chat waits with an empty draft");
+    assert_eq!(cabin.threads.len(), 2, "yesterday's chat is kept");
+    let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+    std::env::set_var("GROKHUB_DECK_SHOT", "1");
+    cabin.open_launch_page();
+    match prev_shot {
+        Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+        None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+    }
+    assert_eq!(
+        cabin.nav,
+        Nav::Chat,
+        "deck shots still open on the Hangout chat"
+    );
+    release_isolated(&root, cabin);
+}
