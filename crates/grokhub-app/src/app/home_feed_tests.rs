@@ -1924,5 +1924,14 @@ fn a_fresh_launch_opens_on_home_with_a_clean_chat_draft_behind_it() {
         Nav::Chat,
         "deck shots still open on the Hangout chat"
     );
+    let prev_web = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
+    std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+    cabin.nav = Nav::Home;
+    cabin.open_launch_page();
+    match prev_web {
+        Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
+        None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+    }
+    assert_eq!(cabin.nav, Nav::Chat, "web-search shots open on their chat");
     release_isolated(&root, cabin);
 }

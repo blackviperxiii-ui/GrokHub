@@ -566,10 +566,10 @@ impl Cabin {
     }
 
     /// A fresh launch: a clean draft ready in Chat, but the window opens on Home.
-    /// Deck shots keep Chat, the page their Hangout seed is of.
+    /// Proof shots (deck or web search) keep Chat, the page their seed is of.
     pub(super) fn open_launch_page(&mut self) {
         self.open_fresh_home();
-        if !super::loadout_home::deck_shot_requested() {
+        if !super::loadout_home::proof_shot_requested() {
             self.nav = Nav::Home;
         }
     }
