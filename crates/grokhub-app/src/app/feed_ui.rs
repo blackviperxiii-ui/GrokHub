@@ -498,13 +498,9 @@ impl Cabin {
         self.persist_updates();
     }
 
-    /// The offer opens the schedule box. Add on that page is what saves it.
-    fn open_offer_on_automations(&mut self, id: &str) {
-        if !mark_update_opened(&mut self.updates, id) {
-            return;
-        }
-        let seed = self
-            .updates
+    /// The schedule line an Automate offer files: its preview, else its title.
+    fn offer_seed(&self, id: &str) -> String {
+        self.updates
             .iter()
             .find(|c| c.id == id)
             .map(|c| {
@@ -515,7 +511,15 @@ impl Cabin {
                     from_preview
                 }
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// The offer opens the schedule box. Add on that page is what saves it.
+    fn open_offer_on_automations(&mut self, id: &str) {
+        if !mark_update_opened(&mut self.updates, id) {
+            return;
+        }
+        let seed = self.offer_seed(id);
         self.persist_updates();
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
             self.log_card_use(
@@ -533,19 +537,7 @@ impl Cabin {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
-        let seed = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| {
-                let from_preview = grokhub_core::automate_accept_seed(c);
-                if from_preview.trim().is_empty() {
-                    c.title.clone()
-                } else {
-                    from_preview
-                }
-            })
-            .unwrap_or_default();
+        let seed = self.offer_seed(id);
         self.persist_updates();
         let route = route_schedule(&seed);
         let (depth, did) = if route.is_some() {

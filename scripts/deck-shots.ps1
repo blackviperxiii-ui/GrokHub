@@ -264,6 +264,17 @@ function Seed-Radar([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'release-radar.json') ($radar | ConvertTo-Json -Depth 4)
 }
 
+# Repeated asks: three evening "patch notes" asks on three days, so the
+# cabin's own clustering posts the Automate offer card at launch.
+function Seed-AskOffers([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $asks = @('check the game patch notes', "check tonight's patch notes please", 'check patch notes for the update')
+    $entries = @(for ($i = 0; $i -lt $asks.Count; $i++) {
+        @{ atMs = $now - ($i + 1) * 86400000; hour = 19; weekday = ($i + 2) % 7; text = $asks[$i] }
+    })
+    Write-Utf8 (Join-Path $cfg 'ask-offers.json') (@{ entries = $entries } | ConvertTo-Json -Depth 4)
+}
+
 # 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
 # after launch, since the first scan only marks what is already there.
 function Write-ModelDrop([string]$root) {
@@ -308,7 +319,7 @@ function Write-ModelDrop([string]$root) {
 # canned Steam replies (GROKHUB_DECK_ACHIEVEMENTS), for slide 14.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '', [switch]$askOffer) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -327,6 +338,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($askOffer) { Seed-AskOffers $cfg }
     if ($tidy) {
         Seed-Tidy $root
         $app.downloadsTidy = $true

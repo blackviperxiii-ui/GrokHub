@@ -374,11 +374,19 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .nth(1)
         .and_then(|s| s.split("fn ensure_useful_ideas(").next())
         .expect("accept_automate_offer");
+    let seed = pulse
+        .split("fn offer_seed(")
+        .nth(1)
+        .and_then(|s| s.split("fn open_offer_on_automations(").next())
+        .expect("offer_seed");
     assert!(
-        offer.contains("c.title.clone()")
+        offer.contains("self.offer_seed(id)")
             && offer.contains("route_schedule")
-            && !offer.contains("c.body"),
-        "Accept seeds the schedule from the title, not the canned offer body: {offer}"
+            && !offer.contains("c.body")
+            && seed.contains("automate_accept_seed(c)")
+            && seed.contains("c.title.clone()")
+            && !seed.contains("c.body"),
+        "Accept seeds the schedule from the preview, else the title, never the canned offer body: {offer} {seed}"
     );
     let build = pulse
         .split("fn build_idea(")
