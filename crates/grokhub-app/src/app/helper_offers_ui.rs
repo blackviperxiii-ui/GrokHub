@@ -73,11 +73,17 @@ impl Cabin {
     /// "Turn on" switches the helper on; "Not now" stops offering it.
     pub(super) fn answer_helper_offer(&mut self, offer: HelperOffer, turn_on: bool) {
         if turn_on {
-            match offer {
+            // A failed wind-down write keeps its error in the status line.
+            let saved = match offer {
                 HelperOffer::WindDown => self.set_wind_on(true),
-                HelperOffer::Tidy => self.set_downloads_tidy(true),
+                HelperOffer::Tidy => {
+                    self.set_downloads_tidy(true);
+                    true
+                }
+            };
+            if saved {
+                self.status = offer.turned_on().into();
             }
-            self.status = offer.turned_on().into();
         } else {
             self.cfg.helper_offers_dismissed.push(offer.id().into());
             self.persist_cfg();

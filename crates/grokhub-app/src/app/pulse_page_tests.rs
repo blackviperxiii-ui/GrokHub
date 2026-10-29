@@ -1243,6 +1243,12 @@ fn pulse_offers_the_off_helpers_once_each() {
         cabin.cfg.helper_offers_dismissed,
         vec!["wind_down".to_string()]
     );
+    // It survives a restart: the saved config has it.
+    cabin.persist_svc.flush();
+    assert_eq!(
+        crate::config::load().helper_offers_dismissed,
+        vec!["wind_down".to_string()]
+    );
     assert_eq!(cabin.helper_offers(), Vec::<HelperOffer>::new());
     let texts = pulse_texts(cabin, 900.0);
     assert!(
@@ -1258,6 +1264,20 @@ fn pulse_offers_the_off_helpers_once_each() {
         cabin.status,
         "Late-night wind-down is on. Turn it off in Settings › Behavior."
     );
+    cabin.set_wind_on(false);
+
+    // A wind-down switch that can't be saved never claims to be on.
+    let file = crate::config::config_dir().join(grokhub_core::wind_down::FILE_NAME);
+    let _ = std::fs::remove_file(&file);
+    std::fs::create_dir_all(&file).unwrap();
+    cabin.status.clear();
+    cabin.answer_helper_offer(HelperOffer::WindDown, true);
+    assert!(!cabin.status.is_empty());
+    assert_ne!(
+        cabin.status,
+        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+    );
+    std::fs::remove_dir_all(&file).unwrap();
     cabin.set_wind_on(false);
     quiet.settle();
 }
