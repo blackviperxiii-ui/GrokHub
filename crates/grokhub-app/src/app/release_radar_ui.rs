@@ -34,21 +34,20 @@ impl Cabin {
         }
     }
 
-    /// The games to ask about: most played first, then the wishlist.
+    /// The games to ask about: most played and wishlisted in turn.
     fn radar_seeds(&mut self, now: u64) -> (Vec<(u32, String)>, BTreeSet<u32>) {
         let mut library = self.steam_library(now).1.to_vec();
         library.sort_by_key(|g| std::cmp::Reverse(g.playtime_min));
         let owned: BTreeSet<u32> = library.iter().map(|g| g.app_id).collect();
-        let mut seeds: Vec<(u32, String)> =
-            library.into_iter().map(|g| (g.app_id, g.name)).collect();
-        seeds.extend(
-            self.wish_now()
-                .apps
-                .iter()
-                .filter(|(_, seen)| !seen.name.is_empty())
-                .map(|(id, seen)| (*id, seen.name.clone())),
-        );
-        (seeds, owned)
+        let library = library.into_iter().map(|g| (g.app_id, g.name)).collect();
+        let wishlist = self
+            .wish_now()
+            .apps
+            .iter()
+            .filter(|(_, seen)| !seen.name.is_empty())
+            .map(|(id, seen)| (*id, seen.name.clone()))
+            .collect();
+        (rr::interleave_seeds(library, wishlist), owned)
     }
 
     fn radar_bias() -> i32 {
@@ -69,6 +68,7 @@ impl Cabin {
         if seeds.is_empty() {
             return;
         }
+        let seeds = self.radar_now().next_seeds(&seeds);
         self.radar_now().last_check_ms = now;
         self.save_radar();
         self.sources.radar.note = "Looking for upcoming DLC and sequels…".into();

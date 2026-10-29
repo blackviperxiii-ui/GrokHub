@@ -45,6 +45,10 @@ pub struct Details {
     pub dlc: Vec<u32>,
     pub coming_soon: bool,
     pub date_text: String,
+    /// The store's app type: "game", "dlc", "music", "demo", … ("" if missing).
+    pub app_type: String,
+    /// For DLC, the game it belongs to.
+    pub full_game: Option<u32>,
 }
 
 /// One `appdetails` reply.
@@ -72,11 +76,26 @@ pub fn parse_details(body: &str, app_id: u32) -> Option<Details> {
         .unwrap_or("")
         .trim()
         .to_string();
+    let app_type = data
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let full_game = data
+        .pointer("/fullgame/appid")
+        .and_then(|id| match id {
+            serde_json::Value::String(s) => s.parse::<u64>().ok(),
+            other => other.as_u64(),
+        })
+        .and_then(|id| u32::try_from(id).ok());
     Some(Details {
         name,
         dlc,
         coming_soon,
         date_text,
+        app_type,
+        full_game,
     })
 }
 
@@ -220,6 +239,20 @@ impl Upcoming {
     }
 }
 
+/// What a looked-up candidate really is, from the store's own type. A
+/// search hit only counts as a sequel when the store calls it a game, and as
+/// DLC only when it is DLC for the seed game itself; soundtracks, demos,
+/// videos and DLC for other games are dropped.
+fn classify(found_as: Kind, d: &Details, seed_id: u32) -> Option<Kind> {
+    match (found_as, d.app_type.as_str()) {
+        (_, "music" | "demo" | "video" | "series" | "episode" | "advertising" | "mod") => None,
+        (Kind::Dlc, _) => Some(Kind::Dlc),
+        (Kind::Sequel, "game") => Some(Kind::Sequel),
+        (Kind::Sequel, "dlc") if d.full_game == Some(seed_id) => Some(Kind::Dlc),
+        (Kind::Sequel, _) => None,
+    }
+}
+
 /// Look up what is coming for `seeds` (app id, name), skipping anything in
 /// `owned`. `get` fetches a URL.
 pub fn scan(
@@ -273,6 +306,9 @@ pub fn scan(
             let Some(d) = parse_details(&body, id) else {
                 continue;
             };
+            let Some(kind) = classify(kind, &d, *seed_id) else {
+                continue;
+            };
             if d.coming_soon {
                 out.push(Upcoming {
                     app_id: id,
@@ -289,6 +325,27 @@ pub fn scan(
         return Err(last_err);
     }
     Ok(out)
+}
+
+/// Library (most played first) and wishlist taken in turn, so the wishlist
+/// is not stuck behind the whole library. Wishlisted games the user now owns
+/// are left out.
+pub fn interleave_seeds(
+    library: Vec<(u32, String)>,
+    wishlist: Vec<(u32, String)>,
+) -> Vec<(u32, String)> {
+    let owned: BTreeSet<u32> = library.iter().map(|(id, _)| *id).collect();
+    let mut wish = wishlist.into_iter().filter(|(id, _)| !owned.contains(id));
+    let mut lib = library.into_iter();
+    let mut out = Vec::new();
+    loop {
+        let (a, b) = (lib.next(), wish.next());
+        if a.is_none() && b.is_none() {
+            return out;
+        }
+        out.extend(a);
+        out.extend(b);
+    }
 }
 
 /// How many posts one check may make, moved by the feedback score the user
@@ -317,6 +374,9 @@ pub struct Radar {
     pub posted: BTreeSet<u32>,
     #[serde(default)]
     pub reminders: BTreeMap<u32, Reminder>,
+    /// Where the next check starts in the seed list, so every game gets a turn.
+    #[serde(default)]
+    pub seed_cursor: usize,
 }
 
 impl Radar {
@@ -338,6 +398,24 @@ impl Radar {
             }
         }
         out
+    }
+
+    /// The next `SEEDS_PER_CHECK` seeds, going round the list one check at a
+    /// time so games past the first few are asked about on later days.
+    pub fn next_seeds(&mut self, seeds: &[(u32, String)]) -> Vec<(u32, String)> {
+        if seeds.is_empty() {
+            return Vec::new();
+        }
+        let start = self.seed_cursor % seeds.len();
+        let take = SEEDS_PER_CHECK.min(seeds.len());
+        self.seed_cursor = (start + take) % seeds.len();
+        seeds
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(take)
+            .cloned()
+            .collect()
     }
 
     pub fn remind(&mut self, u: &Upcoming) -> bool {
@@ -402,11 +480,27 @@ mod tests {
 
     // Made-up app ids and names.
     fn details(id: u32, name: &str, dlc: &[u32], soon: bool, date: &str) -> String {
-        serde_json::json!({ id.to_string(): { "success": true, "data": {
-            "name": name, "dlc": dlc,
+        typed(id, name, "game", None, dlc, soon, date)
+    }
+
+    fn typed(
+        id: u32,
+        name: &str,
+        kind: &str,
+        full_game: Option<u32>,
+        dlc: &[u32],
+        soon: bool,
+        date: &str,
+    ) -> String {
+        let mut data = serde_json::json!({
+            "type": kind, "name": name, "dlc": dlc,
             "release_date": { "coming_soon": soon, "date": date }
-        }}})
-        .to_string()
+        });
+        if let Some(game) = full_game {
+            // The store sends this id as a string.
+            data["fullgame"] = serde_json::json!({ "appid": game.to_string(), "name": "x" });
+        }
+        serde_json::json!({ id.to_string(): { "success": true, "data": data } }).to_string()
     }
 
     fn store() -> BTreeMap<String, String> {
@@ -417,24 +511,87 @@ mod tests {
         );
         m.insert(
             details_url(101),
-            details(101, "Star Forge: Deep Space", &[], true, "14 Nov, 2026"),
+            typed(
+                101,
+                "Star Forge: Deep Space",
+                "dlc",
+                Some(100),
+                &[],
+                true,
+                "14 Nov, 2026",
+            ),
         );
         m.insert(
             details_url(102),
-            details(102, "Star Forge: Soundtrack", &[], false, "3 Mar, 2021"),
+            typed(
+                102,
+                "Star Forge: Soundtrack",
+                "music",
+                Some(100),
+                &[],
+                true,
+                "Coming soon",
+            ),
         );
         m.insert(
             details_url(103),
-            details(103, "Star Forge: Owned Pack", &[], true, "Q1 2027"),
+            typed(
+                103,
+                "Star Forge: Owned Pack",
+                "dlc",
+                Some(100),
+                &[],
+                true,
+                "Q1 2027",
+            ),
         );
         m.insert(
             details_url(110),
             details(110, "Star Forge II", &[], true, "Coming soon"),
         );
         m.insert(
+            details_url(120),
+            typed(
+                120,
+                "Star Forge II Demo",
+                "demo",
+                None,
+                &[],
+                true,
+                "Coming soon",
+            ),
+        );
+        m.insert(
+            details_url(121),
+            typed(
+                121,
+                "Star Forge II: Season Pass",
+                "dlc",
+                Some(110),
+                &[],
+                true,
+                "Coming soon",
+            ),
+        );
+        m.insert(
+            details_url(122),
+            typed(
+                122,
+                "Star Forge Original Score",
+                "music",
+                None,
+                &[],
+                true,
+                "Coming soon",
+            ),
+        );
+        m.insert(
             search_url("Star Forge"),
             serde_json::json!({ "items": [
                 { "id": 100, "name": "Star Forge" },
+                { "id": 120, "name": "Star Forge II Demo" },
+                { "id": 121, "name": "Star Forge II: Season Pass" },
+                { "id": 122, "name": "Star Forge Original Score" },
                 { "id": 110, "name": "Star Forge II" },
                 { "id": 101, "name": "Star Forge: Deep Space" },
                 { "id": 999, "name": "Starforged Tales" }
@@ -487,6 +644,75 @@ mod tests {
         assert_eq!(card.title, "Coming: Star Forge: Deep Space");
         assert_eq!(card.pulse.source_name.as_deref(), Some(SOURCE_NAME));
         assert!(found[1].chip().is_none(), "no exact date, no reminder");
+        assert!(
+            fetched.contains(&details_url(102)) && fetched.contains(&details_url(122)),
+            "the soundtracks were looked up and then dropped as music"
+        );
+    }
+
+    #[test]
+    fn a_search_hit_that_is_dlc_for_the_seed_is_labelled_dlc() {
+        let mut store = BTreeMap::new();
+        store.insert(
+            details_url(200),
+            details(200, "Moon Mill", &[], false, "1 Jan, 2020"),
+        );
+        store.insert(
+            search_url("Moon Mill"),
+            serde_json::json!({ "items": [{ "id": 201, "name": "Moon Mill: Tides" }] }).to_string(),
+        );
+        store.insert(
+            details_url(201),
+            typed(
+                201,
+                "Moon Mill: Tides",
+                "dlc",
+                Some(200),
+                &[],
+                true,
+                "Coming soon",
+            ),
+        );
+        let mut get = |url: &str| store.get(url).cloned().ok_or_else(|| "404".to_string());
+        let found = scan(&[(200, "Moon Mill".into())], &BTreeSet::new(), &mut get).unwrap();
+        assert_eq!(
+            found.iter().map(|u| (u.app_id, u.kind)).collect::<Vec<_>>(),
+            vec![(201, Kind::Dlc)]
+        );
+        assert_eq!(found[0].body(), "New DLC for Moon Mill. No date yet.");
+    }
+
+    #[test]
+    fn wishlist_games_interleave_and_every_seed_gets_a_turn() {
+        let named = |ids: &[u32]| {
+            ids.iter()
+                .map(|id| (*id, format!("G{id}")))
+                .collect::<Vec<_>>()
+        };
+        let seeds = interleave_seeds(named(&[1, 2, 3, 4, 5, 6, 7, 8]), named(&[50, 3, 51]));
+        assert_eq!(
+            seeds.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 50, 2, 51, 3, 4, 5, 6, 7, 8],
+            "owned wishlist entry 3 is dropped"
+        );
+        let mut radar = Radar::default();
+        let ids = |r: &mut Radar| {
+            r.next_seeds(&seeds)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&mut radar), vec![1, 50, 2, 51, 3, 4]);
+        assert_eq!(ids(&mut radar), vec![5, 6, 7, 8, 1, 50]);
+        assert_eq!(radar.seed_cursor, 2);
+        assert_eq!(ids(&mut radar), vec![2, 51, 3, 4, 5, 6]);
+        let few = named(&[9, 10]);
+        assert_eq!(
+            radar.next_seeds(&few).len(),
+            2,
+            "a short list is asked once each"
+        );
+        assert!(radar.next_seeds(&[]).is_empty());
     }
 
     #[test]
