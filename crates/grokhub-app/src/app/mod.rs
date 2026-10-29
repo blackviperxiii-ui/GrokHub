@@ -202,6 +202,7 @@ mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;
+mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -581,6 +582,7 @@ pub struct Cabin {
     window_focused: bool,
     /// Focus help: the app the user was just in (opt-in).
     focus: focus_ui::FocusState,
+    pc_health: pc_health_ui::PcHealthState,
     print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
@@ -1208,6 +1210,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
@@ -1676,6 +1679,7 @@ impl Cabin {
             situation_ping: None,
             window_focused: true,
             focus: Default::default(),
+            pc_health: Default::default(),
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),

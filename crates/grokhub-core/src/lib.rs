@@ -93,6 +93,7 @@ pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
 pub mod paths;
+pub mod pc_health;
 pub mod personality;
 pub mod pii;
 pub mod pkce;
@@ -473,6 +474,10 @@ pub use pair::{
 pub use paths::{
     cabin_session_cwd, cabin_work_root, canonical_session_cwd, chat_appears_in_history,
     history_list_refresh_due, session_home, user_home,
+};
+pub use pc_health::{
+    game_running, is_pc_health_card, observe, summary_card, BoundGuess, GameSession, ObserveOut,
+    PcHealthLedger, PcHealthSettings, SensorSample, SessionSummary, SAMPLE_EVERY_MS,
 };
 pub use pii::{redact_pii, redact_recall};
 pub use print_alerts::{
