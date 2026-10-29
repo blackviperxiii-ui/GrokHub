@@ -3,7 +3,8 @@
 use super::*;
 
 /// Native engine, no GrokHub sign-in and no key yet.
-const NATIVE_SIGNIN_NOTE: &str = "Sign in with Grok in Settings → Account, or add an API key.";
+const NATIVE_SIGNIN_NOTE: &str =
+    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
 
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
