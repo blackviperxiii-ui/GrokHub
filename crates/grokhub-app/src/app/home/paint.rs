@@ -5,7 +5,7 @@ use grokhub_core::local_profile::Thermal;
 use grokhub_core::mission::MissionView;
 
 use super::super::loadout_home::{
-    caption, card, header, objective_progress, pc_profile, pc_score, pc_tile_grid, pc_tile_list,
+    caption, header, objective_progress, pc_profile, pc_score, pc_tile_grid, pc_tile_list,
     pulse_lines,
 };
 use super::super::mission_page::{paint_streak, up_next, up_next_tile};
@@ -51,6 +51,29 @@ pub(super) fn paint_module(
         _ => ready_stub(ui, size, name, purpose, data),
     }
     actions
+}
+
+/// A module card that fills its slot, so stacked slots read as one packed grid
+/// instead of a short card with empty space under it.
+fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    super::super::loadout_home::card(ui, |ui| {
+        ui.set_min_height(ui.available_height());
+        add(ui);
+    });
+}
+
+/// Shown under empty streak tiles so seven grey boxes explain themselves.
+const STREAK_EMPTY: &str = "Finish an objective today to start your streak.";
+
+fn streak_hint(ui: &mut egui::Ui, days: usize) {
+    if days == 0 {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(STREAK_EMPTY)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::muted()),
+        );
+    }
 }
 
 fn coming_soon_card(ui: &mut egui::Ui, name: &str, detail: &str) {
@@ -199,6 +222,7 @@ fn paint_objectives(
                     });
                 });
                 paint_streak(ui, &streak);
+                streak_hint(ui, days);
             }
         }
     });
@@ -388,7 +412,9 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                     }
                     Some(p) => pc_tile_grid(ui, &pc_tile_list(&p)),
                 }
-                if size == ModuleSize::Large {
+                // Slide 09 shows the actions under the tiles at Medium too;
+                // skip them only when the slot has no room left.
+                if size == ModuleSize::Large || ui.available_height() >= 48.0 {
                     ui.add_space(8.0);
                     let btn = egui::vec2(140.0, 40.0);
                     ui.horizontal(|ui| {
@@ -430,6 +456,7 @@ fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
         );
         if size != ModuleSize::Small {
             paint_streak(ui, &streak);
+            streak_hint(ui, days);
         }
     });
 }

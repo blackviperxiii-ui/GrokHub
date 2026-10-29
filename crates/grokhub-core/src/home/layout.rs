@@ -26,6 +26,10 @@ const MIN_BODY_H: f32 = 440.0;
 const DEFAULT_BODY_H: f32 = 470.0;
 /// Stacked medium height target on wide.
 const MEDIUM_SLOT_H: f32 = 229.0;
+/// Narrow side layout: Large keeps room for objectives + the weekly streak,
+/// and the medium row gives way down to this height first.
+const NARROW_L_MIN: f32 = 240.0;
+const NARROW_ROW_MIN: f32 = 170.0;
 /// Stacked / row small height target.
 const SMALL_SLOT_H: f32 = 107.0;
 
@@ -346,15 +350,23 @@ fn place_narrow(
         .iter()
         .filter(|(_, id)| id.filter(|s| !s.is_empty()).is_some())
         .count() as f32;
-    let s_rows = if smalls.is_empty() {
+    // One or two smalls sit in a column beside the mediums, so Up Next stays
+    // on screen at 900×700 instead of dropping under PC Loadout.
+    let side = !as_m && n_m > 0.0 && (1..=2).contains(&smalls.len());
+    let s_rows = if smalls.is_empty() || side {
         0.0
     } else {
         smalls.len().div_ceil(2) as f32
     };
     // Keep Medium + smalls in the first viewport (slide 09 900×700) instead of
     // a 440 px Large that leaves an empty lower half with siblings off-screen.
-    let sibling_h = n_m * (MEDIUM_SLOT_H + GAP) + s_rows * (SMALL_SLOT_H + GAP);
     let avail = if h > 0.0 { h } else { DEFAULT_BODY_H };
+    let m_h = if side {
+        ((avail - NARROW_L_MIN - GAP * n_m) / n_m).clamp(NARROW_ROW_MIN, MEDIUM_SLOT_H)
+    } else {
+        MEDIUM_SLOT_H
+    };
+    let sibling_h = n_m * (m_h + GAP) + s_rows * (SMALL_SLOT_H + GAP);
     let mut out = Vec::with_capacity(7);
     let mut y = oy;
     let l_h = if as_m {
@@ -370,6 +382,14 @@ fn place_narrow(
         y += l_h + GAP;
     }
 
+    let (mw, sw) = if side {
+        let inner = (w - GAP).max(0.0);
+        let m = inner * M_WEIGHT / (M_WEIGHT + S_WEIGHT);
+        (m, inner - m)
+    } else {
+        (w, 0.0)
+    };
+    let m_top = y;
     for (slot, id) in mediums {
         if let Some(id) = id.filter(|s| !s.is_empty()) {
             out.push(PlacedSlot {
@@ -378,11 +398,32 @@ fn place_narrow(
                 module_id: Some(id.to_string()),
                 x: ox,
                 y,
-                w,
-                h: MEDIUM_SLOT_H,
+                w: mw,
+                h: m_h,
             });
-            y += MEDIUM_SLOT_H + GAP;
+            y += m_h + GAP;
         }
+    }
+
+    if side {
+        let n = smalls.len() as f32;
+        let block_h = y - GAP - m_top;
+        let slot_h = ((block_h - GAP * (n - 1.0)) / n).max(1.0);
+        let x = ox + mw + GAP;
+        let mut sy = m_top;
+        for (slot, id) in smalls {
+            out.push(PlacedSlot {
+                slot: *slot,
+                size: ModuleSize::Small,
+                module_id: Some((*id).to_string()),
+                x,
+                y: sy,
+                w: sw,
+                h: slot_h,
+            });
+            sy += slot_h + GAP;
+        }
+        return out;
     }
 
     // Smalls as 2×2 (one small → full-width row).
@@ -489,13 +530,54 @@ mod tests {
         assert!(m1.y > large.y);
         let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
         assert_eq!(s1.module_id.as_deref(), Some("up_next"));
-        assert!(s1.y > m1.y);
-        assert!((s1.w - 800.0).abs() < 0.01, "one small spans full width");
+        // Up Next sits beside PC Loadout, not under it.
+        assert!((large.h - 259.0).abs() < 0.01, "large {}", large.h);
+        assert!((m1.y - 291.0).abs() < 0.01, "m1 y {}", m1.y);
+        assert!((s1.y - m1.y).abs() < 0.01);
+        assert!((s1.h - 229.0).abs() < 0.01);
+        assert!((s1.x - (m1.x + m1.w + GAP)).abs() < 0.01);
+        assert!((m1.w + GAP + s1.w - 800.0).abs() < 0.01);
+        assert!(m1.w > s1.w);
         let bottom = s1.y + s1.h - 20.0;
         assert!(
-            bottom <= 500.0 + 0.5,
-            "slide 09 modules must fit the narrow body height, got bottom {bottom}"
+            (bottom - 500.0).abs() < 0.5,
+            "slide 09 modules must fill the narrow body height, got bottom {bottom}"
         );
+    }
+
+    #[test]
+    fn narrow_keeps_up_next_on_screen_at_900_by_700() {
+        // 900×700 cabin: about 700 px wide and 430 px tall for the grid.
+        let placed = place_slots((0.0, 0.0, 700.0, 430.0), &default_layout());
+        let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
+        assert_eq!(s1.module_id.as_deref(), Some("up_next"));
+        assert!(
+            (s1.y + s1.h - 430.0).abs() < 0.5,
+            "Up Next bottom {}",
+            s1.y + s1.h
+        );
+        // The medium row gives way so objectives keep room for the streak.
+        assert!((s1.h - 178.0).abs() < 0.01, "row {}", s1.h);
+        let large = placed.iter().find(|p| p.slot == SlotId::Large).unwrap();
+        assert!((large.h - 240.0).abs() < 0.01, "large {}", large.h);
+    }
+
+    #[test]
+    fn narrow_with_two_mediums_splits_the_side_column() {
+        let mut layout = default_layout();
+        layout.medium = vec!["pc_loadout".into(), "storage".into()];
+        layout.small = [Some("up_next".into()), Some("streak".into()), None, None];
+        let placed = place_slots((0.0, 0.0, 800.0, 900.0), &layout);
+        let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
+        let m2 = placed.iter().find(|p| p.slot == SlotId::Medium2).unwrap();
+        let s1 = placed.iter().find(|p| p.slot == SlotId::Small1).unwrap();
+        let s2 = placed.iter().find(|p| p.slot == SlotId::Small2).unwrap();
+        assert!((m2.y - (m1.y + 229.0 + GAP)).abs() < 0.01);
+        assert!((s1.y - m1.y).abs() < 0.01);
+        // Two smalls share the 470 px medium block: (470 - 12) / 2.
+        assert!((s1.h - 229.0).abs() < 0.01);
+        assert!((s2.y - (s1.y + 229.0 + GAP)).abs() < 0.01);
+        assert!((s2.y + s2.h - (m2.y + m2.h)).abs() < 0.01);
     }
 
     #[test]
