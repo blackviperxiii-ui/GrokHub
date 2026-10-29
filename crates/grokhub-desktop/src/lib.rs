@@ -122,7 +122,7 @@ pub fn run_cua_stdio() -> i32 {
 fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
     use grokhub_agent::harness as hx;
     if !cfg!(target_os = "linux") {
-        return Err(hx::CUA_LINUX_ONLY_MSG.into());
+        return Err((*hx::CUA_LINUX_ONLY_MSG).into());
     }
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;

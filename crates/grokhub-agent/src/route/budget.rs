@@ -52,8 +52,11 @@ pub const EIGHTY_CARD: &str =
 /// The 100% ask on user-facing work.
 pub const BUDGET_ASK: &str = "You've used this week's budget. Keep chatting this week anyway?";
 /// What a paused call returns at 100%, or when background used its share.
-pub const BUDGET_PAUSE_MSG: &str =
-    "This week's budget is used up, so GrokHub paused this step. Home has your options.";
+pub static BUDGET_PAUSE_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled(
+        "This week's budget is used up, so {product} paused this step. Home has your options.",
+    )
+});
 pub const BACKGROUND_PAUSE_MSG: &str =
     "Background work used its share of this week's budget, so it waits until next week.";
 
@@ -327,8 +330,8 @@ pub fn nudge_text(f: &NudgeFacts, tier: Option<&str>) -> String {
 /// buys nothing; plans are changed on grok.com by you.
 pub fn nudge_details(f: &NudgeFacts) -> String {
     format!(
-        "In the last 7 days, {} tasks would have used a model outside your plan, and {} checks failed or hit the usage limit this week. Plans and their limits are on grok.com, under your account. GrokHub doesn't change plans or buy anything.",
-        f.would_upgrade, f.fails
+        "In the last 7 days, {} tasks would have used a model outside your plan, and {} checks failed or hit the usage limit this week. Plans and their limits are on grok.com, under your account. {product} doesn't change plans or buy anything.",
+        f.would_upgrade, f.fails, product = grokhub_core::brand::product_name()
     )
 }
 

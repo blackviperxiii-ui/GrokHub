@@ -113,19 +113,19 @@ impl Locked {
 
     /// [`Self::message`] as it reads on `os`.
     pub fn message_for(&self, os: KeyringOs) -> String {
-        let what = "GrokHub won't read or save grants, the send log or private memory until then, and never saves them as plain text.";
+        let what = grokhub_core::brand::filled("{product} won't read or save grants, the send log or private memory until then, and never saves them as plain text.");
         let name = keyring_name_for(os);
         match self {
-            Self::Unavailable => format!("Private data is locked: GrokHub can't reach your {name}. {what}"),
+            Self::Unavailable => format!("Private data is locked: {product} can't reach your {name}. {what}", product = grokhub_core::brand::product_name()),
             Self::Missing => {
                 format!("Private data is locked: its key is missing from your {name}. {what} Nothing was deleted.")
             }
             Self::WrongKey => format!(
                 "Private data is locked: the key in your {name} doesn't match this data. {what} Nothing was deleted."
             ),
-            Self::Busy => "Private data is busy: another GrokHub window is setting up its key. Try again in a moment.".into(),
+            Self::Busy => format!("Private data is busy: another {product} window is setting up its key. Try again in a moment.", product = grokhub_core::brand::product_name()),
             Self::Unwritable => {
-                "Private data wasn't saved: GrokHub couldn't write the file. Nothing was saved as plain text.".into()
+                format!("Private data wasn't saved: {product} couldn't write the file. Nothing was saved as plain text.", product = grokhub_core::brand::product_name())
             }
         }
     }
@@ -907,7 +907,7 @@ mod tests {
         );
         assert!(Locked::Unavailable
             .message()
-            .starts_with("Private data is locked: GrokHub can't reach your "));
+            .starts_with("Private data is locked: Loadout can't reach your "));
     }
 
     #[test]

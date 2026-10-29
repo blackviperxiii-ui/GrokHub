@@ -649,7 +649,7 @@ fn apps_index_desktop_entries_with_launch_counts() {
             .iter()
             .map(|f| f.line.as_str())
             .collect::<Vec<_>>(),
-        vec!["Installed app: Firefox · opened 2 times from GrokHub"]
+        vec!["Installed app: Firefox · opened 2 times from Loadout"]
     );
 }
 

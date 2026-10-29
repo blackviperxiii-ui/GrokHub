@@ -1079,7 +1079,7 @@ fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
     let next =
         super::privacy_ui::lock_next_step_short(&hx::Locked::Unavailable, hx::KeyringOs::current());
     assert!(
-        msg.starts_with("Private data is locked: GrokHub can't reach your "),
+        msg.starts_with("Private data is locked: Loadout can't reach your "),
         "{msg}"
     );
     assert!(

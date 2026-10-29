@@ -426,7 +426,7 @@ mod tests {
         let index = index_of(&stable);
         assert!(!index.contains("skill_list —"), "{index}");
         assert!(
-            index.contains("automation_create — Create a GrokHub automation\n"),
+            index.contains("automation_create — Create a Loadout automation\n"),
             "{index}"
         );
         let out = run_load_tool_schema(&json!({"name": "skill_list"}));
@@ -586,7 +586,7 @@ mod tests {
         assert_eq!(lines, sorted);
         assert_eq!(
             lines.first(),
-            Some(&"automation_create — Create a GrokHub automation")
+            Some(&"automation_create — Create a Loadout automation")
         );
         assert!(lines.contains(&"scheduler_list — List scheduled automations"));
         assert!(lines.contains(&"screenshot — Capture the desktop screen"));

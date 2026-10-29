@@ -3676,7 +3676,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Not done: \"bluetooth errors\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
+        let said = "Not done: \"bluetooth errors\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something Loadout can't do yet, I can note it as a feature request instead.";
         assert!(events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
@@ -3937,7 +3937,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Not done: \"the error is gone\", \"it works again\", the findings card are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
+        let said = "Not done: \"the error is gone\", \"it works again\", the findings card are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something Loadout can't do yet, I can note it as a feature request instead.";
         assert!(
             matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
         );
@@ -4008,7 +4008,7 @@ mod tests {
             user_texts(&history)[1],
             "Marked completed without any check this run: \"Scan the Steam library\", \"Use it for Pulse\". Run a check that shows each one before you finish."
         );
-        let said = "Not done: \"Diagnose image folders\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
+        let said = "Not done: \"Diagnose image folders\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something Loadout can't do yet, I can note it as a feature request instead.";
         assert!(
             matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
         );

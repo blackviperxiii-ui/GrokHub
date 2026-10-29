@@ -16,8 +16,9 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 /// The dialog's words.
-pub const DIALOG_TEXT: &str =
-    "GrokHub needs your password to run an admin command (sudo). It asks once and keeps it in memory until GrokHub closes.";
+pub static DIALOG_TEXT: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("{product} needs your password to run an admin command (sudo). It asks once and keeps it in memory until {product} closes.")
+});
 
 /// After you cancel the dialog, sudo steps fail at once for this long instead of asking again.
 pub const DECLINE_HOLD: Duration = Duration::from_secs(300);
@@ -95,9 +96,9 @@ pub fn dialog_argv(kde: bool, has: &dyn Fn(&str) -> bool) -> Option<(String, Vec
         "kdialog",
         vec![
             "--title".into(),
-            "GrokHub".into(),
+            format!("{product}", product = grokhub_core::brand::product_name()),
             "--password".into(),
-            DIALOG_TEXT.into(),
+            (*DIALOG_TEXT).into(),
         ],
     );
     let entry = |bin: &'static str| {
@@ -106,8 +107,11 @@ pub fn dialog_argv(kde: bool, has: &dyn Fn(&str) -> bool) -> Option<(String, Vec
             vec![
                 "--entry".into(),
                 "--hide-text".into(),
-                "--title=GrokHub".into(),
-                format!("--text={DIALOG_TEXT}"),
+                format!(
+                    "--title={product}",
+                    product = grokhub_core::brand::product_name()
+                ),
+                format!("--text={}", *DIALOG_TEXT),
             ],
         )
     };
@@ -128,7 +132,9 @@ pub fn dialog_argv(kde: bool, has: &dyn Fn(&str) -> bool) -> Option<(String, Vec
 const HELPER_MARKERS: &[&str] = &["SUDO_ASKPASS", "--askpass", "grokhub-askpass-"];
 
 /// What an agent command that names the sudo helper gets instead of running.
-pub const HELPER_REFUSAL: &str = "This command reaches GrokHub's sudo password helper directly. Run `sudo <command>` and GrokHub asks for the password itself.";
+pub static HELPER_REFUSAL: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("This command reaches {product}'s sudo password helper directly. Run `sudo <command>` and {product} asks for the password itself.")
+});
 
 /// True when an agent command names the sudo helper (see [`HELPER_MARKERS`]).
 pub fn names_helper(command: &str) -> bool {
@@ -473,8 +479,8 @@ mod linux {
         #[test]
         fn a_pipe_that_grokhub_or_another_program_reads_gets_no_password() {
             // `sudo -u "$USER" "$SUDO_ASKPASS"` in an agent command: the helper's
-            // stdout is the pipe GrokHub reads for tool output. Here a child
-            // writes into a pipe this test process reads, as GrokHub would.
+            // stdout is the pipe Loadout reads for tool output. Here a child
+            // writes into a pipe this test process reads, as Loadout would.
             let mut child = std::process::Command::new("sleep")
                 .arg("5")
                 .stdout(std::process::Stdio::piped())
@@ -665,7 +671,10 @@ mod tests {
         let all = |_: &str| true;
         let (bin, args) = dialog_argv(true, &all).unwrap();
         assert_eq!(bin, "kdialog");
-        assert_eq!(args, vec!["--title", "GrokHub", "--password", DIALOG_TEXT]);
+        assert_eq!(
+            args,
+            vec!["--title", "Loadout", "--password", (*DIALOG_TEXT)]
+        );
         let (bin, args) = dialog_argv(false, &all).unwrap();
         assert_eq!(bin, "zenity");
         assert_eq!(
@@ -673,8 +682,8 @@ mod tests {
             vec![
                 "--entry".to_string(),
                 "--hide-text".into(),
-                "--title=GrokHub".into(),
-                format!("--text={DIALOG_TEXT}")
+                "--title=Loadout".into(),
+                format!("--text={}", *DIALOG_TEXT)
             ]
         );
         assert_eq!(
