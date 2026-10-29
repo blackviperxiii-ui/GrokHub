@@ -1132,6 +1132,34 @@ impl Cabin {
                 }
             }
         }
+        // Scratch proof: a 25-minute game session through the real observe()
+        // and summary_card(), so Pulse shows the post-session summary.
+        if std::env::var("GROKHUB_DECK_PC_HEALTH").is_ok_and(|v| v.trim() == "1") {
+            use grokhub_core::pc_health as ph;
+            let start = now.saturating_sub(25 * 60_000);
+            let mut session = None;
+            for i in 0..100u64 {
+                let hot = i > 60;
+                let s = ph::SensorSample {
+                    at_ms: start + i * 15_000,
+                    cpu_temp_c: Some(if hot { 78.0 } else { 70.0 }),
+                    gpu_temp_c: Some(if hot { 86.0 } else { 76.0 }),
+                    cpu_util_pct: Some(45),
+                    gpu_util_pct: Some(98),
+                    cpu_clock_mhz: Some(4600),
+                    gpu_clock_mhz: Some(if hot { 1650 } else { 1950 }),
+                    game_label: Some("Rift Circuit".into()),
+                };
+                let _ = ph::observe(true, true, Some(s), &mut session, start + i * 15_000);
+            }
+            match ph::observe(true, false, None, &mut session, now) {
+                ph::ObserveOut::Ended(summary) => {
+                    eprintln!("deck pc health: {summary:?}");
+                    self.post_feed_card(ph::summary_card(&summary, now));
+                }
+                other => eprintln!("deck pc health: no summary ({})", matches!(other, ph::ObserveOut::Idle)),
+            }
+        }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
         // including `-pinPersonality` / `-pinBehavior`) or
         // `GROKHUB_DECK_OPEN_SETTINGS=1` (privacy / full-page proofs). No rail

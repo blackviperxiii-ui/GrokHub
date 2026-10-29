@@ -275,7 +275,7 @@ function Write-ModelDrop([string]$root) {
 # seeded Activity list over every pinned page.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [switch]$pcHealth, [switch]$pcHealthOn) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -294,6 +294,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Library $root
     } elseif ($dock -or $screenshotOffer) { Seed-Dock $cfg $app 'Diamond, 3 wins left' (-not $chatFirst) }
     if ($pulse) { Seed-Pulse $cfg }
+    if ($pcHealthOn) { $app.pcHealth = @{ enabled = $true } }
     if ($backup) {
         $app.backupNudge = $true
         $app.codeFolders = @(Seed-Backup $root)
@@ -349,6 +350,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
+    $env:GROKHUB_DECK_PC_HEALTH = $(if ($pcHealth) { '1' } else { '' })
     if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
