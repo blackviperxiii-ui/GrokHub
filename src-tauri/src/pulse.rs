@@ -145,28 +145,37 @@ fn save(config_dir: &Path, cards: &[UpdateCard]) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
+/// The Pulse ledger's own file beside MEMORY.md, shared with the cabin.
+fn ledger_path() -> PathBuf {
+    grokhub_agent::global_memory_path().with_file_name(pc::LEDGER_FILE)
+}
+
+/// The ledger file, with any lines an older build left in MEMORY.md in front.
+/// The cabin moves those over; the shell only reads them.
 fn ledger() -> Vec<pc::LedgerEntry> {
-    let text = std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default();
-    pc::parse_ledger(&text)
+    let own = std::fs::read_to_string(ledger_path()).unwrap_or_default();
+    let notes = std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default();
+    let (_, older) = pc::split_ledger(&notes);
+    pc::parse_ledger(&pc::merge_ledger(&own, &older))
 }
 
 /// Appends one ledger line through a temp file and a rename, so a crash never
-/// leaves MEMORY.md half written. A line that would carry a secret is left
+/// leaves the ledger half written. A line that would carry a secret is left
 /// out, as the cabin's `append_memory` does; the card action still goes on.
 fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     let line = pc::ledger_line(date, title, reason);
     if !grokhub_core::is_plain_text(&line) {
         return Ok(());
     }
-    let path = grokhub_agent::global_memory_path();
+    let path = ledger_path();
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(format!(
-            "MEMORY.md is a link to another file. {} does not follow it.",
+            "The Pulse ledger is a link to another file. {} does not follow it.",
             grokhub_core::brand::product_name()
         ));
     }
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > NOTES_CAP) {
-        return Err("MEMORY.md is too large to add to. Nothing was changed.".into());
+        return Err("The Pulse ledger is too large to add to. Nothing was changed.".into());
     }
     let mut body = std::fs::read_to_string(&path).unwrap_or_default();
     if !body.is_empty() && !body.ends_with('\n') {
@@ -174,9 +183,13 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     }
     body.push_str(&line);
     body.push('\n');
-    let parent = path.parent().ok_or("MEMORY.md has no folder.")?;
+    let parent = path.parent().ok_or("The Pulse ledger has no folder.")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = parent.join(format!("MEMORY.md.shell-{}.tmp", std::process::id()));
+    let tmp = parent.join(format!(
+        "{}.shell-{}.tmp",
+        pc::LEDGER_FILE,
+        std::process::id()
+    ));
     std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -581,7 +594,13 @@ mod tests {
         }
     }
 
+    /// The Pulse ledger file.
     fn memory() -> String {
+        std::fs::read_to_string(ledger_path()).unwrap_or_default()
+    }
+
+    /// MEMORY.md itself.
+    fn notes() -> String {
         std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default()
     }
 
@@ -731,7 +750,7 @@ mod tests {
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
         // Liked then dismissed is used/done, not a bury (#969 / #972).
-        // Compare on LF: Windows checkouts may leave CRLF in MEMORY.md.
+        // Compare on LF: Windows checkouts may leave CRLF in the ledger.
         let mem = memory().replace("\r\n", "\n");
         assert!(
             mem.ends_with("pulse: used \"Board\" reason=used\n"),
@@ -761,26 +780,46 @@ mod tests {
         let d = dirs("secret", &cards);
         std::fs::create_dir_all(grokhub_agent::global_memory_path().parent().unwrap())
             .expect("memory dir");
-        std::fs::write(grokhub_agent::global_memory_path(), "- earlier note").expect("seed");
+        std::fs::write(
+            grokhub_agent::global_memory_path(),
+            "- earlier note\n- [2026-10-24] pulse: liked \"Old board\" reason=liked\n",
+        )
+        .expect("seed");
         let page = act(&d.config, "post-1", Act::Dismiss, &day(), NOW).expect("dismiss");
         assert!(page.feed.is_empty(), "{page:?}");
-        assert_eq!(memory(), "- earlier note");
+        assert_eq!(memory(), "");
 
         act(&d.config, "idea-1", Act::Accept, &day(), NOW).expect("accept");
         assert_eq!(
             memory(),
-            "- earlier note\n- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
+            "- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
+        );
+        assert_eq!(
+            notes(),
+            "- earlier note\n- [2026-10-24] pulse: liked \"Old board\" reason=liked\n",
+            "the shell never rewrites MEMORY.md"
+        );
+        let titles: Vec<String> = ledger().into_iter().map(|e| e.title).collect();
+        assert_eq!(
+            titles,
+            ["Old board", "Tidy the workboard"],
+            "a line still in MEMORY.md reads in front"
         );
         let dir = grokhub_agent::global_memory_path()
             .parent()
             .unwrap()
             .to_path_buf();
-        let left: Vec<_> = std::fs::read_dir(&dir)
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
             .expect("dir")
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left, vec!["MEMORY.md".to_string()], "no temp file is left");
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["MEMORY.md".to_string(), pc::LEDGER_FILE.to_string()],
+            "no temp file is left"
+        );
     }
 
     #[test]

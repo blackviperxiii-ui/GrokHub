@@ -306,14 +306,19 @@ pub fn line_key(file: NoteFile, line: &str) -> Option<String> {
 }
 
 /// Lines the old reflect copied into MEMORY.md straight from chat: plain
-/// sentences, not headings, bullets or quotes, and not a line of `seed`
-/// (the starter template). The learning loop writes dated bullets instead.
+/// sentences, not headings, bullets, numbered items or quotes, and not a line
+/// of `seed` (the starter template). Like the old reflect's filter
+/// (`fact_candidates_from`), slash commands and `HOST_`/`VERIFY_` lines are
+/// never counted. The learning loop writes dated bullets instead.
 pub fn raw_chat_lines(memory_md: &str, seed: &str) -> Vec<String> {
     let template: Vec<&str> = seed.lines().map(str::trim).collect();
     let mut out: Vec<String> = Vec::new();
     for line in memory_md.lines().map(str::trim) {
         let structured = line.is_empty()
-            || line.starts_with(['#', '-', '*', '>', '|', '`', '+'])
+            || line.starts_with(['#', '-', '*', '>', '|', '`', '+', '/'])
+            || line.starts_with("HOST_")
+            || line.starts_with("VERIFY_")
+            || is_numbered_item(line)
             || template.contains(&line);
         if structured || line.len() >= 200 || !is_plain_text(line) {
             continue;
@@ -323,6 +328,12 @@ pub fn raw_chat_lines(memory_md: &str, seed: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// `1. Keep this` or `2) Keep this`: a numbered list item, not chat.
+fn is_numbered_item(line: &str) -> bool {
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && matches!(line[digits..].chars().next(), Some('.' | ')'))
 }
 
 /// `memory_md` without the lines in `drop` (compared trimmed).
@@ -395,7 +406,7 @@ mod tests {
     #[test]
     fn old_raw_chat_lines_are_found_and_only_they_are_dropped() {
         let seed = "# Memory\n\nLong-term notes.\n";
-        let memory = "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\nI prefer the harbor light on at night\n> a quote I kept\nI prefer the harbor light on at night\nhello\n";
+        let memory = "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\nI prefer the harbor light on at night\n> a quote I kept\nI prefer the harbor light on at night\nhello\n1. Keep the boat keys on the hook\n2) Water the plants on Sunday\n/remember the dentist on Friday\nHOST_NOTE keep the router on\nVERIFY_ the backup runs nightly\n";
         let raw = raw_chat_lines(memory, seed);
         assert_eq!(
             raw,
@@ -403,7 +414,7 @@ mod tests {
         );
         assert_eq!(
             without_lines(memory, &raw),
-            "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\n> a quote I kept\nhello\n"
+            "# Memory\n\nLong-term notes.\n- 2026-10-28: the spare key is under the planter\n> a quote I kept\nhello\n1. Keep the boat keys on the hook\n2) Water the plants on Sunday\n/remember the dentist on Friday\nHOST_NOTE keep the router on\nVERIFY_ the backup runs nightly\n"
         );
         assert!(
             raw_chat_lines(seed, seed).is_empty(),

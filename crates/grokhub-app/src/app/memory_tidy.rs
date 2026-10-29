@@ -10,9 +10,34 @@ use super::persist::pin_scheduled_dir;
 use super::*;
 use crate::config;
 
+/// A memory file bigger than `read_memory` reads: rewriting it from that
+/// read would drop its tail, so it is left as it is.
+fn too_big_to_rewrite(name: &str) -> bool {
+    std::fs::metadata(config::memory_dir().join(name))
+        .is_ok_and(|m| m.len() > config::MEMORY_FILE_CAP as u64)
+}
+
+/// `text` cut from the front, at a line, to fit the memory file cap: the
+/// newest ledger lines are the ones kept.
+fn newest_that_fit(mut text: String) -> String {
+    while text.len() > config::MEMORY_FILE_CAP {
+        match text.find('\n') {
+            Some(i) => {
+                text.drain(..=i);
+            }
+            None => text.clear(),
+        }
+    }
+    text
+}
+
 /// Move any ledger lines still in MEMORY.md into the ledger file, oldest
 /// first. MEMORY.md keeps a `.prev` copy of what it held (`write_memory`).
+/// A MEMORY.md over the cap is never rewritten; its lines stay readable there.
 pub(super) fn migrate_pulse_ledger() -> Result<(), String> {
+    if too_big_to_rewrite("MEMORY.md") || too_big_to_rewrite(LEDGER_FILE) {
+        return Ok(());
+    }
     let memory = config::read_memory("MEMORY.md");
     if !memory.contains("pulse:") {
         return Ok(());
@@ -22,20 +47,33 @@ pub(super) fn migrate_pulse_ledger() -> Result<(), String> {
         return Ok(());
     }
     let ledger = config::read_memory(LEDGER_FILE);
-    config::write_memory(LEDGER_FILE, &merge_ledger(&ledger, &moved))?;
+    config::write_memory(LEDGER_FILE, &newest_that_fit(merge_ledger(&ledger, &moved)))?;
     config::write_memory("MEMORY.md", &kept)
 }
 
 /// The Pulse ledger text, after moving any lines MEMORY.md still holds.
+/// Lines a too-big MEMORY.md still holds are read in front of the file's.
 pub(super) fn read_pulse_ledger() -> String {
     let _ = migrate_pulse_ledger();
-    config::read_memory(LEDGER_FILE)
+    let own = config::read_memory(LEDGER_FILE);
+    let (_, left) = split_ledger(&config::read_memory("MEMORY.md"));
+    merge_ledger(&own, &left)
 }
 
-/// One new ledger line, after the move so older lines stay in front.
+/// One new ledger line, after the move so older lines stay in front. A full
+/// ledger drops its oldest lines, never the new one.
 pub(super) fn append_pulse_ledger(line: &str) -> Result<(), String> {
     migrate_pulse_ledger()?;
-    config::append_memory(LEDGER_FILE, line)
+    if too_big_to_rewrite(LEDGER_FILE) {
+        return Err("The Pulse ledger is too large to add to. Nothing was changed.".into());
+    }
+    let mut body = config::read_memory(LEDGER_FILE);
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(line.trim());
+    body.push('\n');
+    config::write_memory(LEDGER_FILE, &newest_that_fit(body))
 }
 
 impl Cabin {
@@ -101,6 +139,10 @@ impl Cabin {
     /// Drop the old chat lines from the open MEMORY.md and save it.
     pub(super) fn tidy_memory_raw_lines(&mut self) {
         let lines = self.memory_raw_lines().to_vec();
+        if too_big_to_rewrite("MEMORY.md") {
+            self.status = "MEMORY.md is too large to tidy here. Nothing was changed.".into();
+            return;
+        }
         self.cfg.memory_raw_tidy_done = true;
         self.persist_cfg();
         if lines.is_empty() {
@@ -165,6 +207,58 @@ mod tests {
             .collect();
         assert_eq!(titles, ["Standup", "NFL scores"]);
         drop(cabin);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_memory_md_over_the_cap_is_never_rewritten_and_its_lines_still_read() {
+        let (_pin, root) = pinned("ledger-big");
+        let old = "- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss\n";
+        let big = format!("{old}{}", "x".repeat(config::MEMORY_FILE_CAP));
+        std::fs::create_dir_all(config::memory_dir()).unwrap();
+        std::fs::write(config::memory_dir().join("MEMORY.md"), &big).unwrap();
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.pulse_note(
+            "NFL scores",
+            grokhub_core::pulse::LedgerReason::Used,
+            "2026-10-28",
+        );
+        assert_eq!(
+            std::fs::read_to_string(config::memory_dir().join("MEMORY.md")).unwrap(),
+            big,
+            "nothing past the read cap is lost"
+        );
+        assert_eq!(
+            config::read_memory(LEDGER_FILE),
+            "- [2026-10-28] pulse: used \"NFL scores\" reason=used\n"
+        );
+        let titles: Vec<String> = grokhub_core::pulse::parse_ledger(&read_pulse_ledger())
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(titles, ["Standup", "NFL scores"]);
+        cabin.mem_name = "MEMORY.md".into();
+        cabin.mem_body = config::read_memory("MEMORY.md");
+        cabin.tidy_memory_raw_lines();
+        assert_eq!(
+            cabin.status,
+            "MEMORY.md is too large to tidy here. Nothing was changed."
+        );
+        drop(cabin);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_full_ledger_drops_its_oldest_lines_never_the_new_one() {
+        let (_pin, root) = pinned("ledger-full");
+        let line = "- [2026-10-01] pulse: liked \"Filler\" reason=liked\n";
+        let full = line.repeat(config::MEMORY_FILE_CAP / line.len());
+        config::write_memory(LEDGER_FILE, &full).unwrap();
+        append_pulse_ledger("- [2026-10-28] pulse: used \"NFL scores\" reason=used").unwrap();
+        let after = config::read_memory(LEDGER_FILE);
+        assert!(after.len() <= config::MEMORY_FILE_CAP);
+        assert!(after.ends_with("- [2026-10-28] pulse: used \"NFL scores\" reason=used\n"));
+        assert!(after.starts_with(line), "it cuts at a line");
         let _ = std::fs::remove_dir_all(root);
     }
 
