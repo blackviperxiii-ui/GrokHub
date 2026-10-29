@@ -36,7 +36,7 @@ pub(super) fn paint_module(
     }
 
     match module_id {
-        "objectives" => paint_objectives(cabin, ui, size),
+        "objectives" => paint_objectives(cabin, ui, size, &mut actions),
         "up_next" => paint_up_next(cabin, ui, size),
         "pulse" => paint_pulse(cabin, ui, size, &mut actions),
         "pc_loadout" => paint_pc_loadout(ui, size, &mut actions),
@@ -128,7 +128,12 @@ fn paint_nav_stub(
     });
 }
 
-fn paint_objectives(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
+fn paint_objectives(
+    cabin: &mut Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    actions: &mut Vec<ModuleAction>,
+) {
     let mission = cabin.dock_mission(ui.ctx());
     let now = now_ms();
     let streak = cabin.mission_streak(ui.ctx(), now);
@@ -165,6 +170,11 @@ fn paint_objectives(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
                 }
             }
             ModuleSize::Medium | ModuleSize::Large => {
+                // Above the list: the slot clips, so a long checklist can't hide it.
+                if crate::cards::ghost_pill(ui, "Details") {
+                    actions.push(ModuleAction::Nav("objectives"));
+                }
+                ui.add_space(4.0);
                 let cap = if size == ModuleSize::Medium {
                     3
                 } else {
@@ -189,15 +199,6 @@ fn paint_objectives(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
                     });
                 });
                 paint_streak(ui, &streak);
-                if size == ModuleSize::Large {
-                    ui.label(
-                        RichText::new(
-                            "Coach: warm up before ranked — first-match win rate climbs.",
-                        )
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::muted()),
-                    );
-                }
             }
         }
     });

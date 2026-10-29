@@ -91,7 +91,7 @@ Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
 Shot 1600 900 'chat-objectives-1600x900' 'ops-dark' '10' -dock -chatFirst
 Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
-# Home Mission Control (slide 09): Objectives+streak | PC Loadout | Up Next covers.
+# Home: the same module grid a fresh profile gets, with seeded data only.
 # Pin via GROKHUB_DECK_NAV=home (cabin apply_deck_shot_seed) — a first-icon click
 # missed on windows-latest and captured Hangout instead. -library seeds Steam
 # covers + dock outcomes (multi-day streak) and waits for PC sensors; Activity
@@ -99,7 +99,7 @@ Shot 1100 720 'chat-objectives-1100x720' 'ops-dark' '10' -dock -chatFirst
 Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
 Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
 Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
-# Objectives (mission control) is the third icon on the rail.
+# Objectives (the checklist details behind Home's card) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
