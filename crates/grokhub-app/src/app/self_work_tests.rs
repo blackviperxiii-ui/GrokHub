@@ -383,7 +383,7 @@ fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
         .expect("a Home update");
     assert_eq!(
         card.title,
-        format!("GrokHub added automation {}", cabin.automations[0].name)
+        format!("Loadout added automation {}", cabin.automations[0].name)
     );
     assert_eq!(
         card.body.as_deref(),
@@ -495,7 +495,7 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
         .iter()
         .find(|u| u.source_id == "connection:wiki")
         .expect("connection Home update");
-    assert_eq!(conn.title, "GrokHub added connection wiki");
+    assert_eq!(conn.title, "Loadout added connection wiki");
     // The ledger lines stay, so `/why table` and history still read them.
     let ids: Vec<String> = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
         .all()

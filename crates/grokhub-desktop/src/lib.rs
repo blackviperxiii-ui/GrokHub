@@ -362,7 +362,7 @@ pub fn request_desktop_test(enabled: bool) -> String {
     }
     if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
         note_halt();
-        return grokhub_core::desktop_mcp::HALT_MSG.to_string();
+        return (*grokhub_core::desktop_mcp::HALT_MSG).to_string();
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {

@@ -121,8 +121,9 @@ pub fn activate(dir: &Path, m: &LocalModel) -> Result<Installed, String> {
 pub fn remove(dir: &Path, m: &LocalModel) -> Result<(), String> {
     if installed(dir).is_some_and(|rec| rec.file == m.file) {
         return Err(format!(
-            "{} is the model GrokHub runs. Switch to another one first.",
-            m.name
+            "{} is the model {product} runs. Switch to another one first.",
+            m.name,
+            product = crate::brand::product_name()
         ));
     }
     let _ = fs::remove_file(part_path(dir, m));
@@ -202,8 +203,8 @@ pub fn download(
         Ok(h) if h == m.sha256 => {}
         Ok(_) => {
             return Outcome::Failed(format!(
-                "Hugging Face now lists a different file for {} than the one GrokHub pinned, so it wasn't downloaded.",
-                m.name
+                "Hugging Face now lists a different file for {} than the one {product} pinned, so it wasn't downloaded.",
+                m.name, product = crate::brand::product_name()
             ))
         }
         Err(e) => {
@@ -544,7 +545,7 @@ mod tests {
         assert_eq!(
             out,
             Outcome::Failed(
-                "Hugging Face now lists a different file for Test Model than the one GrokHub pinned, so it wasn't downloaded.".into()
+                "Hugging Face now lists a different file for Test Model than the one Loadout pinned, so it wasn't downloaded.".into()
             )
         );
         assert!(srv.opens.lock().unwrap().is_empty());
@@ -628,7 +629,7 @@ mod tests {
         assert_eq!(
             remove(&dir, b),
             Err(format!(
-                "{} is the model GrokHub runs. Switch to another one first.",
+                "{} is the model Loadout runs. Switch to another one first.",
                 b.name
             ))
         );

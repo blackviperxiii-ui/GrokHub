@@ -142,7 +142,7 @@ impl DreamReport {
     pub fn markdown(&self) -> String {
         let mut out = format!("# Memory dream {}\n\n", self.date);
         out.push_str(
-            "GrokHub tidied its memory overnight. Nothing was deleted: merged and retired notes are marked forgotten and stay on disk.\n\n",
+            crate::brand::filled("{product} tidied its memory overnight. Nothing was deleted: merged and retired notes are marked forgotten and stay on disk.\n\n"),
         );
         out.push_str(&format!(
             "- Looked at: {} notes ({} changed in the last {} days, {} with low confidence)\n",

@@ -512,7 +512,7 @@ impl<C: CuaChild> CuaProxy<C> {
 
     fn off_reason(&self, gate: CuaGate) -> String {
         if self.halted {
-            grokhub_core::desktop_mcp::HALT_MSG.into()
+            (*grokhub_core::desktop_mcp::HALT_MSG).into()
         } else if !gate.enabled {
             grokhub_core::desktop_mcp::OFF_MSG.into()
         } else {
@@ -1182,7 +1182,7 @@ mod tests {
                 false
             })
             .unwrap();
-        assert_eq!(text_of(&after), grokhub_core::desktop_mcp::HALT_MSG);
+        assert_eq!(text_of(&after), *grokhub_core::desktop_mcp::HALT_MSG);
         assert!(
             fake.got.borrow().is_empty(),
             "the child received nothing: {:?}",

@@ -30,8 +30,11 @@ const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 pub const OFF_MSG: &str =
     "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
-pub const HALT_MSG: &str =
-    "Desktop control was halted (Ctrl+Alt+H). Open GrokHub again to use the screen.";
+pub static HALT_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled(
+        "Desktop control was halted (Ctrl+Alt+H). Open {product} again to use the screen.",
+    )
+});
 pub const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
 
 const DRAG_STEPS: i32 = 8;
@@ -653,7 +656,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
         }
         if gate.halted {
             self.backend.release_input();
-            return tool_fail(id, HALT_MSG, true);
+            return tool_fail(id, *HALT_MSG, true);
         }
         if is_input_tool(name) && self.backend.is_locked() {
             self.backend.release_input();
@@ -3080,7 +3083,7 @@ mod tests {
         );
         assert!(!halted.ok);
         assert!(halted.exit);
-        assert_eq!(halted.error.as_deref(), Some(HALT_MSG));
+        assert_eq!(halted.error.as_deref(), Some(*HALT_MSG));
         assert_eq!(fake.released, 1);
         assert_eq!(fake.moves, 0);
 

@@ -1246,7 +1246,7 @@ mod tests {
             !night.contains("Personality:"),
             "night jobs stay neutral: {night}"
         );
-        assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
+        assert!(night.contains(*grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
         assert!(
             night.contains("<dangerous_actions>"),
             "unattended keeps template safety: {night}"

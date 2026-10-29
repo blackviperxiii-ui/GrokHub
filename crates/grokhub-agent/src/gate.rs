@@ -261,7 +261,9 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
         }
         match desk {
             None => return Decision::Refuse(OFF_MSG.to_string()),
-            Some(DeskFlags { halted: true, .. }) => return Decision::Refuse(HALT_MSG.to_string()),
+            Some(DeskFlags { halted: true, .. }) => {
+                return Decision::Refuse((*HALT_MSG).to_string())
+            }
             Some(DeskFlags { locked: true, .. }) => return Decision::Refuse(LOCK_MSG.to_string()),
             Some(_) => {}
         }
@@ -467,7 +469,7 @@ mod tests {
                     locked: false
                 })
             ),
-            Decision::Refuse(HALT_MSG.into())
+            Decision::Refuse((*HALT_MSG).into())
         );
         assert_eq!(
             decide(

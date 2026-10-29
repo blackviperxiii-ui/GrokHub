@@ -1804,9 +1804,9 @@ pub fn idea_chat_open_line(card: &UpdateCard) -> String {
 /// Hidden brief sent with every turn of an idea card's chat.
 pub fn idea_card_brief(card: &UpdateCard) -> String {
     let mut out = format!(
-        "You are helping the person refine one idea card in GrokHub before they apply it.\nType: {}\nTitle: {}",
+        "You are helping the person refine one idea card in {product} before they apply it.\nType: {}\nTitle: {}",
         card.idea_type_label(),
-        card.title
+        card.title, product = crate::brand::product_name()
     );
     if let Some(body) = card
         .body
@@ -2665,9 +2665,10 @@ pub fn crash_card(
         feed_card_id("crash", &source, &title, created_at, true),
         UpdateKind::AutomationDone,
         title,
-        Some(
-            "Something outside GrokHub stopped it before it finished. Retry runs it again.".into(),
-        ),
+        Some(format!(
+            "Something outside {product} stopped it before it finished. Retry runs it again.",
+            product = crate::brand::product_name()
+        )),
         created_at,
     );
     if !thread_id.trim().is_empty() {
@@ -2803,7 +2804,13 @@ pub fn self_change_card(
     created_at: u64,
 ) -> UpdateCard {
     let name = clip_line(name, TITLE_CHARS);
-    let title = clip_line(&format!("GrokHub {verb} {kind} {name}"), TITLE_CHARS);
+    let title = clip_line(
+        &format!(
+            "{product} {verb} {kind} {name}",
+            product = crate::brand::product_name()
+        ),
+        TITLE_CHARS,
+    );
     let why = clip_line(reason, TITLE_CHARS);
     let undo = format!("Undo it from its Work-tree row or /{kind}s changes.");
     let body = if why.is_empty() {

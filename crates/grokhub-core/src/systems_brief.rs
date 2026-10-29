@@ -374,7 +374,11 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
         if let Some(v) = &input.cabin_update {
             actions.push(BriefAction {
                 text: "Run /update".into(),
-                rationale: format!("GrokHub {} is ready", v.trim_start_matches('v')),
+                rationale: format!(
+                    "{product} {} is ready",
+                    v.trim_start_matches('v'),
+                    product = crate::brand::product_name()
+                ),
                 source: "health:update".into(),
             });
         }

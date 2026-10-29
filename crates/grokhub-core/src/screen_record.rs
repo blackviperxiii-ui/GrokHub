@@ -172,7 +172,9 @@ pub fn is_recording_dir(home: &Path, dir: &Path) -> bool {
             .is_some_and(|n| !n.is_empty() && n != "." && n != "..")
 }
 
-const SYSTEM_PROMPT: &str = "You are GrokHub's screen diagnosis. You get stills from a short screen recording, in order, and the user's note. Say only what the stills show. Do not take or suggest automatic actions; the user decides. Answer in exactly three parts:\nSeen: one or two sentences naming the app or window and what happens.\nLikely cause: one sentence.\nFix steps:\n1. a step the user can do\n2. another step (at most five)";
+static SYSTEM_PROMPT: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled("You are {product}'s screen diagnosis. You get stills from a short screen recording, in order, and the user's note. Say only what the stills show. Do not take or suggest automatic actions; the user decides. Answer in exactly three parts:\nSeen: one or two sentences naming the app or window and what happens.\nLikely cause: one sentence.\nFix steps:\n1. a step the user can do\n2. another step (at most five)")
+});
 
 /// System and user messages for the diagnosis call.
 pub fn diagnosis_messages(note: &str, secs: u64, stills: usize) -> Vec<(String, String)> {
@@ -183,7 +185,7 @@ pub fn diagnosis_messages(note: &str, secs: u64, stills: usize) -> Vec<(String, 
         note
     };
     vec![
-        ("system".into(), SYSTEM_PROMPT.into()),
+        ("system".into(), (*SYSTEM_PROMPT).into()),
         (
             "user".into(),
             format!(

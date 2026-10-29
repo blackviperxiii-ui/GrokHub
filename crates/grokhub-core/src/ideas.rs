@@ -128,11 +128,10 @@ fn push_list(lines: &mut Vec<String>, head: &str, items: &[String], max: usize, 
 /// One prompt. The reply is only `IDEA:` lines.
 pub fn idea_prompt(ctx: &IdeaContext) -> String {
     let mut lines: Vec<String> = vec![
-        "You suggest ideas for one person who uses GrokHub, a desktop assistant on their own computer.".into(),
-        "GrokHub can: run shell commands and edit files on this computer, drive the desktop, search the web, \
+        format!("You suggest ideas for one person who uses {product}, a desktop assistant on their own computer.", product = crate::brand::product_name()),
+        format!("{product} can: run shell commands and edit files on this computer, drive the desktop, search the web, \
          schedule automations on a clock (\"every weekday at 9, ...\") or an interval (\"every 2 hours, ...\"), \
-         keep skills (saved step-by-step procedures), manage a workboard of tasks, and make images."
-            .into(),
+         keep skills (saved step-by-step procedures), manage a workboard of tasks, and make images.", product = crate::brand::product_name()),
         String::new(),
         "Before you suggest anything, ask yourself: why would this person want it, and would they miss it if it \
          were not there? Most of the time the honest answer is no, and the right output is nothing."
@@ -172,8 +171,7 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
         "- reason: why you are making this, pointing at the repeated work it answers, at most 120 characters"
             .into(),
         "- details: two to four sentences: what it does, why it helps them, and what it needs, at most 500 characters".into(),
-        "- what to send: the exact message to send GrokHub to do it. An automation starts with its schedule."
-            .into(),
+        format!("- what to send: the exact message to send {product} to do it. An automation starts with its schedule.", product = crate::brand::product_name()),
         "Do not copy their sentences. Do not repeat or overlap anything listed under Existing or Turned down. \
          If nothing clears the rules, output nothing."
             .into(),

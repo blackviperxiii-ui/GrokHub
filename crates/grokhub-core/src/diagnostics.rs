@@ -284,7 +284,7 @@ pub fn content_level_label(explicit_personalities: bool, personality_explicit: b
 /// Readable Markdown for a diagnostics export.
 pub fn diagnostics_markdown(export: &DiagnosticsExport) -> String {
     let mut out = String::new();
-    out.push_str("# GrokHub diagnostics\n\n");
+    out.push_str(crate::brand::filled("# {product} diagnostics\n\n"));
     out.push_str(&format!(
         "- App: {} {}\n- OS: {} {}\n- Chat: {} ({})\n- Exported: {}\n\n",
         export.app,
