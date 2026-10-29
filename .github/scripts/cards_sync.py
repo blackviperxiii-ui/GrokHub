@@ -7,7 +7,7 @@ Modes (argv[1]):
   done  - issues/pull_request closed event: mark the linked card Done.
 
 Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID (Notion API 2025-09-03 data source id),
-GITHUB_TOKEN, GITHUB_REPOSITORY, CARDS_PROJECT (default GrokHub),
+GITHUB_TOKEN, GITHUB_REPOSITORY, CARDS_PROJECT (board Project option, default Loadout),
 COPILOT_ASSIGN_TOKEN (optional user token; GITHUB_TOKEN may not assign Copilot),
 JULES_API_KEY (optional; Jules sessions are started through the Jules API,
 the 'jules' label alone does not start Jules).
@@ -24,7 +24,7 @@ NOTION = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"
 GH = "https://api.github.com"
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
-PROJECT = os.environ.get("CARDS_PROJECT") or "GrokHub"
+PROJECT = os.environ.get("CARDS_PROJECT") or "Loadout"
 CAP = 2
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 CODERS = {
@@ -291,14 +291,45 @@ def sync():
     for pid, issue in closed_issues.items():
         if issue.get("state_reason") == "completed":
             mark_done(pid, issue["html_url"])
+    # Sweep: open card issues whose PR already merged into beta. beta is not the
+    # default branch, so "Fixes #N" never closes them, and a missed done event
+    # would leave the card at Doing.
+    for pid, issue in open_issues.items():
+        if "number" not in issue:
+            continue
+        pr_url = merged_beta_pr(issue["number"])
+        if pr_url:
+            mark_done(pid, pr_url, issue["number"])
 
 
-def mark_done(pid, url):
+def merged_beta_pr(number):
+    """URL of a same-repo PR merged into beta that references issue #number."""
+    for ev in gh_all(f"/repos/{REPO}/issues/{number}/timeline"):
+        src = (ev.get("source") or {}).get("issue") or {}
+        if ev.get("event") != "cross-referenced" or not (src.get("pull_request") or {}).get("merged_at"):
+            continue
+        if (src.get("repository") or {}).get("full_name", REPO) != REPO:
+            continue
+        pr = gh(f"/repos/{REPO}/pulls/{src['number']}")
+        if pr.get("merged") and pr["base"]["ref"] == "beta":
+            return pr["html_url"]
+    return None
+
+
+def close_issue(number):
+    try:
+        gh(f"/repos/{REPO}/issues/{number}", "PATCH", {"state": "closed", "state_reason": "completed"})
+    except RuntimeError as e:
+        print(f"close #{number} failed: {e}")
+
+
+def mark_done(pid, url, issue_number=None):
     page = notion(f"/pages/{pid}")
-    if prop(page, "Status") in ("Done", "Notes"):
-        return
-    print(f"card {pid} -> Done ({url})")
-    set_card(pid, "Done", f"Done: {url}")
+    if prop(page, "Status") not in ("Done", "Notes"):
+        print(f"card {pid} -> Done ({url})")
+        set_card(pid, "Done", f"Done: {url}")
+    if issue_number:
+        close_issue(issue_number)
 
 
 def done():
@@ -314,7 +345,8 @@ def done():
             issue = gh(f"/repos/{REPO}/issues/{n}")
             m = MARK_RE.search(issue.get("body") or "")
             if m:
-                mark_done(m.group(1).replace("-", ""), pr["html_url"])
+                mark_done(m.group(1).replace("-", ""), pr["html_url"],
+                          issue["number"] if issue.get("state") == "open" else None)
     elif "issue" in event:
         issue = event["issue"]
         m = MARK_RE.search(issue.get("body") or "")
