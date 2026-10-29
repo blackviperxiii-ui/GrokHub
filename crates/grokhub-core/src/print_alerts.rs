@@ -923,7 +923,10 @@ mod tests {
         let user_info = r#"{"webcam":{"snapshotUrl":"http://127.0.0.1@203.0.113.9/snap.jpg"}}"#;
         assert_eq!(parse_webcam_path(PrinterKind::OctoPrint, user_info), None);
         let other_scheme = r#"{"webcam":{"snapshotUrl":"ftp://127.0.0.1/snap.jpg"}}"#;
-        assert_eq!(parse_webcam_path(PrinterKind::OctoPrint, other_scheme), None);
+        assert_eq!(
+            parse_webcam_path(PrinterKind::OctoPrint, other_scheme),
+            None
+        );
         assert_eq!(
             webcam_query_path(PrinterKind::Moonraker),
             "/server/webcams/list"
