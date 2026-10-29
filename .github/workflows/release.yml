@@ -46,6 +46,8 @@ jobs:
     outputs:
       build: ${{ steps.plan.outputs.build }}
       sha: ${{ steps.plan.outputs.sha }}
+      # true for the nightly, manual beta runs and vX.Y.Z-beta.N tags.
+      beta: ${{ github.ref_type != 'tag' || contains(github.ref_name, '-beta.') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,6 +93,12 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+      # The planned SHA checks out detached; name it beta so build.rs labels the
+      # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
+      - name: Label the beta build
+        if: needs.plan.outputs.beta == 'true'
+        shell: bash
+        run: git switch -C beta
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -123,6 +131,12 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+      # The planned SHA checks out detached; name it beta so build.rs labels the
+      # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
+      - name: Label the beta build
+        if: needs.plan.outputs.beta == 'true'
+        shell: bash
+        run: git switch -C beta
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
