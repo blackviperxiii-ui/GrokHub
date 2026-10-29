@@ -178,6 +178,17 @@ impl Cabin {
             ui,
             "Learn your games, hobbies and setup from names and counts on this computer, never file contents, browser data, mail, messages or keys. Only the tags below are kept.",
         );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            crate::cards::settings_note(
+                ui,
+                "What chats teach goes to USER.md (you), SOUL.md (how the cabin behaves) and MEMORY.md (what you asked it to remember).",
+            );
+            if crate::cards::ghost_pill(ui, "See and edit") {
+                self.nav = Nav::Memory;
+                self.open_memory_file("USER.md");
+            }
+        });
         ui.add_space(6.0);
         let mut on = self.know_me().on;
         if ui

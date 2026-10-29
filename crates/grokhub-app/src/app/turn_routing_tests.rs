@@ -590,12 +590,13 @@ fn chat_side_effects_keep_the_origin_thread() {
         !reflect.contains("t.messages.clone()") && !reflect.contains("content.clone()"),
         "/learn reflect must not clone an 8MB transcript to harvest facts: {reflect}"
     );
+    // The memory files are read and edited in `write_notes`.
     let mem = reflect
-        .find("read_memory(\"MEMORY.md\")")
+        .find("learn_notes_ui::write_notes(")
         .expect("reflect memory");
     assert!(
         reflect[..mem].contains("write_memory") && reflect[..mem].contains("mem_body"),
-        "/learn reflect must flush the Memory editor before surgical edit: {reflect}"
+        "/learn reflect must flush the Memory editor before the note edit: {reflect}"
     );
     let mem_spawn = reflect[..mem]
         .rfind("thread::spawn")

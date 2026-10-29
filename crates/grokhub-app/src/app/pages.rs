@@ -590,6 +590,15 @@ impl Cabin {
                         }
                     });
                 });
+                if self.mem_name != "MEMORY.md"
+                    && grokhub_core::learn_notes::is_placeholder(&self.mem_body)
+                {
+                    ui.add_space(8.0);
+                    crate::cards::settings_note(
+                        ui,
+                        "Still the starter template. The cabin fills this in as you chat, or write it here.",
+                    );
+                }
                 if !self.reflect_diff.is_empty() {
                     ui.add_space(8.0);
                     ui.label(

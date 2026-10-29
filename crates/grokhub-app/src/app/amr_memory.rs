@@ -283,7 +283,7 @@ impl Cabin {
     }
 
     /// AMR reflect: one node per new fact, no MEMORY.md or USER.md line. The
-    /// edit sent back has an empty `next`, which `poll_reflect` reads as AMR.
+    /// result carries only `amr_diff`.
     pub(super) fn run_reflect_amr(&mut self, facts: &[String]) {
         let Some(added) = self.amr_remember_facts(facts, "reflect") else {
             self.status = "Scratch — no reflect".into();
@@ -294,13 +294,10 @@ impl Cabin {
         self.status = "Reflecting…".into();
         std::thread::spawn(move || {
             let diff = added.recv().unwrap_or_default().join("\n");
-            let _ = tx.send((
-                MemoryEdit {
-                    next: String::new(),
-                    diff,
-                },
-                None,
-            ));
+            let _ = tx.send(super::learn_notes_ui::LearnWrites {
+                amr_diff: Some(diff),
+                files: Vec::new(),
+            });
         });
     }
 

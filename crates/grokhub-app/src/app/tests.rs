@@ -2296,6 +2296,7 @@ fn quiet_cabin() -> Cabin {
         sync_rx: None,
         inhabit_rx: None,
         reflect_rx: None,
+        learn_rx: None,
         amr_imported: false,
         dream_day: None,
         amr_prune: amr_memory::AmrPrune::default(),
