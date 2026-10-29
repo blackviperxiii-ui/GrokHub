@@ -392,8 +392,30 @@ pub fn game_in_exe_paths(paths: &[String]) -> bool {
         p.contains("\\steamapps\\common\\")
             || (p.contains("\\epic games\\") && !p.contains("\\launcher\\"))
             || p.contains("\\gog galaxy\\games\\")
+            || p.contains("\\gog games\\")
             || p.contains("\\xboxgames\\")
     })
+}
+
+/// Windows processes in the user's session whose path a normal app can't
+/// read. Any other unreadable process could be an elevated game.
+const SESSION_SYSTEM: [&str; 5] = ["csrss", "winlogon", "dwm", "fontdrvhost", "logonui"];
+
+/// Windows: whether a game runs, from the session's process list, one line
+/// each: the full path, or `?name` when the path couldn't be read. `None`
+/// when no game shows and an unreadable process isn't a known Windows one.
+pub fn game_in_process_list(lines: &[String]) -> Option<bool> {
+    let (hidden, paths): (Vec<&String>, Vec<&String>) =
+        lines.iter().partition(|l| l.starts_with('?'));
+    let paths: Vec<String> = paths.into_iter().cloned().collect();
+    if game_in_exe_paths(&paths) {
+        return Some(true);
+    }
+    let unknown = hidden.iter().any(|l| {
+        let name = l[1..].trim().to_ascii_lowercase();
+        !SESSION_SYSTEM.contains(&name.as_str())
+    });
+    (!unknown).then_some(false)
 }
 
 /// `gamemoded -s`: "gamemode is active".

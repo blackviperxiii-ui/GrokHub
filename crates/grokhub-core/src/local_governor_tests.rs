@@ -572,5 +572,30 @@ fn windows_games_are_read_from_store_library_paths() {
             .to_string(),
         r"C:\Windows\explorer.exe".to_string(),
     ]));
+    assert!(game_in_exe_paths(&p(
+        r"C:\GOG Games\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe"
+    )));
     assert!(!game_in_exe_paths(&[]));
+}
+
+#[test]
+fn an_unreadable_process_leaves_the_windows_game_signal_unknown() {
+    let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let explorer = r"C:\Windows\explorer.exe";
+    assert_eq!(
+        game_in_process_list(&l(&[explorer, "?csrss", "?dwm", "?winlogon"])),
+        Some(false)
+    );
+    assert_eq!(
+        game_in_process_list(&l(&[explorer, "?csrss", "?EliteGame"])),
+        None
+    );
+    assert_eq!(
+        game_in_process_list(&l(&[
+            r"D:\SteamLibrary\steamapps\common\Hades\Hades.exe",
+            "?EliteGame",
+        ])),
+        Some(true)
+    );
+    assert_eq!(game_in_process_list(&[]), Some(false));
 }

@@ -58,7 +58,9 @@ impl Busy {
             Busy::Render => "another app is busy on the GPU",
             Busy::Download => "a download is running",
             Busy::Task => "an agent task is running",
-            Busy::Unknown => "this PC can't tell whether a game or fullscreen app is running",
+            Busy::Unknown => {
+                "this PC can't tell whether a game, fullscreen app or GPU work is running"
+            }
         }
     }
 }
