@@ -136,6 +136,20 @@ fn settings_fresh_view(ctx: &egui::Context, sec: SettingsSec) -> bool {
     !matches!(last, Some((was, at)) if was == sec && at + 1 >= pass)
 }
 
+/// The section body's scroll: one per section, back at the top each time a
+/// section is newly shown, and kept while it stays open.
+fn settings_body_scroll(ctx: &egui::Context, sec: SettingsSec, max_h: f32) -> egui::ScrollArea {
+    let body = egui::ScrollArea::vertical()
+        .id_salt(("settings-body", sec))
+        .auto_shrink([false, false])
+        .max_height(max_h);
+    if settings_fresh_view(ctx, sec) {
+        body.vertical_scroll_offset(0.0)
+    } else {
+        body
+    }
+}
+
 pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
     sec != SettingsSec::Appearance
 }
@@ -615,13 +629,7 @@ impl Cabin {
                                         // Personality owns its own grid scroll; keep the body
                                         // height capped so the panel never grows past the window.
                                         let body_h = (ui.available_height() - 8.0).max(120.0);
-                                        let mut body = egui::ScrollArea::vertical()
-                                            .id_salt(("settings-body", sec))
-                                            .auto_shrink([false, false])
-                                            .max_height(body_h);
-                                        if settings_fresh_view(ctx, sec) {
-                                            body = body.vertical_scroll_offset(0.0);
-                                        }
+                                        let body = settings_body_scroll(ctx, sec, body_h);
                                         body.show(ui, |ui| {
                                                 ui.set_width((body_w - 40.0).max(240.0));
                                                 ui.set_max_width((body_w - 40.0).max(240.0));
@@ -1536,6 +1544,56 @@ mod tests {
         pass(None);
         pass(Some(SettingsSec::Behavior));
         assert_eq!(seen, [true, false, true, false, true]);
+    }
+
+    #[test]
+    fn a_section_body_scrolls_back_to_the_top_only_when_reopened() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+        // One frame of a tall section body, optionally wheeled down; its offset after.
+        let frame = |sec: Option<SettingsSec>, wheel: f32| -> Option<f32> {
+            let mut raw = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            if wheel != 0.0 {
+                raw.events = vec![
+                    egui::Event::PointerMoved(egui::pos2(300.0, 150.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -wheel),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+            } else {
+                // Off the body, so a wheel still easing from the last frame moves nothing.
+                raw.events = vec![egui::Event::PointerGone];
+            }
+            let mut offset = None;
+            let _ = crate::theme::test_pass(&ctx, raw, |ui| {
+                let Some(sec) = sec else { return };
+                let out = settings_body_scroll(ui.ctx(), sec, 300.0).show(ui, |ui| {
+                    ui.allocate_space(egui::vec2(200.0, 2000.0));
+                });
+                offset = Some(out.state.offset.y);
+            });
+            offset
+        };
+        frame(Some(SettingsSec::Behavior), 0.0);
+        frame(Some(SettingsSec::Behavior), 400.0);
+        // Still open: the scroll is kept.
+        let kept = frame(Some(SettingsSec::Behavior), 0.0).unwrap();
+        assert!(kept > 100.0, "kept {kept}");
+        // Another section has its own scroll, from the top.
+        assert_eq!(frame(Some(SettingsSec::Labs), 0.0), Some(0.0));
+        // Back on Behavior, newly shown: the top again, not where it was left.
+        assert_eq!(frame(Some(SettingsSec::Behavior), 0.0), Some(0.0));
+        // Closed for a frame and reopened on the same section: the top as well.
+        frame(Some(SettingsSec::Behavior), 400.0);
+        assert!(frame(Some(SettingsSec::Behavior), 0.0).unwrap() > 100.0);
+        frame(None, 0.0);
+        assert_eq!(frame(Some(SettingsSec::Behavior), 0.0), Some(0.0));
     }
 
     #[test]

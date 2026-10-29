@@ -9,7 +9,7 @@ Board: "Grok Bot Command Centre" database, data source "Command Center"
 - Assigned: who owns the card. Coders: Claude, Copilot, Jules.
 - Order: pickup order (number). Lowest Ready Order goes first. Blank = not queued.
 - Priority: High, Medium, Low, Eh... Whenever.
-- Project: Loadout work is Project = GrokHub.
+- Project: Loadout work is Project = Loadout.
 - Result: short outcome or current state with links and any assumptions.
 - Picked up: date you started. Done at: date the work landed.
 - Archive now / Archive section: archive controls. Leave them alone.
@@ -23,7 +23,7 @@ Board: "Grok Bot Command Centre" database, data source "Command Center"
 ## Working a card
 - Start: set Status = Doing and Picked up = now. Add a line to Result saying you started.
 - PR opened: put the PR link and a one-line summary in Result.
-- Merged to beta (merges are done by the Repo bot): set Status = Done,
+- Merged to beta (auto-merge lands it once required checks pass): set Status = Done,
   Done at = merge time, and update Result with the PR link and summary.
 - Never set Done before the PR has merged to beta.
 - Blocked: set Status back to Ready and put a clear note in Result saying
@@ -40,5 +40,7 @@ Board: "Grok Bot Command Centre" database, data source "Command Center"
 - No force-pushes.
 - Run fmt, lint and tests locally before pushing, then push once.
 - At most 2 open PRs per coder.
-- The Repo bot does all merges. Never merge your own PR.
+- Merges: auto-merge (squash) turns on when a PR into beta opens, and GitHub
+  merges it once the required checks pass. If auto-merge is off and the PR is
+  green and not held, squash-merge it into beta yourself. Never merge into main.
 - No personal info in the repo: write 'user' for names and /home/user for paths.
