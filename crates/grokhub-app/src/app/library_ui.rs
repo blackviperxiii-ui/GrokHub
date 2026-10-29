@@ -321,18 +321,19 @@ impl Cabin {
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                self.library_header(ui, &mut view);
-                ui.add_space(16.0);
                 if !found || games.is_empty() {
-                    ui.label(
-                        egui::RichText::new(
-                            "No Steam library on this PC yet. Games you install with Steam show up here.",
-                        )
-                        .size(crate::theme::TYPE_LABEL)
-                        .color(crate::theme::muted()),
-                    );
+                    if crate::ui_kit::empty_state(
+                        ui,
+                        "No Steam library",
+                        "Games you install with Steam on this PC show up here.",
+                        Some("Open Steam"),
+                    ) {
+                        let _ = crate::desktop::open_path("steam://");
+                    }
                     return;
                 }
+                self.library_header(ui, &mut view);
+                ui.add_space(16.0);
                 let shown = filter_games(&games, view.tab, &view.query, &objective);
                 if view.picked.is_none_or(|p| !games.iter().any(|g| g.app_id == p)) {
                     view.picked = games.first().map(|g| g.app_id);
@@ -633,5 +634,18 @@ mod tests {
         assert_eq!(cabin.nav_id(), "library");
         cabin.set_nav_id("skills");
         assert_eq!(cabin.nav, Nav::Skills);
+    }
+
+    #[test]
+    fn library_empty_state_hides_filters_and_offers_open_steam_action() {
+        let src = cabin_src();
+        let lib = fn_src(&src, "ui_library");
+        assert!(
+            lib.contains("empty_state")
+                && lib.contains("No Steam library")
+                && lib.contains("Open Steam")
+                && lib.contains("steam://"),
+            "Library empty state must offer one clear action and hide filters: {lib}"
+        );
     }
 }

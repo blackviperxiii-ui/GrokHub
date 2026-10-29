@@ -534,6 +534,7 @@ fn selecting_plan_leaves_the_title_and_sets_plan() {
 fn session_menu_sits_left_of_minimize() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("menu-place");
+    cabin.threads[cabin.thread_idx].grok_session = Some("sess".into());
     let ctx = egui::Context::default();
     let raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(

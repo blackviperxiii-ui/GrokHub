@@ -513,10 +513,22 @@ impl Cabin {
                         );
                     });
                 ui.add_space(8.0);
-                if crate::cards::white_pill(ui, "Send a task home") {
-                    let t = std::mem::take(&mut self.task_prompt);
-                    self.nav = Nav::Chat;
-                    self.send_chat(t);
+                if self.has_key() {
+                    if crate::cards::white_pill(ui, "Send a task home") {
+                        let t = std::mem::take(&mut self.task_prompt);
+                        self.nav = Nav::Chat;
+                        self.send_chat(t);
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        crate::cards::settings_note(
+                            ui,
+                            "Sign in with Grok in Settings → Account, or add an API key.",
+                        );
+                        if crate::cards::ghost_pill(ui, "Sign in") {
+                            self.set_nav_id("settings");
+                        }
+                    });
                 }
             });
     }
