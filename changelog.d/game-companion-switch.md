@@ -1,0 +1,1 @@
+- Game companion: switching straight from one game to another now closes the first one, so its note offer still shows. The launch card's Open goes to the top-rated guides, and the newest news item is its "Read at" link.
