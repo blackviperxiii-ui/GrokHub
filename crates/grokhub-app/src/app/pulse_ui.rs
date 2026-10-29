@@ -1438,6 +1438,7 @@ impl Cabin {
             });
         }
         self.paint_brief_offer(ui);
+        self.ui_helper_offers(ui);
         ui.add_space(14.0);
     }
 
