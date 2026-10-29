@@ -16,6 +16,8 @@ pub(super) struct BackupState {
     rx: Option<mpsc::Receiver<Option<Reminder>>>,
     checked: bool,
     reminder: Option<Reminder>,
+    /// The `source_id` of the post the reminder belongs to.
+    card_source: String,
 }
 
 fn check(code_folders: &[String], important: &[String], now: u64) -> Option<Reminder> {
@@ -46,7 +48,9 @@ impl Cabin {
         }
         if !std::mem::replace(&mut self.focus.backup.checked, true) {
             let now = now_ms();
-            if !bn::load(&crate::config::config_dir()).may_show(now) {
+            let state = bn::load(&crate::config::config_dir());
+            self.restore_backup_reminder(state.reminder.clone(), &state.card_source);
+            if !state.may_show(now) {
                 return;
             }
             let code = self.cfg.code_folders.clone();
@@ -67,17 +71,36 @@ impl Cabin {
         }
     }
 
+    /// After a restart: the saved reminder's one-taps come back while its
+    /// own Pulse post is still there (not an older day's post).
+    fn restore_backup_reminder(&mut self, saved: Option<Reminder>, card_source: &str) {
+        let posted = !card_source.is_empty()
+            && self.updates.iter().any(|c| {
+                c.source_id == card_source && c.status != grokhub_core::UpdateStatus::Dismissed
+            });
+        if let Some(reminder) = saved.filter(|_| posted) {
+            self.focus.backup.reminder = Some(reminder);
+            self.focus.backup.card_source = card_source.to_string();
+            self.chip_paint_key.clear();
+        }
+    }
+
     fn show_backup_reminder(&mut self, reminder: Reminder, now: u64) {
-        if grokhub_core::post_update(&mut self.updates, reminder.card(now)) {
+        let card = reminder.card(now);
+        let card_source = card.source_id.clone();
+        if grokhub_core::post_update(&mut self.updates, card) {
             self.persist_updates();
         }
         let dir = crate::config::config_dir();
         let mut state = bn::load(&dir);
         state.last_shown_ms = now;
+        state.reminder = Some(reminder.clone());
+        state.card_source = card_source.clone();
         if let Err(err) = bn::save(&dir, &state) {
             self.status = err;
         }
         self.focus.backup.reminder = Some(reminder);
+        self.focus.backup.card_source = card_source;
         self.chip_paint_key.clear();
     }
 
@@ -106,12 +129,17 @@ impl Cabin {
         let dir = crate::config::config_dir();
         let mut state = bn::load(&dir);
         state.snooze(now_ms());
-        if let Err(err) = bn::save(&dir, &state) {
-            self.status = err;
+        state.reminder = None;
+        state.card_source.clear();
+        match bn::save(&dir, &state) {
+            Ok(()) => {
+                self.status = format!("Backup reminders snoozed for {} days.", bn::SNOOZE_DAYS);
+                self.focus.backup.reminder = None;
+                self.chip_paint_key.clear();
+            }
+            // The one-taps stay so the snooze can be tried again.
+            Err(err) => self.status = format!("Couldn't save the snooze: {err}"),
         }
-        self.focus.backup.reminder = None;
-        self.chip_paint_key.clear();
-        self.status = format!("Backup reminders snoozed for {} days.", bn::SNOOZE_DAYS);
         true
     }
 
@@ -122,7 +150,8 @@ impl Cabin {
         ui: &mut egui::Ui,
         card: &grokhub_core::UpdateCard,
     ) -> Option<String> {
-        if !card.source_id.starts_with(bn::CARD_SOURCE) {
+        // Only on the reminder's own post, not an older day's.
+        if card.source_id != self.focus.backup.card_source {
             return None;
         }
         let chips = self.backup_chips();
@@ -264,6 +293,73 @@ mod tests {
         assert_eq!(cabin.nav, Nav::Pulse, "snooze stays on Pulse");
         assert!(cabin.backup_chips().is_empty());
         assert!(bn::load(&root).snoozed_until_ms > now_ms());
+    }
+
+    #[test]
+    fn the_reminder_and_its_one_taps_survive_a_restart() {
+        let root = crate::config::test_config_root("backup-nudge-restart");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.backup_nudge = true;
+        cabin.show_backup_reminder(reminder(), now_ms());
+        assert_eq!(bn::load(&root).reminder, Some(reminder()));
+        // A new launch with the post still on Pulse: the one-taps return
+        // without a new check (it is not a day later yet).
+        let mut next = Cabin::quiet_for_test();
+        next.cfg.backup_nudge = true;
+        next.updates = cabin.updates.clone();
+        next.tick_backup();
+        assert!(next.focus.backup.rx.is_none(), "no second check today");
+        let labels: Vec<String> = next.backup_chips().into_iter().map(|c| c.label).collect();
+        assert_eq!(labels, vec!["Push my-app", "Snooze 3 days"]);
+        // Without the post, nothing comes back.
+        let mut bare = Cabin::quiet_for_test();
+        bare.cfg.backup_nudge = true;
+        bare.tick_backup();
+        assert!(bare.backup_chips().is_empty());
+        // An older day's post still up while this one was dismissed: the
+        // one-taps don't move onto it.
+        let mut older = Cabin::quiet_for_test();
+        older.cfg.backup_nudge = true;
+        older.updates = cabin.updates.clone();
+        for c in &mut older.updates {
+            if c.source_id.starts_with(bn::CARD_SOURCE) {
+                c.status = grokhub_core::UpdateStatus::Dismissed;
+            }
+        }
+        older.updates.push(reminder().card(1_000));
+        older.tick_backup();
+        assert!(older.backup_chips().is_empty());
+    }
+
+    #[test]
+    fn a_failed_snooze_save_says_so() {
+        let root = crate::config::test_config_root("backup-nudge-ro");
+        let _ = std::fs::remove_dir_all(&root);
+        // A file where the config folder should be: every save fails.
+        std::fs::write(&root, "not a folder").unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.backup_nudge = true;
+        cabin.focus.backup.reminder = Some(reminder());
+        let snooze = cabin
+            .backup_chips()
+            .into_iter()
+            .find(|c| c.id == bn::SNOOZE_ID)
+            .expect("snooze chip");
+        assert!(cabin.take_backup_chip(&snooze));
+        assert!(
+            cabin.status.starts_with("Couldn't save the snooze: "),
+            "{}",
+            cabin.status
+        );
+        assert!(
+            !cabin.backup_chips().is_empty(),
+            "the one-taps stay to try again"
+        );
+        let _ = std::fs::remove_file(&root);
     }
 
     #[test]
