@@ -100,9 +100,6 @@ Shot 1600 900 'home-mc-1600x900' 'ops-dark' '09' -nav 'home' -library
 Shot 1100 720 'home-mc-1100x720' 'ops-dark' '09' -nav 'home' -library
 Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
 # Objectives (the checklist details behind Home's card) is the third icon on the rail.
-Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
-Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
-# Objectives (mission control) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
