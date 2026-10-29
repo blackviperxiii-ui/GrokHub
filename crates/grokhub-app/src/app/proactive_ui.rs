@@ -78,7 +78,7 @@ impl Cabin {
     }
 
     /// MindCheck over the proactive span log: Not this is a deny, a click an approve.
-    fn proactive_mind(&self) -> hx::MindCheck {
+    pub(super) fn proactive_mind(&self) -> hx::MindCheck {
         let (spans, _) = hx::read_spans_tail(
             &crate::config::config_dir(),
             PROACTIVE_TRACE,
