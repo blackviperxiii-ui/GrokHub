@@ -64,9 +64,7 @@ const DECK_PICK_ENV: &str = "GROKHUB_DECK_LIBRARY_PICK";
 /// The view on first open: the deck shot's pick, else the first game.
 fn first_view() -> LibraryView {
     LibraryView {
-        picked: std::env::var(DECK_PICK_ENV)
-            .ok()
-            .and_then(|v| v.trim().parse().ok()),
+        picked: super::loadout_home::deck_switch(DECK_PICK_ENV).and_then(|v| v.parse().ok()),
         ..Default::default()
     }
 }
@@ -539,13 +537,20 @@ mod tests {
     #[test]
     fn a_deck_shot_opens_library_on_its_picked_game() {
         let before = std::env::var(DECK_PICK_ENV).ok();
+        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var(DECK_PICK_ENV);
         assert_eq!(first_view().picked, None, "the first game by default");
         std::env::set_var(DECK_PICK_ENV, " 1086940 ");
         assert_eq!(first_view().picked, Some(1086940));
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        assert_eq!(first_view().picked, None, "ignored outside a deck shot");
         match before {
             Some(v) => std::env::set_var(DECK_PICK_ENV, v),
             None => std::env::remove_var(DECK_PICK_ENV),
+        }
+        if let Some(v) = before_shot {
+            std::env::set_var("GROKHUB_DECK_SHOT", v);
         }
     }
 

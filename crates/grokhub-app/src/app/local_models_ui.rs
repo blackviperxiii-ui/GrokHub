@@ -79,7 +79,7 @@ fn get(url: &str) -> Result<String, String> {
 }
 
 fn deck_check() -> bool {
-    std::env::var(DECK_ENV).is_ok_and(|v| v.trim() == "1")
+    super::loadout_home::deck_switch_is(DECK_ENV, "1")
 }
 
 fn deck_machine() -> Machine {

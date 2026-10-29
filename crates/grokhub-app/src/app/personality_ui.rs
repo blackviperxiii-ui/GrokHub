@@ -74,7 +74,7 @@ const DECK_AGE_CHECK_ENV: &str = "GROKHUB_DECK_AGE_CHECK";
 
 /// The 18+ check deck shot is running.
 pub(super) fn deck_age_check() -> bool {
-    std::env::var(DECK_AGE_CHECK_ENV).is_ok_and(|v| v.trim() == "1")
+    super::loadout_home::deck_switch_is(DECK_AGE_CHECK_ENV, "1")
 }
 
 /// The picker a window starts with: the 18+ row only for that deck shot.
@@ -1285,15 +1285,24 @@ mod tests {
     #[test]
     fn a_deck_shot_opens_with_the_18_plus_check_showing() {
         let before = std::env::var(DECK_AGE_CHECK_ENV).ok();
+        let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var(DECK_AGE_CHECK_ENV);
         assert!(!first_picker().age_check, "never shown on a normal start");
         std::env::set_var(DECK_AGE_CHECK_ENV, " 1 ");
         assert!(first_picker().age_check);
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        assert!(!first_picker().age_check, "ignored outside a deck shot");
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::set_var(DECK_AGE_CHECK_ENV, "0");
         assert!(!first_picker().age_check);
         match before {
             Some(v) => std::env::set_var(DECK_AGE_CHECK_ENV, v),
             None => std::env::remove_var(DECK_AGE_CHECK_ENV),
+        }
+        match before_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
     }
 
