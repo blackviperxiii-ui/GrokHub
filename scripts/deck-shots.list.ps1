@@ -16,6 +16,12 @@ Shot 1600 900 'chattabs-3-1600x900' 'ops-dark' '02' -dock -tabs 3
 Shot 1100 720 'chattabs-3-1100x720' 'ops-dark' '02' -dock -tabs 3
 Shot 1600 900 'chattabs-overflow-1600x900' 'ops-dark' '02' -dock -tabs 18 -overflow
 Shot 1100 720 'chattabs-overflow-1100x720' 'ops-dark' '02' -dock -tabs 18 -overflow
+# Ctrl+N (the strip's +) shows the empty draft as a selected New chat tab.
+Shot 1600 900 'chattabs-plus-1600x900' 'ops-dark' '02' -dock -tabs 3 -keys '^n'
+Shot 1100 720 'chattabs-plus-1100x720' 'ops-dark' '02' -dock -tabs 3 -keys '^n'
+# The far-right ... menu lists the chats that did not fit.
+Shot 1600 900 'chattabs-tools-1600x900' 'ops-dark' '02' -dock -tabs 18 -clickAt 1578, 58
+Shot 1100 720 'chattabs-tools-1100x720' 'ops-dark' '02' -dock -tabs 18 -clickAt 1078, 58
 # Chat rail last-used: Home (empty) then Chat restores Hangout.
 Shot 1600 900 'lastchat-home-1600x900' 'ops-dark' '02' -dock -tabs 3 -lastChat 'home'
 Shot 1100 720 'lastchat-home-1100x720' 'ops-dark' '02' -dock -tabs 3 -lastChat 'home'
@@ -73,12 +79,12 @@ Shot 1100 720 'model-drop-1100x720-scrolled' 'ops-dark' '14' -pulse -modelDrop -
 Shot 1600 900 'ask-offer-1600x900' 'ops-dark' '14' -askOffer -nav 'pulse'
 Shot 1100 720 'ask-offer-1100x720' 'ops-dark' '14' -askOffer -nav 'pulse'
 # Library is the fifth icon on the 40 px rail, below the chat tab strip.
-Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
-Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258
+Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
+Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Baldur's Gate 3 picked, so the detail header shows its store art too. A
 # synthetic tile click didn't register on the runner, so the seed picks it.
-Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
-Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 258
+Shot 1600 900 'library-detail-1600x900' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 221
+Shot 1100 720 'library-detail-1100x720' 'ops-dark' '11' -library -libraryPick '1086940' -clickAt 20, 221
 # Playbooks chat quality: joke replies show the character's playful response.
 Shot 1600 900 'chat-joke-1600x900' 'ops-dark' '02' -dock -chat 'joke'
 Shot 1100 720 'chat-joke-1100x720' 'ops-dark' '02' -dock -chat 'joke'
@@ -96,6 +102,9 @@ Shot 900 700 'home-mc-900x700' 'ops-dark' '09' -nav 'home' -library
 # Objectives (the checklist details behind Home's card) is the third icon on the rail.
 Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 178
 Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 178
+# Objectives (mission control) is the third icon on the rail.
+Shot 1600 900 'objectives-1600x900' 'ops-dark' '09' -library -clickAt 20, 141
+Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # Privacy & data is the second entry in the Settings list; the dialog is centred.
 # The gear at the foot of the rail opens Settings at 1100x720, where Ctrl+, from
 # SendKeys missed the window; at 1600x900 the gear sits below the runner's
@@ -145,3 +154,9 @@ Shot 1100 720 'tidy-1100x720' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
 Shot 1100 720 'tidy-1100x720-scrolled' 'ops-dark' '14' -tidy 'card' -nav 'pulse' -wheel 12
 Shot 1600 900 'tidy-approve-1600x900' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
 Shot 1100 720 'tidy-approve-1100x720' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
+# Signed out: the empty chat, then a typed send that keeps its text and shows
+# the inline sign-in card (deck shots carry no key or sign-in).
+Shot 1600 900 'signed-out-empty-1600x900' 'ops-dark' '02'
+Shot 1100 720 'signed-out-empty-1100x720' 'ops-dark' '02'
+Shot 1600 900 'signed-out-send-1600x900' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'
+Shot 1100 720 'signed-out-send-1100x720' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'

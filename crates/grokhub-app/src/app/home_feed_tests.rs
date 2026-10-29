@@ -57,9 +57,10 @@ fn empty_home_paints_faint_greeting() {
     let greet = slice.find("self.greeting").expect("greeting");
     let composer = slice.find("ui_composer_stack").expect("composer");
     assert!(greet < composer, "greeting sits above the chat box");
+    let greet_label = &slice[greet..composer];
     assert!(
-        slice.contains("muted()"),
-        "greeting uses secondary paint, not a washed-out whisper"
+        greet_label.contains(".color(crate::theme::fg())") && !greet_label.contains("muted()"),
+        "the empty-chat headline uses full-contrast ink, not the dim muted tone: {greet_label}"
     );
     assert!(
         !slice.contains("Native Grok Build cabin"),

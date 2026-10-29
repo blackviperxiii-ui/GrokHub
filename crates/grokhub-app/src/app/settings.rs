@@ -38,7 +38,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Behavior => "Behavior",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
-        SettingsSec::Defaults => "Cabin defaults",
+        SettingsSec::Defaults => "Defaults",
         SettingsSec::Labs => "Labs",
         SettingsSec::Permissions => "Permissions",
         SettingsSec::Connectors => "Connectors",
@@ -108,6 +108,10 @@ pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSe
     egui::Rect::from_center_size(screen.center(), settings_modal_size(sec, screen.size()))
 }
 
+pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
+    sec != SettingsSec::Appearance
+}
+
 /// Chat catalog ids plus Auto. Auto persists an empty model pin.
 pub(super) fn cabin_default_models() -> Vec<(&'static str, &'static str)> {
     let mut out = vec![("", "Auto")];
@@ -147,7 +151,7 @@ const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for 
 const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
-/// Settings → Cabin defaults, in order. There is no effort row: effort is automatic (Router R1).
+/// Settings → Defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
 pub(super) const DEFAULTS_ROWS: &[&str] = &[
     ROW_MODEL,
@@ -512,7 +516,7 @@ impl Cabin {
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
                                                     (SettingsSec::Connectors, "Connectors"),
-                                                    (SettingsSec::Defaults, "Cabin defaults"),
+                                                    (SettingsSec::Defaults, "Defaults"),
                                                     (SettingsSec::Labs, "Labs"),
                                                 ] {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
@@ -566,7 +570,9 @@ impl Cabin {
                                                     {
                                                         close = true;
                                                     }
-                                                    if crate::cards::ghost_pill(ui, "Save") {
+                                                    if settings_save_visible(sec)
+                                                        && crate::cards::ghost_pill(ui, "Save")
+                                                    {
                                                         save = true;
                                                     }
                                                 },

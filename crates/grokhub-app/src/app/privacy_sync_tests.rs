@@ -1079,7 +1079,7 @@ fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
     let next =
         super::privacy_ui::lock_next_step_short(&hx::Locked::Unavailable, hx::KeyringOs::current());
     assert!(
-        msg.starts_with("Private data is locked: GrokHub can't reach your "),
+        msg.starts_with("Your private data is locked because Loadout can't access your "),
         "{msg}"
     );
     assert!(
@@ -1238,7 +1238,7 @@ fn locked_state_disables_every_allow_with_the_lock_on_hover() {
         "Try again stays live: {pills:?}"
     );
     assert!(
-        !texts.iter().any(|t| t == "Locked: keyring unavailable"),
+        !texts.iter().any(|t| t == "Private data is unavailable"),
         "no hover yet"
     );
 
@@ -1248,12 +1248,12 @@ fn locked_state_disables_every_allow_with_the_lock_on_hover() {
     let mut shown = false;
     for _ in 0..4 {
         let (_, texts) = pill_opacity(&ctx, &mut cabin, vec![egui::Event::PointerMoved(at)]);
-        shown |= texts.iter().any(|t| t == "Locked: keyring unavailable");
+        shown |= texts.iter().any(|t| t == "Private data is unavailable");
     }
     assert!(shown, "hover names the lock");
     assert_eq!(
         super::privacy_ui::lock_hover(&hx::Locked::Unavailable),
-        "Locked: keyring unavailable"
+        "Private data is unavailable"
     );
 
     // A click on any of them writes nothing and says nothing new.
@@ -1331,10 +1331,7 @@ fn try_again_asks_the_keyring_again_and_refreshes_permissions() {
         "{:?}",
         p.texts.iter().map(|t| &t.0).collect::<Vec<_>>()
     );
-    assert_eq!(
-        cabin.status,
-        "Your keyring answered. Private data is open again."
-    );
+    assert_eq!(cabin.status, "Private data is available again.");
     let (pills, _) = pill_opacity(&ctx, &mut cabin, vec![]);
     assert!(
         pills
@@ -1398,7 +1395,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
             "- Calendar: on since 1m ago",
             "- Files in notes: on since 1m ago",
             "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
-            "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
+            "- Screen: \"Let Grok control the desktop\" in Settings → Defaults (off)",
             "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
         ]
         .join("\n")

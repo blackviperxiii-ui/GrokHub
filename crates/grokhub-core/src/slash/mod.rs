@@ -981,7 +981,7 @@ pub fn slash_help() -> String {
         "/privacy — your grants, learning scopes (all off), and what left this computer",
         "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks; /why local shows the on-device model",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
-        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Cabin defaults",
+        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Defaults",
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
