@@ -89,9 +89,7 @@ fn scan(now: u64) -> Vec<Finding> {
 /// `GROKHUB_DECK_TIDY=approve` opens the review with every file ticked and
 /// the approval showing, for the Windows deck shot.
 fn deck_approve() -> bool {
-    // The env first: the deck-shot flag is read once per process.
-    std::env::var("GROKHUB_DECK_TIDY").is_ok_and(|v| v.trim() == "approve")
-        && super::loadout_home::deck_shot_requested()
+    super::loadout_home::deck_switch_is("GROKHUB_DECK_TIDY", "approve")
 }
 
 impl Cabin {
@@ -369,6 +367,12 @@ impl Cabin {
         act
     }
 
+    pub(super) fn set_downloads_tidy(&mut self, on: bool) {
+        self.cfg.downloads_tidy = on;
+        self.focus.tidy = TidyState::default();
+        self.persist_cfg();
+    }
+
     /// Settings → Behavior: the toggle, and the review once a check found something.
     pub(super) fn ui_downloads_tidy_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.downloads_tidy;
@@ -378,9 +382,7 @@ impl Cabin {
             "Once a week, look at the names, sizes and dates in Downloads (and hash same-size files to find exact copies) and suggest old installers, big old archives and duplicates. Nothing moves until you approve it, and then it goes to the Trash.",
             &mut on,
         ) {
-            self.cfg.downloads_tidy = on;
-            self.focus.tidy = TidyState::default();
-            self.persist_cfg();
+            self.set_downloads_tidy(on);
             self.status = "Saved".into();
         }
         if !self.cfg.downloads_tidy {

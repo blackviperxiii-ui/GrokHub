@@ -247,7 +247,7 @@ fn offline_with_no_local_runtime_waits_and_says_why_instead_of_trying_the_cloud(
     assert_eq!((r.no_route, r.model.as_str()), (false, "grok-4.7"));
     assert_eq!(
         local::offline_pause_text("runtime missing"),
-        "Offline, local model unavailable: runtime missing. GrokHub keeps your message and answers it once you're back online."
+        "Offline, local model unavailable: runtime missing. Loadout keeps your message and answers it once you're back online."
     );
     local::set_enabled(false);
     assert_eq!(local::unavailable_reason(), "Local AI is off in Settings");

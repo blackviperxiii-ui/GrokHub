@@ -172,22 +172,22 @@ impl Ladder {
         };
         let prompt = match rung {
             Rung::Retry => Some(format!(
-                "GrokHub's check: {}. Try that step once more, then take a screenshot and say only what changed. \
+                "{product}'s check: {}. Try that step once more, then take a screenshot and say only what changed. \
                  If it is done, run the check and reply VERIFY_OK only when it passes.",
-                finding.detail
+                finding.detail, product = grokhub_core::brand::product_name()
             )),
             Rung::Backtrack => Some(format!(
-                "GrokHub's check: {}. Don't repeat the same step. Take a fresh screenshot first, then try a \
+                "{product}'s check: {}. Don't repeat the same step. Take a fresh screenshot first, then try a \
                  different target than before ({} {}).",
                 finding.detail,
                 finding.tool,
-                redact_args(&args)
+                redact_args(&args), product = grokhub_core::brand::product_name()
             )),
             Rung::Replan => Some(format!(
-                "GrokHub's check: {}. Stop repeating that. Re-read the goal, say in one line what you tried, \
+                "{product}'s check: {}. Stop repeating that. Re-read the goal, say in one line what you tried, \
                  then pick a different approach (another tool, another route or a smaller sub-step), \
                  take a fresh screenshot and go on.",
-                finding.detail
+                finding.detail, product = grokhub_core::brand::product_name()
             )),
             Rung::Pause => None,
         };
@@ -285,7 +285,7 @@ mod tests {
             .prompt
             .as_deref()
             .unwrap()
-            .starts_with("GrokHub's check: `click` changed nothing on screen"));
+            .starts_with("Loadout's check: `click` changed nothing on screen"));
         let b = ladder.next(&finding, &spans);
         assert_eq!(b.rung, Rung::Backtrack);
         assert!(b

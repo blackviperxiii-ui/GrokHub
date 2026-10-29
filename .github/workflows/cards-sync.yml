@@ -1,0 +1,62 @@
+name: cards-sync
+# Notion Command Center cards -> issues for this repo, and card -> Done on close.
+# Needs secret NOTION_TOKEN and variable NOTION_DATA_SOURCE_ID; no-ops without the token.
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+  issues:
+    types: [closed]
+  pull_request:
+    types: [closed]
+    branches: [beta]
+permissions: {}
+concurrency:
+  group: cards-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: beta
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Sync Ready cards to issues
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATA_SOURCE_ID: ${{ vars.NOTION_DATA_SOURCE_ID }}
+          CARDS_PROJECT: ${{ vars.CARDS_PROJECT }}
+          COPILOT_ASSIGN_TOKEN: ${{ secrets.COPILOT_ASSIGN_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/cards_sync.py sync
+  done:
+    if: >-
+      (github.event_name == 'issues' && github.event.issue.state_reason == 'completed') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: beta
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Mark linked card Done
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/cards_sync.py done

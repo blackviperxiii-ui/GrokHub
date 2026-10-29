@@ -1,0 +1,3 @@
+- Home is one page for everyone: deck shots now paint the same module grid real profiles get, with seeded data only.
+- Objectives on the rail is the details page for Home's objectives card (full checklist and streak) instead of a second Home, and the card's Details opens it.
+- The coach line with a made-up "+12%" win rate is gone from Home and Objectives.

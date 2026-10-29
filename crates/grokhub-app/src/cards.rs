@@ -1533,6 +1533,12 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     let preview_rect =
         egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(88.0, 56.0));
     ui.painter().rect_filled(preview_rect, 6.0, preview);
+    ui.painter().rect_stroke(
+        preview_rect,
+        6.0,
+        Stroke::new(1.0_f32, crate::theme::fg()),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         egui::pos2(rect.center().x, rect.bottom() - 14.0),
         Align2::CENTER_CENTER,
@@ -2749,6 +2755,31 @@ mod tests {
             (head_h - plain_h).abs() < 0.01,
             "the heading size stays: {plain_h} vs {head_h}"
         );
+    }
+
+    #[test]
+    fn appearance_swatch_has_a_contrasting_outline() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(240.0, 160.0),
+            )),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                appearance_card(ui, "Ops Dark", true, crate::theme::bg());
+            });
+        });
+        assert!(out.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) => {
+                rect.rect.size() == egui::vec2(88.0, 56.0)
+                    && rect.stroke.color == crate::theme::fg()
+            }
+            _ => false,
+        }));
     }
 
     /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but

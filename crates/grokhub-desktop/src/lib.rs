@@ -122,7 +122,7 @@ pub fn run_cua_stdio() -> i32 {
 fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
     use grokhub_agent::harness as hx;
     if !cfg!(target_os = "linux") {
-        return Err(hx::CUA_LINUX_ONLY_MSG.into());
+        return Err((*hx::CUA_LINUX_ONLY_MSG).into());
     }
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
@@ -362,7 +362,7 @@ pub fn request_desktop_test(enabled: bool) -> String {
     }
     if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
         note_halt();
-        return grokhub_core::desktop_mcp::HALT_MSG.to_string();
+        return (*grokhub_core::desktop_mcp::HALT_MSG).to_string();
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {

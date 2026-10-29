@@ -597,7 +597,7 @@ fn automation_tools_use_the_scheduler_writer_and_its_weekly_cap() {
         (third.failed, third.text.as_str()),
         (
             true,
-            "Not added: GrokHub already made 2 automations on its own this week. Keep one from its Work-tree row, or add this one yourself on the Automations page."
+            "Not added: Loadout already made 2 automations on its own this week. Keep one from its Work-tree row, or add this one yourself on the Automations page."
         )
     );
     let changed = run_with(

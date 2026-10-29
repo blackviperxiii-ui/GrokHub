@@ -1,0 +1,5 @@
+- Home packs its module grid: each card fills its slot, so a short card no longer leaves a gap above the next one, and the body only scrolls when the modules really overflow (no stray scrollbar).
+- Home measures the chips and composer, so the "Assign an objective" box is never cut off at the bottom.
+- On narrow windows (900×700) Up Next sits beside PC Loadout instead of dropping below the fold, and Today's objectives keeps room for the weekly streak.
+- PC Loadout shows Tune-up and Details at medium size too, and empty weekly streak tiles say how to start one.
+- Edit Home catalog uses plain labels: "fits Large, Medium, Small", "in this slot", and "Not built yet" instead of "L M S", "IN SLOT" and "Coming soon".

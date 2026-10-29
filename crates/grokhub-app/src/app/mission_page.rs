@@ -1,8 +1,7 @@
-//! Mission control (deck slide 09, layout A): the Objectives page on the
-//! rail. Today's objectives are the open mission's checklist, with a weekly
-//! streak of days that finished a task; PC loadout is this machine's
-//! hardware read; Up next is the Steam games played last. The composer at
-//! the bottom starts a chat. Workboards stays one click away.
+//! The Objectives page on the rail, and the details behind Home's objectives
+//! card: the open mission's full checklist with the weekly streak of days that
+//! finished a task. Home is the one "Ready up" page; this one does not repeat
+//! its PC or Up next cards. Workboards stays one click away.
 
 use std::time::{Duration, Instant};
 
@@ -11,34 +10,20 @@ use grokhub_core::steam::SteamGame;
 
 use super::library_ui::paint_cover_at;
 use super::loadout_home::{
-    caption, card, deck_home_mc_shot, diamond, grouped, header, level_xp, objective_progress,
-    pc_mission_loadout_tiles, pc_mission_tile_grid, pc_profile, pc_score, XP_PER_LEVEL,
+    caption, card, diamond, grouped, header, level_xp, objective_progress, XP_PER_LEVEL,
 };
 use super::*;
 
 const DAY_MS: u64 = 86_400_000;
 const PAGE_PAD: f32 = 24.0;
 const GAP: f32 = 16.0;
-/// Three columns from here; two (objectives and PC) with Up next below
-/// from [`TWO_COL_MIN_W`]; one below that.
-const THREE_COL_MIN_W: f32 = 1240.0;
-const TWO_COL_MIN_W: f32 = 760.0;
-const UP_NEXT_W: f32 = 360.0;
 const UP_NEXT_GAMES: usize = 3;
-const COMPOSE_H: f32 = 112.0;
 const STREAK_REFRESH: Duration = Duration::from_secs(30);
-const DRAFT_ID: &str = "mission-control-draft";
-const MISSION_COACH_LINE: &str =
-    "Coach: warm up 10 min before ranked — your first-match win rate is +12%.";
-/// Deck home-mc keeps Up next in the third column down to ~780 px content.
-const DECK_THREE_COL_MIN_W: f32 = 780.0;
-/// Starters for the composer. Picking one fills it; Enter sends.
-pub(super) const STARTERS: [&str; 4] = [
-    "Plan my week",
-    "Free up storage",
-    "Check my PC",
-    "Pick a game for tonight",
-];
+/// Width of the level bar in the header.
+const XP_W: f32 = 360.0;
+/// The checklist reads as one column, not a stretched banner.
+const OBJECTIVES_MAX_W: f32 = 760.0;
+const OBJECTIVES_TITLE: &str = "Objectives";
 
 /// "Ready up, Sam." from the first word of the name, or "Ready up." without one.
 pub(super) fn greeting(name: &str) -> String {
@@ -122,8 +107,6 @@ impl Cabin {
     pub(super) fn ui_mission_control(&mut self, ui: &mut egui::Ui) {
         let now = now_ms();
         let mission = self.dock_mission(ui.ctx());
-        let (_, games) = self.steam_library(now);
-        let next = up_next(games);
         egui::Frame::NONE
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
@@ -132,118 +115,31 @@ impl Cabin {
                 let done = mission
                     .as_ref()
                     .map_or(0, |m| objective_progress(&m.checklist).0);
-                self.mission_header(ui, done);
+                // Same width as the checklist, so the XP bar sits above its right edge.
+                let width = ui.available_width().min(OBJECTIVES_MAX_W);
+                ui.scope(|ui| {
+                    ui.set_max_width(width);
+                    self.mission_header(ui, done);
+                });
                 ui.add_space(GAP);
-                let w = ui.available_width();
-                let body_h = (ui.available_height() - COMPOSE_H).max(240.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(w, body_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("mission-control-body")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                self.mission_body(ui, w, body_h, mission.as_ref(), &next, now)
-                            });
-                    },
-                );
-                self.mission_compose(ui);
+                egui::ScrollArea::vertical()
+                    .id_salt("mission-control-body")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_max_width(width);
+                        self.mission_objectives(ui, mission.as_ref(), now)
+                    });
             });
-    }
-
-    /// Slide 09 layout (objectives · PC loadout · Up next) for deck home-mc shots.
-    pub(in crate::app) fn paint_mission_control_body(
-        &mut self,
-        ui: &mut egui::Ui,
-        w: f32,
-        body_h: f32,
-    ) {
-        let now = now_ms();
-        let mission = self.dock_mission(ui.ctx());
-        let (_, games) = self.steam_library(now);
-        let next = up_next(games);
-        self.mission_body(ui, w, body_h, mission.as_ref(), &next, now);
-    }
-
-    fn mission_body(
-        &mut self,
-        ui: &mut egui::Ui,
-        w: f32,
-        body_h: f32,
-        mission: Option<&MissionView>,
-        next: &[SteamGame],
-        now: u64,
-    ) {
-        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
-        if body_h > 0.0 {
-            ui.set_min_height(body_h);
-        }
-        let three_min = if deck_home_mc_shot() {
-            DECK_THREE_COL_MIN_W
-        } else {
-            THREE_COL_MIN_W
-        };
-        if w >= three_min {
-            let side = UP_NEXT_W;
-            let col = (w - side - GAP * 2.0) / 2.0;
-            ui.horizontal_top(|ui| {
-                if body_h > 0.0 {
-                    ui.set_min_height(body_h);
-                }
-                column(ui, col, body_h, |ui| {
-                    self.mission_objectives(ui, mission, now)
-                });
-                column(ui, col, body_h, |ui| self.mission_pc(ui));
-                column(ui, side, body_h, |ui| {
-                    self.mission_up_next_column(ui, next, body_h)
-                });
-            });
-        } else if w >= TWO_COL_MIN_W {
-            let col = (w - GAP) / 2.0;
-            let top_h = if body_h > 0.0 {
-                ((body_h - 120.0 - GAP) * 0.62).max(180.0)
-            } else {
-                0.0
-            };
-            ui.horizontal_top(|ui| {
-                if top_h > 0.0 {
-                    ui.set_min_height(top_h);
-                }
-                column(ui, col, top_h, |ui| {
-                    self.mission_objectives(ui, mission, now)
-                });
-                column(ui, col, top_h, |ui| self.mission_pc(ui));
-            });
-            self.mission_up_next(ui, next, true, body_h);
-        } else {
-            self.mission_objectives(ui, mission, now);
-            self.mission_pc(ui);
-            self.mission_up_next(ui, next, true, body_h);
-        }
     }
 
     fn mission_header(&mut self, ui: &mut egui::Ui, done: usize) {
-        let name = greeting_name(
-            &self.greeting_user_md,
-            self.secrets
-                .oauth
-                .as_ref()
-                .and_then(|t| t.name.as_deref())
-                .unwrap_or(""),
-        );
-        let name = if self.cfg.display_name.trim().is_empty() {
-            name
-        } else {
-            self.cfg.display_name.trim().to_string()
-        };
         let show_xp = self.home_layout.xp_bar;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.label(caption(&day_caption(&Self::local_day())));
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(greeting(&name))
+                    RichText::new(OBJECTIVES_TITLE)
                         .font(crate::theme::title_font(28.0))
                         .color(crate::theme::fg()),
                 );
@@ -252,7 +148,7 @@ impl Cabin {
                 if show_xp {
                     let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
                     ui.allocate_ui_with_layout(
-                        egui::vec2(UP_NEXT_W.min(ui.available_width()), 48.0),
+                        egui::vec2(XP_W.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.add_space(14.0);
@@ -342,11 +238,6 @@ impl Cabin {
                 });
             });
             paint_streak(ui, &streak);
-            ui.label(
-                RichText::new(MISSION_COACH_LINE)
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
-            );
         });
     }
 
@@ -368,180 +259,6 @@ impl Cabin {
         ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), days)));
         days
     }
-
-    fn mission_pc(&mut self, ui: &mut egui::Ui) {
-        let profile = pc_profile();
-        mission_card_fill(ui, |ui| {
-            let score = profile
-                .as_ref()
-                .and_then(pc_score)
-                .map(|n| format!("{n}%"))
-                .unwrap_or_default();
-            header(ui, false, "PC loadout", &score, crate::theme::fg());
-            match profile {
-                None => {
-                    ui.label(
-                        RichText::new("Reading this PC…")
-                            .size(crate::theme::TYPE_BODY)
-                            .color(crate::theme::muted()),
-                    );
-                }
-                Some(p) => pc_mission_tile_grid(ui, &pc_mission_loadout_tiles(&p)),
-            }
-            ui.add_space(8.0);
-            let size = egui::vec2(140.0, 40.0);
-            ui.horizontal(|ui| {
-                if crate::ui_kit::recipe::button(ui, None, "RUN TUNE-UP", true, size, true)
-                    .clicked()
-                {
-                    self.open_fresh_home();
-                    self.composer = "Check this PC and suggest a tune-up.".into();
-                }
-                if crate::ui_kit::recipe::button(ui, None, "DETAILS", false, size, true).clicked() {
-                    self.set_nav_id("devices");
-                }
-            });
-        });
-    }
-
-    fn mission_up_next_column(&mut self, ui: &mut egui::Ui, next: &[SteamGame], body_h: f32) {
-        ui.set_min_height(body_h.max(0.0));
-        ui.vertical(|ui| {
-            ui.label(caption("Up next"));
-            if next.is_empty() {
-                ui.label(
-                    RichText::new("Games you play with Steam show up here.")
-                        .size(crate::theme::TYPE_BODY)
-                        .color(crate::theme::muted()),
-                );
-                return;
-            }
-            let n = next.len().max(1) as f32;
-            let tile_h = if body_h > 0.0 {
-                ((body_h - 28.0 - GAP * (n - 1.0)) / n).clamp(72.0, 150.0)
-            } else {
-                150.0
-            };
-            let w = ui.available_width();
-            let mut open = None;
-            for g in next {
-                if up_next_tile(ui, g, egui::vec2(w, tile_h)) {
-                    open = Some(g.app_id);
-                }
-            }
-            if let Some(id) = open {
-                self.show_in_library(ui.ctx(), id);
-            }
-        });
-    }
-
-    fn mission_up_next(&mut self, ui: &mut egui::Ui, next: &[SteamGame], row: bool, body_h: f32) {
-        ui.label(caption("Up next"));
-        if next.is_empty() {
-            ui.label(
-                RichText::new("Games you play with Steam show up here.")
-                    .size(crate::theme::TYPE_BODY)
-                    .color(crate::theme::muted()),
-            );
-            return;
-        }
-        let mut open = None;
-        let w = ui.available_width();
-        let row_h = if row && body_h > 0.0 {
-            96.0_f32.min(body_h - 8.0).max(72.0)
-        } else {
-            120.0
-        };
-        if row {
-            let tile_w = (w - GAP * (UP_NEXT_GAMES as f32 - 1.0)) / UP_NEXT_GAMES as f32;
-            ui.horizontal_top(|ui| {
-                for g in next {
-                    if up_next_tile(ui, g, egui::vec2(tile_w, row_h)) {
-                        open = Some(g.app_id);
-                    }
-                }
-            });
-        } else {
-            for g in next {
-                if up_next_tile(ui, g, egui::vec2(w, 150.0)) {
-                    open = Some(g.app_id);
-                }
-            }
-        }
-        if let Some(id) = open {
-            self.show_in_library(ui.ctx(), id);
-        }
-    }
-
-    fn mission_compose(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new(DRAFT_ID);
-        let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
-        ui.add_space(GAP);
-        ui.horizontal_wrapped(|ui| {
-            for s in STARTERS {
-                if crate::ui_kit::chip(ui, s, true, true).clicked() {
-                    draft = s.to_string();
-                }
-            }
-        });
-        ui.add_space(10.0);
-        let mut send = false;
-        egui::Frame::NONE
-            .fill(crate::theme::surface())
-            .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
-            .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(14, 8))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let field_w = ui.available_width() - 48.0;
-                    let edit = ui.add_sized(
-                        egui::vec2(field_w, 32.0),
-                        egui::TextEdit::singleline(&mut draft)
-                            .frame(egui::Frame::NONE)
-                            .hint_text("Assign an objective or ask anything…")
-                            .vertical_align(egui::Align::Center)
-                            .font(egui::FontId::proportional(crate::theme::TYPE_LABEL)),
-                    );
-                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        send = true;
-                    }
-                    if crate::ui_kit::recipe::button(
-                        ui,
-                        None,
-                        "→",
-                        true,
-                        egui::vec2(36.0, 36.0),
-                        true,
-                    )
-                    .on_hover_text("Send")
-                    .clicked()
-                    {
-                        send = true;
-                    }
-                });
-            });
-        let text = draft.trim().to_string();
-        if send && !text.is_empty() {
-            draft.clear();
-            self.send_home_to_chat(text);
-        }
-        ui.ctx().data_mut(|d| d.insert_temp(id, draft));
-    }
-}
-
-fn column(ui: &mut egui::Ui, w: f32, h: f32, add: impl FnOnce(&mut egui::Ui)) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(w, h.max(0.0)),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.set_width(w);
-            if h > 0.0 {
-                ui.set_min_height(h);
-            }
-            ui.spacing_mut().item_spacing.y = GAP;
-            add(ui);
-        },
-    );
 }
 
 fn mission_card_fill(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {

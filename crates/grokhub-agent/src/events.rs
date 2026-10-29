@@ -1272,7 +1272,7 @@ mod tests {
         }
         let kept = format!("{:?}", eng.history);
         assert!(!kept.contains("schoolgirl"), "{kept}");
-        assert!(kept.contains("GrokHub held this message back"), "{kept}");
+        assert!(kept.contains("Loadout held this message back"), "{kept}");
     }
 
     fn engine(
