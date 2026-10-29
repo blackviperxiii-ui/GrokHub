@@ -151,7 +151,7 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 | `%APPDATA%\GrokHub` | Windows user data |
 
 Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `v*` tag publishes both as a release; each push to `beta` publishes them as a pre-release named `beta-v<version>-<sha>`. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
+Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `vX.Y.Z` tag publishes both as a release; the nightly beta build (and a `vX.Y.Z-beta.N` tag) publishes them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above. Pushes to `beta` don't publish. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
 
 Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
 
