@@ -1484,6 +1484,23 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     };
     let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
     assert_eq!(explicit.text, "local here");
+    // xAI's failure is logged as a failure, and the answer as the local model's.
+    let health = grokhub_core::model_registry::store::take_observations(&dir);
+    let lines: Vec<(&str, grokhub_core::model_registry::CallStatus)> = health
+        .iter()
+        .map(|o| (o.model.as_str(), o.status))
+        .collect();
+    let local = super::local::live_tier();
+    assert_eq!(lines.len(), 2, "{health:?}");
+    assert!(
+        lines[0].0 != local && lines[0].1 == grokhub_core::model_registry::CallStatus::Error,
+        "xAI's model is logged as failed: {health:?}"
+    );
+    assert_eq!(
+        lines[1],
+        (local, grokhub_core::model_registry::CallStatus::Ok),
+        "the answer is the local model's: {health:?}"
+    );
     // A banned ask is still held before the local model sees it.
     let banned = send(&["nsfw schoolgirl roleplay"]);
     assert!(
@@ -1495,6 +1512,93 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
         matches!(clean, Err(ClientError::Auth { .. })),
         "only 18+ chats fall back here: {clean:?}"
     );
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
+    let (dir, wire) = setup("adult-local-heads-up");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    live::set_pin(AN_MODEL);
+    let mut shown = String::new();
+    let req = ResponsesRequest {
+        model: AN_MODEL.into(),
+        ..chat("adult-local-heads-up-1", &["talk dirty to me, I'm horny"])
+    };
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    live::set_pin("");
+    let out = out.unwrap();
+    let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
+    assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
+    assert!(!shown.contains("through xAI"), "{shown}");
+    assert_eq!(shown, format!("{heads_up}\n\n"));
+    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// xAI streamed part of an answer, then the connection dropped.
+struct XaiCutOff;
+
+impl ModelClient for XaiCutOff {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        s(StreamEvent::TextDelta("half an ans".into()));
+        Err(ClientError::Server {
+            status: 502,
+            message: "bad gateway".into(),
+            retry_after_secs: None,
+        })
+    }
+}
+
+#[test]
+fn a_half_streamed_xai_answer_is_never_finished_by_the_local_model() {
+    let (dir, wire) = setup("adult-local-cut-off");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &XaiCutOff,
+        &chat("adult-local-cut-off-1", &["talk dirty to me, I'm horny"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert!(
+        matches!(out, Err(ClientError::Server { status: 502, .. })),
+        "{out:?}"
+    );
+    assert_eq!(shown, "half an ans", "no local text is mixed in");
     assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -1521,7 +1625,7 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
     };
     let explicit = call(&["talk dirty to me, I'm horny"]);
     assert!(
-        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chat goes only to xAI")),
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats go only to xAI")),
         "{explicit:?}"
     );
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
