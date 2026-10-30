@@ -1,0 +1,1 @@
+- Labs Diagnostics zip goes to Downloads instead of a Desktop that syncs to OneDrive, Dropbox, Google Drive or iCloud, so a save never uploads itself, and the saved notice names the folder used.
