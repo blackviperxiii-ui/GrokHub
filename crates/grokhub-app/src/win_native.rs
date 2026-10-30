@@ -684,74 +684,6 @@ pub fn clipboard_image() -> Option<(Vec<u8>, bool)> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn adapter_ipv4s_lists_the_machines_addresses() {
-        // A CI runner has at least one adapter up with an IPv4 address.
-        let ips = adapter_ipv4s();
-        assert!(!ips.is_empty(), "no IPv4 adapters found");
-        let text: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
-        let refs: Vec<&str> = text.iter().map(String::as_str).collect();
-        assert!(
-            grokhub_core::pair::pick_lan_ipv4(&refs).is_some(),
-            "{text:?}"
-        );
-    }
-
-    #[test]
-    fn toast_sanitizes_injection_chars() {
-        let s = sanitize_ps("hi'; $(calc) <b>");
-        assert!(!s.contains('\''));
-        assert!(!s.contains('$'));
-        assert!(!s.contains('<'));
-        let src = include_str!("win_native.rs");
-        let toast = src
-            .split("pub fn toast(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn open_path(").next())
-            .expect("toast");
-        assert!(
-            toast.contains("hide_windows_console"),
-            "WinRT toast PowerShell must not flash a console: {toast}"
-        );
-    }
-
-    #[test]
-    fn app_user_model_id_is_stable() {
-        assert_eq!(APP_USER_MODEL_ID, "GrokHub.Cabin");
-    }
-
-    #[test]
-    fn hide_cabin_unmaps_from_the_taskbar() {
-        let src = include_str!("win_native.rs");
-        let hide = src
-            .split("pub fn hide_cabin(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn work_area(").next())
-            .expect("hide_cabin");
-        assert!(
-            hide.contains("unmap_from_taskbar") && hide.contains("set_cloaked"),
-            "× must cloak and leave the taskbar, not only cloak: {hide}"
-        );
-        assert!(
-            !hide.contains("SW_HIDE"),
-            "SW_HIDE on the titled cabin freezes tray Show / Quit: {hide}"
-        );
-        let show = src
-            .split("pub fn show_cabin(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn keep_awake(").next())
-            .expect("show_cabin");
-        assert!(
-            show.contains("map_to_taskbar") && show.contains("set_cloaked"),
-            "Show cabin must uncloak and restore the taskbar button: {show}"
-        );
-    }
-}
-
 // ---- Desktop companion window -------------------------------------------
 
 /// `SetWindowDisplayAffinity`: the window is left out of screen capture
@@ -823,4 +755,72 @@ pub fn fullscreen_app_in_front() -> bool {
         return false;
     }
     matches!(state, QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_ipv4s_lists_the_machines_addresses() {
+        // A CI runner has at least one adapter up with an IPv4 address.
+        let ips = adapter_ipv4s();
+        assert!(!ips.is_empty(), "no IPv4 adapters found");
+        let text: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+        let refs: Vec<&str> = text.iter().map(String::as_str).collect();
+        assert!(
+            grokhub_core::pair::pick_lan_ipv4(&refs).is_some(),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn toast_sanitizes_injection_chars() {
+        let s = sanitize_ps("hi'; $(calc) <b>");
+        assert!(!s.contains('\''));
+        assert!(!s.contains('$'));
+        assert!(!s.contains('<'));
+        let src = include_str!("win_native.rs");
+        let toast = src
+            .split("pub fn toast(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn open_path(").next())
+            .expect("toast");
+        assert!(
+            toast.contains("hide_windows_console"),
+            "WinRT toast PowerShell must not flash a console: {toast}"
+        );
+    }
+
+    #[test]
+    fn app_user_model_id_is_stable() {
+        assert_eq!(APP_USER_MODEL_ID, "GrokHub.Cabin");
+    }
+
+    #[test]
+    fn hide_cabin_unmaps_from_the_taskbar() {
+        let src = include_str!("win_native.rs");
+        let hide = src
+            .split("pub fn hide_cabin(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn work_area(").next())
+            .expect("hide_cabin");
+        assert!(
+            hide.contains("unmap_from_taskbar") && hide.contains("set_cloaked"),
+            "× must cloak and leave the taskbar, not only cloak: {hide}"
+        );
+        assert!(
+            !hide.contains("SW_HIDE"),
+            "SW_HIDE on the titled cabin freezes tray Show / Quit: {hide}"
+        );
+        let show = src
+            .split("pub fn show_cabin(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn keep_awake(").next())
+            .expect("show_cabin");
+        assert!(
+            show.contains("map_to_taskbar") && show.contains("set_cloaked"),
+            "Show cabin must uncloak and restore the taskbar button: {show}"
+        );
+    }
 }
