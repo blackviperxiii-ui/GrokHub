@@ -1,0 +1,45 @@
+# Nyx, the companion. One folder per companion; this file names her outfits
+# and which mode each one is worn for. The pictures it points at live under
+# brand/ at the repo root and ship inside the app. Adults-only outfits never
+# ship: they load from `{config}/companions/nyx/adult/adult.toml` on the
+# user's own PC (see assets/companions/README.md).
+#
+# Fields: id, name, pedestal_tint (hex, optional; the theme accent when
+# blank), default_outfit, then one [[outfit]] per picture with id, file,
+# moods (working, gaming, doctor, reading, hanging-out, viper, thinking,
+# writing, raunchy), adult (never true here), and optional eyes / mouth
+# patches with their top-left anchor in the outfit's own pixels.
+
+id = "nyx"
+name = "Nyx"
+default_outfit = "hanging-out"
+
+[[outfit]]
+id = "working"
+file = "brand/nyx-working.jpg"
+moods = ["working", "thinking", "writing"]
+
+[[outfit]]
+id = "gaming"
+file = "brand/nyx-gaming.jpg"
+moods = ["gaming"]
+
+[[outfit]]
+id = "doctor"
+file = "brand/nyx-doctor.jpg"
+moods = ["doctor"]
+
+[[outfit]]
+id = "reading"
+file = "brand/nyx-reading.jpg"
+moods = ["reading"]
+
+[[outfit]]
+id = "hanging-out"
+file = "brand/nyx-hanging-out.jpg"
+moods = ["hanging-out"]
+
+[[outfit]]
+id = "viper"
+file = "brand/nyx-viper.jpg"
+moods = ["viper"]

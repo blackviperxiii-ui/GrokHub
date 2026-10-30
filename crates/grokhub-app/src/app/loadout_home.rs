@@ -42,57 +42,52 @@ const XP_PER_TASK: u32 = 100;
 const XP_PER_STEP: u32 = 25;
 pub(super) const XP_PER_LEVEL: u32 = 500;
 
-/// What Nyx is doing, shown in the corner box: a tool turn picks Working,
-/// Doctor or Reading by what the tool does, a game the user just left is
-/// Gaming, and anything else is Hanging out. The Viper personality wears
-/// the snake onesie whatever the mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Mood {
-    Working,
-    Gaming,
-    Doctor,
-    Reading,
-    HangingOut,
-    Viper,
+/// What Nyx is doing, shown in the corner box. The modes and her outfits
+/// live in [`grokhub_core::companion`] (`assets/companions/nyx/companion.toml`),
+/// so the desktop companion reads the same source.
+pub(super) use grokhub_core::companion::Mood;
+
+/// The shipped picture an outfit file names, embedded in the build. The
+/// companion file is the source of which outfit a mode wears; this is
+/// only how the bytes get into the binary.
+fn builtin_art(file: &str) -> Option<&'static [u8]> {
+    Some(match file {
+        "brand/nyx-working.jpg" => NYX_WORKING_JPG,
+        "brand/nyx-gaming.jpg" => NYX_GAMING_JPG,
+        "brand/nyx-doctor.jpg" => NYX_DOCTOR_JPG,
+        "brand/nyx-reading.jpg" => NYX_READING_JPG,
+        "brand/nyx-hanging-out.jpg" => NYX_HANGING_OUT_JPG,
+        "brand/nyx-viper.jpg" => NYX_VIPER_JPG,
+        _ => return None,
+    })
 }
 
-impl Mood {
-    fn art(self) -> &'static [u8] {
-        match self {
-            Mood::Working => NYX_WORKING_JPG,
-            Mood::Gaming => NYX_GAMING_JPG,
-            Mood::Doctor => NYX_DOCTOR_JPG,
-            Mood::Reading => NYX_READING_JPG,
-            Mood::HangingOut => NYX_HANGING_OUT_JPG,
-            Mood::Viper => NYX_VIPER_JPG,
-        }
-    }
+/// The outfit Nyx wears for `mood` in the corner box: the shipped one the
+/// companion file names, or hanging out when a mode has no picture yet.
+pub(super) fn mood_outfit(mood: Mood) -> &'static grokhub_core::companion::Outfit {
+    grokhub_core::companion::nyx().outfit_for(mood, false)
+}
 
-    fn key(self) -> &'static str {
-        match self {
-            Mood::Working => "loadout-nyx-working",
-            Mood::Gaming => "loadout-nyx-gaming",
-            Mood::Doctor => "loadout-nyx-doctor",
-            Mood::Reading => "loadout-nyx-reading",
-            Mood::HangingOut => "loadout-nyx-hanging-out",
-            Mood::Viper => "loadout-nyx-viper",
-        }
-    }
+/// The embedded picture for `mood`, by way of the companion file.
+pub(super) fn mood_art(mood: Mood) -> &'static [u8] {
+    let nyx = grokhub_core::companion::nyx();
+    builtin_art(&mood_outfit(mood).file)
+        .or_else(|| builtin_art(&nyx.default_outfit().file))
+        .unwrap_or(NYX_HANGING_OUT_JPG)
+}
+
+/// Texture key for the outfit `mood` wears, so two modes sharing a picture
+/// share one texture.
+pub(super) fn mood_key(mood: Mood) -> String {
+    format!("loadout-nyx-{}", mood_outfit(mood).id)
 }
 
 /// `GROKHUB_DECK_MOOD` (`working`, `gaming`, `doctor`, `reading`,
-/// `hanging-out`, `viper`) pins the picture for the deck screenshots
-/// (`scripts/deck-shots.ps1`), where no turn or game can run.
+/// `hanging-out`, `viper`, `thinking`, `writing`, `raunchy`) pins the picture
+/// for the deck screenshots (`scripts/deck-shots.ps1`), where no turn or
+/// game can run.
 pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "working" => Some(Mood::Working),
-        "gaming" => Some(Mood::Gaming),
-        "doctor" => Some(Mood::Doctor),
-        "reading" => Some(Mood::Reading),
-        "hanging-out" => Some(Mood::HangingOut),
-        "viper" => Some(Mood::Viper),
-        _ => None,
-    }
+    Mood::parse(raw)
 }
 
 /// Launch pins are read once per run. Tests flip them inside one process,
@@ -509,14 +504,15 @@ fn paint_brackets(painter: &egui::Painter, rect: egui::Rect) {
 }
 
 fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(mood.key());
+    let key = mood_key(mood);
+    let id = egui::Id::new(key.as_str());
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
-    let rgba = image::load_from_memory(mood.art()).ok()?.to_rgba8();
+    let rgba = image::load_from_memory(mood_art(mood)).ok()?.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
-        mood.key(),
+        key,
         egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
         egui::TextureOptions::LINEAR,
     );
@@ -1667,16 +1663,40 @@ mod tests {
             Mood::Viper,
         ];
         for mood in all {
-            let img = image::load_from_memory(mood.art()).expect("mode art decodes");
+            let img = image::load_from_memory(mood_art(mood)).expect("mode art decodes");
             assert_eq!((img.width(), img.height()), (448, 350), "{mood:?}");
         }
-        let mut keys: Vec<_> = all.iter().map(|m| m.key()).collect();
+        let mut keys: Vec<_> = all.iter().map(|m| mood_key(*m)).collect();
         keys.dedup();
         assert_eq!(keys.len(), 6);
-        let mut arts: Vec<_> = all.iter().map(|m| m.art().as_ptr()).collect();
+        let mut arts: Vec<_> = all.iter().map(|m| mood_art(*m).as_ptr()).collect();
         arts.sort();
         arts.dedup();
         assert_eq!(arts.len(), 6, "each mode shows a different picture");
+    }
+
+    #[test]
+    fn the_corner_box_reads_its_outfits_from_the_companion_file() {
+        let nyx = grokhub_core::companion::nyx();
+        for outfit in &nyx.outfits {
+            assert!(
+                builtin_art(&outfit.file).is_some(),
+                "{} is named in companion.toml but not embedded",
+                outfit.file
+            );
+        }
+        assert_eq!(mood_outfit(Mood::Working).id, "working");
+        assert_eq!(mood_key(Mood::Working), "loadout-nyx-working");
+        assert_eq!(mood_key(Mood::HangingOut), "loadout-nyx-hanging-out");
+        // Modes with no picture of their own wear the outfit the file says.
+        assert_eq!(mood_key(Mood::Thinking), "loadout-nyx-working");
+        assert_eq!(mood_key(Mood::Writing), "loadout-nyx-working");
+        assert_eq!(mood_art(Mood::Thinking), NYX_WORKING_JPG);
+        // Raunchy only comes from the local adult folder, so the corner
+        // box falls back to the default outfit.
+        assert_eq!(mood_key(Mood::Raunchy), "loadout-nyx-hanging-out");
+        assert_eq!(mood_art(Mood::Raunchy), NYX_HANGING_OUT_JPG);
+        assert_eq!(builtin_art("brand/nyx-raunchy.jpg"), None);
     }
 
     #[test]
@@ -1687,6 +1707,9 @@ mod tests {
         assert_eq!(parse_mood("reading"), Some(Mood::Reading));
         assert_eq!(parse_mood("hanging-out"), Some(Mood::HangingOut));
         assert_eq!(parse_mood("VIPER"), Some(Mood::Viper));
+        assert_eq!(parse_mood("thinking"), Some(Mood::Thinking));
+        assert_eq!(parse_mood("writing"), Some(Mood::Writing));
+        assert_eq!(parse_mood("raunchy"), Some(Mood::Raunchy));
         assert_eq!(parse_mood("hello"), None);
         assert_eq!(parse_mood(""), None);
     }

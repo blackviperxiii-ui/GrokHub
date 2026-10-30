@@ -1,0 +1,1 @@
+- Companion files: Nyx's outfits and modes now come from `companion.toml` (`grokhub_core::companion`), shared by the home dock's corner box and the coming desktop companion. Adults-only outfits load only from `{config}/companions/nyx/adult/` on your PC, and a CI guard keeps adult art out of the repo.

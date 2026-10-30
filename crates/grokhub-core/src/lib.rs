@@ -27,6 +27,7 @@ pub mod chat_view;
 pub mod chips;
 pub mod cli_history;
 pub mod code_resume;
+pub mod companion;
 pub mod connectivity;
 pub mod connector;
 pub mod consult;
