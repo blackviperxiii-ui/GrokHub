@@ -4,10 +4,8 @@
 use eframe::egui::{self, Color32, Pos2, Vec2};
 use grokhub_core::cursor_motion::{travel_point, CursorMotion, TravelShape};
 
-/// Pulse Feed↔Ideas crossfade duration (seconds).
+/// Pulse idea rows enter over this long (seconds).
 pub const PULSE_CROSSFADE_SECS: f32 = 0.180;
-/// Shared-axis slide for Feed↔Ideas (pixels).
-pub const PULSE_AXIS_PX: f32 = 8.0;
 /// Ideas row stagger step (seconds).
 pub const IDEAS_STAGGER_SECS: f32 = 0.020;
 /// Max Ideas rows that stagger.
@@ -95,10 +93,6 @@ pub fn reduced_motion(ui: &egui::Ui) -> bool {
     ui.style().animation_time <= 0.0
 }
 
-pub fn reduced_motion_ctx(ctx: &egui::Context) -> bool {
-    ctx.global_style().animation_time <= 0.0
-}
-
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
@@ -118,30 +112,8 @@ pub fn progress(now: f64, t0: f64, duration: f32, reduced: bool) -> f32 {
     ((now - t0) as f32 / duration).clamp(0.0, 1.0)
 }
 
-/// Pulse tab crossfade: 0 = Feed fully shown, 1 = Ideas fully shown.
-pub fn pulse_tab_t(ctx: &egui::Context, ideas_on: bool) -> f32 {
-    if reduced_motion_ctx(ctx) {
-        return if ideas_on { 1.0 } else { 0.0 };
-    }
-    ctx.animate_bool_with_time_and_easing(
-        egui::Id::new("pulse-feed-ideas-crossfade"),
-        ideas_on,
-        PULSE_CROSSFADE_SECS,
-        egui::emath::easing::cubic_out,
-    )
-}
-
-/// Shared-axis x for the Feed layer given ideas progress `t` (Feed→Ideas → −8).
-pub fn feed_axis_x(t: f32) -> f32 {
-    -PULSE_AXIS_PX * t.clamp(0.0, 1.0)
-}
-
-/// Shared-axis x for the Ideas layer (enters from +8 → 0 as t→1).
-pub fn ideas_axis_x(t: f32) -> f32 {
-    PULSE_AXIS_PX * (1.0 - t.clamp(0.0, 1.0))
-}
-
-/// Ideas row enter factor 0..1 with stagger. `tab_t` is pulse_tab_t.
+/// Ideas row enter factor 0..1 with stagger. `tab_t` is how far the rows
+/// have come in, 1 when settled.
 pub fn ideas_row_enter(tab_t: f32, index: usize, reduced: bool) -> f32 {
     if reduced {
         return if tab_t > 0.5 { 1.0 } else { 0.0 };
@@ -369,7 +341,6 @@ mod tests {
         assert!((CURSOR_CLICK_SECS - 0.060).abs() < 0.0001);
         assert!((IDEAS_STAGGER_SECS - 0.020).abs() < 0.0001);
         assert_eq!(IDEAS_STAGGER_MAX, 5);
-        assert!((PULSE_AXIS_PX - 8.0).abs() < 0.01);
         assert!((APPROVAL_ENTER_Y - 12.0).abs() < 0.01);
         assert!((APPROVAL_HOVER_SECS - 0.120).abs() < 0.0001);
     }
@@ -401,14 +372,6 @@ mod tests {
     fn reduced_progress_snaps() {
         assert_eq!(progress(1.0, 0.0, 0.2, true), 1.0);
         assert_eq!(progress(0.05, 0.0, 0.2, false), 0.25);
-    }
-
-    #[test]
-    fn feed_ideas_axis_signs() {
-        assert!((feed_axis_x(0.0) - 0.0).abs() < 0.01);
-        assert!((feed_axis_x(1.0) - (-8.0)).abs() < 0.01);
-        assert!((ideas_axis_x(0.0) - 8.0).abs() < 0.01);
-        assert!((ideas_axis_x(1.0) - 0.0).abs() < 0.01);
     }
 
     #[test]

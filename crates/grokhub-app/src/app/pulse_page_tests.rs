@@ -16,8 +16,8 @@ fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_c
     c
 }
 
-/// A window narrow enough for the compact page (one view behind the switch).
-const COMPACT_W: f32 = 640.0;
+/// A window under 720: idea rows keep Run at rest.
+const NARROW_W: f32 = 640.0;
 
 fn pulse_texts(cabin: &mut super::Cabin, h: f32) -> Vec<String> {
     pulse_texts_w(cabin, 1400.0, h)
@@ -103,18 +103,27 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
             .any(|t| t == "What I'd do next, from how you use the cabin."),
         "{texts:?}"
     );
+    // One stream: no Feed | For You switch, the two actions sit in the header.
     assert!(
-        texts.iter().any(|t| t == "For You") && texts.iter().any(|t| t == "Feed"),
+        !texts.iter().any(|t| t == "For You" || t == "Feed"),
         "{texts:?}"
     );
-    // Pulse opens on Feed; its empty line says how to steer it (link is separate).
-    assert!(
+    for want in ["Suggest for you", "Feed instructions"] {
+        assert_eq!(
+            texts.iter().filter(|t| t.as_str() == want).count(),
+            1,
+            "{want:?} in {texts:?}"
+        );
+    }
+    // Nothing yet: one empty line for the whole page, then the silence line.
+    assert_eq!(
         texts
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in "),
+            .filter(|t| t.as_str() == grokhub_core::pulse::PULSE_EMPTY)
+            .count(),
+        1,
         "{texts:?}"
     );
-    assert!(texts.iter().any(|t| t == "Feed instructions"), "{texts:?}");
     assert!(
         texts.iter().any(|t| t == "No pulse yet. Nothing to do."),
         "{texts:?}"
@@ -195,7 +204,6 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
         ],
         "the three strongest lead, then the categories in their fixed order"
     );
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let texts = pulse_texts(cabin, 2400.0);
     let at = |needle: &str| {
         texts
@@ -203,26 +211,28 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             .position(|t| t == needle)
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
+    // The stream keeps that rank order with no section headers between rows.
     let order = [
-        at("UP NEXT"),
         at("I can pay your TXU bill before Friday"),
         at("I can draft your standup"),
         at("I can plan a dinner with family"),
-        at("PRODUCTIVITY"),
         at("I can summarize the workboard automatically"),
-        at("SHOPPING"),
-        at("HEALTH & FITNESS"),
-        at("MORE FOR YOU"),
         at("I can sort the vacation photos"),
     ];
     assert!(
         order.windows(2).all(|w| w[0] < w[1]),
         "{order:?} in {texts:?}"
     );
-    assert!(
-        !texts.iter().any(|t| t == "FINANCIAL MANAGEMENT"),
-        "the bill sits in the top group: {texts:?}"
-    );
+    for header in [
+        "UP NEXT",
+        "PRODUCTIVITY",
+        "SHOPPING",
+        "HEALTH & FITNESS",
+        "MORE FOR YOU",
+        "FINANCIAL MANAGEMENT",
+    ] {
+        assert!(!texts.iter().any(|t| t == header), "{header}: {texts:?}");
+    }
     assert!(
         texts.iter().any(|t| t == "AUTOMATE") && texts.iter().any(|t| t == "DO"),
         "{texts:?}"
@@ -564,7 +574,6 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
     image::RgbaImage::from_pixel(8, 4, image::Rgba([200, 80, 40, 255]))
         .save_with_format(&fixture, image::ImageFormat::Png)
         .expect("fixture png");
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
     pulse_texts(cabin, 1200.0);
     // The thumb decodes off-thread; on a busy runner it can miss the second pass.
     super::pulse_ui::wait_pulse_decodes();
@@ -636,7 +645,6 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
 fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
     let mut quiet = QuietCabin::boot("pulse-sheet");
     let cabin = &mut quiet.cabin;
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
     cabin.open_feed_instructions();
     assert_eq!(
         cabin.pulse_view.sheet.as_deref(),
@@ -734,18 +742,9 @@ fn pulse_key_event(key: egui::Key) -> egui::Event {
 }
 
 #[test]
-fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
-    assert_eq!(
-        super::pulse_ui::PulseView::default().tab,
-        super::pulse_ui::PulseTab::Feed
-    );
-    let mut quiet = QuietCabin::boot("pulse-tabs");
+fn pulse_header_shows_both_actions_and_no_tabs_at_every_width() {
+    let mut quiet = QuietCabin::boot("pulse-header");
     let cabin = &mut quiet.cabin;
-    assert_eq!(cabin.pulse_view.tab, super::pulse_ui::PulseTab::Feed);
-    assert_eq!(
-        super::pulse_ui::PulseTab::ORDER.map(|t| t.label()),
-        ["Feed", "For You"]
-    );
     let x = |texts: &[(String, f32)], needle: &str| {
         texts
             .iter()
@@ -753,21 +752,21 @@ fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
             .map(|(_, x)| *x)
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
-    let feed = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
-    let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "For You"));
-    assert!(feed_x < ideas_x, "Feed sits left of Ideas: {feed:?}");
-    assert!(feed.iter().any(|(t, _)| t == "Feed instructions"));
-    // The switch stays put when the tab's action changes (one fixed slot).
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let ideas = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
-    assert_eq!(
-        (x(&ideas, "Feed"), x(&ideas, "For You")),
-        (feed_x, ideas_x),
-        "the Feed | For You switch does not move between tabs"
-    );
-    assert!(ideas.iter().any(|(t, _)| t == "Suggest for you"));
-    assert!(!ideas.iter().any(|(t, _)| t == "Feed instructions"));
-    assert_eq!(super::pulse_ui::HEADER_SLOT_W, 150.0);
+    for w in [2560.0, 1100.0, NARROW_W, 400.0] {
+        let texts = pulse_text_at_w(cabin, w, 900.0, Vec::new());
+        let title = x(&texts, "Pulse");
+        let (suggest, steer) = (x(&texts, "Suggest for you"), x(&texts, "Feed instructions"));
+        assert!(
+            title < suggest && suggest < steer && steer < w,
+            "Suggest then Feed instructions, right of the title, on screen at {w}: {texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|(t, _)| t == "Feed" || t == "For You" || t == "FROM YOUR FEED"),
+            "no tab switch or feed heading at {w}: {texts:?}"
+        );
+    }
 }
 
 #[test]
@@ -795,7 +794,6 @@ fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row()
         "save the city guide",
         12,
     ));
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let rows: Vec<String> = cabin
         .pulse_groups(now_ms())
         .into_iter()
@@ -877,28 +875,33 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let empty = pulse_texts_w(cabin, COMPACT_W, 900.0);
-    assert!(
-        empty
-            .iter()
-            .any(|t| t == "Nothing for you yet. I'll add one when I spot something worth doing."),
+    let count = |texts: &[String], needle: &str| texts.iter().filter(|t| *t == needle).count();
+    let empty = pulse_texts_w(cabin, NARROW_W, 900.0);
+    // No ideas and no posts: one empty state, not one per kind.
+    assert_eq!(
+        count(&empty, grokhub_core::pulse::PULSE_EMPTY),
+        1,
         "{empty:?}"
     );
-    // Empty For You keeps one inline Suggest for you. The header hides its duplicate.
-    let suggest_n = empty
-        .iter()
-        .filter(|t| t.as_str() == "Suggest for you")
-        .count();
     assert_eq!(
-        suggest_n, 1,
-        "expected one Suggest for you, got {suggest_n}: {empty:?}"
+        count(&empty, "No pulse yet. Nothing to do."),
+        1,
+        "{empty:?}"
     );
+    assert!(
+        !empty
+            .iter()
+            .any(|t| t.starts_with("Nothing for you yet") || t.starts_with("No posts yet")),
+        "{empty:?}"
+    );
+    // The header carries the only Suggest for you and Feed instructions.
+    assert_eq!(count(&empty, "Suggest for you"), 1, "{empty:?}");
+    assert_eq!(count(&empty, "Feed instructions"), 1, "{empty:?}");
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);
     assert!(cabin.pulse_view.signin_note);
     assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
-    let signed_out = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let signed_out = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(
         cabin.pulse_view.signin_note,
         "note stays until Account/native signs in"
@@ -911,12 +914,12 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     }
     // PI-05: once signed in, the amber line clears without another press.
     cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
-    let _ = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let _ = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(!cabin.pulse_view.signin_note);
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
-    let loading = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let loading = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(
         loading
             .iter()
@@ -927,25 +930,33 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     assert!(
         !loading
             .iter()
-            .any(|t| t.starts_with("Nothing for you yet") || t.ends_with("Nothing to do.")),
+            .any(|t| t == grokhub_core::pulse::PULSE_EMPTY || t.ends_with("Nothing to do.")),
         "{loading:?}"
     );
+    // Loading with posts on the page: the placeholder rows, then the posts.
+    let now = now_ms();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now - 60_000,
+    ));
+    let both = pulse_text_at_w(cabin, NARROW_W, 900.0, Vec::new());
+    let at = |needle: &str| {
+        both.iter()
+            .position(|(t, _)| t == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {both:?}"))
+    };
+    assert!(at("Looking for ideas in your recent work…") < at("Rust 1.92 ships"));
     cabin.ideas_rx = None;
-
-    // Feed empty: lead + clickable "Feed instructions" + silence line.
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
-    let feed = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    // Only posts, no ideas: the posts with no empty panel above them.
+    let posts_only = pulse_texts_w(cabin, NARROW_W, 900.0);
+    assert!(posts_only.iter().any(|t| t == "Rust 1.92 ships"));
     assert!(
-        feed.iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in "),
-        "{feed:?}"
-    );
-    assert!(feed.iter().any(|t| t == "Feed instructions"), "{feed:?}");
-    assert!(
-        !feed
+        !posts_only
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
-        "empty Feed paints the link separately: {feed:?}"
+            .any(|t| t == grokhub_core::pulse::PULSE_EMPTY || t.ends_with("Nothing to do.")),
+        "{posts_only:?}"
     );
 }
 
@@ -990,76 +1001,69 @@ fn pulse_opened_idea_heading_matches_row_type() {
 }
 
 #[test]
-fn pulse_layout_reflows_like_the_deck_breakpoints() {
-    use super::pulse_ui::{post_thumb_count, pulse_layout, PulseFit};
-    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
-    // Ultra-wide: Ideas 3fr, Feed 2fr, both tile 2-up.
-    let wide = pulse_layout(2440.0);
-    assert_eq!(wide.fit, PulseFit::Split);
-    assert!(near(wide.gap, 30.0) && near(wide.ideas_w, 1446.0) && near(wide.feed_w, 964.0));
-    assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
-    // The 60/40 split starts at 1500.
-    let edge = pulse_layout(1500.0);
-    assert!(near(edge.gap, 19.5) && near(edge.ideas_w, 888.3) && near(edge.feed_w, 592.2));
-    assert_eq!((edge.ideas_cols, edge.feed_cols), (1, 1));
-    // Laptop: 1.35fr to 1fr, one card across.
-    let laptop = pulse_layout(1300.0);
-    assert_eq!(laptop.fit, PulseFit::Split);
-    assert!(near(laptop.ideas_w, 737.1) && near(laptop.feed_w, 546.0));
-    assert_eq!((laptop.ideas_cols, laptop.feed_cols), (1, 1));
-    // The split starts at 1100 with the 16 px minimum gap.
-    let tight = pulse_layout(1100.0);
-    assert_eq!(tight.fit, PulseFit::Split);
-    assert!(near(tight.gap, 16.0) && near(tight.feed_w, 461.3) && near(tight.ideas_w, 622.7));
-    assert_eq!(pulse_layout(1099.0).fit, PulseFit::Stacked);
-    // Small window: one column, the feed 2-up underneath.
-    let small = pulse_layout(900.0);
-    assert_eq!(small.fit, PulseFit::Stacked);
-    assert_eq!((small.ideas_w, small.feed_cols), (900.0, 2));
-    assert_eq!(pulse_layout(720.0).fit, PulseFit::Stacked);
-    // Below 720: the switch, one centered column up to 680.
-    let phone = pulse_layout(719.0);
-    assert_eq!(phone.fit, PulseFit::Compact);
-    assert_eq!(phone.ideas_w, 680.0);
-    assert_eq!(pulse_layout(552.0).ideas_w, 552.0);
+fn pulse_is_one_centered_column_at_every_width() {
+    use super::pulse_ui::{post_thumb_count, pulse_column, STREAM_MAX_W};
+    // Page widths, padding included: one column, capped, narrow under 720.
+    for (page_w, width, narrow) in [
+        (2560.0, STREAM_MAX_W, false),
+        (1600.0, STREAM_MAX_W, false),
+        (1100.0, STREAM_MAX_W, false),
+        (720.0, 672.0, false),
+        (400.0, 352.0, true),
+    ] {
+        let col = pulse_column(page_w);
+        assert_eq!((col.width, col.narrow), (width, narrow), "at {page_w}");
+    }
+    assert!(pulse_column(719.0).narrow);
+    assert_eq!(pulse_column(0.0).width, 0.0);
     // Posts under 560 show two source images, not three.
     assert_eq!(post_thumb_count(559.0), 2);
     assert_eq!(post_thumb_count(560.0), 3);
+    assert_eq!(post_thumb_count(STREAM_MAX_W), 3);
 }
 
 #[test]
-fn the_deck_frames_land_on_their_layouts_beside_the_rail() {
-    use super::pulse_ui::{post_thumb_count, pulse_page_layout, PulseFit};
-    let rail = crate::theme::SIDEBAR_W;
-    // 2560: the 60/40 split, 24 px padding each side, both columns 2-up.
-    let wide = pulse_page_layout(2560.0 - rail);
-    assert_eq!(wide.fit, PulseFit::Split);
-    assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
-    assert!((wide.ideas_w + wide.gap + wide.feed_w - 2472.0).abs() < 0.05);
-    // 1440: the laptop split. The Feed column is 568 px, over the 560 px
-    // line, so posts keep all three images.
-    let laptop = pulse_page_layout(1440.0 - rail);
-    assert_eq!(laptop.fit, PulseFit::Split);
-    assert!((laptop.feed_w - 567.8).abs() < 0.1, "{}", laptop.feed_w);
-    assert_eq!(post_thumb_count(laptop.feed_w), 3);
-    // 1024: one column with the feed 2-up below, 936 px inside the padding.
-    let tablet = pulse_page_layout(1024.0 - rail);
-    assert_eq!(
-        (tablet.fit, tablet.ideas_w, tablet.feed_cols),
-        (PulseFit::Stacked, 936.0, 2)
-    );
-    // The narrowest window (720) leaves a 680 px page: the switch.
-    let narrow = pulse_page_layout(720.0 - rail);
-    assert_eq!((narrow.fit, narrow.ideas_w), (PulseFit::Compact, 632.0));
+fn the_painted_stream_is_centered_and_never_wider_than_its_cap() {
+    use super::pulse_ui::STREAM_MAX_W;
+    let mut quiet = QuietCabin::boot("pulse-center");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let now = now_ms();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now - 60_000,
+    ));
+    for w in [2560.0_f32, 1600.0, 1100.0, 720.0, 400.0] {
+        let texts = pulse_text_pos(cabin, w);
+        let title = texts
+            .iter()
+            .find(|(t, _)| t == "Pulse")
+            .map(|(_, p)| p.x)
+            .unwrap_or_else(|| panic!("no title at {w}: {texts:?}"));
+        let post = texts
+            .iter()
+            .find(|(t, _)| t == "Rust 1.92 ships")
+            .map(|(_, p)| p.x)
+            .unwrap_or_else(|| panic!("no post at {w}: {texts:?}"));
+        let left = ((w - STREAM_MAX_W) * 0.5).max(24.0);
+        assert!(
+            (title - left).abs() < 12.0,
+            "title {title} near the column's left edge {left} at {w}"
+        );
+        assert!(
+            title < post && post < title + 80.0,
+            "the post sits in the same column at {w}: {texts:?}"
+        );
+    }
 }
 
 #[test]
-fn suggest_goes_short_on_the_one_column_page() {
-    use super::pulse_ui::{suggest_label, PulseFit};
-    assert_eq!(suggest_label(false, PulseFit::Split), "Suggest for you");
-    assert_eq!(suggest_label(false, PulseFit::Stacked), "Suggest");
-    assert_eq!(suggest_label(false, PulseFit::Compact), "Suggest for you");
-    assert_eq!(suggest_label(true, PulseFit::Stacked), "Suggesting…");
+fn suggest_label_says_when_it_is_busy() {
+    use super::pulse_ui::suggest_label;
+    assert_eq!(suggest_label(false), "Suggest for you");
+    assert_eq!(suggest_label(true), "Suggesting…");
 }
 
 /// Deck-match 6: Pulse header/cards follow slides 13 and 15 chrome.
@@ -1070,16 +1074,12 @@ fn pulse_deck_match_6_chrome_tokens() {
     let pulse = include_str!("pulse_ui.rs");
     let ideas = include_str!("ideas_ui.rs");
     assert!(
-        pulse.contains("fn pulse_header_tab(") && !pulse.contains("felt_segment(ui, tab.label()"),
-        "Feed|Ideas must use outlined recipe tabs, not felt_segment pills"
-    );
-    assert!(
         pulse.contains("recipe::STROKE_W") && pulse.contains("signal_red()"),
         "idea icon tiles must use the signal-red recipe rim"
     );
     assert!(
-        ideas.contains("paint_group_diamond") && ideas.contains("theme::amber()"),
-        "Up next / category headers keep amber diamonds"
+        ideas.contains("paint_pulse_row(") && ideas.contains("self.paint_idea_open("),
+        "ideas in the stream keep their row and opened-card painters"
     );
     assert_eq!(
         super::pulse_ui::type_color(grokhub_core::pulse::PulseType::Automate),
@@ -1120,8 +1120,8 @@ fn pulse_text_pos(cabin: &mut super::Cabin, w: f32) -> Vec<(String, egui::Pos2)>
 }
 
 #[test]
-fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
-    let mut quiet = QuietCabin::boot("pulse-fluid");
+fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
+    let mut quiet = QuietCabin::boot("pulse-stream");
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
@@ -1138,6 +1138,18 @@ fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
         "sort the beach photos",
         11,
     ));
+    let now = now_ms();
+    for (i, title) in ["Rust 1.92 ships", "egui 0.33 lands", "Steam sale starts"]
+        .iter()
+        .enumerate()
+    {
+        cabin.updates.push(grokhub_core::digest_card(
+            &format!("digest-{i}"),
+            title,
+            "Two lines about it.",
+            now - (i as u64 + 1) * 60 * 60 * 1000,
+        ));
+    }
     let at = |texts: &[(String, egui::Pos2)], needle: &str| {
         texts
             .iter()
@@ -1149,54 +1161,86 @@ fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
         texts.iter().filter(|(t, _)| t == needle).count()
     };
 
-    // Laptop window: Ideas on the left, the feed column on the right, and
-    // each column keeps its own action. Rows rest without inline actions.
-    let split = pulse_text_pos(cabin, 1400.0);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Split);
-    let (ideas, feed) = (at(&split, "UP NEXT"), at(&split, "FROM YOUR FEED"));
+    // An idea, two posts, the next idea, then the post that is left.
+    let wide = pulse_text_pos(cabin, 1400.0);
+    assert!(!cabin.pulse_view.narrow);
+    let order = [
+        at(&wide, "I can sort the beach photos"),
+        at(&wide, "Rust 1.92 ships"),
+        at(&wide, "egui 0.33 lands"),
+        at(&wide, "I can print the trail map"),
+        at(&wide, "Steam sale starts"),
+    ];
     assert!(
-        ideas.x + 500.0 < feed.x,
-        "feed sits right of ideas: {split:?}"
+        order.windows(2).all(|w| w[0].y < w[1].y),
+        "one list, top to bottom: {wide:?}"
     );
-    assert_eq!(count(&split, "Suggest for you"), 1, "{split:?}");
-    assert_eq!(
-        count(&split, "Feed instructions"),
-        2,
-        "pill and empty-feed link: {split:?}"
-    );
-    assert_eq!((count(&split, "Run"), count(&split, "Snooze")), (0, 0));
-    assert_eq!(count(&split, "···"), 2);
+    let (min_x, max_x) = order.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+        (lo.min(p.x), hi.max(p.x))
+    });
+    assert!(max_x - min_x < 80.0, "one column, not two: {wide:?}");
+    for gone in ["UP NEXT", "FROM YOUR FEED", "Feed", "For You"] {
+        assert_eq!(count(&wide, gone), 0, "{gone}: {wide:?}");
+    }
+    // Rows rest without inline actions; every idea and post keeps its ···.
+    assert_eq!((count(&wide, "Run"), count(&wide, "Snooze")), (0, 0));
+    assert_eq!(count(&wide, "···"), 5);
+    assert_eq!(count(&wide, "Like"), 3);
 
-    // Small window: one column, the feed below the ideas.
-    let stacked = pulse_text_pos(cabin, 900.0);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Stacked);
-    let (ideas, feed) = (at(&stacked, "UP NEXT"), at(&stacked, "FROM YOUR FEED"));
-    assert!(ideas.y < feed.y && feed.x < ideas.x, "{stacked:?}");
-    assert!(at(&stacked, "I can sort the beach photos").y < feed.y);
-
-    // Compact: one view behind the switch. Run stays on every row; Snooze
-    // and Dismiss wait in ···.
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let compact = pulse_text_pos(cabin, COMPACT_W);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Compact);
-    assert_eq!(count(&compact, "FROM YOUR FEED"), 0, "{compact:?}");
+    // Narrow: Run stays on every idea row; Snooze and Dismiss wait in ···.
+    let narrow = pulse_text_pos(cabin, NARROW_W);
+    assert!(cabin.pulse_view.narrow);
     assert_eq!(
         (
-            count(&compact, "Run"),
-            count(&compact, "Snooze"),
-            count(&compact, "Dismiss"),
-            count(&compact, "···")
+            count(&narrow, "Run"),
+            count(&narrow, "Snooze"),
+            count(&narrow, "Dismiss"),
+            count(&narrow, "···")
         ),
-        (2, 0, 0, 2),
-        "{compact:?}"
+        (2, 0, 0, 5),
+        "{narrow:?}"
     );
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
-    let compact_feed = pulse_text_pos(cabin, COMPACT_W);
-    assert_eq!(count(&compact_feed, "UP NEXT"), 0, "{compact_feed:?}");
-    assert_eq!(
-        count(&compact_feed, "Feed instructions"),
-        2,
-        "{compact_feed:?}"
+    assert!(at(&narrow, "I can sort the beach photos").y < at(&narrow, "Rust 1.92 ships").y);
+
+    // Keys walk the idea rows in stream order and skip the posts.
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::ArrowDown)]);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-beach"));
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::J)]);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-trail"));
+}
+
+#[test]
+fn pulse_source_note_waits_behind_details() {
+    assert!(!super::pulse_ui::PulseView::default().sources_open);
+    let mut quiet = QuietCabin::boot("pulse-source-note");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now_ms() - 60_000,
+    ));
+    let note = "Checked 15 sources (15 from the network). Failed: Reddit: HTTP 403 and 2 more.";
+    cabin.sources.note = note.into();
+    let shut = pulse_texts(cabin, 900.0);
+    assert!(shut.iter().any(|t| t == "1 post on Pulse"), "{shut:?}");
+    assert!(shut.iter().any(|t| t == "Details"), "{shut:?}");
+    assert!(
+        !shut.iter().any(|t| t.contains("Failed")),
+        "the check note stays tucked away: {shut:?}"
+    );
+    cabin.pulse_view.sources_open = true;
+    let open = pulse_texts(cabin, 900.0);
+    assert!(open.iter().any(|t| t == note), "{open:?}");
+    assert!(open.iter().any(|t| t == "Hide details"), "{open:?}");
+    // No note: just the count, nothing to open.
+    cabin.sources.note.clear();
+    let plain = pulse_texts(cabin, 900.0);
+    assert!(plain.iter().any(|t| t == "1 post on Pulse"), "{plain:?}");
+    assert!(
+        !plain.iter().any(|t| t == "Details" || t == "Hide details"),
+        "{plain:?}"
     );
 }
 

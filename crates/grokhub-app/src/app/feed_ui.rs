@@ -2,7 +2,7 @@
 //! Cards paint on Pulse. The empty main chat no longer stacks a Home deck.
 
 use super::*;
-use crate::ui_kit::{badge, card_frame, empty_state, BadgeTone, CardVariant};
+use crate::ui_kit::{badge, card_frame, BadgeTone, CardVariant};
 use grokhub_core::{
     automation_done_card, dismiss_update_at, file_idea_todo, hold_if_quiet, idea_todo_title,
     mark_update_opened, parse_lookup, post_help, post_update, quiet_hours_active,
@@ -788,7 +788,7 @@ impl Cabin {
                 // A hung ask must not leave the Ideas button on "Thinking…" for good.
                 if now_ms().saturating_sub(self.cfg.feed_pulse.last_ideas_ms) > IDEAS_WAIT_MS {
                     if self.nav == Nav::Pulse {
-                        self.status = "For You took too long. Try Suggest for you again.".into();
+                        self.status = "Ideas took too long. Try Suggest for you again.".into();
                     }
                 } else {
                     self.ideas_rx = Some((rx, inputs));
@@ -1062,48 +1062,6 @@ pub(super) fn kit_pulse_feed_post(
 
 pub(super) fn kit_daily_drop_badge(ui: &mut eframe::egui::Ui) {
     badge(ui, "Daily drop", BadgeTone::Accent);
-}
-
-/// Feed tab empty line with a Feed instructions link. Returns true when the link is clicked.
-pub(super) fn paint_feed_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
-    use grokhub_core::pulse::{FEED_EMPTY_LEAD, FEED_EMPTY_LINK};
-    let mut open = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label(
-            RichText::new(FEED_EMPTY_LEAD)
-                .size(crate::theme::FONT_BODY)
-                .color(crate::theme::muted()),
-        );
-        let link = ui.add(
-            egui::Label::new(
-                RichText::new(FEED_EMPTY_LINK)
-                    .size(crate::theme::FONT_BODY)
-                    .underline()
-                    .color(crate::theme::link()),
-            )
-            .sense(egui::Sense::click())
-            .selectable(false),
-        );
-        if link.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if link.clicked() {
-            open = true;
-        }
-        ui.label(
-            RichText::new(".")
-                .size(crate::theme::FONT_BODY)
-                .color(crate::theme::muted()),
-        );
-    });
-    open
-}
-
-/// For You tab empty body. Returns true when Suggest for you is pressed.
-pub(super) fn paint_ideas_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
-    use grokhub_core::pulse::{FOR_YOU_LABEL, IDEAS_EMPTY};
-    empty_state(ui, FOR_YOU_LABEL, IDEAS_EMPTY, Some("Suggest for you"))
 }
 
 #[cfg(test)]

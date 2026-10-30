@@ -68,25 +68,15 @@ fn is_false(v: &bool) -> bool {
 
 pub const PULSE_TITLE: &str = "Pulse";
 pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
-/// The Feed's caption when For You and Feed share the page.
-pub const FEED_HEADING: &str = "From your feed";
-/// For You with nothing to show and nothing running.
-pub const IDEAS_EMPTY: &str =
-    "Nothing for you yet. I'll add one when I spot something worth doing.";
-/// Feed with nothing to show.
-pub const FEED_EMPTY: &str = "No posts yet. Tell me what to watch in Feed instructions.";
-/// Lead before the Feed instructions link on the empty Feed.
-pub const FEED_EMPTY_LEAD: &str = "No posts yet. Tell me what to watch in ";
-/// Clickable end of the empty Feed line (opens the instructions sheet).
-pub const FEED_EMPTY_LINK: &str = "Feed instructions";
-/// For You while a suggestion call is running: shown with placeholder rows.
+/// Pulse with no ideas, no posts, and nothing running.
+pub const PULSE_EMPTY: &str =
+    "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing.";
+/// Pulse while a suggestion call is running: shown with placeholder rows.
 pub const IDEAS_LOADING: &str = "Looking for ideas in your recent work…";
 /// Suggest for you pressed with no Grok sign-in or key.
 pub const IDEAS_SIGN_IN: &str = "Sign in to Grok to get ideas.";
 /// The longest bold line on a For You row.
 pub const I_CAN_MAX: usize = 70;
-/// User-facing name of the Pulse ideas tab (was "Ideas").
-pub const FOR_YOU_LABEL: &str = "For You";
 
 /// "Last pulse 2m ago. Nothing to do." for the silence line.
 pub fn silence_line(last_pulse_ms: u64, now_ms: u64) -> String {
@@ -2170,16 +2160,11 @@ mod tests {
         assert_eq!(PulseType::Learn.apply_heading(), "What I'll learn");
         assert_eq!(PulseType::Watch.apply_heading(), "What Apply will do");
         assert_eq!(
-            format!("{}{}.", FEED_EMPTY_LEAD, FEED_EMPTY_LINK),
-            FEED_EMPTY
-        );
-        assert_eq!(
-            IDEAS_EMPTY,
-            "Nothing for you yet. I'll add one when I spot something worth doing."
+            PULSE_EMPTY,
+            "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing."
         );
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
-        assert_eq!(FOR_YOU_LABEL, "For You");
         assert_eq!(PulseCategory::More.label(), "More for you");
     }
 
