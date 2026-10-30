@@ -85,6 +85,10 @@ static TIER: AtomicUsize = AtomicUsize::new(0);
 /// tick, so the Settings toggle takes effect without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
+    if !on {
+        // Off: nothing falls back to the device, so drop the chip and keep-warm.
+        note_fallback(false);
+    }
 }
 
 /// The Settings toggle alone, for the governor's sampler.

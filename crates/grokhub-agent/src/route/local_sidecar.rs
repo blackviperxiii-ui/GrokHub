@@ -86,6 +86,12 @@ static LAST_DONE_SECS: AtomicU64 = AtomicU64::new(0);
 static LAST_NEEDED_SECS: AtomicU64 = AtomicU64::new(0);
 /// A keep-warm load is running on its own thread.
 static WARMING: AtomicBool = AtomicBool::new(false);
+/// Set when Local AI is turned off while a request runs: the sidecar stops as
+/// soon as the last request in flight finishes instead of after the idle timeout.
+static STOP_PENDING: AtomicBool = AtomicBool::new(false);
+/// Bumped by every stop. A keep-warm load started before a stop sees the
+/// change under the slot lock and loads nothing.
+static WARM_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Held for the length of one request (see [`busy`]).
 pub struct Busy(());
@@ -93,7 +99,13 @@ pub struct Busy(());
 impl Drop for Busy {
     fn drop(&mut self) {
         LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
-        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        if IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 && STOP_PENDING.load(Ordering::SeqCst) {
+            // Never block a request's teardown on the slot; if it's busy, the
+            // next idle tick does the pending stop.
+            if let Ok(mut slot) = global_slot().try_lock() {
+                stop_pending_locked(&mut slot);
+            }
+        }
     }
 }
 
@@ -614,6 +626,12 @@ pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
 /// request is in flight; a crash-loop breaker refuses starts after 3 failures
 /// and drops a dead sidecar from the slot.
 pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
+    load(config_dir, None)
+}
+
+/// [`acquire`]; a keep-warm load passes the [`WARM_GEN`] it started under and
+/// gives up when Local AI was turned off or the sidecar stopped since.
+fn load(config_dir: &Path, warm: Option<u64>) -> Result<Busy, String> {
     tick_idle_unload();
     if local_gov::paused() {
         tick_governor();
@@ -631,6 +649,9 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
         _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing))?,
     };
     let mut slot = global_slot().lock().expect("sidecar global");
+    if warm_stale(warm) {
+        return Err("the warm-up was cancelled".into());
+    }
     if local_gov::restart_due() && in_flight() == 0 {
         if let Some(side) = slot.take() {
             side.stop();
@@ -724,6 +745,9 @@ pub fn tick_idle_unload() {
         return;
     }
     let mut slot = global_slot().lock().expect("sidecar global");
+    if stop_pending_locked(&mut slot) {
+        return;
+    }
     let Some(side) = slot.as_ref() else {
         return;
     };
@@ -766,18 +790,56 @@ pub fn tick_keep_warm(config_dir: &Path, needed: bool) {
         return;
     }
     let dir = config_dir.to_path_buf();
+    let generation = WARM_GEN.load(Ordering::SeqCst);
     std::thread::spawn(move || {
-        if ensure_global(&dir).is_ok() {
+        if load(&dir, Some(generation)).is_ok() {
             health::log_to(&dir, "warm", Some("covering for the cloud"), None);
         }
         WARMING.store(false, Ordering::SeqCst);
     });
 }
 
+/// A keep-warm load started under generation `warm` is out of date: a stop
+/// came since, or Local AI is off. Requests (`None`) never are.
+fn warm_stale(warm: Option<u64>) -> bool {
+    warm.is_some_and(|g| g != WARM_GEN.load(Ordering::SeqCst) || !super::local::switched_on())
+}
+
+/// Stop the sidecar now, or right after the requests in flight finish.
+///
+/// Checked under the slot lock that [`acquire`] holds while it takes a
+/// request's [`Busy`] guard, so a request can't start between the check and
+/// the stop.
+pub fn stop_when_idle() {
+    let mut slot = global_slot().lock().expect("sidecar global");
+    WARM_GEN.fetch_add(1, Ordering::SeqCst);
+    STOP_PENDING.store(true, Ordering::SeqCst);
+    stop_pending_locked(&mut slot);
+}
+
+/// Drop a stop asked for by [`stop_when_idle`] (Local AI turned back on).
+pub fn cancel_pending_stop() {
+    STOP_PENDING.store(false, Ordering::SeqCst);
+}
+
+/// Does a pending stop when nothing is in flight; the caller holds the slot.
+fn stop_pending_locked(slot: &mut Option<Sidecar>) -> bool {
+    if !STOP_PENDING.load(Ordering::SeqCst) || in_flight() > 0 {
+        return false;
+    }
+    STOP_PENDING.store(false, Ordering::SeqCst);
+    if let Some(side) = slot.take() {
+        side.stop();
+        health::log("stop", Some("local AI turned off"));
+    }
+    true
+}
+
 /// Stop the global sidecar (tests / quit).
 pub fn stop_global() {
     set_last_error(None);
     let mut slot = global_slot().lock().expect("sidecar global");
+    WARM_GEN.fetch_add(1, Ordering::SeqCst);
     if let Some(side) = slot.take() {
         side.stop();
         health::log("stop", Some("switched model, new engine or quit"));
@@ -1167,6 +1229,56 @@ mod tests {
         LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
         tick_idle_unload();
         assert_eq!(global_pid(), None, "idle past the timeout unloads");
+    }
+
+    #[test]
+    fn turning_local_ai_off_stops_now_or_right_after_the_request_in_flight() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        stop_when_idle();
+        assert_eq!(global_pid(), None, "off with nothing in flight stops now");
+
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        let held = busy();
+        stop_when_idle();
+        assert!(
+            global_pid().is_some(),
+            "off never cuts off a request in flight"
+        );
+        drop(held);
+        assert_eq!(
+            global_pid(),
+            None,
+            "the stop happens as soon as the last request finishes, not after the idle timeout"
+        );
+
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        let held = busy();
+        stop_when_idle();
+        cancel_pending_stop();
+        drop(held);
+        assert!(global_pid().is_some(), "turning it back on keeps the model");
+        stop_global();
+    }
+
+    #[test]
+    fn a_keep_warm_load_started_before_a_stop_loads_nothing() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            !warm_stale(None),
+            "a request is never cancelled as a warm-up"
+        );
+        let started = WARM_GEN.load(Ordering::SeqCst);
+        stop_when_idle();
+        assert!(
+            warm_stale(Some(started)),
+            "Local AI turned off after the warm-up began"
+        );
+        let started = WARM_GEN.load(Ordering::SeqCst);
+        stop_global();
+        assert!(warm_stale(Some(started)), "model switched or app quitting");
     }
     use crate::route::local::LocalRuntime;
     use fake_server::FakeServer;
