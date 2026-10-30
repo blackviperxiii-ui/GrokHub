@@ -66,11 +66,6 @@ fn maybe_queue_show_panel(cabin_thread_id: &str, card: &ToolCard) {
         ));
 }
 
-/// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
-/// prefix) still outranks a custom personality or tuned note that lands last.
-/// The agent puts each turn's talk style just before it.
-const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
-
 impl Cabin {
     /// Drain `show_panel` tool results captured on the native engine thread into [`Self::panels`].
     /// Only the pending queue — never re-scan `tool_cards` each frame (that revived dismissals
@@ -406,7 +401,8 @@ impl Cabin {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
         let mut parts: Vec<String> = Vec::new();
         let mut needs_safety_closer = false;
-        let voice = self.chat_personality().prompt_block();
+        let personality = self.chat_personality();
+        let voice = personality.prompt_block();
         if !voice.is_empty() {
             parts.push(voice);
             needs_safety_closer = true;
@@ -436,8 +432,11 @@ impl Cabin {
             parts.push(intentions);
             needs_safety_closer = true;
         }
+        // Closes the volatile voice/notes tail so cabin safety (earlier, in the
+        // stable prefix) still outranks a custom personality or tuned note that
+        // lands last. The agent puts each turn's talk style just before it.
         if needs_safety_closer {
-            parts.push(VOLATILE_SAFETY_CLOSER.to_string());
+            parts.push(grokhub_core::talk::safety_closer(personality.explicit).to_string());
         }
         (stable, parts.join("\n\n"))
     }

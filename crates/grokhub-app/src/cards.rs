@@ -256,6 +256,7 @@ pub fn imagine_seg_chip(
         })
         .response
         .interact(Sense::click());
+    crate::motion::icon::note_card(ui, resp.rect);
     let (resp, felt, wash) = crate::theme::feel_button(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter()
@@ -1592,6 +1593,7 @@ fn paint_slot_card(
         Stroke::new(stroke_w, stroke),
         egui::StrokeKind::Middle,
     );
+    crate::motion::icon::note_card(ui, resp.rect);
     resp
 }
 

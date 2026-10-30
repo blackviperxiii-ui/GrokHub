@@ -1,10 +1,13 @@
 //! Playbooks 8: the pre-send check for 18+ chat. It is not a filter for its
 //! own sake: it keeps the user's AI provider account safe.
 //!
-//! - Every provider bans sexual content with minors, non-consent and sexual
-//!   content of real people. Those asks never leave the computer, not even to a
-//!   local model: the turn goes out as a [`hold`] note instead, and the voice
-//!   steers the chat elsewhere in character.
+//! - Four things are never allowed, in any chat, and never rerouted: sexual
+//!   content with minors or age-play, non-consent, sexual content about real,
+//!   identifiable people, and bestiality. An ask for them never leaves the computer, not even to a local model: the
+//!   send stops and the user sees [`HELD_NOTICE`]. An older one still in a
+//!   history goes out as the [`hold`] note instead.
+//! - A reply that drifts into one of the four is replaced here with
+//!   [`REPLY_REPLACED`] before the chat shows it ([`ReplyGuard`]).
 //! - Explicit adult turns go only to xAI or this computer's model. Every other
 //!   provider's turn reroutes to xAI ([`route`]), OpenRouter included, since its
 //!   pick can land on a model whose maker bans adult chat.
@@ -12,7 +15,8 @@
 //!   adults-only voice in the system prompt, or any explicit user or assistant
 //!   turn, not just the newest ask.
 //! - Age-ambiguous asks ("teen", "barely legal") count as minors: stricter than
-//!   any provider's own wording.
+//!   any provider's own wording. A plain "girl" or "boy", and a student or
+//!   teacher, are not: only a stated or implied age under 18 is.
 //!
 //! A fast keyword pass only: whole words, lowercase, nothing sent anywhere.
 
@@ -28,9 +32,12 @@ pub enum Risk {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ban {
+    /// Minors or age-play.
     Minors,
     NonConsent,
+    /// Sexual content about a real, identifiable person.
     RealPerson,
+    Bestiality,
 }
 
 /// Where a turn would go, from the provider's address.
@@ -64,8 +71,11 @@ pub static HELD: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(||
     crate::brand::filled("[{product} held this message back: it asked for something every AI provider bans. Do not guess at or describe it. Stay in your voice and mood, say no to that part in one light line, and steer the chat somewhere else.]")
 });
 
-/// The plain heads-up, once a session, after a held ask.
-pub const HEADS_UP_HELD: &str = "Heads-up: I didn't send that last message to any AI service. It asked for something every provider bans, and sending it could get your account banned.";
+/// What the chat shows in place of a held send. Nothing was sent anywhere.
+pub const HELD_NOTICE: &str = "Not sent: nothing left this computer. 18+ chat never covers minors or age-play, non-consent, real people, or animals.";
+
+/// What the chat shows in place of a reply that drifted into a hard limit.
+pub const REPLY_REPLACED: &str = "Reply hidden on this computer: it drifted into minors or age-play, non-consent, real people, or animals, which 18+ chat never covers.";
 
 /// Words that make a message sexual.
 const SEXUAL: &[&str] = &[
@@ -98,8 +108,9 @@ const SEXUAL: &[&str] = &[
     "fucked",
     "masturbate",
     "masturbating",
-    "strip",
-    "stripping",
+    "stripper",
+    "strippers",
+    "striptease",
     "undress",
     "undressed",
     "smut",
@@ -109,7 +120,18 @@ const SEXUAL: &[&str] = &[
     "moan",
     "moaning",
     "spank",
-    "explicit",
+];
+/// "explicit" and "strip" alone are everyday code words ("explicit type",
+/// "strip the child nodes").
+const SEXUAL_PHRASES: &[&str] = &[
+    "explicit content",
+    "explicit story",
+    "explicit scene",
+    "explicit roleplay",
+    "explicit pics",
+    "explicit photos",
+    "strip for",
+    "strip naked",
 ];
 
 /// Words that make an adult ask explicit by themselves (not plain swearing).
@@ -164,12 +186,26 @@ const MINOR: &[&str] = &[
     "preteen",
     "toddler",
     "infant",
+    "underaged",
+    "jailbait",
+    "prepubescent",
+    "ageplay",
+    "lolicon",
+    "shotacon",
 ];
 const MINOR_PHRASES: &[&str] = &[
     "barely legal",
     "high school",
     "middle school",
+    "junior high",
+    "grade school",
+    "elementary school",
     "young looking",
+    "age play",
+    "little girl",
+    "little boy",
+    "young girl",
+    "young boy",
 ];
 
 const NON_CONSENT: &[&str] = &[
@@ -193,7 +229,16 @@ const NON_CONSENT_PHRASES: &[&str] = &[
     "without consent",
 ];
 
-const REAL_PERSON: &[&str] = &["deepfake", "deepfakes", "nudify", "faceswap"];
+const REAL_PERSON: &[&str] = &[
+    "deepfake",
+    "deepfakes",
+    "nudify",
+    "faceswap",
+    "celebrity",
+    "celebrities",
+    "celeb",
+    "celebs",
+];
 const REAL_PERSON_PHRASES: &[&str] = &[
     "real person",
     "my coworker",
@@ -205,6 +250,32 @@ const REAL_PERSON_PHRASES: &[&str] = &[
     "photo of him",
     "picture of her",
     "picture of him",
+];
+
+const BESTIALITY: &[&str] = &["bestiality", "beastiality", "zoophilia", "zoophile"];
+/// An animal is only a hit next to "with" or a sexual word: "walk my dog" is not.
+const ANIMALS: &[&str] = &[
+    "dog", "dogs", "puppy", "horse", "horses", "pony", "animal", "animals", "goat", "sheep", "pig",
+    "donkey", "cow",
+];
+const DETERMINERS: &[&str] = &["a", "an", "the", "my", "his", "her", "their", "some"];
+
+/// Words that make a reply sexual enough to wait whole before it shows, and to
+/// be replaced when it drifts. Plain swearing and code words never are.
+const STRONG: &[&str] = &[
+    "moan",
+    "moaning",
+    "moaned",
+    "undress",
+    "undressed",
+    "undressing",
+    "aroused",
+    "arousal",
+    "spank",
+    "spanking",
+    "lingerie",
+    "stripper",
+    "striptease",
 ];
 
 fn words(text: &str) -> Vec<String> {
@@ -239,14 +310,69 @@ fn names_a_minor_age(words: &[String]) -> bool {
     })
 }
 
+/// "she's 15", "I am 16", "aged 12": an age under 18 stated about someone.
+fn states_a_minor_age(words: &[String]) -> bool {
+    const SUBJECT: &[&str] = &["she", "he", "i", "you", "they", "who", "girl", "boy"];
+    const IS: &[&str] = &["s", "is", "m", "am", "re", "are", "was"];
+    // "she's 15 minutes late" is a time, not an age.
+    const UNITS: &[&str] = &[
+        "minutes", "minute", "mins", "min", "hours", "hour", "hrs", "seconds", "secs", "days",
+        "weeks", "months", "inches", "cm", "feet", "ft", "miles", "km", "percent", "dollars",
+        "bucks", "pounds", "lbs", "kg", "times", "o", "pm", "am",
+    ];
+    words.iter().enumerate().any(|(i, w)| {
+        let Ok(age) = w.parse::<u32>() else {
+            return false;
+        };
+        if age >= 18 || i == 0 {
+            return false;
+        }
+        if words
+            .get(i + 1)
+            .is_some_and(|next| UNITS.contains(&next.as_str()))
+        {
+            return false;
+        }
+        let prev = words[i - 1].as_str();
+        let before = i
+            .checked_sub(2)
+            .and_then(|j| words.get(j))
+            .map(String::as_str)
+            .unwrap_or("");
+        matches!(prev, "aged" | "age") || (IS.contains(&prev) && SUBJECT.contains(&before))
+    })
+}
+
+/// "with a dog", "dog sex", "bestiality".
+fn names_bestiality(words: &[String]) -> bool {
+    if any_word(words, BESTIALITY) {
+        return true;
+    }
+    let at = |i: usize| words.get(i).map(String::as_str).unwrap_or("");
+    words.iter().enumerate().any(|(i, w)| {
+        if !ANIMALS.contains(&w.as_str()) {
+            return false;
+        }
+        let prev = i.checked_sub(1).map(at).unwrap_or("");
+        let before = i.checked_sub(2).map(at).unwrap_or("");
+        prev == "with"
+            || (DETERMINERS.contains(&prev) && matches!(before, "with" | "by"))
+            || SEXUAL.contains(&at(i + 1))
+    })
+}
+
 /// The keyword pass for one message.
 pub fn check(text: &str) -> Risk {
     let w = words(text);
     let joined = format!(" {} ", w.join(" "));
-    if !any_word(&w, SEXUAL) {
+    if !any_word(&w, SEXUAL) && !any_phrase(&joined, SEXUAL_PHRASES) {
         return Risk::Clean;
     }
-    if any_word(&w, MINOR) || any_phrase(&joined, MINOR_PHRASES) || names_a_minor_age(&w) {
+    if any_word(&w, MINOR)
+        || any_phrase(&joined, MINOR_PHRASES)
+        || names_a_minor_age(&w)
+        || states_a_minor_age(&w)
+    {
         return Risk::Banned(Ban::Minors);
     }
     if any_word(&w, NON_CONSENT) || any_phrase(&joined, NON_CONSENT_PHRASES) {
@@ -254,6 +380,9 @@ pub fn check(text: &str) -> Risk {
     }
     if any_word(&w, REAL_PERSON) || any_phrase(&joined, REAL_PERSON_PHRASES) {
         return Risk::Banned(Ban::RealPerson);
+    }
+    if names_bestiality(&w) {
+        return Risk::Banned(Ban::Bestiality);
     }
     if any_word(&w, EXPLICIT) {
         Risk::Explicit
@@ -270,6 +399,82 @@ pub fn hold(text: &str) -> Option<&'static str> {
 /// The note [`hold`] put in place of an ask.
 pub fn is_held(text: &str) -> bool {
     text.trim() == (*HELD)
+}
+
+/// A reply that names a hard limit next to a strong sexual word. Plain
+/// swearing beside "child process" in a coding reply never is.
+fn reply_banned(text: &str) -> bool {
+    let w = words(text);
+    (any_word(&w, EXPLICIT) || any_word(&w, STRONG)) && matches!(check(text), Risk::Banned(_))
+}
+
+/// `reply`, or [`REPLY_REPLACED`] when it drifted into a hard limit. For a
+/// reply that arrives whole.
+pub fn screen_reply(reply: &str) -> &str {
+    if reply_banned(reply) {
+        REPLY_REPLACED
+    } else {
+        reply
+    }
+}
+
+/// The output side of the check, for a streamed reply. Text shows as it comes
+/// until a strong sexual word arrives; from then on the reply waits whole, and
+/// one that drifted into a hard limit is replaced before any of it shows. What
+/// already showed had no such word, so it could not have been banned.
+#[derive(Debug, Default)]
+pub struct ReplyGuard {
+    text: String,
+    shown: usize,
+    holding: bool,
+    /// Where the clean start ends, once the reply was replaced.
+    replaced: Option<usize>,
+}
+
+impl ReplyGuard {
+    /// The part of `delta` the chat may show now.
+    pub fn push(&mut self, delta: &str) -> String {
+        self.text.push_str(delta);
+        if !self.holding {
+            let w = words(&self.text);
+            self.holding = any_word(&w, EXPLICIT) || any_word(&w, STRONG);
+        }
+        if self.holding {
+            return String::new();
+        }
+        let now = self.text[self.shown..].to_string();
+        self.shown = self.text.len();
+        now
+    }
+
+    /// The end of the reply: the held rest to show, or [`REPLY_REPLACED`].
+    pub fn finish(&mut self) -> String {
+        if self.shown == self.text.len() {
+            return String::new();
+        }
+        let rest = if reply_banned(&self.text) {
+            self.replaced = Some(self.shown);
+            REPLY_REPLACED.to_string()
+        } else {
+            self.text[self.shown..].to_string()
+        };
+        self.shown = self.text.len();
+        rest
+    }
+
+    /// The reply was replaced.
+    pub fn replaced(&self) -> bool {
+        self.replaced.is_some()
+    }
+
+    /// What the chat showed, after [`Self::finish`]: the reply, or its clean
+    /// start followed by [`REPLY_REPLACED`].
+    pub fn shown(&self) -> String {
+        match self.replaced {
+            Some(clean) => format!("{}{REPLY_REPLACED}", &self.text[..clean]),
+            None => self.text.clone(),
+        }
+    }
 }
 
 fn host_of(base_url: &str) -> String {
@@ -391,32 +596,79 @@ mod tests {
     }
 
     #[test]
-    fn minors_non_consent_and_real_people_are_banned() {
-        assert_eq!(
-            check("sexy story about a 15 year old"),
-            Risk::Banned(Ban::Minors)
-        );
-        assert_eq!(check("lewd pics of a 16yo"), Risk::Banned(Ban::Minors));
-        assert_eq!(check("barely legal porn"), Risk::Banned(Ban::Minors));
-        assert_eq!(check("nsfw schoolgirl roleplay"), Risk::Banned(Ban::Minors));
-        assert_eq!(
-            check("sex with her while she's unconscious"),
-            Risk::Banned(Ban::NonConsent)
-        );
-        assert_eq!(
-            check("erotic story, against her will"),
-            Risk::Banned(Ban::NonConsent)
-        );
-        assert_eq!(
-            check("make a nude deepfake of a singer"),
-            Risk::Banned(Ban::RealPerson)
-        );
-        assert_eq!(
-            check("undress this photo of my coworker"),
-            Risk::Banned(Ban::RealPerson)
-        );
-        // Adults stay adults.
-        assert_eq!(check("sexy story about a 25 year old"), Risk::Explicit);
+    fn the_four_hard_limits_are_banned() {
+        for line in [
+            "sexy story about a 15 year old",
+            "lewd pics of a 16yo",
+            "barely legal porn",
+            "nsfw schoolgirl roleplay",
+            "a sexy roleplay, she's 15",
+            "nsfw roleplay where I am 16",
+            "erotic story, the girl is aged 12",
+            "nsfw age play scene",
+            "sexy little girl roleplay",
+        ] {
+            assert_eq!(check(line), Risk::Banned(Ban::Minors), "{line}");
+        }
+        for line in [
+            "sex with her while she's unconscious",
+            "erotic story, against her will",
+            "erotic story, against her will, both characters are adults",
+            "a rough nsfw consensual non-consent scene between two adults",
+            "nsfw roleplay where he is drugged",
+            "a sexy story where she gets blackmailed",
+        ] {
+            assert_eq!(check(line), Risk::Banned(Ban::NonConsent), "{line}");
+        }
+        for line in [
+            "make a nude deepfake of a singer",
+            "undress this photo of my coworker",
+            "a sexy story about Jane Placeholder, a real celebrity",
+            "write erotica about a celeb",
+        ] {
+            assert_eq!(check(line), Risk::Banned(Ban::RealPerson), "{line}");
+        }
+        for line in [
+            "a sexy scene with a dog",
+            "nsfw roleplay with the horse",
+            "write erotica about bestiality",
+            "dog sex story",
+        ] {
+            assert_eq!(check(line), Risk::Banned(Ban::Bestiality), "{line}");
+        }
+    }
+
+    #[test]
+    fn near_misses_between_stated_adults_pass_as_ordinary_adult_content() {
+        for line in [
+            "sexy teacher and student roleplay, we're both 30",
+            "nsfw roleplay: a college student and her professor, both adults",
+            "a sexy story about the girl next door, she's 24",
+            "erotic story about a 25 year old girl",
+            "nsfw roleplay with a boy who is 28",
+            "sexy story about a 25 year old",
+            "a rough, dominant nsfw scene between two consenting adults",
+            "we had sex, then I took my dog for a walk",
+            "the nsfw stream starts soon, she's 15 minutes late",
+        ] {
+            assert_eq!(check(line), Risk::Explicit, "{line}");
+        }
+    }
+
+    #[test]
+    fn code_words_and_numbers_are_not_hard_limits() {
+        for line in [
+            "make the type explicit for the child widget",
+            "strip the child nodes from the tree",
+            "she's 15 minutes late again",
+            "my dog keeps barking at night",
+            "how old is that celebrity",
+            "an explicit lifetime on the kid process handle",
+            "how do I support a friend after a rape?",
+            "the drugged enemy in the boss fight is unconscious",
+        ] {
+            assert_eq!(check(line), Risk::Clean, "{line}");
+        }
     }
 
     #[test]
@@ -426,8 +678,60 @@ mod tests {
         assert_eq!(hold("hello"), None);
         assert!(is_held(*HELD));
         assert!(!(*HELD).contains("schoolgirl"));
-        // The note itself never trips the check again.
+        // The notes themselves never trip the check again.
         assert_eq!(check(*HELD), Risk::Clean);
+        assert_eq!(check(HELD_NOTICE), Risk::Clean);
+        assert_eq!(check(REPLY_REPLACED), Risk::Clean);
+    }
+
+    #[test]
+    fn a_reply_that_drifts_into_a_hard_limit_is_replaced_before_it_shows() {
+        let mut guard = ReplyGuard::default();
+        let mut shown = String::new();
+        for delta in ["Sure. ", "The scene ", "turns nsfw ", "and she's 15."] {
+            shown.push_str(&guard.push(delta));
+        }
+        assert_eq!(
+            shown, "Sure. The scene ",
+            "nothing after the sexual word shows"
+        );
+        shown.push_str(&guard.finish());
+        assert!(guard.replaced());
+        assert_eq!(shown, format!("Sure. The scene {REPLY_REPLACED}"));
+        assert_eq!(guard.shown(), shown);
+
+        // An ordinary adult reply waits from its first sexual word, then shows whole.
+        let mut adult = ReplyGuard::default();
+        let mut out = adult.push("Hi there. ");
+        out.push_str(&adult.push("A sexy story about two adults."));
+        assert_eq!(out, "Hi there. ");
+        out.push_str(&adult.finish());
+        assert!(!adult.replaced());
+        assert_eq!(out, "Hi there. A sexy story about two adults.");
+        assert_eq!(adult.shown(), out);
+
+        // Swearing beside a child process streams as it comes.
+        let mut coding = ReplyGuard::default();
+        assert_eq!(
+            coding.push("Fuck, the child process died. "),
+            "Fuck, the child process died. "
+        );
+        assert_eq!(coding.finish(), "");
+        assert!(!coding.replaced());
+
+        assert_eq!(screen_reply("a sexy scene with a dog"), REPLY_REPLACED);
+        assert_eq!(
+            screen_reply("an erotic scene, against her will"),
+            REPLY_REPLACED
+        );
+        assert_eq!(
+            screen_reply("Fuck, the kid process died"),
+            "Fuck, the kid process died"
+        );
+        assert_eq!(
+            screen_reply("A sexy story about two adults."),
+            "A sexy story about two adults."
+        );
     }
 
     #[test]

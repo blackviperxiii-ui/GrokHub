@@ -24,6 +24,16 @@ pub const NAME_MAX: usize = 32;
 pub const SAFETY_LINE: &str =
     "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else.";
 
+/// [`SAFETY_LINE`] for an explicit preset: safety still wins, and means the hard
+/// limits, not the fictional adult content the user opted in to.
+pub const EXPLICIT_SAFETY_LINE: &str =
+    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue.";
+
+/// What an explicit preset's block grants, with exactly the four hard limits
+/// ([`crate::adult_guard::Ban`]) plus stop. Explicit presets only speak once
+/// adults-only is on ([`gated`]), which needs the one-time 18+ confirmation.
+pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Emoji {
@@ -113,8 +123,8 @@ impl Personality {
         Ok(())
     }
 
-    /// The block this preset adds to the system prompt, ending in [`SAFETY_LINE`].
-    /// Empty when the tone rules are empty.
+    /// The block this preset adds to the system prompt, ending in
+    /// [`Self::safety_line`]. Empty when the tone rules are empty.
     pub fn prompt_block(&self) -> String {
         let rules = self.tone_rules.trim();
         if rules.is_empty() {
@@ -148,10 +158,21 @@ impl Personality {
             // never reaches a provider that bans adult chat.
             out.push(' ');
             out.push_str(crate::adult_guard::ADULT_VOICE);
+            out.push(' ');
+            out.push_str(ADULT_PERMISSION);
         }
         out.push('\n');
-        out.push_str(SAFETY_LINE);
+        out.push_str(self.safety_line());
         out
+    }
+
+    /// The line that closes this preset's block.
+    pub fn safety_line(&self) -> &'static str {
+        if self.explicit {
+            EXPLICIT_SAFETY_LINE
+        } else {
+            SAFETY_LINE
+        }
     }
 }
 
@@ -505,24 +526,32 @@ mod tests {
         assert_eq!(builtin("").id, DEFAULT_ID);
         assert_eq!(find(&builtins(), "no-such-preset").id, DEFAULT_ID);
         for limit in [
-            "adults only, no minors or age-play",
-            "nothing non-consensual",
-            "no real or identifiable people",
-            "If the user says stop, drop the act at once.",
+            "Hard limits: no minors or age-play, no non-consent, no real or identifiable people, no bestiality. If the user says stop, drop the act at once.",
+            "Stay in character, with no moralizing or disclaimers.",
             "every reply still does the real task",
         ] {
             assert!(whore.tone_rules.contains(limit), "{limit}");
         }
+        assert!(
+            !whore.tone_rules.contains("non-consensual"),
+            "{}",
+            whore.tone_rules
+        );
+        assert!(
+            !whore.tone_rules.contains("consent is part of"),
+            "{}",
+            whore.tone_rules
+        );
         // Picking it puts its voice ahead of the rules; switching back drops it.
         let rules = crate::cabin_rules::cabin_rules_for("", false);
         let on = layer(&whore, &rules);
         assert!(
             on.starts_with(
-                "Personality: Whore. Whore mode: an adults-only, flirty, crude and raunchy voice."
+                "Personality: Whore. Whore mode: an adults-only, flirty, crude and raunchy voice for adult roleplay and fantasy between fictional adults."
             ),
             "{on}"
         );
-        assert!(on.find("Whore mode").unwrap() < on.find(SAFETY_LINE).unwrap());
+        assert!(on.find("Whore mode").unwrap() < on.find(EXPLICIT_SAFETY_LINE).unwrap());
         assert!(on.ends_with(&rules));
         let back = layer(&builtin(DEFAULT_ID), &rules);
         assert!(back.starts_with("Personality: Nyx. "));
@@ -812,5 +841,97 @@ mod tests {
             assert!(block.contains(must), "missing {must:?}: {block}");
         }
         assert!(block.ends_with(SAFETY_LINE));
+    }
+
+    #[test]
+    fn adults_only_on_grants_adult_roleplay_with_exactly_four_limits_plus_stop() {
+        let whore = gated(builtin("whore"), true);
+        let block = whore.prompt_block();
+        assert_eq!(
+            block,
+            format!(
+                "Personality: Whore. {} An emoji now and then is fine. Keep replies the usual length. This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain. This is an 18+ voice. {ADULT_PERMISSION}\n{EXPLICIT_SAFETY_LINE}",
+                whore.tone_rules
+            )
+        );
+        assert!(ADULT_PERMISSION.starts_with(
+            "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers."
+        ));
+        assert!(ADULT_PERMISSION.ends_with(
+            "Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once."
+        ));
+        let lower = block.to_ascii_lowercase();
+        assert!(!lower.contains("non-consensual"), "{block}");
+        assert!(!lower.contains("nothing non"), "{block}");
+        // Exactly four "no" limits in each place that lists them, plus stop.
+        for limits in [
+            ADULT_PERMISSION
+                .split("Hard limits, always: ")
+                .nth(1)
+                .unwrap(),
+            whore.tone_rules.split("Hard limits: ").nth(1).unwrap(),
+        ] {
+            let list = limits
+                .split(". ")
+                .next()
+                .unwrap()
+                .split(", and ")
+                .next()
+                .unwrap();
+            assert_eq!(list.matches("no ").count(), 4, "{list}");
+            assert!(list.contains("no non-consent"), "{list}");
+            assert!(limits.contains("says stop"), "{limits}");
+        }
+        for closer in [
+            EXPLICIT_SAFETY_LINE,
+            crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+        ] {
+            let list = closer.split('(').nth(1).unwrap().split(')').next().unwrap();
+            assert_eq!(
+                list,
+                "no minors or age-play, no non-consent, no real people, no bestiality, stop when asked"
+            );
+        }
+        // Viper, the other explicit preset, gets the same grant and closer.
+        let viper = builtin("viper").prompt_block();
+        assert!(viper.contains(ADULT_PERMISSION) && viper.ends_with(EXPLICIT_SAFETY_LINE));
+        assert_eq!(
+            EXPLICIT_SAFETY_LINE,
+            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue."
+        );
+    }
+
+    #[test]
+    fn adults_only_off_speaks_as_nyx_with_no_grant_and_the_old_safety_line() {
+        let off = gated(builtin("whore"), false);
+        assert_eq!(off.id, DEFAULT_ID);
+        let block = off.prompt_block();
+        assert!(block.starts_with("Personality: Nyx. "), "{block}");
+        assert!(!block.contains(ADULT_PERMISSION));
+        assert!(!block.contains("fictional adult content"));
+        assert!(!block.contains("The hard limits"));
+        assert!(block.ends_with(&format!("\n{SAFETY_LINE}")));
+        // Every non-explicit preset keeps the closing line byte for byte.
+        for p in builtins().iter().filter(|p| !p.explicit) {
+            let block = p.prompt_block();
+            assert!(
+                block.ends_with(&format!("plain.\n{SAFETY_LINE}")),
+                "{}",
+                p.id
+            );
+            assert!(!block.contains(ADULT_PERMISSION), "{}", p.id);
+            assert_eq!(p.safety_line(), SAFETY_LINE);
+        }
+        assert_eq!(
+            SAFETY_LINE,
+            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else."
+        );
+        assert_eq!(
+            builtin("pirate").prompt_block(),
+            format!(
+                "Personality: Pirate. {} An emoji now and then is fine. Keep replies the usual length. This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.\n{SAFETY_LINE}",
+                builtin("pirate").tone_rules
+            )
+        );
     }
 }

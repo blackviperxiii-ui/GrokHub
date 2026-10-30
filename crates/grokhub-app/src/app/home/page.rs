@@ -54,12 +54,19 @@ impl Cabin {
                     let stroke = egui::Stroke::new(1.0, crate::theme::signal_red());
                     ui.painter()
                         .rect_stroke(edit_btn, 4.0, stroke, egui::StrokeKind::Outside);
-                    ui.painter().text(
-                        edit_btn.center(),
-                        egui::Align2::CENTER_CENTER,
+                    let pose = crate::motion::icon::pose(
+                        ui,
+                        edit_resp.id,
+                        crate::motion::icon::Cue::of(&edit_resp, false),
+                        crate::motion::icon::Kick::Nudge(egui::vec2(1.0, -1.0)),
+                    );
+                    // 12 pt, as before: the glyph paints at 0.78 of its rect.
+                    crate::motion::icon::paint_glyph(
+                        ui.painter(),
+                        egui::Rect::from_center_size(edit_btn.center(), egui::vec2(15.4, 15.4)),
                         crate::icons::ph::regular::PENCIL_SIMPLE,
-                        egui::FontId::proportional(12.0),
                         crate::theme::amber(),
+                        pose,
                     );
                 }
                 if edit_resp.on_hover_text("Edit Home").clicked() {

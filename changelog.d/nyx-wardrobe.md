@@ -1,0 +1,1 @@
+- Nyx's corner box now has several poses per mode, new Thinking and Writing modes, and every built-in personality wears its own outfit there and on its Settings → Personality tile (explicit ones only with adults-only personalities on).

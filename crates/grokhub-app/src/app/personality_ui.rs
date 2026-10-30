@@ -3,9 +3,10 @@
 //! A chat can pick its own personality; "Make default" / Talk as saves that
 //! pick as the default for every chat. Switching is silent apart from the
 //! status line. Custom presets live in `{config}/personalities/`.
-//! Optional built-in photos may land later at
-//! `crates/grokhub-app/assets/personalities/<id>/1..5.png` — Loadout matches
-//! slide 19 with the letter icon, not a placeholder photo strip.
+//! A built-in voice's tile shows Nyx in its outfit (the first pose of its
+//! set in [`super::loadout_home::nyx_wardrobe`]); custom voices keep the
+//! letter icon. Optional built-in photos may land later at
+//! `crates/grokhub-app/assets/personalities/<id>/1..5.png`.
 
 use super::*;
 use grokhub_core::personality::{self, Personality};
@@ -51,7 +52,8 @@ const SHOWN_FACE: &str = "personality-shown-face";
 /// The shown personality, as the face painters need it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ShownFace {
-    /// Nyx and Viper wear the companion art; every other voice shows its letter.
+    /// Nyx and every built-in voice with an outfit wear the companion art;
+    /// custom voices show their letter.
     pub art: bool,
     pub name: String,
 }
@@ -65,9 +67,10 @@ pub(super) fn shown_face(ctx: &egui::Context) -> ShownFace {
         })
 }
 
-/// Nyx and her Viper outfit are drawn; other voices have no art yet.
+/// Nyx is drawn, and every built-in voice is Nyx in its own outfit. Custom
+/// voices have no art.
 pub(super) fn wears_companion_art(id: &str) -> bool {
-    id == personality::DEFAULT_ID || id == "viper"
+    id == personality::DEFAULT_ID || super::loadout_home::nyx_wardrobe::has_outfit(id)
 }
 
 /// What a "Try it" preview shows under its card.
@@ -257,6 +260,15 @@ pub(super) fn chat_note(p: &Personality) -> String {
     format!("This chat: {}", p.name)
 }
 
+/// The status line when an adults-only preset is picked while adults-only is off.
+/// Nothing changes: the pick is not swapped for the default behind the user's back.
+pub(super) fn adults_only_note(p: &Personality) -> String {
+    format!(
+        "{} is adults-only. Turn on Adults-only personalities in Settings → Personality to use it.",
+        p.name
+    )
+}
+
 impl Cabin {
     /// The personality the chat being answered uses: its own pick, else the default.
     pub(super) fn personality_id(&self) -> String {
@@ -356,6 +368,7 @@ impl Cabin {
             name: p.name,
         };
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(SHOWN_FACE), face));
+        super::loadout_home::nyx_wardrobe::publish_explicit_ok(ctx, self.explicit_art_ok());
     }
 
     /// The personality the open chat shows in its header.
@@ -372,8 +385,21 @@ impl Cabin {
         }))
     }
 
+    /// An adults-only preset picked while adults-only is off: say so, change nothing.
+    fn refuse_while_adults_only_off(&mut self, id: &str) -> bool {
+        let p = personality::lookup(&presets_dir(), id);
+        let off = p.explicit && !self.cfg.explicit_personalities;
+        if off {
+            self.status = adults_only_note(&p);
+        }
+        off
+    }
+
     /// Settings: the default for every chat that has not picked its own.
     pub(super) fn set_default_personality(&mut self, id: &str) {
+        if self.refuse_while_adults_only_off(id) {
+            return;
+        }
         let p = personality::gated(
             personality::lookup(&presets_dir(), id),
             self.cfg.explicit_personalities,
@@ -385,6 +411,9 @@ impl Cabin {
 
     /// Chat header: this chat only. Picking the default's own voice clears the override.
     pub(super) fn set_chat_personality(&mut self, id: &str) {
+        if self.refuse_while_adults_only_off(id) {
+            return;
+        }
         let p = personality::gated(
             personality::lookup(&presets_dir(), id),
             self.cfg.explicit_personalities,
@@ -425,6 +454,7 @@ impl Cabin {
         self.picker.age_check = false;
         if adult {
             self.cfg.adult_confirmed = true;
+            self.cfg.adult_confirmed_at_ms = Some(grokhub_core::now_ms());
             self.set_explicit_personalities(true);
         }
     }
@@ -602,7 +632,10 @@ impl Cabin {
         self.picker.shown = Some((id.clone(), TryState::Running(std::time::Instant::now())));
         self.picker.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send((id, run_try_it(route, &p, &cancel)));
+            // Playbooks 8: a preview that drifts into a hard limit never shows.
+            let reply = run_try_it(route, &p, &cancel)
+                .map(|t| grokhub_core::adult_guard::screen_reply(&t).to_string());
+            let _ = tx.send((id, reply));
         });
     }
 
@@ -677,6 +710,8 @@ impl Cabin {
             }
         }
         ui.add_space(10.0);
+        // The switch or the 18+ answer may have just changed the gate.
+        super::loadout_home::nyx_wardrobe::publish_explicit_ok(ui.ctx(), self.explicit_art_ok());
         if self.picker.draft.is_some() {
             self.ui_personality_editor(ui);
             ui.add_space(16.0);
@@ -714,7 +749,10 @@ impl Cabin {
         // Prefer the real free rect width when it disagrees with available_width
         // (indent / ScrollArea), so absolute column rects match the cards' max_rect.
         let avail = avail_raw.min(arect.width()).max(1.0);
-        let row_h = arect.intersect(clip).height().max(200.0);
+        // Sized as if a jump had put this section's title at the top of the
+        // view, so the row keeps one height while Settings scrolls past it.
+        let into_section = arect.top() - ui.max_rect().top();
+        let row_h = (clip.height() - super::settings::SPY_TOP_PAD - into_section).max(200.0);
         let cols_widths = two_col_widths(avail);
         let (grid_w, detail_w) = cols_widths.unwrap_or((avail, avail));
         let cols = grid_cols(grid_w);
@@ -1187,6 +1225,34 @@ pub(super) fn paint_letter_tile(ui: &mut egui::Ui, letter: char, size: f32, hot:
     ui.painter().galley(pos, galley, crate::theme::fg());
 }
 
+/// The voice's outfit picture in a `size` tile with the letter tile's rim,
+/// or its letter tile when it has no picture. Explicit pictures need this
+/// frame's adults-only gate.
+pub(super) fn paint_preset_tile(ui: &mut egui::Ui, p: &Personality, size: f32, hot: bool) {
+    use super::loadout_home::nyx_wardrobe;
+    let ok = nyx_wardrobe::explicit_ok(ui.ctx());
+    let tex = (!p.explicit || ok)
+        .then(|| nyx_wardrobe::thumbnail(&p.id, ok))
+        .flatten()
+        .and_then(|pose| nyx_wardrobe::thumb_texture(ui.ctx(), pose));
+    let Some(tex) = tex else {
+        paint_letter_tile(ui, initial_letter(&p.name), size, hot);
+        return;
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let radius = (size * 0.27).clamp(6.0, 18.0);
+    egui::Image::from_texture(&tex)
+        .corner_radius(radius)
+        .paint_at(ui, rect);
+    let stroke = if crate::theme::is_loadout_paint() {
+        egui::Stroke::new(if hot { 2.0 } else { 1.0 }, crate::theme::signal_red())
+    } else {
+        egui::Stroke::new(1.0, crate::theme::border())
+    };
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+}
+
 fn paint_tag_chip(ui: &mut egui::Ui, label: &str, kind: TagKind) {
     let (fill, stroke, ink) = match kind {
         TagKind::Default => (
@@ -1312,7 +1378,7 @@ fn paint_grid_card(
                         ui.set_min_height(88.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
-                            paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
+                            paint_preset_tile(ui, p, 28.0, selected);
                             ui.vertical(|ui| {
                                 ui.set_max_width((inner_w - 36.0).max(40.0));
                                 ui.label(
@@ -1393,15 +1459,15 @@ fn paint_detail_panel(
                 );
             });
             ui.add_space(12.0);
-            // Slide 19: letter icon until finals land under assets/personalities/.
-            // Read the embed so empty-asset builds stay clippy-clean; drop-in PNGs rebuild.
+            // Slide 19: the voice's outfit picture, else its letter icon. Read the
+            // optional photo embed so empty-asset builds stay clippy-clean.
             let _ = (
                 PERSONALITY_PHOTO_COUNT,
                 personality_photo_png(p.id.as_str(), 1),
             );
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
-                paint_letter_tile(ui, initial_letter(&p.name), DETAIL_ICON, true);
+                paint_preset_tile(ui, p, DETAIL_ICON, true);
                 ui.vertical(|ui| {
                     ui.set_max_width((inner_w - DETAIL_ICON - 12.0).max(80.0));
                     ui.label(
@@ -1580,10 +1646,25 @@ mod tests {
         assert!(!ids(&mut cabin)
             .iter()
             .any(|id| id == "viper" || id == "whore"));
-        // Picking an explicit preset while off picks the default voice instead.
+        // Picking an explicit preset while off says why and changes nothing.
+        cabin.threads[0].personality = "pirate".into();
         cabin.set_chat_personality("whore");
-        assert_eq!(cabin.threads[0].personality, "");
+        assert_eq!(cabin.threads[0].personality, "pirate");
+        assert_eq!(
+            cabin.status,
+            "Whore is adults-only. Turn on Adults-only personalities in Settings → Personality to use it."
+        );
+        cabin.cfg.personality = "butler".into();
+        cabin.set_default_personality("viper");
+        assert_eq!(cabin.cfg.personality, "butler");
+        assert_eq!(
+            cabin.status,
+            "Viper is adults-only. Turn on Adults-only personalities in Settings → Personality to use it."
+        );
+        cabin.threads[0].personality.clear();
+        cabin.cfg.personality.clear();
         assert_eq!(cabin.chat_personality().id, "nyx");
+        assert_eq!(cabin.cfg.adult_confirmed_at_ms, None);
 
         // The first time, the one-time 18+ check comes first.
         cabin.set_explicit_personalities(true);
@@ -1592,14 +1673,19 @@ mod tests {
             "not before the 18+ check"
         );
         assert!(cabin.picker.age_check);
+        let before = grokhub_core::now_ms();
         cabin.answer_age_check(true);
         assert!(cabin.cfg.explicit_personalities);
         assert!(cabin.cfg.adult_confirmed);
+        let at = cabin
+            .cfg
+            .adult_confirmed_at_ms
+            .expect("the 18+ yes is timestamped");
+        assert!(at >= before && at <= grokhub_core::now_ms(), "{at}");
         crate::config::save(&cabin.cfg).unwrap();
-        assert!(
-            crate::config::load().explicit_personalities,
-            "round-trips in app.json"
-        );
+        let back = crate::config::load();
+        assert!(back.explicit_personalities, "round-trips in app.json");
+        assert_eq!(back.adult_confirmed_at_ms, Some(at));
         assert!(ids(&mut cabin).ends_with(&["viper".to_string(), "whore".to_string()]));
         cabin.set_chat_personality("whore");
         assert_eq!(cabin.threads[0].personality, "whore");
@@ -1772,6 +1858,34 @@ mod tests {
             plain_volatile.contains("earlier in this prompt always win"),
             "the values voice still closes under the cabin rules: {plain_volatile}"
         );
+    }
+
+    #[test]
+    fn an_explicit_pick_closes_its_tail_with_the_adult_closer_only_while_adults_only_is_on() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.cfg.adult_confirmed = true;
+        cabin.set_explicit_personalities(true);
+        cabin.set_chat_personality("whore");
+        let (_, volatile) = cabin.chat_prompt_parts();
+        assert!(
+            volatile.contains(grokhub_core::personality::ADULT_PERMISSION),
+            "{volatile}"
+        );
+        assert!(
+            volatile.ends_with(grokhub_core::talk::VOLATILE_SAFETY_CLOSER_ADULT),
+            "{volatile}"
+        );
+        assert!(!volatile.to_ascii_lowercase().contains("non-consensual"));
+        // Off: the stored pick speaks as Nyx, with no grant and the old closer.
+        cabin.set_explicit_personalities(false);
+        let (_, volatile) = cabin.chat_prompt_parts();
+        assert!(volatile.starts_with("Personality: Nyx. "), "{volatile}");
+        assert!(!volatile.contains(grokhub_core::personality::ADULT_PERMISSION));
+        assert!(
+            volatile.ends_with(grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+            "{volatile}"
+        );
+        assert!(!volatile.contains("Fictional adult content"), "{volatile}");
     }
 
     #[test]
@@ -2003,9 +2117,10 @@ mod tests {
         assert_eq!(
             shown_face(&ctx),
             ShownFace {
-                art: false,
+                art: true,
                 name: "Pirate".into()
-            }
+            },
+            "built-in voices are Nyx in their outfit"
         );
         let now = cabin.shown_personality();
         assert_eq!(
@@ -2015,6 +2130,53 @@ mod tests {
         // The other chat still shows the default everywhere.
         cabin.thread_idx = 1;
         assert_eq!(cabin.shown_personality_id(), "nyx");
+    }
+
+    #[test]
+    fn picker_tiles_show_the_outfit_and_explicit_ones_only_with_adults_only_on() {
+        fn pictures(shape: &egui::Shape, n: &mut usize) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| pictures(s, n)),
+                s if s.texture_id() != egui::TextureId::default() => *n += 1,
+                _ => {}
+            }
+        }
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let builtins = personality::builtins();
+        let preset = |id: &str| {
+            builtins
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .expect("built-in")
+        };
+        let mut custom = preset("pirate");
+        custom.id = "pirate-copy".into();
+        custom.custom = true;
+        let count = |p: &Personality, adults: bool| {
+            let mut n = 0;
+            let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+                super::super::loadout_home::nyx_wardrobe::publish_explicit_ok(ui.ctx(), adults);
+                paint_preset_tile(ui, p, DETAIL_ICON, true);
+            });
+            for c in &out.shapes {
+                pictures(&c.shape, &mut n);
+            }
+            n
+        };
+        assert_eq!(
+            count(&preset("pirate"), false),
+            1,
+            "pirate wears its outfit"
+        );
+        assert_eq!(count(&preset("nyx"), false), 1);
+        assert_eq!(count(&custom, true), 0, "custom voices keep the letter");
+        for id in ["whore", "viper"] {
+            assert_eq!(count(&preset(id), false), 0, "{id} with adults-only off");
+            assert_eq!(count(&preset(id), true), 1, "{id} with adults-only on");
+        }
     }
 
     #[test]
