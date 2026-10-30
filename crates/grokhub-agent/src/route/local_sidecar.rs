@@ -80,6 +80,13 @@ static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 /// later of this and the last start, so a long request doesn't end idle.
 static LAST_DONE_SECS: AtomicU64 = AtomicU64::new(0);
 
+/// Unix seconds when the model was last needed as the fallback (offline, or no
+/// cloud model answering). Idle time counts from this too, so it unloads only
+/// [`super::local_perf::IDLE_UNLOAD_SECS`] after the cloud is back.
+static LAST_NEEDED_SECS: AtomicU64 = AtomicU64::new(0);
+/// A keep-warm load is running on its own thread.
+static WARMING: AtomicBool = AtomicBool::new(false);
+
 /// Held for the length of one request (see [`busy`]).
 pub struct Busy(());
 
@@ -727,13 +734,44 @@ pub fn tick_idle_unload() {
     let last = side
         .last_used_secs
         .load(Ordering::SeqCst)
-        .max(LAST_DONE_SECS.load(Ordering::SeqCst));
+        .max(LAST_DONE_SECS.load(Ordering::SeqCst))
+        .max(LAST_NEEDED_SECS.load(Ordering::SeqCst));
     if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
         if let Some(side) = slot.take() {
             side.stop();
             health::log("stop", Some("idle"));
         }
     }
+}
+
+/// Keep warm only when needed: while the model covers for the cloud (`needed`),
+/// load it ahead of the next request and keep it loaded. Once it isn't needed,
+/// the idle rule unloads it [`super::local_perf::IDLE_UNLOAD_SECS`] later.
+/// The load runs on its own thread; a governor pause or the crash breaker
+/// still refuses it.
+pub fn tick_keep_warm(config_dir: &Path, needed: bool) {
+    if !needed {
+        return;
+    }
+    LAST_NEEDED_SECS.store(unix_secs(), Ordering::SeqCst);
+    if local_gov::paused() || STARTING.load(Ordering::SeqCst) {
+        return;
+    }
+    let loaded = global_slot()
+        .lock()
+        .expect("sidecar global")
+        .as_ref()
+        .is_some_and(Sidecar::alive);
+    if loaded || WARMING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let dir = config_dir.to_path_buf();
+    std::thread::spawn(move || {
+        if ensure_global(&dir).is_ok() {
+            health::log_to(&dir, "warm", Some("covering for the cloud"), None);
+        }
+        WARMING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Stop the global sidecar (tests / quit).
@@ -1020,6 +1058,7 @@ mod tests {
 
     #[test]
     fn a_server_that_exited_reads_ready_and_is_reaped() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("gh-sidecar-dead-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
@@ -1066,8 +1105,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The tests below share the process-wide slot; `cargo test` runs them on threads.
+    static SLOT_TESTS: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn keep_warm_holds_the_model_while_needed_and_unloads_after_the_timeout() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-warm-{}", std::process::id()));
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        // Online with the cloud up: nothing to keep warm.
+        LAST_NEEDED_SECS.store(0, Ordering::SeqCst);
+        tick_keep_warm(&dir, false);
+        assert_eq!(LAST_NEEDED_SECS.load(Ordering::SeqCst), 0);
+        // Offline or the cloud down: the loaded model stays, however long it sat idle.
+        tick_keep_warm(&dir, true);
+        assert!(
+            !WARMING.load(Ordering::SeqCst),
+            "already loaded: no second load"
+        );
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "needed as the fallback, so it stays loaded"
+        );
+        // The cloud is back: it stays for the timeout, counted from then.
+        tick_keep_warm(&dir, false);
+        tick_idle_unload();
+        assert!(global_pid().is_some(), "unloads only after the timeout");
+        LAST_NEEDED_SECS.store(now - 1_000, Ordering::SeqCst);
+        tick_idle_unload();
+        assert_eq!(
+            global_pid(),
+            None,
+            "idle past the timeout once it isn't needed"
+        );
+        LAST_NEEDED_SECS.store(0, Ordering::SeqCst);
+    }
+
     #[test]
     fn idle_unload_waits_for_requests_in_flight_and_counts_from_the_last_one_done() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         stop_global();
         let now = unix_secs();
         *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));

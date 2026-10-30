@@ -88,6 +88,8 @@ fn sample_loop(config_dir: &Path) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
         }
         local_sidecar::tick_governor();
+        // Offline or with the cloud down, have the model loaded before it's asked.
+        local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
         // The idle rule runs here too, so an unused model unloads on time
         // even when nothing asks for it again.
         local_sidecar::tick_idle_unload();

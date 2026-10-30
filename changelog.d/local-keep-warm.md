@@ -1,0 +1,1 @@
+- Local AI: the model loads ahead of time while it's covering for the cloud (offline, or no cloud model answering), stays loaded for as long as that lasts, and unloads 10 minutes after the cloud is back. Online with the cloud up, it still loads only on demand.
