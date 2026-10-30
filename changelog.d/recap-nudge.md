@@ -1,0 +1,1 @@
+- After multi-step work the agent ends with a Finished list (Done, Partly done or Not done per task), so the reply shows as the recap card.

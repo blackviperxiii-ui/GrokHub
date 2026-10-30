@@ -570,6 +570,14 @@ mod tests {
         assert!(rules.contains("When the next step is obvious, reversible and inside what the user asked, do it in this turn"));
         assert!(rules.contains("call ask_user_question with 2 to 4 concrete options and mark exactly one `recommended`"));
         assert!(rules.contains("A suggestion or a chosen option never replaces it."));
+        // The chat paints this block as the recap card, so the heading must match.
+        assert!(
+            rules.contains(&format!(
+                "End multi-step work with {}: Done:, Partly done: or Not done: per task",
+                grokhub_core::recap::RECAP_HEAD
+            )),
+            "{rules}"
+        );
         assert!(
             text.contains("Don't be sycophantic"),
             "the charter keeps the honesty line"
