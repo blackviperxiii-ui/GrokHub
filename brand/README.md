@@ -17,7 +17,9 @@ Swap art by replacing a file with one of the same name. Keep a square
 with a transparent background, 440 px tall. The `nyx-*.jpg` pictures are
 448 x 350 crops of the approved scenes in
 `docs/design/loadout-baseline-v1/nyx-modes/`, framed on her face and upper
-body; the dock fills its frame with the middle of each.
+body; the dock fills its frame with the middle of each. Which picture each
+mode wears is data in `crates/grokhub-core/assets/companions/nyx/companion.toml`
+(see the README beside it); the dock only embeds the files that names.
 
 What does not follow the brand: the config folder, the keychain service, the
 binary names, the app ids and the shell's `tauri.conf.json` `productName`.
