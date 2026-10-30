@@ -80,6 +80,223 @@ fn redact_patterns(input: &str, word_start: bool) -> String {
     s
 }
 
+/// A bare token with no `KEY=` in front: a prefix that starts a word, then at
+/// least `min` characters that pass `ok`.
+struct TokenShape {
+    prefix: &'static str,
+    min: usize,
+    ok: fn(char) -> bool,
+}
+
+const TOKEN_SHAPES: &[TokenShape] = &[
+    TokenShape {
+        prefix: "AKIA",
+        min: 16,
+        ok: is_upper_alnum,
+    },
+    TokenShape {
+        prefix: "ASIA",
+        min: 16,
+        ok: is_upper_alnum,
+    },
+    TokenShape {
+        prefix: "xoxb-",
+        min: 10,
+        ok: is_slack_char,
+    },
+    TokenShape {
+        prefix: "xoxp-",
+        min: 10,
+        ok: is_slack_char,
+    },
+    TokenShape {
+        prefix: "xapp-",
+        min: 10,
+        ok: is_slack_char,
+    },
+    TokenShape {
+        prefix: "sk_live_",
+        min: 10,
+        ok: is_alnum,
+    },
+    TokenShape {
+        prefix: "rk_live_",
+        min: 10,
+        ok: is_alnum,
+    },
+    TokenShape {
+        prefix: "sk_test_",
+        min: 10,
+        ok: is_alnum,
+    },
+    TokenShape {
+        prefix: "rk_test_",
+        min: 10,
+        ok: is_alnum,
+    },
+    TokenShape {
+        prefix: "AIza",
+        min: 30,
+        ok: is_url_b64,
+    },
+    TokenShape {
+        prefix: "ntn_",
+        min: 20,
+        ok: is_alnum,
+    },
+    TokenShape {
+        prefix: "secret_",
+        min: 20,
+        ok: is_alnum,
+    },
+];
+
+fn is_upper_alnum(c: char) -> bool {
+    c.is_ascii_uppercase() || c.is_ascii_digit()
+}
+
+fn is_alnum(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+}
+
+fn is_slack_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+fn is_url_b64(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_')
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
+}
+
+/// Redact keys that [`redact_secrets`] does not know, for exports that leave
+/// the app: AWS access keys, Slack, Stripe, Google API and Notion tokens,
+/// JWTs, passwords in URLs (`scheme://user:pass@host`) and PEM private key
+/// blocks. Ordinary words and paths stay.
+pub fn redact_token_shapes(input: &str) -> String {
+    let s = redact_pem_private_keys(input);
+    let s = redact_url_passwords(&s);
+    let s = redact_jwts(&s);
+    let mut s = s;
+    for shape in TOKEN_SHAPES {
+        s = redact_prefixed(&s, shape);
+    }
+    s
+}
+
+fn redact_prefixed(input: &str, shape: &TokenShape) -> String {
+    let TokenShape { prefix, min, ok } = *shape;
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(idx) = rest.find(prefix) {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx + prefix.len()..];
+        let n = after.chars().take_while(|c| ok(*c)).count();
+        let starts_word = !out.chars().next_back().is_some_and(is_word_char);
+        if !starts_word || n < min {
+            out.push_str(prefix);
+            rest = after;
+            continue;
+        }
+        out.push_str("[redacted]");
+        rest = &after[after.chars().take(n).map(char::len_utf8).sum::<usize>()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `eyJ…` header, payload and signature, each base64url, joined by dots.
+fn redact_jwts(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(idx) = rest.find("eyJ") {
+        out.push_str(&rest[..idx]);
+        let cand = &rest[idx..];
+        let parts: Vec<usize> = cand
+            .splitn(4, '.')
+            .take(3)
+            .map(|p| p.chars().take_while(|c| is_url_b64(*c)).count())
+            .collect();
+        let whole = parts.len() == 3
+            && parts[0] >= 10
+            && parts[1] >= 4
+            && parts[2] >= 4
+            && cand.split('.').take(2).all(|p| p.chars().all(is_url_b64));
+        let starts_word = !out.chars().next_back().is_some_and(is_word_char);
+        if !(whole && starts_word) {
+            out.push_str("eyJ");
+            rest = &cand[3..];
+            continue;
+        }
+        out.push_str("[redacted]");
+        rest = &cand[parts[0] + parts[1] + parts[2] + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `scheme://user:pass@host` keeps the user and host and drops the password.
+fn redact_url_passwords(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(idx) = rest.find("://") {
+        out.push_str(&rest[..idx + 3]);
+        let after = &rest[idx + 3..];
+        let auth_end = after
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '/' | '?' | '#' | '"' | '\'' | '<' | '>')
+            })
+            .unwrap_or(after.len());
+        let authority = &after[..auth_end];
+        if let Some(at) = authority.rfind('@') {
+            if let Some(colon) = authority[..at].find(':') {
+                if colon + 1 < at && &authority[colon + 1..at] != "[redacted]" {
+                    out.push_str(&authority[..colon + 1]);
+                    out.push_str("[redacted]");
+                    rest = &after[at..];
+                    continue;
+                }
+            }
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A whole `-----BEGIN … PRIVATE KEY-----` block through its END line; with
+/// no END line, everything after BEGIN.
+fn redact_pem_private_keys(input: &str) -> String {
+    const BEGIN: &str = "-----BEGIN ";
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(idx) = rest.find(BEGIN) {
+        let head = &rest[idx..];
+        let line_end = head.find('\n').unwrap_or(head.len());
+        if !head[..line_end].contains("PRIVATE KEY-----") {
+            out.push_str(&rest[..idx + BEGIN.len()]);
+            rest = &rest[idx + BEGIN.len()..];
+            continue;
+        }
+        out.push_str(&rest[..idx]);
+        out.push_str("[redacted private key]");
+        rest = match head.find("-----END ") {
+            Some(end) => {
+                let tail = &head[end + "-----END ".len()..];
+                match tail.find("-----") {
+                    Some(close) => &tail[close + 5..],
+                    None => "",
+                }
+            }
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn is_plain_text(s: &str) -> bool {
     redact_secrets(s) == s
 }
@@ -224,5 +441,41 @@ mod tests {
             "a short sk- prefix must not hide the real key: {mixed}"
         );
         assert!(mixed.contains("sk-short"), "{mixed}");
+    }
+
+    #[test]
+    fn bare_token_shapes_are_redacted_and_words_stay() {
+        assert_eq!(
+            redact_token_shapes(
+                "aws AKIAFAKEFAKEFAKE0000 slack xoxb-0000-FAKE-fake-token \
+                 stripe sk_live_FAKEFAKE0000 google AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA \
+                 notion ntn_FAKEFAKEFAKEFAKEFAKE secret_FAKEFAKEFAKEFAKEFAKE"
+            ),
+            "aws [redacted] slack [redacted] \
+                 stripe [redacted] google [redacted] \
+                 notion [redacted] [redacted]"
+        );
+        assert_eq!(
+            redact_token_shapes("jwt eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.ZmFrZXNpZw."),
+            "jwt [redacted]."
+        );
+        assert_eq!(
+            redact_token_shapes("git https://app:hunter2fake@example.com/repo.git ok"),
+            "git https://app:[redacted]@example.com/repo.git ok"
+        );
+        assert_eq!(
+            redact_token_shapes(
+                "a\n-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----\nb"
+            ),
+            "a\n[redacted private key]\nb"
+        );
+        assert_eq!(
+            redact_token_shapes("-----BEGIN PRIVATE KEY-----\ncut off"),
+            "[redacted private key]"
+        );
+        let kept = "path /srv/secret_sauce_recipe and MYAKIAFAKEFAKEFAKE0000, \
+                    AKIA short, http://example.com:8080/x, user@example.com, \
+                    -----BEGIN CERTIFICATE----- eyJnot.a.jwt";
+        assert_eq!(redact_token_shapes(kept), kept);
     }
 }

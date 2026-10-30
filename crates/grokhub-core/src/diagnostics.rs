@@ -217,10 +217,13 @@ pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
     Ok(dir.join(diagnostics_zip_name(at)))
 }
 
-/// Redact secrets, emails/PII, credential assignments (`DB_PASSWORD=…`,
-/// `"api_key": "…"`), and home-rooted paths for a diagnostics export.
+/// Redact secrets, bare token shapes (AWS, Slack, Stripe, Google, Notion,
+/// JWTs, URL passwords, PEM private keys), emails/PII, credential
+/// assignments (`DB_PASSWORD=…`, `"api_key": "…"`), and home-rooted paths
+/// for a diagnostics export.
 pub fn redact_for_diagnostics(input: &str, home: Option<&str>) -> String {
-    let (s, _) = crate::pii::redact_recall(input);
+    let s = crate::redact::redact_token_shapes(input);
+    let (s, _) = crate::pii::redact_recall(&s);
     let mut s = redact_credential_values(&s);
     if let Some(home) = home.map(str::trim).filter(|h| !h.is_empty()) {
         s = redact_home_paths(&s, home);
@@ -948,5 +951,48 @@ mod tests {
             "adults-only allowed (standard voice)"
         );
         assert_eq!(content_level_label(true, true), "adults-only");
+    }
+
+    #[test]
+    fn bare_keys_of_every_shape_are_redacted_in_json_and_markdown() {
+        let samples = [
+            "AKIAFAKEFAKEFAKE0000",
+            "xoxb-0000-FAKE-fake-token",
+            "xoxp-0000-FAKE-fake-token",
+            "xapp-0-FAKE-0000-faketoken",
+            "sk_live_FAKEFAKE0000",
+            "rk_live_FAKEFAKE0000",
+            "sk_test_FAKEFAKE0000",
+            "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA",
+            "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.ZmFrZXNpZw",
+            "ntn_FAKEFAKEFAKEFAKEFAKE",
+            "secret_FAKEFAKEFAKEFAKEFAKE",
+            "hunter2fake",
+            "not-a-real-key-body",
+        ];
+        let raw = "aws AKIAFAKEFAKEFAKE0000\n\
+                   slack xoxb-0000-FAKE-fake-token xoxp-0000-FAKE-fake-token xapp-0-FAKE-0000-faketoken\n\
+                   stripe sk_live_FAKEFAKE0000 rk_live_FAKEFAKE0000 sk_test_FAKEFAKE0000\n\
+                   google AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA\n\
+                   jwt eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.ZmFrZXNpZw\n\
+                   notion ntn_FAKEFAKEFAKEFAKEFAKE secret_FAKEFAKEFAKEFAKEFAKE\n\
+                   db postgres://app:hunter2fake@db.local:5432/app\n\
+                   -----BEGIN OPENSSH PRIVATE KEY-----\n\
+                   not-a-real-key-body\n\
+                   -----END OPENSSH PRIVATE KEY-----\n\
+                   done";
+        let mut export = DiagnosticsExport::with_defaults("9.9.9-test", "thr-1", "Keys");
+        export.recent_logs = redact_for_diagnostics(raw, None);
+        let json = serde_json::to_string(&export).unwrap();
+        let md = diagnostics_markdown(&export);
+        for sample in samples {
+            assert!(!json.contains(sample), "{sample} in JSON: {json}");
+            assert!(!md.contains(sample), "{sample} in Markdown: {md}");
+        }
+        assert!(
+            md.contains("db postgres://app:[redacted]@db.local:5432/app"),
+            "{md}"
+        );
+        assert!(md.contains("[redacted private key]\ndone"), "{md}");
     }
 }
