@@ -52,11 +52,14 @@ corner box shows that set in every mode, and the picker tile shows pose 1.
 | `defaults/surfer/1-5` | Surfer |
 | `defaults/zen-mentor/1-5` | Zen Mentor |
 | `viper-snake-onesie.png`, `defaults/viper/2-5` | Viper (explicit) |
-| `defaults/whore/1-5` | Whore (explicit) |
+| `raunchy.png`, `defaults/whore/1-5` | Whore and any other explicit preset (the raunchy outfit) |
 
-The explicit presets' pictures show only while Settings → Adults-only
-personalities is on and the one-time 18+ check was answered yes.
+The explicit presets' pictures (Viper's and the raunchy set) show only
+while Settings → Adults-only personalities is on, which takes the one-time
+18+ check. They show in every mode, moving to the next pose when what the
+chat is doing changes.
 
 ## Reference only
 
-`raunchy-v1.png` is an earlier outfit kept for reference. Nothing shows it.
+`raunchy-v1.png` is an earlier version of the raunchy outfit, kept for
+reference. Nothing shows it.
