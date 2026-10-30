@@ -266,32 +266,30 @@ fn redact_url_passwords(input: &str) -> String {
     out
 }
 
-/// A whole `-----BEGIN … PRIVATE KEY-----` block through its END line; with
-/// no END line, everything after BEGIN.
+/// A whole `-----BEGIN <label>-----` private key block through its matching
+/// `-----END <label>-----` line; with no matching END line, everything after
+/// BEGIN. Another END line inside the block does not close it.
 fn redact_pem_private_keys(input: &str) -> String {
     const BEGIN: &str = "-----BEGIN ";
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(idx) = rest.find(BEGIN) {
         let head = &rest[idx..];
-        let line_end = head.find('\n').unwrap_or(head.len());
-        if !head[..line_end].contains("PRIVATE KEY-----") {
+        let label = head[BEGIN.len()..]
+            .split('\n')
+            .next()
+            .and_then(|line| line.split_once("-----"))
+            .map(|(label, _)| label)
+            .filter(|label| label.contains("PRIVATE KEY"));
+        let Some(label) = label else {
             out.push_str(&rest[..idx + BEGIN.len()]);
             rest = &rest[idx + BEGIN.len()..];
             continue;
-        }
+        };
         out.push_str(&rest[..idx]);
         out.push_str("[redacted private key]");
-        rest = match head.find("-----END ") {
-            Some(end) => {
-                let tail = &head[end + "-----END ".len()..];
-                match tail.find("-----") {
-                    Some(close) => &tail[close + 5..],
-                    None => "",
-                }
-            }
-            None => "",
-        };
+        let end = format!("-----END {label}-----");
+        rest = head.find(&end).map_or("", |at| &head[at + end.len()..]);
     }
     out.push_str(rest);
     out
@@ -472,6 +470,21 @@ mod tests {
         assert_eq!(
             redact_token_shapes("-----BEGIN PRIVATE KEY-----\ncut off"),
             "[redacted private key]"
+        );
+        assert_eq!(
+            redact_token_shapes(
+                "a\n-----BEGIN RSA PRIVATE KEY-----\nfirst-half\n-----END NOT-A-KEY-----\n\
+                 second-half\n-----END RSA PRIVATE KEY-----\nb"
+            ),
+            "a\n[redacted private key]\nb",
+            "only the matching END line closes the block"
+        );
+        assert_eq!(
+            redact_token_shapes(
+                "-----BEGIN EC PRIVATE KEY-----\nhalf\n-----END RSA PRIVATE KEY-----\nmore"
+            ),
+            "[redacted private key]",
+            "a mismatched END keeps redacting to the end"
         );
         let kept = "path /srv/secret_sauce_recipe and MYAKIAFAKEFAKEFAKE0000, \
                     AKIA short, http://example.com:8080/x, user@example.com, \

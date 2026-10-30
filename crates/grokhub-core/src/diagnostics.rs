@@ -957,12 +957,14 @@ mod tests {
     fn bare_keys_of_every_shape_are_redacted_in_json_and_markdown() {
         let samples = [
             "AKIAFAKEFAKEFAKE0000",
+            "ASIAFAKEFAKEFAKE0000",
             "xoxb-0000-FAKE-fake-token",
             "xoxp-0000-FAKE-fake-token",
             "xapp-0-FAKE-0000-faketoken",
             "sk_live_FAKEFAKE0000",
             "rk_live_FAKEFAKE0000",
             "sk_test_FAKEFAKE0000",
+            "rk_test_FAKEFAKE0000",
             "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA",
             "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.ZmFrZXNpZw",
             "ntn_FAKEFAKEFAKEFAKEFAKE",
@@ -970,9 +972,9 @@ mod tests {
             "hunter2fake",
             "not-a-real-key-body",
         ];
-        let raw = "aws AKIAFAKEFAKEFAKE0000\n\
+        let raw = "aws AKIAFAKEFAKEFAKE0000 ASIAFAKEFAKEFAKE0000\n\
                    slack xoxb-0000-FAKE-fake-token xoxp-0000-FAKE-fake-token xapp-0-FAKE-0000-faketoken\n\
-                   stripe sk_live_FAKEFAKE0000 rk_live_FAKEFAKE0000 sk_test_FAKEFAKE0000\n\
+                   stripe sk_live_FAKEFAKE0000 rk_live_FAKEFAKE0000 sk_test_FAKEFAKE0000 rk_test_FAKEFAKE0000\n\
                    google AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA\n\
                    jwt eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.ZmFrZXNpZw\n\
                    notion ntn_FAKEFAKEFAKEFAKEFAKE secret_FAKEFAKEFAKEFAKEFAKE\n\
