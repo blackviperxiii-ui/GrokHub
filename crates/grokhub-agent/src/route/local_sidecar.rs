@@ -198,8 +198,10 @@ pub fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
-/// Command line for llama-server: host locked to loopback, no credentials,
-/// plus hardware-aware perf flags from [`super::local_perf`].
+/// Command line for llama-server: host locked to loopback, plus
+/// hardware-aware perf flags from [`super::local_perf`]. The API key never
+/// goes on the command line: `llama_command` passes it as `LLAMA_API_KEY`
+/// in the child's environment, out of the process list.
 pub fn llama_args(model: &Path, host: &str, port: u16) -> Vec<String> {
     llama_args_with_perf(model, host, port, &super::local_perf::current_defaults())
 }
@@ -1006,16 +1008,19 @@ mod tests {
             let cmd = llama_command(Path::new(llama_server_name()), &args, "fake-local-token");
             let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
             assert!(!args.iter().any(|a| a.contains("fake-local-token")));
-            assert!(!args.iter().any(|a| a.contains("--api-key")));
+            assert!(
+                !args
+                    .iter()
+                    .any(|a| *a == "--api-key" || a.starts_with("--api-key=")),
+                "{args:?}"
+            );
             assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
             assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
-            assert_eq!(
-                cmd.get_envs().collect::<Vec<_>>(),
-                vec![(
-                    std::ffi::OsStr::new("LLAMA_API_KEY"),
-                    Some(std::ffi::OsStr::new("fake-local-token"))
-                )]
-            );
+            let key = cmd
+                .get_envs()
+                .find(|(k, _)| *k == std::ffi::OsStr::new("LLAMA_API_KEY"))
+                .and_then(|(_, v)| v);
+            assert_eq!(key, Some(std::ffi::OsStr::new("fake-local-token")));
         }
     }
 
