@@ -1,0 +1,1 @@
+- Local AI: looking for an installed llama-server on PATH skips empty and relative entries, so Loadout never runs an engine from the folder it was started in.
