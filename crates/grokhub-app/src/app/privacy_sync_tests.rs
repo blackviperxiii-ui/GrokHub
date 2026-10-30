@@ -1422,3 +1422,33 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
     );
     release_isolated(&root, cabin);
 }
+
+// The on-device model lines on the Privacy page, in PRIVACY.md and in the
+// installer's privacy.txt say the same thing, each line once.
+#[test]
+fn local_model_routing_lines_match_the_privacy_docs() {
+    let lines = super::privacy_page::LOCAL_ROUTING;
+    assert_eq!(
+        lines[0],
+        "Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work."
+    );
+    assert_eq!(
+        lines[4],
+        "Explicit 18+ chats go only to xAI or this PC's model."
+    );
+    for (name, doc) in [
+        ("PRIVACY.md", include_str!("../../../../PRIVACY.md")),
+        (
+            "privacy.txt",
+            include_str!("../../../../packaging/windows/privacy.txt"),
+        ),
+    ] {
+        for line in lines {
+            assert_eq!(
+                doc.matches(&format!("- {line}")).count(),
+                1,
+                "{name} lists {line:?} once"
+            );
+        }
+    }
+}
