@@ -11,6 +11,8 @@
 //!
 //! [`current`] caches the reading for 2 s. [`peek`] never blocks: the UI
 //! reads it every frame and a stale reading refreshes on a worker thread.
+//! Refreshes run one at a time, and a reading is stamped with when it
+//! started, so an older reading never replaces a newer one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -23,41 +25,87 @@ pub use grokhub_core::game_guard::{GameGuard, Guarded};
 /// How long one reading is reused.
 const FRESH: Duration = Duration::from_secs(2);
 
-static CACHE: Mutex<Option<(Instant, GameGuard)>> = Mutex::new(None);
-static REFRESHING: AtomicBool = AtomicBool::new(false);
-
-fn cached() -> Option<(Instant, GameGuard)> {
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner())
+/// One cached reading and the lock that lets one refresh run at a time.
+struct Cache {
+    /// The last reading and when its read started.
+    last: Mutex<Option<(Instant, GameGuard)>>,
+    /// Held while the readers run, so stale callers wait for one reading
+    /// instead of each reading in parallel.
+    refresh: Mutex<()>,
+    /// A [`peek`] worker is on its way.
+    refreshing: AtomicBool,
 }
 
-fn store(guard: GameGuard) -> GameGuard {
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), guard));
-    guard
+impl Cache {
+    const fn new() -> Self {
+        Self {
+            last: Mutex::new(None),
+            refresh: Mutex::new(()),
+            refreshing: AtomicBool::new(false),
+        }
+    }
+
+    fn cached(&self) -> Option<(Instant, GameGuard)> {
+        *self.last.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn fresh(&self) -> Option<GameGuard> {
+        self.cached()
+            .filter(|(at, _)| at.elapsed() < FRESH)
+            .map(|(_, g)| g)
+    }
+
+    /// Keep `guard`, read from `started` on, unless a reading that started
+    /// later is already kept. Returns the reading kept.
+    fn store(&self, started: Instant, guard: GameGuard) -> GameGuard {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        match *last {
+            Some((at, newer)) if at > started => newer,
+            _ => {
+                *last = Some((started, guard));
+                guard
+            }
+        }
+    }
+
+    /// The fresh reading, or a new one. One refresh runs at a time; a caller
+    /// that waited for it uses the reading it left.
+    fn current(&self, read: impl FnOnce() -> GameGuard) -> GameGuard {
+        if let Some(g) = self.fresh() {
+            return g;
+        }
+        let _one = self.refresh.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(g) = self.fresh() {
+            return g;
+        }
+        let started = Instant::now();
+        self.store(started, read())
+    }
 }
+
+static CACHE: Cache = Cache::new();
 
 /// The guard now, read at most every 2 s. Blocks on the readers when the
 /// last reading is stale (a few ms), so call it off the UI thread.
 pub fn current() -> GameGuard {
-    match cached() {
-        Some((at, g)) if at.elapsed() < FRESH => g,
-        _ => store(read()),
-    }
+    CACHE.current(read)
 }
 
 /// The last reading, without blocking. A stale one is refreshed on a worker
 /// thread for the next call. Clear until the first reading lands.
 pub fn peek() -> GameGuard {
-    let last = cached();
-    if last.is_none_or(|(at, _)| at.elapsed() >= FRESH) && !REFRESHING.swap(true, Ordering::SeqCst)
+    let last = CACHE.cached();
+    if last.is_none_or(|(at, _)| at.elapsed() >= FRESH)
+        && !CACHE.refreshing.swap(true, Ordering::SeqCst)
     {
         let spawned = std::thread::Builder::new()
             .name("game-guard".into())
             .spawn(|| {
-                store(read());
-                REFRESHING.store(false, Ordering::SeqCst);
+                CACHE.current(read);
+                CACHE.refreshing.store(false, Ordering::SeqCst);
             });
         if spawned.is_err() {
-            REFRESHING.store(false, Ordering::SeqCst);
+            CACHE.refreshing.store(false, Ordering::SeqCst);
         }
     }
     last.map(|(_, g)| g).unwrap_or_default()
@@ -386,6 +434,60 @@ mod tests {
         // An anti-cheat always counts as gaming.
         assert!(g.anticheat.is_none() || g.gaming, "{g:?}");
         assert_eq!(peek(), current());
+    }
+
+    const FACEIT: GameGuard = GameGuard {
+        anticheat: Some("FACEIT"),
+        gaming: true,
+        idle_anticheat: None,
+    };
+
+    #[test]
+    fn an_older_reading_never_replaces_a_newer_one() {
+        let cache = Cache::new();
+        let older = Instant::now();
+        let newer = older + Duration::from_millis(5);
+        // The newer read (an anti-cheat) lands first; the slower, older
+        // read that saw nothing lands after it and is dropped.
+        assert_eq!(cache.store(newer, FACEIT), FACEIT);
+        assert_eq!(cache.store(older, GameGuard::default()), FACEIT);
+        assert_eq!(cache.cached(), Some((newer, FACEIT)));
+        // A reading that started later still replaces it.
+        let later = newer + Duration::from_millis(5);
+        assert_eq!(
+            cache.store(later, GameGuard::default()),
+            GameGuard::default()
+        );
+    }
+
+    #[test]
+    fn stale_callers_wait_for_one_refresh_instead_of_reading_in_parallel() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::mpsc;
+        static SLOW: Cache = Cache::new();
+        static SECOND_READS: AtomicUsize = AtomicUsize::new(0);
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let first = std::thread::spawn(move || {
+            SLOW.current(move || {
+                started_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+                FACEIT
+            })
+        });
+        started_rx.recv().unwrap();
+        // The first refresh is mid-read: a second stale caller waits for it
+        // and takes its reading rather than running the readers again.
+        let second = std::thread::spawn(|| {
+            SLOW.current(|| {
+                SECOND_READS.fetch_add(1, Ordering::SeqCst);
+                GameGuard::default()
+            })
+        });
+        go_tx.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), FACEIT);
+        assert_eq!(second.join().unwrap(), FACEIT);
+        assert_eq!(SECOND_READS.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(any(target_os = "linux", windows))]

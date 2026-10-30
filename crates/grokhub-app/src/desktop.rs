@@ -34,7 +34,7 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct DeskScan {
     rows: Vec<AtspiRow>,
     lock: Vec<String>,
@@ -640,7 +640,22 @@ pub fn ensure_hands() -> HandsDown {
     hands_peek()
 }
 
+/// The shared window scan (AT-SPI, wmctrl) behind [`collect_rows`] and
+/// [`lock_titles`]. Reading other windows' titles waits while an anti-cheat
+/// runs: every caller then gets an empty scan and no helper is started.
 fn desk_scan() -> DeskScan {
+    desk_scan_under(crate::desktop_mcp::game_guard(), desk_scan_cached)
+}
+
+/// [`desk_scan`] with the game guard the caller read.
+fn desk_scan_under(guard: GameGuard, scan: impl FnOnce() -> DeskScan) -> DeskScan {
+    if guard.blocks(Guarded::WindowCheck).is_some() {
+        return DeskScan::default();
+    }
+    scan()
+}
+
+fn desk_scan_cached() -> DeskScan {
     if let Ok(g) = LAST_DESK_SCAN.lock() {
         if let Some((at, scan)) = g.as_ref() {
             if at.elapsed() < DESK_SCAN_TTL {
@@ -2358,6 +2373,44 @@ mod tests {
             Err("Screen capture is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())
         );
         assert!(!dir.exists(), "a held capture writes nothing");
+    }
+
+    #[test]
+    fn an_anticheat_stops_the_shared_window_scan_for_every_caller() {
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let seen = || DeskScan {
+            rows: vec![AtspiRow {
+                name: "Game".into(),
+                role: "frame".into(),
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }],
+            lock: vec!["Lock".into()],
+        };
+        let held = desk_scan_under(eac, || panic!("no window scan while an anti-cheat runs"));
+        assert!(held.rows.is_empty() && held.lock.is_empty());
+        // Gaming alone pauses desktop control, not window checks.
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        assert_eq!(desk_scan_under(gaming, seen).lock, ["Lock"]);
+        assert_eq!(desk_scan_under(GameGuard::default(), seen).rows.len(), 1);
+        // collect_rows and lock_titles share the guarded scan.
+        let src = include_str!("desktop.rs");
+        let scan = src
+            .split("\nfn desk_scan() -> DeskScan {")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("desk_scan");
+        assert!(scan.contains("desk_scan_under(crate::desktop_mcp::game_guard()"));
     }
 
     #[test]

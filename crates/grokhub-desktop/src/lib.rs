@@ -106,25 +106,47 @@ pub fn run_cua_stdio() -> i32 {
             continue;
         }
         let cfg = crate::host::settings();
-        // The Cua driver is desktop control end to end: every call waits
-        // while the user is gaming or an anti-cheat runs.
-        if cfg.desktop_control {
-            if let Some(reply) = guard_refusal_line(&line, game_guard::current()) {
-                emit(&reply);
-                continue;
-            }
-        }
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
         let gate = hx::CuaGate {
             enabled: cfg.desktop_control,
             flag: cfg.cua_driver,
             halted: halted(),
         };
-        if let Some(reply) = proxy.handle_line(&line, gate, &dir, &mut halted) {
+        if let Some(reply) = cua_line(
+            &mut proxy,
+            &line,
+            gate,
+            game_guard::current,
+            &dir,
+            &mut halted,
+        ) {
             emit(&reply);
         }
     }
     0
+}
+
+/// One Cua stdin line. A halt (which kills a running child) and the switch
+/// or flag being off are handled first; then, since the Cua driver is
+/// desktop control end to end, a call that would reach the child waits
+/// while the user is gaming or an anti-cheat runs.
+fn cua_line<C: grokhub_agent::harness::CuaChild>(
+    proxy: &mut grokhub_agent::harness::CuaProxy<C>,
+    line: &str,
+    gate: grokhub_agent::harness::CuaGate,
+    guard: impl FnOnce() -> game_guard::GameGuard,
+    dir: &std::path::Path,
+    halted: &mut dyn FnMut() -> bool,
+) -> Option<String> {
+    if gate.halted {
+        proxy.halt();
+    }
+    if gate.enabled && gate.flag && !proxy.is_halted() {
+        if let Some(reply) = guard_refusal_line(line, guard()) {
+            return Some(reply);
+        }
+    }
+    proxy.handle_line(line, gate, dir, halted)
 }
 
 /// The refusal for a `tools/call` line the game guard holds, or `None` for
@@ -395,13 +417,14 @@ pub fn request_desktop_test(enabled: bool) -> String {
         set_desktop_enabled(false);
         return grokhub_core::desktop_mcp::OFF_MSG.to_string();
     }
-    // The test moves the pointer on every monitor.
-    if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::DesktopControl) {
-        return msg;
-    }
-    if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
-        note_halt();
-        return (*grokhub_core::desktop_mcp::HALT_MSG).to_string();
+    let halted = read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()));
+    match desktop_test_hold(halted, game_guard::current) {
+        Some(TestHold::Halted) => {
+            note_halt();
+            return (*grokhub_core::desktop_mcp::HALT_MSG).to_string();
+        }
+        Some(TestHold::Guard(msg)) => return msg,
+        None => {}
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
@@ -411,6 +434,29 @@ pub fn request_desktop_test(enabled: bool) -> String {
     {
         "Desktop test did not open a session.".into()
     }
+}
+
+/// Why the desktop test does not run.
+#[derive(Debug, PartialEq, Eq)]
+enum TestHold {
+    Halted,
+    /// The game guard's message.
+    Guard(String),
+}
+
+/// A halt is checked first, so a Test after Halt is noted as a halt even
+/// while gaming; then the game guard, since the test moves the pointer on
+/// every monitor.
+fn desktop_test_hold(
+    halted: bool,
+    guard: impl FnOnce() -> game_guard::GameGuard,
+) -> Option<TestHold> {
+    if halted {
+        return Some(TestHold::Halted);
+    }
+    guard()
+        .blocks(game_guard::Guarded::DesktopControl)
+        .map(TestHold::Guard)
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -1111,5 +1157,121 @@ mod tests {
         );
         let list = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
         assert_eq!(guard_refusal_line(list, gaming), None);
+    }
+
+    /// A Cua child that answers `tools/list` and counts its requests and kills.
+    struct FakeCua {
+        requests: std::rc::Rc<std::cell::Cell<usize>>,
+        kills: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl grokhub_agent::harness::CuaChild for FakeCua {
+        fn request(&mut self, _line: &str, id: &serde_json::Value) -> Result<String, String> {
+            self.requests.set(self.requests.get() + 1);
+            Ok(serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}).to_string())
+        }
+        fn notify(&mut self, _line: &str) {}
+        fn kill(&mut self) {
+            self.kills.set(self.kills.get() + 1);
+        }
+    }
+
+    fn reply_text(reply: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(reply).unwrap();
+        v["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn a_halt_or_cua_off_is_handled_before_the_game_guard() {
+        use grokhub_agent::harness::{CuaGate, CuaProxy};
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let faceit = game_guard::GameGuard {
+            anticheat: Some("FACEIT"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let dir = test_root("cua-guard-order");
+        let requests = Rc::new(Cell::new(0));
+        let kills = Rc::new(Cell::new(0));
+        let (r, k) = (requests.clone(), kills.clone());
+        let mut proxy: CuaProxy<FakeCua> = CuaProxy::new(Box::new(move || {
+            Ok(FakeCua {
+                requests: r.clone(),
+                kills: k.clone(),
+            })
+        }));
+        let live = CuaGate {
+            enabled: true,
+            flag: true,
+            halted: false,
+        };
+        let mut never = || false;
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"click","arguments":{"x":1,"y":1}}}"#;
+        // A tools/list starts the child.
+        assert!(cua_line(&mut proxy, list, live, || faceit, &dir, &mut never).is_some());
+        assert_eq!(requests.get(), 1);
+
+        // Live and gaming: the game guard answers, the child is not asked.
+        let held = cua_line(&mut proxy, call, live, || faceit, &dir, &mut never).unwrap();
+        assert_eq!(
+            reply_text(&held),
+            "Desktop control is blocked while FACEIT is running so it doesn't flag this PC."
+        );
+        assert_eq!((requests.get(), kills.get()), (1, 0));
+
+        // The Cua flag off while gaming: the Cua-off answer, not the game's.
+        let off = CuaGate {
+            flag: false,
+            ..live
+        };
+        let reply = cua_line(&mut proxy, call, off, || faceit, &dir, &mut never).unwrap();
+        assert_eq!(reply_text(&reply), *grokhub_agent::harness::CUA_OFF_MSG);
+
+        // A halt while gaming kills the running child and says it halted.
+        let halted = CuaGate {
+            halted: true,
+            ..live
+        };
+        let reply = cua_line(
+            &mut proxy,
+            call,
+            halted,
+            || panic!("the guard is not read after a halt"),
+            &dir,
+            &mut || true,
+        )
+        .unwrap();
+        assert_eq!(reply_text(&reply), *grokhub_core::desktop_mcp::HALT_MSG);
+        assert_eq!(kills.get(), 1, "the halt killed the Cua child");
+        assert!(proxy.is_halted());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_desktop_test_after_halt_is_a_halt_even_while_gaming() {
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        assert_eq!(
+            desktop_test_hold(true, || panic!("the guard is not read after a halt")),
+            Some(TestHold::Halted)
+        );
+        assert_eq!(
+            desktop_test_hold(false, || gaming),
+            Some(TestHold::Guard(
+                "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".into()
+            ))
+        );
+        assert_eq!(
+            desktop_test_hold(false, game_guard::GameGuard::default),
+            None
+        );
     }
 }
