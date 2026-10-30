@@ -24,6 +24,7 @@ const NYX_DOCTOR_JPG: &[u8] = include_bytes!("../../../../brand/nyx-doctor.jpg")
 const NYX_READING_JPG: &[u8] = include_bytes!("../../../../brand/nyx-reading.jpg");
 const NYX_HANGING_OUT_JPG: &[u8] = include_bytes!("../../../../brand/nyx-hanging-out.jpg");
 const NYX_VIPER_JPG: &[u8] = include_bytes!("../../../../brand/nyx-viper.jpg");
+const NYX_RAUNCHY_JPG: &[u8] = include_bytes!("../../../../brand/nyx-raunchy.jpg");
 /// Below this page width the dock hides and the chat gets the whole page.
 /// The default 1100 px window leaves about 840 px beside the rail, so the
 /// dock shows there in its compact width.
@@ -44,8 +45,9 @@ pub(super) const XP_PER_LEVEL: u32 = 500;
 
 /// What Nyx is doing, shown in the corner box: a tool turn picks Working,
 /// Doctor or Reading by what the tool does, a game the user just left is
-/// Gaming, and anything else is Hanging out. The Viper personality wears
-/// the snake onesie whatever the mode.
+/// Gaming, and anything else is Hanging out. With adults-only on, the Viper
+/// personality wears the snake onesie and the other explicit ones the
+/// raunchy outfit, whatever the mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mood {
     Working,
@@ -54,6 +56,7 @@ pub(super) enum Mood {
     Reading,
     HangingOut,
     Viper,
+    Raunchy,
 }
 
 impl Mood {
@@ -65,6 +68,7 @@ impl Mood {
             Mood::Reading => NYX_READING_JPG,
             Mood::HangingOut => NYX_HANGING_OUT_JPG,
             Mood::Viper => NYX_VIPER_JPG,
+            Mood::Raunchy => NYX_RAUNCHY_JPG,
         }
     }
 
@@ -76,13 +80,14 @@ impl Mood {
             Mood::Reading => "loadout-nyx-reading",
             Mood::HangingOut => "loadout-nyx-hanging-out",
             Mood::Viper => "loadout-nyx-viper",
+            Mood::Raunchy => "loadout-nyx-raunchy",
         }
     }
 }
 
 /// `GROKHUB_DECK_MOOD` (`working`, `gaming`, `doctor`, `reading`,
-/// `hanging-out`, `viper`) pins the picture for the deck screenshots
-/// (`scripts/deck-shots.ps1`), where no turn or game can run.
+/// `hanging-out`, `viper`, `raunchy`) pins the picture for the deck
+/// screenshots (`scripts/deck-shots.ps1`), where no turn or game can run.
 pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "working" => Some(Mood::Working),
@@ -91,6 +96,7 @@ pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
         "reading" => Some(Mood::Reading),
         "hanging-out" => Some(Mood::HangingOut),
         "viper" => Some(Mood::Viper),
+        "raunchy" => Some(Mood::Raunchy),
         _ => None,
     }
 }
@@ -167,10 +173,23 @@ pub(super) fn tool_mood(title: &str) -> Mood {
     }
 }
 
-/// Viper wins; then a running tool's mode; then a game the user just left.
-pub(super) fn mood_for(viper: bool, tool: Option<&str>, gaming: bool) -> Mood {
-    if viper {
-        Mood::Viper
+/// The outfit a personality wears over every mode. Only explicit presets
+/// have one, and only while adults-only personalities are on: Viper's snake
+/// onesie, else the raunchy outfit. Anything else shows Nyx's mode picture.
+pub(super) fn outfit_for(id: &str, explicit: bool, adults_only: bool) -> Option<Mood> {
+    if !(explicit && adults_only) {
+        None
+    } else if id == "viper" {
+        Some(Mood::Viper)
+    } else {
+        Some(Mood::Raunchy)
+    }
+}
+
+/// An outfit wins; then a running tool's mode; then a game the user just left.
+pub(super) fn mood_for(outfit: Option<Mood>, tool: Option<&str>, gaming: bool) -> Mood {
+    if let Some(outfit) = outfit {
+        outfit
     } else if let Some(title) = tool {
         tool_mood(title)
     } else if gaming {
@@ -1251,7 +1270,9 @@ impl Cabin {
 
     /// The dock's pose for what this chat is doing right now.
     pub(super) fn companion_mood(&self) -> Mood {
-        if let Some(mood) = pinned_mood() {
+        let adults_only = self.cfg.explicit_personalities;
+        // Even a deck pin shows the raunchy outfit only with adults-only on.
+        if let Some(mood) = pinned_mood().filter(|m| *m != Mood::Raunchy || adults_only) {
             return mood;
         }
         // A permission ask is a tool waiting to run.
@@ -1266,7 +1287,11 @@ impl Cabin {
             .app
             .as_ref()
             .is_some_and(|a| a.category == grokhub_core::focus_app::FocusCategory::Gaming);
-        mood_for(self.shown_personality_id() == "viper", tool, gaming)
+        let id = self.shown_personality_id();
+        let explicit = adults_only
+            && grokhub_core::personality::lookup(&super::personality_ui::presets_dir(), &id)
+                .explicit;
+        mood_for(outfit_for(&id, explicit, adults_only), tool, gaming)
     }
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
@@ -1665,6 +1690,7 @@ mod tests {
             Mood::Reading,
             Mood::HangingOut,
             Mood::Viper,
+            Mood::Raunchy,
         ];
         for mood in all {
             let img = image::load_from_memory(mood.art()).expect("mode art decodes");
@@ -1672,11 +1698,11 @@ mod tests {
         }
         let mut keys: Vec<_> = all.iter().map(|m| m.key()).collect();
         keys.dedup();
-        assert_eq!(keys.len(), 6);
+        assert_eq!(keys.len(), 7);
         let mut arts: Vec<_> = all.iter().map(|m| m.art().as_ptr()).collect();
         arts.sort();
         arts.dedup();
-        assert_eq!(arts.len(), 6, "each mode shows a different picture");
+        assert_eq!(arts.len(), 7, "each mode shows a different picture");
     }
 
     #[test]
@@ -1687,6 +1713,7 @@ mod tests {
         assert_eq!(parse_mood("reading"), Some(Mood::Reading));
         assert_eq!(parse_mood("hanging-out"), Some(Mood::HangingOut));
         assert_eq!(parse_mood("VIPER"), Some(Mood::Viper));
+        assert_eq!(parse_mood("raunchy"), Some(Mood::Raunchy));
         assert_eq!(parse_mood("hello"), None);
         assert_eq!(parse_mood(""), None);
     }
@@ -1710,11 +1737,29 @@ mod tests {
     }
 
     #[test]
-    fn viper_then_a_tool_then_a_game_then_hanging_out() {
-        assert_eq!(mood_for(true, Some("Run cargo build"), true), Mood::Viper);
-        assert_eq!(mood_for(false, Some("Search the web"), true), Mood::Reading);
-        assert_eq!(mood_for(false, None, true), Mood::Gaming);
-        assert_eq!(mood_for(false, None, false), Mood::HangingOut);
+    fn an_outfit_then_a_tool_then_a_game_then_hanging_out() {
+        assert_eq!(
+            mood_for(Some(Mood::Viper), Some("Run cargo build"), true),
+            Mood::Viper
+        );
+        assert_eq!(
+            mood_for(Some(Mood::Raunchy), Some("Read fan curve"), true),
+            Mood::Raunchy
+        );
+        assert_eq!(mood_for(None, Some("Search the web"), true), Mood::Reading);
+        assert_eq!(mood_for(None, None, true), Mood::Gaming);
+        assert_eq!(mood_for(None, None, false), Mood::HangingOut);
+    }
+
+    #[test]
+    fn only_explicit_presets_with_adults_only_on_wear_an_outfit() {
+        assert_eq!(outfit_for("whore", true, true), Some(Mood::Raunchy));
+        assert_eq!(outfit_for("whore-copy", true, true), Some(Mood::Raunchy));
+        assert_eq!(outfit_for("viper", true, true), Some(Mood::Viper));
+        assert_eq!(outfit_for("whore", true, false), None);
+        assert_eq!(outfit_for("viper", true, false), None);
+        assert_eq!(outfit_for("nyx", false, true), None);
+        assert_eq!(outfit_for("pirate", false, true), None);
     }
 
     #[test]
@@ -1781,6 +1826,74 @@ mod tests {
         assert_eq!(cabin.companion_mood(), Mood::Gaming, "Viper is adults-only");
         cabin.cfg.explicit_personalities = true;
         assert_eq!(cabin.companion_mood(), Mood::Viper);
+    }
+
+    #[test]
+    fn the_raunchy_outfit_needs_an_explicit_preset_and_adults_only() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+        cabin.thread_idx = 0;
+        cabin.messages = Arc::new(Vec::new());
+        cabin.focus.app = Some(grokhub_core::focus_app::FocusApp {
+            name: "Rift Circuit".into(),
+            category: grokhub_core::focus_app::FocusCategory::Gaming,
+        });
+        let presets = grokhub_core::personality::load_all(&super::personality_ui::presets_dir()).0;
+        let explicit: Vec<&str> = presets
+            .iter()
+            .filter(|p| p.explicit)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(explicit.contains(&"whore") && explicit.contains(&"viper"));
+
+        for p in &presets {
+            cabin.cfg.personality = p.id.clone();
+            cabin.cfg.explicit_personalities = true;
+            let on = match (p.explicit, p.id.as_str()) {
+                (true, "viper") => Mood::Viper,
+                (true, _) => Mood::Raunchy,
+                (false, _) => Mood::Gaming,
+            };
+            assert_eq!(cabin.companion_mood(), on, "{} with adults-only on", p.id);
+            cabin.cfg.explicit_personalities = false;
+            assert_eq!(
+                cabin.companion_mood(),
+                Mood::Gaming,
+                "{} with adults-only off shows Nyx's mode",
+                p.id
+            );
+        }
+
+        // A chat's own explicit pick follows the same switch.
+        cabin.cfg.personality = "nyx".into();
+        cabin.threads[0].personality = "whore".into();
+        cabin.nav = Nav::Chat;
+        cabin.focus.app = None;
+        cabin.cfg.explicit_personalities = true;
+        assert_eq!(cabin.companion_mood(), Mood::Raunchy);
+        cabin.cfg.explicit_personalities = false;
+        assert_eq!(cabin.companion_mood(), Mood::HangingOut);
+
+        // A deck pin for the raunchy picture follows the switch too.
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_MOOD", "raunchy");
+        cabin.threads[0].personality = String::new();
+        let pinned_off = cabin.companion_mood();
+        cabin.cfg.explicit_personalities = true;
+        let pinned_on = cabin.companion_mood();
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_mood {
+            Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
+            None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+        assert_eq!(pinned_off, Mood::HangingOut);
+        assert_eq!(pinned_on, Mood::Raunchy);
     }
 
     #[test]
