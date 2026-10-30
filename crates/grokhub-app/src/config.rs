@@ -492,6 +492,10 @@ pub struct AppConfig {
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
     pub diagnostics_mode: bool,
+    /// Labs Diagnostics: attach the cabin/hub log tail to a Save. Off by
+    /// default; logs can hold more than the chat.
+    #[serde(default)]
+    pub diagnostics_include_logs: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -831,6 +835,7 @@ impl Default for AppConfig {
             explicit_personalities: false,
             adult_confirmed: false,
             diagnostics_mode: false,
+            diagnostics_include_logs: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
@@ -1644,8 +1649,10 @@ mod tests {
     #[test]
     fn diagnostics_mode_defaults_off() {
         assert!(!AppConfig::default().diagnostics_mode);
+        assert!(!AppConfig::default().diagnostics_include_logs);
         let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!absent.diagnostics_mode);
+        assert!(!absent.diagnostics_include_logs);
         let _g = hold_test_config();
         let root = test_config_root("diagnostics-mode");
         let _ = fs::remove_dir_all(&root);

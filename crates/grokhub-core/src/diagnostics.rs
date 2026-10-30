@@ -39,8 +39,9 @@ pub fn diagnostics_bundle(
     )
 }
 
-/// What a Labs Diagnostics export includes (shown before / with the save).
-pub const DIAGNOSTICS_PREVIEW_LINES: &[&str] = &[
+/// What a Labs Diagnostics export always includes (shown before / with the
+/// save). [`diagnostics_preview_lines`] adds the app logs line.
+const DIAGNOSTICS_PREVIEW_LINES: &[&str] = &[
     "Per turn: user text and final reply (secrets redacted)",
     "Raw saved turn with TURN_* labels (Thought / Tool / Say)",
     "Classifier: intent, care, domain, why chat vs task",
@@ -48,9 +49,25 @@ pub const DIAGNOSTICS_PREVIEW_LINES: &[&str] = &[
     "Brain policy row, length cap, model/provider",
     "Tool calls + results summary, approvals, errors, timings",
     "App version and OS",
-    "Optional: recent app logs and service status",
+    "Service status",
     "Nothing leaves this machine unless you copy or share the file",
 ];
+
+/// Preview for one Save: the fixed lines plus whether recent app logs go in,
+/// in step with the "Include recent app logs" box.
+pub fn diagnostics_preview_lines(include_logs: bool) -> Vec<String> {
+    let logs = if include_logs {
+        "Recent app logs (last 4,000 characters, redacted)"
+    } else {
+        "No app logs (tick Include recent app logs to add them)"
+    };
+    let mut lines: Vec<String> = DIAGNOSTICS_PREVIEW_LINES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    lines.insert(lines.len() - 1, logs.to_string());
+    lines
+}
 
 /// Classifier slice for one turn.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,10 +201,7 @@ impl DiagnosticsExport {
             chat_title: chat_title.into(),
             exported_at: export_stamp(SystemTime::now()),
             turns: Vec::new(),
-            preview: DIAGNOSTICS_PREVIEW_LINES
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
+            preview: diagnostics_preview_lines(false),
             service_status: Vec::new(),
             recent_logs: String::new(),
         }
