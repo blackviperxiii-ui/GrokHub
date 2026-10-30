@@ -349,6 +349,8 @@ fn rename_folder_and_move_project_into_folder() {
         .path
         .clone();
     assert!(home.has_project_dir(&pier_path), "{pier_path}");
+    // projects.json is written on the persist worker: finish it before cleanup.
+    app.persist_svc.flush();
 }
 
 // Landed from PR #127.
@@ -1264,6 +1266,7 @@ fn make_project_keeps_harbor() {
     assert_eq!(node.kind, ProjectKind::Project);
     assert!(!node.path.trim().is_empty());
     assert!(home.has_project_dir(&node.path), "{}", node.path);
+    app.persist_svc.flush();
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
