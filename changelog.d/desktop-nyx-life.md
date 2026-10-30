@@ -1,0 +1,1 @@
+- Desktop companion: she breathes (a slow four-second rise through the chest and head), floats a little over the pedestal, blinks every three to seven seconds when her outfit has an eyes-closed patch, and changes outfit with a short scanline crossfade. Reduced motion keeps all of it still.
