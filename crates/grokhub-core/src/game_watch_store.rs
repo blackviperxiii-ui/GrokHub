@@ -86,7 +86,7 @@ pub fn list_matches(config_dir: &Path, game: &str) -> Vec<(u64, PathBuf)> {
             Some((start.parse().ok()?, path))
         })
         .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|m| std::cmp::Reverse(m.0));
     out
 }
 
