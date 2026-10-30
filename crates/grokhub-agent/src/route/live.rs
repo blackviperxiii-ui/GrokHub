@@ -730,14 +730,14 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if let Some(ask) = &route.premium_ask {
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
-    if !route.no_route {
-        super::local::note_fallback(
-            route
+    // No route answers at all, so nothing is falling back to the device either.
+    super::local::note_fallback(
+        !route.no_route
+            && route
                 .rule_ids
                 .iter()
                 .any(|r| r == "local:cloud_down" || r == "local:no_keys"),
-        );
-    }
+    );
     // An offline turn leaves a line: where it went (local, kept, cloud queue).
     if let Some(rule) = route.rule_ids.iter().find(|r| r.starts_with("offline:")) {
         let what = format!("{} → {rule}", call.class);
