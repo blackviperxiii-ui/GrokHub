@@ -1,0 +1,1 @@
+- With adults-only personalities switched on, an explicit personality other than Viper now dresses Nyx in her raunchy outfit in the home dock's corner box. Viper keeps the snake onesie, and with adults-only off Nyx shows her usual picture for what she is doing.

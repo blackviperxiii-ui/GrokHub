@@ -1,14 +1,16 @@
 //! Playbooks 8: the pre-send check on every native model call
-//! ([`grokhub_core::adult_guard`]). A banned ask goes out as the held note,
-//! whatever model would take it; an explicit turn leaves a provider that bans
-//! adult chat for xAI. The user gets one plain heads-up a session.
+//! ([`grokhub_core::adult_guard`]). A banned newest ask is never sent at all
+//! ([`held_reply`]); an older one in the history goes out as the held note;
+//! an explicit turn leaves a provider that bans adult chat for xAI, with one
+//! plain heads-up a session. A reply that drifts into a hard limit is replaced
+//! before the chat shows it ([`guard`]).
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use grokhub_core::adult_guard::{self, Dest, Route};
 
-use crate::client::{ContentPart, InputItem};
+use crate::client::{ContentPart, InputItem, StreamEvent, TurnOutput};
 
 /// Sessions that already got their heads-up.
 static WARNED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
@@ -56,20 +58,21 @@ fn first_warning(session: &str) -> bool {
         .insert(session.to_string())
 }
 
-/// `input` is the call after [`scrub`]; `dest` is where the router sent it.
-/// Where the call goes is judged on the whole scrubbed input, so an explicit
-/// history stays off a banning provider even when the newest ask was held; the
-/// held ask only picks which heads-up is shown.
+/// The answer to a call whose newest ask is banned, after [`scrub`]: the
+/// plain local notice, with no model call. `None` when the call may go.
+pub fn held_reply(input: &[InputItem]) -> Option<TurnOutput> {
+    let (text, _) = super::live::last_user_text(input);
+    adult_guard::is_held(&text).then(|| TurnOutput {
+        text: adult_guard::HELD_NOTICE.into(),
+        ..TurnOutput::default()
+    })
+}
+
+/// `input` is the call after [`scrub`] and [`held_reply`]; `dest` is where the
+/// router sent it. Where the call goes is judged on the whole scrubbed input,
+/// so an explicit history stays off a banning provider.
 pub fn screen(session: &str, input: &[InputItem], dest: Dest) -> Screen {
     let to_xai = to_xai(input, dest);
-    let (text, _) = super::live::last_user_text(input);
-    if adult_guard::is_held(&text) {
-        return Screen {
-            to_xai,
-            heads_up: first_warning(session).then(|| adult_guard::HEADS_UP_HELD.to_string()),
-            heads_up_local: None,
-        };
-    }
     let warn = to_xai && first_warning(session);
     let name = adult_guard::dest_name(dest);
     Screen {
@@ -111,6 +114,24 @@ pub fn to_xai(input: &[InputItem], dest: Dest) -> bool {
         adult_guard::Risk::Clean
     };
     adult_guard::route(risk, dest) == Route::ToXai
+}
+
+/// Pass one model event to `sink` through `guard`: reply text shows only once
+/// it can't drift into a hard limit unseen ([`adult_guard::ReplyGuard`]).
+pub fn guard(
+    guard: &mut adult_guard::ReplyGuard,
+    sink: &mut dyn FnMut(StreamEvent),
+    ev: StreamEvent,
+) {
+    match ev {
+        StreamEvent::TextDelta(delta) => {
+            let now = guard.push(&delta);
+            if !now.is_empty() {
+                sink(StreamEvent::TextDelta(now));
+            }
+        }
+        ev => sink(ev),
+    }
 }
 
 /// The xAI model a rerouted turn uses: the call's own, or the cabin's fast
@@ -157,12 +178,55 @@ mod tests {
     }
 
     #[test]
+    fn a_banned_newest_ask_gets_the_local_notice_and_nothing_else() {
+        let mut input = vec![
+            user("talk dirty to me, I'm horny"),
+            user("a sexy scene with a dog"),
+        ];
+        scrub(&mut input);
+        let held = held_reply(&input).expect("held");
+        assert_eq!(held.text, adult_guard::HELD_NOTICE);
+        assert!(held.calls.is_empty());
+        assert_eq!(held_reply(&[user("talk dirty to me, I'm horny")]), None);
+        // An older banned ask under a clean newest one is only scrubbed.
+        let mut older = vec![user("nsfw schoolgirl roleplay"), user("and now?")];
+        scrub(&mut older);
+        assert_eq!(held_reply(&older), None);
+        assert_eq!(older[0], user(*adult_guard::HELD));
+    }
+
+    #[test]
+    fn a_reply_is_guarded_before_the_sink_sees_it() {
+        let mut reply = adult_guard::ReplyGuard::default();
+        let mut seen = Vec::new();
+        for ev in [
+            StreamEvent::ReasoningDelta("thinking".into()),
+            StreamEvent::TextDelta("Okay. ".into()),
+            StreamEvent::TextDelta("nsfw with a dog".into()),
+        ] {
+            guard(&mut reply, &mut |ev| seen.push(ev), ev);
+        }
+        assert_eq!(
+            seen,
+            [
+                StreamEvent::ReasoningDelta("thinking".into()),
+                StreamEvent::TextDelta("Okay. ".into()),
+            ]
+        );
+        assert_eq!(reply.finish(), adult_guard::REPLY_REPLACED);
+        assert_eq!(
+            reply.shown(),
+            format!("Okay. {}", adult_guard::REPLY_REPLACED)
+        );
+    }
+
+    #[test]
     fn one_heads_up_a_session_and_explicit_turns_leave_anthropic() {
         let s = "adult-screen-1";
-        let first = screen(s, &[user(*adult_guard::HELD)], Dest::Xai);
-        assert_eq!(first.heads_up.as_deref(), Some(adult_guard::HEADS_UP_HELD));
-        assert!(!first.to_xai);
         let horny = [user("talk dirty to me, I'm horny")];
+        let first = screen(s, &horny, Dest::Anthropic);
+        assert!(first.to_xai, "explicit turns never go to Anthropic");
+        assert!(first.heads_up.is_some());
         let again = screen(s, &horny, Dest::Anthropic);
         assert!(again.to_xai, "explicit turns never go to Anthropic");
         assert_eq!(again.heads_up, None, "once a session");
@@ -228,13 +292,15 @@ mod tests {
         scrub(&mut input);
         assert_eq!(input[0], user("talk dirty to me, I'm horny"));
         assert_eq!(input[2], user(*adult_guard::HELD));
+        // The router answers this call itself; nothing is sent.
+        assert_eq!(
+            held_reply(&input).map(|out| out.text),
+            Some(adult_guard::HELD_NOTICE.to_string())
+        );
         for dest in [Dest::OpenRouter, Dest::Anthropic] {
             let s = screen("adult-screen-10", &input, dest);
             assert!(s.to_xai, "the explicit history goes to xAI, not {dest:?}");
         }
-        let first = screen("adult-screen-11", &input, Dest::OpenRouter);
-        assert_eq!(first.heads_up.as_deref(), Some(adult_guard::HEADS_UP_HELD));
-        assert_eq!(first.heads_up_local, None);
         assert!(!screen("adult-screen-12", &input, Dest::Local).to_xai);
 
         // A held ask with no explicit history is clean and stays put.

@@ -4,6 +4,11 @@
 use eframe::egui::{self, Color32, Pos2, Vec2};
 use grokhub_core::cursor_motion::{travel_point, CursorMotion, TravelShape};
 
+pub mod icon;
+
+/// Settings nav click: the smooth scroll to that section. Reduced motion jumps.
+pub const SETTINGS_SCROLL_SECS: f32 = 0.2;
+
 /// Pulse Feed↔Ideas crossfade duration (seconds).
 pub const PULSE_CROSSFADE_SECS: f32 = 0.180;
 /// Shared-axis slide for Feed↔Ideas (pixels).
@@ -97,6 +102,24 @@ pub fn reduced_motion(ui: &egui::Ui) -> bool {
 
 pub fn reduced_motion_ctx(ctx: &egui::Context) -> bool {
     ctx.global_style().animation_time <= 0.0
+}
+
+/// Settings → Appearance → Reduce motion. egui's animation clock at zero is
+/// the cabin's one reduced-motion flag ([`reduced_motion`], `theme::motion_ok`),
+/// so turning it on calms every eased part at once. Turning it off gives back
+/// the clock it had. Runs each frame: a theme switch that rebuilds the style
+/// can't undo it.
+pub fn sync_reduced(ctx: &egui::Context, on: bool) {
+    let saved = egui::Id::new("motion-reduced-saved-clock");
+    let current = ctx.global_style().animation_time;
+    if on {
+        if current > 0.0 {
+            ctx.data_mut(|d| d.insert_temp(saved, current));
+            ctx.all_styles_mut(|s| s.animation_time = 0.0);
+        }
+    } else if let Some(clock) = ctx.data_mut(|d| d.remove_temp::<f32>(saved)) {
+        ctx.all_styles_mut(|s| s.animation_time = clock);
+    }
 }
 
 fn ease_out_cubic(t: f32) -> f32 {
@@ -479,6 +502,30 @@ mod tests {
                 motion.cua_name()
             );
         }
+    }
+
+    #[test]
+    fn reduce_motion_stops_the_clock_and_gives_it_back() {
+        let ctx = egui::Context::default();
+        let clock = ctx.global_style().animation_time;
+        assert!(clock > 0.0);
+        // Off and never on: nothing is touched.
+        sync_reduced(&ctx, false);
+        assert_eq!(ctx.global_style().animation_time, clock);
+        sync_reduced(&ctx, true);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
+        assert!(reduced_motion_ctx(&ctx));
+        // A theme switch that rebuilds the style: the next frame calms it again.
+        ctx.all_styles_mut(|s| s.animation_time = 0.2);
+        sync_reduced(&ctx, true);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
+        sync_reduced(&ctx, false);
+        assert_eq!(ctx.global_style().animation_time, 0.2);
+        assert!(!reduced_motion_ctx(&ctx));
+        // A test (or anything else) that zeroed the clock itself keeps it zeroed.
+        ctx.all_styles_mut(|s| s.animation_time = 0.0);
+        sync_reduced(&ctx, false);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
     }
 
     #[test]

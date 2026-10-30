@@ -312,6 +312,17 @@ impl Cabin {
         let text_right = rect.right() - pad - close_w;
         let text_w = (text_right - text_left).max(12.0);
 
+        // Read every frame, so pinning a tab pops its pin once.
+        let pin_cue = crate::motion::icon::Cue {
+            active: pinned,
+            ..Default::default()
+        };
+        let pin_pose = crate::motion::icon::pose(
+            ui,
+            resp.id.with("pin"),
+            pin_cue,
+            crate::motion::icon::Kick::Lift,
+        );
         if pinned {
             let pin_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.left() + 4.0, rect.center().y - 6.0),
@@ -322,6 +333,7 @@ impl Cabin {
                 pin_rect,
                 crate::icons::RailIcon::Pin,
                 crate::theme::amber(),
+                pin_pose,
             );
         }
 

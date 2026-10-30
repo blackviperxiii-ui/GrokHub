@@ -465,6 +465,10 @@ pub struct AppConfig {
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
+    /// Settings → Appearance: reduce motion. No hover lifts, no icon motion,
+    /// and Settings jumps instead of scrolling. Off by default.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Settings → Appearance: chat pages show the objectives and recent chats on
     /// the left and a PC snapshot on the right (deck slide 10) instead of the
     /// companion dock. Off by default.
@@ -492,6 +496,10 @@ pub struct AppConfig {
     /// first time adults-only turns on, then never again.
     #[serde(default)]
     pub adult_confirmed: bool,
+    /// When that 18+ yes was given (Unix ms). Empty for a yes carried over
+    /// from before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adult_confirmed_at_ms: Option<u64>,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -832,6 +840,7 @@ impl Default for AppConfig {
             model_drop: false,
             models_folder: String::new(),
             dock_panels: false,
+            reduce_motion: false,
             chat_objectives: false,
             desktop_control: false,
             screen_record: false,
@@ -839,6 +848,7 @@ impl Default for AppConfig {
             personality: String::new(),
             explicit_personalities: false,
             adult_confirmed: false,
+            adult_confirmed_at_ms: None,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
             amr_retention_days: default_amr_retention_days(),
@@ -1682,6 +1692,33 @@ mod tests {
         assert!(!load().diagnostics_mode);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().diagnostics_mode);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reduce_motion_defaults_off_and_round_trips() {
+        assert!(!AppConfig::default().reduce_motion);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.reduce_motion);
+        let _g = hold_test_config();
+        let root = test_config_root("reduce-motion");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            reduce_motion: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().reduce_motion);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"reduceMotion\": true"),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.reduce_motion = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().reduce_motion);
         let _ = fs::remove_dir_all(&root);
     }
 
