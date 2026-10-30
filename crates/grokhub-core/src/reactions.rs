@@ -22,8 +22,8 @@ pub const FILE_NAME: &str = "reactions.json";
 /// A category's score stays in `-SCORE_MAX..=SCORE_MAX`.
 pub const SCORE_MAX: i32 = 10;
 /// How low ignores alone can push a category. A feed posts many cards a
-/// day, so unopened posts used to sink a whole category to -10; only a
-/// dismissal or Less like this goes lower.
+/// day, so unopened posts used to sink a whole category to -10. Every other
+/// lowering outcome (dismissal, snooze, Less like this) can still go lower.
 pub const IGNORE_FLOOR: i32 = -3;
 /// Ignored this many times in a row quiets the category.
 pub const QUIET_AFTER_IGNORES: u32 = 3;

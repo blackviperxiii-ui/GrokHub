@@ -384,13 +384,13 @@ impl InterestProfile {
         {
             return true;
         }
-        if t.weight > InterestSource::Chats.start_weight() {
-            return true;
-        }
         // Dismissed under where it started: chat evidence alone no longer
         // brings it back, so a skipped topic stays skipped.
         if t.weight < t.source.start_weight() {
             return false;
+        }
+        if t.weight > InterestSource::Chats.start_weight() {
+            return true;
         }
         self.graph
             .evidence
@@ -1533,6 +1533,12 @@ mod tests {
         }
         p.observe_chat("c3", "Home espresso", 3);
         assert!(!ready(&p), "dismissed under its start weight");
+        // Same for a topic that started higher than chats do.
+        assert!(p.add("Bouldering", InterestSource::KnowMe, 1));
+        if let Some(t) = p.find_mut("Bouldering") {
+            t.weight = InterestSource::KnowMe.start_weight() - 2;
+        }
+        assert!(!p.find("Bouldering").is_some_and(|t| p.topic_is_ready(t)));
     }
 
     #[test]
