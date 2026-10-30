@@ -656,6 +656,16 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
     }
 }
 
+/// The mode whose embedded picture `outfit` is: `mood` itself when the
+/// outfit is worn for it, else the first mode the outfit lists.
+fn mood_for_outfit(outfit: &grokhub_core::companion::Outfit, mood: Mood) -> Mood {
+    if outfit.moods.contains(&mood) {
+        mood
+    } else {
+        outfit.moods.first().copied().unwrap_or(Mood::HangingOut)
+    }
+}
+
 /// The outfit picture for `mood` and its hit mask (when it has transparent
 /// pixels), cached on the context. Shipped art is embedded; a local adult
 /// outfit is read from its file.
@@ -665,15 +675,14 @@ fn outfit_texture(
     adults_ok: bool,
 ) -> Option<(egui::TextureHandle, Option<HitMask>)> {
     let nyx = grokhub_core::companion::nyx();
-    let outfit = nyx.outfit_for(mood, false);
-    let _ = adults_ok; // local adult outfits land with the wardrobe loader
+    let outfit = nyx.outfit_for(mood, adults_ok);
     let key = format!("desktop-nyx-{}", outfit.id);
     let id = egui::Id::new(key.as_str());
     type Cached = (egui::TextureHandle, Option<HitMask>);
     if let Some(c) = ctx.data(|d| d.get_temp::<Cached>(id)) {
         return Some(c);
     }
-    let bytes = super::loadout_home::mood_art(mood);
+    let bytes = super::loadout_home::mood_art(mood_for_outfit(outfit, mood));
     let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
     let has_alpha = rgba.as_raw().chunks_exact(4).any(|p| p[3] < 250);
