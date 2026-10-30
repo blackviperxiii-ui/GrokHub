@@ -28,7 +28,7 @@ pub enum EventKind {
 }
 
 /// The League objectives the watcher records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Objective {
     Dragon,
     Baron,
@@ -37,7 +37,7 @@ pub enum Objective {
 
 /// A WoW boss encounter, as its `ENCOUNTER_START` / `ENCOUNTER_END` lines
 /// name it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pull {
     pub encounter_id: u32,
     pub name: String,
@@ -358,6 +358,30 @@ pub fn recap_card(game: &str, recap: &Recap, pointers: &[String], at_ms: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn league_and_wow_events_round_trip_through_the_match_store_json() {
+        let pull = Pull {
+            encounter_id: 2902,
+            name: "Ulgrax".into(),
+            difficulty: 16,
+            group_size: 20,
+        };
+        let kinds = vec![
+            EventKind::MatchStart,
+            EventKind::Objective {
+                what: Objective::Baron,
+                ally: Some(true),
+            },
+            EventKind::PullStart(pull.clone()),
+            EventKind::PullEnd { pull, kill: false },
+        ];
+        for kind in kinds {
+            let ev = WatchEvent { at_ms: 1, kind };
+            let json = serde_json::to_string(&ev).unwrap();
+            assert_eq!(serde_json::from_str::<WatchEvent>(&json).unwrap(), ev);
+        }
+    }
 
     fn payload(round: u32, phase: &str, win: &str, kills: u32, deaths: u32) -> String {
         format!(
