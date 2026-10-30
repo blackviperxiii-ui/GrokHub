@@ -1131,6 +1131,9 @@ pub fn call_model(
     // sends a banned ask, or an 18+ chat to a provider that bans adult chat.
     let mut req = std::borrow::Cow::Borrowed(req);
     super::adult::scrub(&mut req.to_mut().input);
+    if let Some(held) = super::adult::held_reply(&req.input) {
+        return Ok(held);
+    }
     let to = dest(config_dir, model);
     if super::adult::to_xai(&req.input, to) {
         return Err(ClientError::Protocol(format!(

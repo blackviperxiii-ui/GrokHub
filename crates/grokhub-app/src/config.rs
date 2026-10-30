@@ -488,6 +488,10 @@ pub struct AppConfig {
     /// first time adults-only turns on, then never again.
     #[serde(default)]
     pub adult_confirmed: bool,
+    /// When that 18+ yes was given (Unix ms). Empty for a yes carried over
+    /// from before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adult_confirmed_at_ms: Option<u64>,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -834,6 +838,7 @@ impl Default for AppConfig {
             personality: String::new(),
             explicit_personalities: false,
             adult_confirmed: false,
+            adult_confirmed_at_ms: None,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
             amr_retention_days: default_amr_retention_days(),

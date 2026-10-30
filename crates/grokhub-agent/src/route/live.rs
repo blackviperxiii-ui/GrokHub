@@ -1123,6 +1123,10 @@ pub fn stream_routed(
     // Playbooks 8: a banned ask never leaves the computer, this turn or a later one.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);
+    if let Some(held) = super::adult::held_reply(&sent.input) {
+        sink(StreamEvent::TextDelta(held.text.clone()));
+        return Ok(held);
+    }
     let (text, needs_image) = last_user_text(&sent.input);
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
@@ -1179,6 +1183,8 @@ pub fn stream_routed(
         }
         sink(ev)
     };
+    // Reply text passes the hard-limit check before the chat shows it.
+    let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
     let streams_xai = !on_device && !on_provider;
     // On xAI the heads-up waits for xAI's first event, so a local fallback can
     // still say where the turn really went.
@@ -1208,7 +1214,11 @@ pub fn stream_routed(
         );
         if let Ok(turn) = &out {
             if !turn.text.is_empty() {
-                sink(StreamEvent::TextDelta(turn.text.clone()));
+                super::adult::guard(
+                    &mut reply,
+                    &mut *sink,
+                    StreamEvent::TextDelta(turn.text.clone()),
+                );
             }
         }
         out
@@ -1221,7 +1231,7 @@ pub fn stream_routed(
                     sink(StreamEvent::TextDelta(format!("{note}\n\n")));
                 }
             }
-            sink(ev)
+            super::adult::guard(&mut reply, &mut *sink, ev)
         });
         match out {
             // An 18+ chat xAI couldn't take (signed out, down) falls back to this
@@ -1247,7 +1257,11 @@ pub fn stream_routed(
                     // The chat shows streamed text, so the local answer goes out
                     // as one delta, like a provider's.
                     if !turn.text.is_empty() {
-                        sink(StreamEvent::TextDelta(turn.text.clone()));
+                        super::adult::guard(
+                            &mut reply,
+                            &mut *sink,
+                            StreamEvent::TextDelta(turn.text.clone()),
+                        );
                     }
                 }
                 out
@@ -1263,6 +1277,20 @@ pub fn stream_routed(
             }
         }
     };
+    // The held rest of the reply, or the line that replaced it; what the chat
+    // showed is what the history keeps.
+    let rest = reply.finish();
+    if !rest.is_empty() {
+        sink(StreamEvent::TextDelta(rest));
+    }
+    let out = out.map(|mut turn| {
+        turn.text = if reply.replaced() {
+            reply.shown()
+        } else {
+            grokhub_core::adult_guard::screen_reply(&turn.text).to_string()
+        };
+        turn
+    });
     let out = match (out, &note) {
         (Ok(mut turn), Some(note)) => {
             turn.text = format!("{note}\n\n{}", turn.text);
