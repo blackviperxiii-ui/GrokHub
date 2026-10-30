@@ -925,9 +925,9 @@ impl Router {
                     };
                     local::note_local_verify_failed(false);
                 }
-            } else if pick.no_route && local::eligible(&input.local, input.class, input.ctx_tokens)
-            {
-                // Every plan model down: fall back to local and clear the sticky flag.
+            } else if pick.no_route && last_resort {
+                // Every plan model down: fall back to local and clear the sticky
+                // flag, never for hard or long work.
                 if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
                     rules.push("local:cloud_down".into());
                     pick = ModelPick {

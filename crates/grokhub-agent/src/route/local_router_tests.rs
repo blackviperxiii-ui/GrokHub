@@ -280,7 +280,42 @@ fn hard_chat_never_falls_back_to_local_with_the_cloud_down_or_no_keys() {
             "{why}: {:?}",
             r.rule_ids
         );
+        if why == "cloud down" {
+            // Nothing answers: the turn pauses instead of going anywhere.
+            assert!(r.no_route, "{why}: {:?}", r.rule_ids);
+        } else {
+            // No sign-in: the turn keeps the no-sign-in path it had before
+            // Local AI, never a stand-in cloud model.
+            assert_eq!(r.model, "grok-4.7", "{why}: {:?}", r.rule_ids);
+            assert!(
+                r.rule_ids.contains(&"cost:not_included".into()),
+                "{why}: {:?}",
+                r.rule_ids
+            );
+        }
     }
+}
+
+#[test]
+fn a_hard_step_that_failed_verify_never_goes_back_to_the_device_with_the_cloud_down() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(true);
+    let mut gate = online();
+    gate.local_verify_failed = true;
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut hard = ask("background:summarize", gate);
+    hard.d = 0.8;
+    let r = Router::choose(&hard, &down, &profiles, &table, 10);
+    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        !r.rule_ids.contains(&"local:cloud_down".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    local::note_local_verify_failed(false);
 }
 
 #[test]
