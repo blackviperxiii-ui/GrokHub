@@ -14,7 +14,7 @@ default_outfit = "hanging-out"
 id = "working"
 file = "brand/nyx-working.jpg"  # shipped art, relative to the repo root
 moods = ["working"]
-adult = false                   # never true in the repo (CI guard 80)
+adult = false                   # true: shown only with adults-only on
 
 # Optional patches for blinking and talking. Anchors are the patch's
 # top-left corner in the outfit picture's own pixels.
@@ -38,8 +38,9 @@ talk; the rest still breathe and bob.
 
 ## Adults-only outfits
 
-Adult art never goes in this public repo. It loads only from the user's
-own PC, from `{config}/companions/<id>/adult/adult.toml`:
+Shipped outfits marked `adult = true` show only with adults-only
+personalities switched on. A user can add more from their own PC, in
+`{config}/companions/<id>/adult/adult.toml`:
 
 ```toml
 [[outfit]]
@@ -50,9 +51,6 @@ moods = ["raunchy"]
 
 Every outfit read from that folder is adult, whatever the file says, and
 the app shows it only with adults-only personalities switched on.
-`scripts/ci-guards.d/80-companion-adult-art.sh` fails CI if a tracked
-file lands under a `companions/**/adult/` path or a shipped
-`companion.toml` marks an outfit `adult = true`.
 
 ## Art prep
 
