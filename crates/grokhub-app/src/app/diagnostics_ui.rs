@@ -2,10 +2,10 @@
 
 use super::*;
 use grokhub_core::{
-    content_level_label, diagnostics_saved_status, diagnostics_zip_path, redact_for_diagnostics,
-    redact_turn, turn_says, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier,
-    DiagnosticsExport, DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall,
-    DiagnosticsTurn, DIAGNOSTICS_PREVIEW_LINES,
+    content_level_label, diagnostics_preview_lines, diagnostics_saved_status, diagnostics_zip_path,
+    redact_for_diagnostics, redact_turn, turn_says, why_chat_vs_task, write_diagnostics_zip,
+    DiagnosticsClassifier, DiagnosticsExport, DiagnosticsPlaybook, DiagnosticsPolicy,
+    DiagnosticsToolCall, DiagnosticsTurn,
 };
 use std::time::SystemTime;
 
@@ -41,6 +41,12 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    /// The "Include recent app logs" box: kept in `app.json` once ticked.
+    pub(super) fn set_diagnostics_include_logs(&mut self, on: bool) {
+        self.cfg.diagnostics_include_logs = on;
+        self.persist_cfg();
+    }
+
     /// Settings → Labs: Diagnostics mode toggle, preview, and Open folder.
     pub(super) fn ui_labs_diagnostics(&mut self, ui: &mut egui::Ui) {
         crate::ui_kit::section_header(ui, "Diagnostics", None);
@@ -55,8 +61,12 @@ impl Cabin {
         }
         if self.cfg.diagnostics_mode {
             crate::cards::settings_note(ui, "Preview — each Save includes:");
-            for line in DIAGNOSTICS_PREVIEW_LINES {
+            for line in diagnostics_preview_lines(self.cfg.diagnostics_include_logs) {
                 crate::cards::settings_note(ui, &format!("• {line}"));
+            }
+            let mut logs = self.cfg.diagnostics_include_logs;
+            if ui.checkbox(&mut logs, "Include recent app logs").changed() {
+                self.set_diagnostics_include_logs(logs);
             }
             if crate::cards::settings_action(
                 ui,
@@ -164,7 +174,10 @@ impl Cabin {
 
         let mut export = DiagnosticsExport::with_defaults(&version, &thread.id, &thread.title);
         export.service_status = self.diagnostics_service_status();
-        export.recent_logs = self.diagnostics_recent_logs(home_ref);
+        export.preview = diagnostics_preview_lines(self.cfg.diagnostics_include_logs);
+        if self.cfg.diagnostics_include_logs {
+            export.recent_logs = self.diagnostics_recent_logs(home_ref);
+        }
 
         // Each store is read once; turns look their records up by raw turn.
         let all_spans =
@@ -595,6 +608,107 @@ mod tests {
         assert_ne!(second, same);
         assert_eq!(std::fs::read(&same).unwrap(), b"earlier");
         assert!(path.is_file() && second.is_file());
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_up {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn app_logs_go_in_only_when_the_box_is_ticked() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("diag-logs-opt-in");
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let logs = config::config_dir().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("cabin.log"),
+            "boot ok\nprovider key sk-abcdefghijklmnopqrstuv\n",
+        )
+        .unwrap();
+
+        let home = std::env::temp_dir().join(format!("gh-diag-logs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("Desktop")).unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_up = std::env::var_os("USERPROFILE");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+
+        let mut cabin = Cabin::quiet_for_test();
+        let mut thread = crate::threads::ChatThread::new("Hangout", false);
+        thread.messages = std::sync::Arc::new(vec![
+            ("user".into(), "hi there".into()),
+            ("assistant".into(), "TURN_SAY:\nHey.\n".into()),
+        ]);
+        cabin.messages = thread.messages.clone();
+        cabin.threads = vec![thread];
+        cabin.thread_idx = 0;
+        cabin.set_diagnostics_mode(true);
+        assert!(
+            !cabin.cfg.diagnostics_include_logs,
+            "logs are off by default"
+        );
+
+        let read = |path: &std::path::Path| {
+            let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+            let mut json = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name("diagnostics.json").unwrap(), &mut json)
+                .unwrap();
+            let mut md = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name("diagnostics.md").unwrap(), &mut md)
+                .unwrap();
+            (json, md)
+        };
+
+        cabin.save_chat_diagnostics(None);
+        let off = cabin
+            .diagnostics_last_zip
+            .clone()
+            .expect("zip with logs off");
+        let (json, md) = read(&off);
+        assert!(!json.contains("recent_logs"), "{json}");
+        assert!(!json.contains("boot ok"), "{json}");
+        assert!(!md.contains("## Recent app logs"), "{md}");
+        assert!(
+            json.contains("No app logs (tick Include recent app logs to add them)"),
+            "{json}"
+        );
+
+        cabin.set_diagnostics_include_logs(true);
+        cabin.persist_svc.flush();
+        assert!(
+            crate::config::load().diagnostics_include_logs,
+            "the box is saved"
+        );
+        cabin.save_chat_diagnostics(None);
+        let on = cabin
+            .diagnostics_last_zip
+            .clone()
+            .expect("zip with logs on");
+        assert_ne!(on, off);
+        let (json, md) = read(&on);
+        let export: DiagnosticsExport = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            export.recent_logs, "boot ok\nprovider key [redacted]\n",
+            "logs are attached and redacted"
+        );
+        assert!(md.contains("## Recent app logs"), "{md}");
+        assert!(
+            export
+                .preview
+                .contains(&"Recent app logs (last 4,000 characters, redacted)".to_string()),
+            "{:?}",
+            export.preview
+        );
 
         match old_home {
             Some(v) => std::env::set_var("HOME", v),

@@ -1,0 +1,1 @@
+- Labs Diagnostics zip only attaches recent app logs when "Include recent app logs" is ticked under the preview (off by default), and the preview says whether they go in.
