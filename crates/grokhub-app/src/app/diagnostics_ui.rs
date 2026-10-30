@@ -41,6 +41,12 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    /// The "Include recent app logs" box: kept in `app.json` once ticked.
+    pub(super) fn set_diagnostics_include_logs(&mut self, on: bool) {
+        self.cfg.diagnostics_include_logs = on;
+        self.persist_cfg();
+    }
+
     /// Settings → Labs: Diagnostics mode toggle, preview, and Open folder.
     pub(super) fn ui_labs_diagnostics(&mut self, ui: &mut egui::Ui) {
         crate::ui_kit::section_header(ui, "Diagnostics", None);
@@ -60,8 +66,7 @@ impl Cabin {
             }
             let mut logs = self.cfg.diagnostics_include_logs;
             if ui.checkbox(&mut logs, "Include recent app logs").changed() {
-                self.cfg.diagnostics_include_logs = logs;
-                self.persist_cfg();
+                self.set_diagnostics_include_logs(logs);
             }
             if crate::cards::settings_action(
                 ui,
@@ -678,7 +683,12 @@ mod tests {
             "{json}"
         );
 
-        cabin.cfg.diagnostics_include_logs = true;
+        cabin.set_diagnostics_include_logs(true);
+        cabin.persist_svc.flush();
+        assert!(
+            crate::config::load().diagnostics_include_logs,
+            "the box is saved"
+        );
         cabin.save_chat_diagnostics(None);
         let on = cabin
             .diagnostics_last_zip

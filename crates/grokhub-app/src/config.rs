@@ -1660,14 +1660,17 @@ mod tests {
         let mut cfg = AppConfig {
             device_name: "cabin".into(),
             diagnostics_mode: true,
+            diagnostics_include_logs: true,
             ..Default::default()
         };
         save_in(&root, &cfg).expect("save");
         assert!(load().diagnostics_mode);
+        assert!(load().diagnostics_include_logs);
         let text = fs::read_to_string(root.join("app.json")).unwrap();
         assert!(
-            text.contains("\"diagnosticsMode\""),
-            "camelCase key must round-trip: {text}"
+            text.contains("\"diagnosticsMode\"")
+                && text.contains("\"diagnosticsIncludeLogs\": true"),
+            "camelCase keys must round-trip: {text}"
         );
         cfg.diagnostics_mode = false;
         save_in(&root, &cfg).expect("save off");
