@@ -15,6 +15,31 @@ pub enum EventKind {
     Kill,
     Death,
     MatchEnd { won: u32, lost: u32 },
+    // League: the match began (`GameStart`), and an objective fell, with
+    // `ally` true when the player's team took it (`None`: side unknown).
+    MatchStart,
+    Objective { what: Objective, ally: Option<bool> },
+    // WoW: a boss pull began, and ended in a kill or a wipe.
+    PullStart(Pull),
+    PullEnd { pull: Pull, kill: bool },
+}
+
+/// The League objectives the watcher records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Objective {
+    Dragon,
+    Baron,
+    Turret,
+}
+
+/// A WoW boss encounter, as its `ENCOUNTER_START` / `ENCOUNTER_END` lines
+/// name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pull {
+    pub encounter_id: u32,
+    pub name: String,
+    pub difficulty: u32,
+    pub group_size: u32,
 }
 
 /// An event and when it was seen, in ms since the epoch.
@@ -207,7 +232,7 @@ pub fn recap(timeline: &[WatchEvent]) -> Recap {
                 }
             }
             EventKind::MatchEnd { won, lost } => final_score = Some((won, lost)),
-            EventKind::RoundStart { .. } => {}
+            _ => {}
         }
     }
     if let Some((won, lost)) = final_score {
