@@ -13,7 +13,7 @@ default_outfit = "hanging-out"
 [[outfit]]
 id = "working"
 file = "brand/nyx-working.jpg"  # shipped art, relative to the repo root
-moods = ["working", "thinking", "writing"]
+moods = ["working"]
 adult = false                   # never true in the repo (CI guard 80)
 
 # Optional patches for blinking and talking. Anchors are the patch's
@@ -32,8 +32,8 @@ y = 150
 ```
 
 Modes: `working`, `gaming`, `doctor`, `reading`, `hanging-out`, `viper`,
-`thinking`, `writing`, `raunchy`. A mode with no outfit of its own shows
-the default outfit. Only outfits with eye and mouth patches can blink and
+`thinking`, `writing`, `raunchy`. Nyx ships one outfit per mode; a mode with
+no outfit of its own shows the default outfit. Only outfits with eye and mouth patches can blink and
 talk; the rest still breathe and bob.
 
 ## Adults-only outfits

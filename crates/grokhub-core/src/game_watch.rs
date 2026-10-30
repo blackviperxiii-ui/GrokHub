@@ -4,20 +4,46 @@
 //! timeline for pointers and an end-of-match recap. No model is called and
 //! nothing leaves the machine; the local listener and UI are follow-ups.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// One thing that happened in a match.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     RoundStart { round: u32 },
     RoundEnd { round: u32, won: bool },
     Kill,
     Death,
     MatchEnd { won: u32, lost: u32 },
+    // League: the match began (`GameStart`), and an objective fell, with
+    // `ally` true when the player's team took it (`None`: side unknown).
+    MatchStart,
+    Objective { what: Objective, ally: Option<bool> },
+    // WoW: a boss pull began, and ended in a kill or a wipe.
+    PullStart(Pull),
+    PullEnd { pull: Pull, kill: bool },
+}
+
+/// The League objectives the watcher records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Objective {
+    Dragon,
+    Baron,
+    Turret,
+}
+
+/// A WoW boss encounter, as its `ENCOUNTER_START` / `ENCOUNTER_END` lines
+/// name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pull {
+    pub encounter_id: u32,
+    pub name: String,
+    pub difficulty: u32,
+    pub group_size: u32,
 }
 
 /// An event and when it was seen, in ms since the epoch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub at_ms: u64,
     pub kind: EventKind,
@@ -206,7 +232,7 @@ pub fn recap(timeline: &[WatchEvent]) -> Recap {
                 }
             }
             EventKind::MatchEnd { won, lost } => final_score = Some((won, lost)),
-            EventKind::RoundStart { .. } => {}
+            _ => {}
         }
     }
     if let Some((won, lost)) = final_score {
@@ -219,6 +245,30 @@ pub fn recap(timeline: &[WatchEvent]) -> Recap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn league_and_wow_events_round_trip_through_the_match_store_json() {
+        let pull = Pull {
+            encounter_id: 2902,
+            name: "Ulgrax".into(),
+            difficulty: 16,
+            group_size: 20,
+        };
+        let kinds = vec![
+            EventKind::MatchStart,
+            EventKind::Objective {
+                what: Objective::Baron,
+                ally: Some(true),
+            },
+            EventKind::PullStart(pull.clone()),
+            EventKind::PullEnd { pull, kill: false },
+        ];
+        for kind in kinds {
+            let ev = WatchEvent { at_ms: 1, kind };
+            let json = serde_json::to_string(&ev).unwrap();
+            assert_eq!(serde_json::from_str::<WatchEvent>(&json).unwrap(), ev);
+        }
+    }
 
     fn payload(round: u32, phase: &str, win: &str, kills: u32, deaths: u32) -> String {
         format!(

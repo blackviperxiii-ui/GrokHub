@@ -17,7 +17,17 @@ default_outfit = "hanging-out"
 [[outfit]]
 id = "working"
 file = "brand/nyx-working.jpg"
-moods = ["working", "thinking", "writing"]
+moods = ["working"]
+
+[[outfit]]
+id = "thinking"
+file = "brand/nyx/actions/thinking/1.jpg"
+moods = ["thinking"]
+
+[[outfit]]
+id = "writing"
+file = "brand/nyx/actions/writing/1.jpg"
+moods = ["writing"]
 
 [[outfit]]
 id = "gaming"
@@ -43,3 +53,11 @@ moods = ["hanging-out"]
 id = "viper"
 file = "brand/nyx-viper.jpg"
 moods = ["viper"]
+
+# The raunchy outfit ships in the repo; the wardrobe shows it only with
+# adults-only personalities on. `adult` stays false: that flag is for the
+# local-only folder.
+[[outfit]]
+id = "raunchy"
+file = "brand/nyx-raunchy.jpg"
+moods = ["raunchy"]

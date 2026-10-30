@@ -1,5 +1,6 @@
 //! Catalog and rail icons — Phosphor glyphs (U7c) with card chrome plates.
-//! Composer Stop / mic / paperclip keep custom motion paint below.
+//! Every glyph here moves through [`crate::motion::icon`]: hover, press and
+//! becoming active. Composer Stop / mic / paperclip keep custom motion paint below.
 
 use eframe::egui::{self, Pos2, Sense, Stroke, Vec2};
 
@@ -20,15 +21,16 @@ pub fn add_phosphor_fonts(fonts: &mut egui::FontDefinitions) {
     ph::regular::add_to_fonts(fonts);
 }
 
-fn phosphor_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: &str, color: egui::Color32) {
-    let size = (rect.height() * 0.78).max(10.0);
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        egui::FontId::proportional(size),
-        color,
-    );
+use crate::motion::icon::{Cue, Kick, Pose};
+
+fn phosphor_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    glyph: &str,
+    color: egui::Color32,
+    pose: Pose,
+) {
+    crate::motion::icon::paint_glyph(painter, rect, glyph, color, pose);
 }
 
 fn tile_phosphor(icon: TileIcon) -> &'static str {
@@ -88,8 +90,11 @@ pub enum TileIcon {
     Chat,
 }
 
+/// A card's icon plate. The plate stays put; while the card is hovered the
+/// glyph lifts and leans to the accent.
 pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let pose = crate::motion::icon::card_icon_pose(ui, resp.id, rect);
     let painter = ui.painter();
     let fill = crate::theme::elevated();
     painter.rect_filled(rect, 6.0, fill);
@@ -100,7 +105,8 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
         egui::StrokeKind::Middle,
     );
     let glyph_rect = rect.shrink(size * 0.18);
-    phosphor_glyph(painter, glyph_rect, tile_phosphor(icon), crate::theme::fg());
+    let ink = pose.ink(crate::theme::fg(), crate::theme::amber());
+    phosphor_glyph(painter, glyph_rect, tile_phosphor(icon), ink, pose);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,9 +164,36 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
     }
 }
 
-pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    paint_rail_icon_at(ui.painter(), rect, icon, color);
+/// What each rail glyph does under the pointer: the gear and clocks turn
+/// (the gear by one tooth, so it lands looking the same), the pencil writes
+/// up and right, the rest rise.
+pub fn rail_kick(icon: RailIcon) -> Kick {
+    use std::f32::consts::{FRAC_PI_4, FRAC_PI_6};
+    match icon {
+        RailIcon::Settings => Kick::Turn(FRAC_PI_4),
+        RailIcon::Clock => Kick::Turn(FRAC_PI_6),
+        RailIcon::History => Kick::Turn(-FRAC_PI_6),
+        RailIcon::Search => Kick::Turn(-FRAC_PI_6 * 0.5),
+        RailIcon::Compose => Kick::Nudge(Vec2::new(1.0, -1.0)),
+        RailIcon::Imagine
+        | RailIcon::Grid
+        | RailIcon::Folder
+        | RailIcon::Chat
+        | RailIcon::File
+        | RailIcon::Pin
+        | RailIcon::Home
+        | RailIcon::Objectives
+        | RailIcon::Pulse
+        | RailIcon::Library
+        | RailIcon::Pc
+        | RailIcon::Profile => Kick::Lift,
+    }
+}
+
+/// The pose of a rail or list glyph whose row answered `resp`. `active` pops
+/// it once when the row becomes the selected one.
+pub fn rail_pose(ui: &egui::Ui, resp: &egui::Response, icon: RailIcon, active: bool) -> Pose {
+    crate::motion::icon::pose(ui, resp.id, Cue::of(resp, active), rail_kick(icon))
 }
 
 pub fn paint_rail_icon_at(
@@ -168,8 +201,9 @@ pub fn paint_rail_icon_at(
     rect: egui::Rect,
     icon: RailIcon,
     color: egui::Color32,
+    pose: Pose,
 ) {
-    phosphor_glyph(painter, rect, rail_phosphor(icon), color);
+    phosphor_glyph(painter, rect, rail_phosphor(icon), color, pose);
 }
 
 /// Indent gutter for a sidebar tree row. One spine per depth, with a branch on the deepest.
@@ -200,29 +234,22 @@ pub fn paint_tree_gutter(ui: &mut egui::Ui, depth: u8) {
     }
 }
 
+/// Folder caret: closed points right, open points down. Toggling turns it a
+/// quarter over the hover ease (snaps with reduced motion).
 pub fn paint_folder_caret(ui: &mut egui::Ui, open: bool, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
+    let turn = crate::motion::icon::toggle_t(ui, resp.id.with("caret-open"), open);
+    let pose = Pose {
+        angle: std::f32::consts::FRAC_PI_2 * turn,
+        ..Pose::REST
+    };
     let c = rect.center();
+    let m = |x: f32, y: f32| pose.map(c, Pos2::new(c.x + x, c.y + y));
     let stroke = Stroke::new(1.4_f32, color);
-    if open {
-        ui.painter().line_segment(
-            [Pos2::new(c.x - 3.0, c.y - 1.0), Pos2::new(c.x, c.y + 2.0)],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [Pos2::new(c.x, c.y + 2.0), Pos2::new(c.x + 3.0, c.y - 1.0)],
-            stroke,
-        );
-    } else {
-        ui.painter().line_segment(
-            [Pos2::new(c.x - 1.0, c.y - 3.0), Pos2::new(c.x + 2.0, c.y)],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [Pos2::new(c.x + 2.0, c.y), Pos2::new(c.x - 1.0, c.y + 3.0)],
-            stroke,
-        );
-    }
+    ui.painter()
+        .line_segment([m(-1.0, -3.0), m(2.0, 0.0)], stroke);
+    ui.painter()
+        .line_segment([m(2.0, 0.0), m(-1.0, 3.0)], stroke);
 }
 
 /// How far a composer Stop or mic has eased this frame.
@@ -278,18 +305,35 @@ pub fn composer_motion(
     ComposerMotion { scale, fill, press }
 }
 
+/// One composer channel: eased, or snapped to its end with reduced motion.
+fn composer_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    if crate::motion::reduced_motion(ui) {
+        return if on { 1.0 } else { 0.0 };
+    }
+    ui.ctx()
+        .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
+}
+
+/// The live breath, held still with reduced motion.
+fn composer_breath_now(ui: &egui::Ui) -> f32 {
+    if crate::motion::reduced_motion(ui) {
+        return 0.0;
+    }
+    composer_breath(ui.ctx().input(|i| i.time) as f32)
+}
+
 fn composer_pointer_ease(ui: &egui::Ui, resp: &egui::Response) -> (f32, f32) {
-    let hover_t = ui.ctx().animate_bool_with_time_and_easing(
+    let hover_t = composer_channel(
+        ui,
         resp.id.with("feel-h"),
         resp.hovered(),
         grokhub_core::HOVER_SECS,
-        egui::emath::easing::quadratic_out,
     );
-    let press_t = ui.ctx().animate_bool_with_time_and_easing(
+    let press_t = composer_channel(
+        ui,
         resp.id.with("feel-p"),
         resp.is_pointer_button_down_on(),
         grokhub_core::PRESS_SECS,
-        egui::emath::easing::quadratic_out,
     );
     (hover_t, press_t)
 }
@@ -420,11 +464,14 @@ pub fn paint_composer_stop(
     let (alloc, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let (resp, _, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     let (hover_t, press_t) = composer_pointer_ease(ui, &resp);
-    let live_t = ui
-        .ctx()
-        .animate_bool_with_time(resp.id.with("glyph-live"), running, 0.16);
+    let live_t = if crate::motion::reduced_motion(ui) {
+        f32::from(u8::from(running))
+    } else {
+        ui.ctx()
+            .animate_bool_with_time(resp.id.with("glyph-live"), running, 0.16)
+    };
     let breath = if running {
-        composer_breath(ui.ctx().input(|i| i.time) as f32)
+        composer_breath_now(ui)
     } else {
         0.0
     };
@@ -446,18 +493,22 @@ pub fn paint_composer_mic(
     let (resp, _, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     let (hover_t, press_t) = composer_pointer_ease(ui, &resp);
     let live = !matches!(mood, MicMood::Idle);
-    let live_t = ui
-        .ctx()
-        .animate_bool_with_time(resp.id.with("glyph-live"), live, 0.16);
+    let live_t = if crate::motion::reduced_motion(ui) {
+        f32::from(u8::from(live))
+    } else {
+        ui.ctx()
+            .animate_bool_with_time(resp.id.with("glyph-live"), live, 0.16)
+    };
     let speak_target = matches!(mood, MicMood::Speaking);
-    let speak_t = ui.ctx().animate_bool_with_time(
+    let speak_t = composer_channel(
+        ui,
         resp.id.with("glyph-speak"),
         speak_target,
         grokhub_core::HOVER_SECS,
     );
     let pulsing = live || channel_moving(live_t) || channel_moving(speak_t);
     let breath = if pulsing {
-        composer_breath(ui.ctx().input(|i| i.time) as f32)
+        composer_breath_now(ui)
     } else {
         0.0
     };
@@ -589,7 +640,7 @@ pub fn paint_composer_paperclip(
     }
     let (hover_t, press_t) = composer_pointer_ease(ui, &resp);
     let breath = if resp.hovered() || channel_moving(hover_t) {
-        composer_breath(ui.ctx().input(|i| i.time) as f32)
+        composer_breath_now(ui)
     } else {
         0.0
     };
@@ -605,6 +656,17 @@ pub fn paint_composer_paperclip(
     follow_composer_frame(ui, &resp, false, &[hover_t, press_t]);
     name_control(&resp, bar_icon_name(BarIcon::Plus));
     resp
+}
+
+/// Send takes off up and right, the arrows lean their way, search tilts.
+pub fn bar_kick(icon: BarIcon) -> Kick {
+    match icon {
+        BarIcon::Send => Kick::Nudge(Vec2::new(1.0, -1.0)),
+        BarIcon::ArrowUp => Kick::Nudge(Vec2::new(0.0, -1.0)),
+        BarIcon::ArrowDown => Kick::Nudge(Vec2::new(0.0, 1.0)),
+        BarIcon::Search => Kick::Turn(-std::f32::consts::FRAC_PI_6 * 0.5),
+        BarIcon::Plus | BarIcon::Mic | BarIcon::Stop => Kick::Lift,
+    }
 }
 
 pub fn bar_icon_name(icon: BarIcon) -> &'static str {
@@ -650,26 +712,29 @@ pub fn paint_bar_icon(
     let glyph = rect.shrink(((rect.width() - optical) * 0.5).max(0.0));
     let c = glyph.center();
     let w = glyph.width();
+    let pose = crate::motion::icon::pose(ui, resp.id, Cue::of(&resp, false), bar_kick(icon));
     match icon {
         // Painted above, before this allocate. Kept so the match stays exhaustive.
         BarIcon::Plus | BarIcon::Mic | BarIcon::Stop => {}
         BarIcon::Send => {
+            // The disc stays; the plane inside it takes off.
             painter.circle_filled(c, w * 0.46, crate::theme::send_on());
             phosphor_glyph(
                 painter,
                 glyph.shrink(w * 0.18),
                 ph::regular::PAPER_PLANE_TILT,
                 crate::theme::send_on_ink(),
+                pose,
             );
         }
         BarIcon::ArrowUp => {
-            phosphor_glyph(painter, glyph, ph::regular::ARROW_UP, color);
+            phosphor_glyph(painter, glyph, ph::regular::ARROW_UP, color, pose);
         }
         BarIcon::ArrowDown => {
-            phosphor_glyph(painter, glyph, ph::regular::ARROW_DOWN, color);
+            phosphor_glyph(painter, glyph, ph::regular::ARROW_DOWN, color, pose);
         }
         BarIcon::Search => {
-            phosphor_glyph(painter, glyph, ph::regular::MAGNIFYING_GLASS, color);
+            phosphor_glyph(painter, glyph, ph::regular::MAGNIFYING_GLASS, color, pose);
         }
     }
     name_control(&resp, bar_icon_name(icon));
@@ -706,8 +771,9 @@ pub fn icon_for_label(label: &str) -> TileIcon {
 }
 
 /// Landscape glyph for the Imagine Image-mode pill — no catalog-card chrome.
-pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32, on: bool) {
+    let rect = host_slot(ui, Vec2::splat(size), on, Kick::Lift);
+    let size = rect.width();
     let painter = ui.painter();
     let r = rect.shrink(size * 0.08);
     let stroke = Stroke::new(1.4_f32, color);
@@ -733,8 +799,9 @@ pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     );
 }
 
-pub fn paint_video_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+pub fn paint_video_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32, on: bool) {
+    let rect = host_slot(ui, Vec2::splat(size), on, Kick::Lift);
+    let size = rect.width();
     let painter = ui.painter();
     let stroke = Stroke::new(1.4_f32, color);
     let body = egui::Rect::from_center_size(
@@ -765,8 +832,9 @@ pub fn paint_video_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     );
 }
 
-pub fn paint_agent_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+pub fn paint_agent_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32, on: bool) {
+    let rect = host_slot(ui, Vec2::splat(size), on, Kick::Lift);
+    let size = rect.width();
     let painter = ui.painter();
     let stroke = Stroke::new(1.4_f32, color);
     let c = rect.center();
@@ -783,7 +851,8 @@ pub fn paint_agent_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
 }
 
 pub fn paint_style_auto(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let rect = host_slot(ui, Vec2::splat(size), false, Kick::Lift);
+    let size = rect.width();
     let painter = ui.painter();
     let stroke = Stroke::new(1.3_f32, color);
     let r = rect.shrink(size * 0.12);
@@ -798,7 +867,8 @@ pub fn paint_style_auto(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
 }
 
 pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let rect = host_slot(ui, Vec2::splat(size), false, Kick::Lift);
+    let size = rect.width();
     let painter = ui.painter();
     let stroke = Stroke::new(1.4_f32, color);
     let (w, h) = match aspect % 5 {
@@ -817,7 +887,12 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
 }
 
 pub fn paint_menu_caret(ui: &mut egui::Ui, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 10.0), Sense::hover());
+    let rect = host_slot(
+        ui,
+        egui::vec2(8.0, 10.0),
+        false,
+        Kick::Nudge(Vec2::new(0.0, 1.0)),
+    );
     let c = rect.center();
     let stroke = Stroke::new(1.4_f32, color);
     ui.painter().line_segment(
@@ -830,24 +905,54 @@ pub fn paint_menu_caret(ui: &mut egui::Ui, color: egui::Color32) {
     );
 }
 
-pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+/// A plus in `rect`. Pass the button's pose; a quarter turn lands looking the same.
+pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, pose: Pose) {
     let c = rect.center();
     let w = rect.width();
+    let m = |p: Pos2| pose.map(c, p);
     let stroke = Stroke::new(1.6_f32, color);
     painter.line_segment(
         [
-            Pos2::new(c.x, c.y - w * 0.18),
-            Pos2::new(c.x, c.y + w * 0.18),
+            m(Pos2::new(c.x, c.y - w * 0.18)),
+            m(Pos2::new(c.x, c.y + w * 0.18)),
         ],
         stroke,
     );
     painter.line_segment(
         [
-            Pos2::new(c.x - w * 0.18, c.y),
-            Pos2::new(c.x + w * 0.18, c.y),
+            m(Pos2::new(c.x - w * 0.18, c.y)),
+            m(Pos2::new(c.x + w * 0.18, c.y)),
         ],
         stroke,
     );
+}
+
+/// Allocate a stroke glyph's slot and pose it for the chip or card around it.
+fn host_slot(ui: &mut egui::Ui, size: Vec2, active: bool, kick: Kick) -> egui::Rect {
+    let (slot, resp) = ui.allocate_exact_size(size, Sense::hover());
+    let pose = crate::motion::icon::host_pose(ui, resp.id, slot, active, kick);
+    crate::motion::icon::posed_rect(slot, pose)
+}
+
+/// A small glyph button (a dialog's ×): the same wash as the bar icons, and
+/// the glyph moves through the shared pose.
+pub fn glyph_button(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    size: f32,
+    color: egui::Color32,
+    kick: Kick,
+) -> egui::Response {
+    let (_rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter().rect_filled(rect, 6.0, wash);
+    }
+    let pose = crate::motion::icon::pose(ui, resp.id, Cue::of(&resp, false), kick);
+    let glyph_rect =
+        egui::Rect::from_center_size(rect.center(), Vec2::splat(crate::theme::ICON_CHROME));
+    phosphor_glyph(ui.painter(), glyph_rect, glyph, color, pose);
+    resp
 }
 
 #[cfg(test)]
@@ -1162,5 +1267,91 @@ mod tests {
             Some(std::time::Duration::MAX),
             "idle controls must not ask for another frame: {delays:?}"
         );
+    }
+
+    /// Every animated icon site at once: idle frames ask for nothing, a hover
+    /// asks for frames only while its ease runs, and then the cabin is idle again.
+    #[test]
+    fn animated_icons_repaint_only_while_they_move() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let send_at = std::cell::Cell::new(egui::Pos2::ZERO);
+        let frame = |time: f64, pointer: Option<egui::Pos2>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                time: Some(time),
+                events: pointer.map_or(Vec::new(), |p| vec![egui::Event::PointerMoved(p)]),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let send = paint_bar_icon(ui, BarIcon::Send, 28.0, crate::theme::fg());
+                        send_at.set(send.rect.center());
+                        paint_bar_icon(ui, BarIcon::ArrowDown, 28.0, crate::theme::fg());
+                        paint_bar_icon(ui, BarIcon::Search, 16.0, crate::theme::fg());
+                        let _ = crate::titlebar::titlebar_chrome_btn(
+                            ui,
+                            crate::titlebar::ChromeBtn::Close,
+                        );
+                        glyph_button(ui, ph::regular::X, 24.0, crate::theme::fg(), Kick::Lift);
+                        paint_folder_caret(ui, true, crate::theme::fg());
+                        paint_image_mode(ui, 16.0, crate::theme::fg(), true);
+                        paint_menu_caret(ui, crate::theme::fg());
+                    });
+                    let (row, resp) =
+                        ui.allocate_exact_size(egui::vec2(40.0, 40.0), Sense::click());
+                    let pose = rail_pose(ui, &resp, RailIcon::Settings, true);
+                    paint_rail_icon_at(
+                        ui.painter(),
+                        row,
+                        RailIcon::Settings,
+                        crate::theme::fg(),
+                        pose,
+                    );
+                    let _ = crate::cards::grok_tile(
+                        ui,
+                        TileIcon::Board,
+                        "Board",
+                        "Cards and lanes.",
+                        None,
+                        false,
+                    );
+                });
+            });
+            out.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+        };
+        let idle = std::time::Duration::MAX;
+        let mut t = 0.0;
+        // egui asks for frames while it warms up (fonts, first layout).
+        for _ in 0..4 {
+            frame(t, None);
+            t += 0.5;
+        }
+        for _ in 0..3 {
+            assert_eq!(frame(t, None), idle, "an idle frame asks for no repaint");
+            t += 0.5;
+        }
+        // Hover Send: frames come only while the ease runs.
+        let on = Some(send_at.get());
+        assert_eq!(frame(t, on), std::time::Duration::ZERO);
+        // The pointer stays put (no new events) while the hover eases in.
+        let mut asks = 0;
+        for _ in 0..30 {
+            t += 1.0 / 60.0;
+            if frame(t, None) == idle {
+                break;
+            }
+            asks += 1;
+        }
+        assert!(
+            (1..=20).contains(&asks),
+            "about 0.2 s of frames at 60 Hz, then none: {asks}"
+        );
+        t += 0.5;
+        assert_eq!(frame(t, None), idle, "a settled hover is idle");
     }
 }

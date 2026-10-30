@@ -507,30 +507,28 @@ y = 40
     }
 
     #[test]
-    fn nyx_ships_six_safe_outfits_covering_every_mode_but_raunchy() {
+    fn nyx_ships_nine_safe_outfits_one_per_mode() {
         let nyx = nyx();
         assert_eq!(nyx.id, "nyx");
         assert_eq!(nyx.name, "Nyx");
         assert_eq!(nyx.default_outfit, "hanging-out");
-        assert_eq!(nyx.outfits.len(), 6);
+        assert_eq!(nyx.outfits.len(), 9);
         assert!(!nyx.ships_adult_art(), "adult art never ships in the repo");
         for o in &nyx.outfits {
-            assert!(o.file.starts_with("brand/nyx-"), "{}", o.file);
+            assert!(o.file.starts_with("brand/nyx"), "{}", o.file);
             assert!(o.file.ends_with(".jpg"), "{}", o.file);
         }
-        assert_eq!(nyx.outfit_for(Mood::Working, false).id, "working");
-        assert_eq!(nyx.outfit_for(Mood::Thinking, false).id, "working");
-        assert_eq!(nyx.outfit_for(Mood::Writing, false).id, "working");
-        assert_eq!(nyx.outfit_for(Mood::Gaming, false).id, "gaming");
-        assert_eq!(nyx.outfit_for(Mood::Doctor, false).id, "doctor");
-        assert_eq!(nyx.outfit_for(Mood::Reading, false).id, "reading");
-        assert_eq!(nyx.outfit_for(Mood::HangingOut, false).id, "hanging-out");
-        assert_eq!(nyx.outfit_for(Mood::Viper, false).id, "viper");
-        assert!(!nyx.has_outfit_for(Mood::Raunchy, true));
+        for mood in Mood::ALL {
+            assert!(nyx.has_outfit_for(mood, false), "{mood:?}");
+            assert_eq!(nyx.outfit_for(mood, false).id, mood.slug(), "{mood:?}");
+        }
         assert_eq!(
-            nyx.outfit_for(Mood::Raunchy, true).id,
-            "hanging-out",
-            "raunchy only comes from the local adult folder"
+            nyx.outfit_for(Mood::Thinking, false).file,
+            "brand/nyx/actions/thinking/1.jpg"
+        );
+        assert_eq!(
+            nyx.outfit_for(Mood::Raunchy, false).file,
+            "brand/nyx-raunchy.jpg"
         );
     }
 
@@ -560,7 +558,7 @@ y = 40
 
         let (shipped, problem) = nyx().clone().with_local_adult(&tmp);
         assert_eq!(problem, None);
-        assert_eq!(shipped.outfits.len(), 7, "viper replaced, raunchy added");
+        assert_eq!(shipped.outfits.len(), 9, "viper and raunchy replaced");
         let raunchy = shipped.outfit("raunchy").unwrap();
         assert!(raunchy.adult);
         assert_eq!(
@@ -576,7 +574,7 @@ y = 40
         assert_eq!(
             shipped.outfit_for(Mood::Raunchy, false).id,
             "hanging-out",
-            "adults-only off hides it"
+            "adults-only off hides the local raunchy outfit"
         );
         assert_eq!(
             shipped.outfit_for(Mood::Viper, false).id,
@@ -592,7 +590,7 @@ y = 40
         let nowhere = Path::new("/nonexistent/grokhub/companions/nyx/adult");
         let (shipped, problem) = nyx().clone().with_local_adult(nowhere);
         assert_eq!(problem, None);
-        assert_eq!(shipped.outfits.len(), 6);
+        assert_eq!(shipped.outfits.len(), 9);
 
         let tmp = std::env::temp_dir().join(format!(
             "grokhub-companion-adult-bad-{}",
@@ -602,7 +600,7 @@ y = 40
         std::fs::write(tmp.join(ADULT_FILE), "[[outfit]]\nid = \"x\"\n").unwrap();
         let (shipped, problem) = nyx().clone().with_local_adult(&tmp);
         assert!(problem.unwrap().contains("adult.toml"));
-        assert_eq!(shipped.outfits.len(), 6);
+        assert_eq!(shipped.outfits.len(), 9);
 
         std::fs::write(
             tmp.join(ADULT_FILE),
@@ -611,7 +609,7 @@ y = 40
         .unwrap();
         let (shipped, problem) = nyx().clone().with_local_adult(&tmp);
         assert!(problem.unwrap().contains("has no file"));
-        assert_eq!(shipped.outfits.len(), 6);
+        assert_eq!(shipped.outfits.len(), 9);
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
