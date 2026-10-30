@@ -31,6 +31,7 @@ mod native_plugins;
 mod night;
 mod notify;
 mod oauth;
+mod pedestal;
 mod recipes;
 mod release_update;
 mod secrets;

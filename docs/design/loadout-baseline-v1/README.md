@@ -29,7 +29,7 @@ Direction: gaming-flavored chrome (black #0B0B0D, red #D7263D outlines, gray #2A
 | 13 | Pulse in the Loadout style: same name and functions (PC care and gaming content), fluid grid |
 | 14 | Pulse at 2560, 1440, 1024 and 600 px, plus the breakpoint rules |
 | 15 | Pulse card close-up and the list of kept functions |
-| 16 | Companion hero on a semi-holographic pedestal |
+| 16 | Companion hero on a semi-holographic pedestal. The cabin draws its pedestal in code (`crates/grokhub-app/src/pedestal.rs`); `scripts/deck-shots.ps1 -pedestal` previews it in the corner box in each theme |
 | 17 | Companion moods: Hello, Helping, Hanging out |
 | 18 | Companion as a live wallpaper (parked idea, not part of the foundation) |
 | 19 | The 21 existing personalities, all kept |
