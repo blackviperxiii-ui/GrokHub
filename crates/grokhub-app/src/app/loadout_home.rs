@@ -231,34 +231,14 @@ pub(super) fn grouped(n: u32) -> String {
     out
 }
 
-/// A 0-100 health score from what the probes read: heat, free memory and
-/// free disk. `None` until anything has been read.
-pub(super) fn pc_score(p: &LocalProfile) -> Option<u8> {
-    if p.ram_mb == 0 && p.gpus.is_empty() && p.thermal == Thermal::Unknown {
-        return None;
-    }
-    let mut score: i32 = 100;
-    score -= match p.thermal {
-        Thermal::Unknown | Thermal::Nominal => 0,
-        Thermal::Fair => 10,
-        Thermal::Serious => 30,
-        Thermal::Critical => 50,
-    };
-    if let Some(free) = p.free_ram_mb.filter(|_| p.ram_mb > 0) {
-        if free * 100 < p.ram_mb * 10 {
-            score -= 15;
-        } else if free * 100 < p.ram_mb * 25 {
-            score -= 8;
-        }
-    }
-    if p.free_disk_mb > 0 {
-        if p.free_disk_mb < 10 * 1024 {
-            score -= 25;
-        } else if p.free_disk_mb < 50 * 1024 {
-            score -= 10;
-        }
-    }
-    Some(score.clamp(0, 100) as u8)
+/// The PC loadout header's number: how much RAM is in use, named, e.g.
+/// "RAM 41% used". A blended health score sat at 100% whenever heat wasn't
+/// readable (most Windows PCs), so it read as a measurement it wasn't.
+/// `None` until free memory has been read.
+pub(super) fn pc_reading(p: &LocalProfile) -> Option<String> {
+    let free = p.free_ram_mb.filter(|_| p.ram_mb > 0)?;
+    let used = p.ram_mb.saturating_sub(free) * 100 / p.ram_mb;
+    Some(format!("RAM {used}% used"))
 }
 
 /// Dock width for the page width beside the rail, or `None` when it hides.
@@ -1454,12 +1434,8 @@ impl Cabin {
 fn dock_pc(ui: &mut egui::Ui) {
     let profile = pc_profile();
     card(ui, |ui| {
-        let score = profile
-            .as_ref()
-            .and_then(pc_score)
-            .map(|n| format!("{n}%"))
-            .unwrap_or_default();
-        header(ui, false, "PC loadout", &score, crate::theme::fg());
+        let reading = profile.as_ref().and_then(pc_reading).unwrap_or_default();
+        header(ui, false, "PC loadout", &reading, crate::theme::fg());
         let Some(p) = profile else {
             ui.label(
                 egui::RichText::new("Reading this PC…")
@@ -2195,25 +2171,19 @@ mod tests {
     }
 
     #[test]
-    fn pc_score_takes_off_for_heat_low_memory_and_a_full_disk() {
+    fn pc_reading_names_the_ram_in_use_and_waits_for_a_real_read() {
         let mut p = profile(vec![gpu("RTX 4070", 12 * 1024, false, "560")]);
-        p.thermal = Thermal::Nominal;
-        assert_eq!(pc_score(&p), Some(100));
-        p.thermal = Thermal::Fair;
-        assert_eq!(pc_score(&p), Some(90));
-        p.free_ram_mb = Some(6 * 1024);
-        assert_eq!(pc_score(&p), Some(82));
+        // Heat unread and memory unread: no number at all, not a 100%.
+        p.thermal = Thermal::Unknown;
+        assert_eq!(pc_reading(&p), None);
+        p.free_ram_mb = Some(19 * 1024);
+        assert_eq!(pc_reading(&p).as_deref(), Some("RAM 40% used"));
         p.free_ram_mb = Some(2 * 1024);
-        p.free_disk_mb = 30 * 1024;
-        assert_eq!(pc_score(&p), Some(65));
-        p.thermal = Thermal::Critical;
-        p.free_disk_mb = 4 * 1024;
-        assert_eq!(pc_score(&p), Some(10));
-
-        let mut bare = profile(vec![]);
-        bare.thermal = Thermal::Unknown;
-        bare.ram_mb = 0;
-        assert_eq!(pc_score(&bare), None);
+        assert_eq!(pc_reading(&p).as_deref(), Some("RAM 93% used"));
+        p.free_ram_mb = Some(32 * 1024);
+        assert_eq!(pc_reading(&p).as_deref(), Some("RAM 0% used"));
+        p.ram_mb = 0;
+        assert_eq!(pc_reading(&p), None);
     }
 
     #[test]
