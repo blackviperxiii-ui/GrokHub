@@ -21,7 +21,7 @@ else
     fail=1
   else
     unpinned=$(printf '%s\n' "$uses" | grep -vE \
-      'uses:[[:space:]]*["'\'']?(\./[^[:space:]"'\'']*|docker://[^@[:space:]]+@sha256:[0-9a-f]{64}|[^@[:space:]"'\'']+@[0-9a-f]{40})["'\'']?([[:space:]]|$)' \
+      '^[^:]*:[0-9]+:[[:space:]]*(- )?uses:[[:space:]]*["'\'']?(\./[^[:space:]"'\'']*|docker://[^@[:space:]]+@sha256:[0-9a-f]{64}|[^@[:space:]"'\'']+@[0-9a-f]{40})["'\'']?([[:space:]]|$)' \
       | grep -v '^$' || true)
     if [[ -n "$unpinned" ]]; then
       echo "ci-guards: actions not pinned to a full commit SHA:" >&2

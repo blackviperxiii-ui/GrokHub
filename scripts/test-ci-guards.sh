@@ -135,6 +135,12 @@ commit_pr
 run_guard fail "workflow action pinned to a tag fails"
 
 fresh_pr
+printf '      - uses: attacker/action@main # uses: ./local\n      - uses: attacker/action@v1 # uses: actions/checkout@%s\n' "$SHA" \
+  >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "a trailing comment can't make an unpinned action look pinned"
+
+fresh_pr
 printf 'jobs:\n  a:\n    steps:\n      - uses: actions/cache@main\n' >"$W/.github/workflows/other.yaml"
 commit_pr
 run_guard fail "unpinned action in a .yaml workflow fails"
