@@ -14,6 +14,7 @@ use grokhub_core::{ChipKind, QuickChip, UpdateCard, UpdateStatus};
 use super::*;
 
 mod chat_first;
+pub(super) mod nyx_wardrobe;
 
 /// The companion cutout the chat header's round face is cropped from.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
@@ -24,6 +25,8 @@ const NYX_DOCTOR_JPG: &[u8] = include_bytes!("../../../../brand/nyx-doctor.jpg")
 const NYX_READING_JPG: &[u8] = include_bytes!("../../../../brand/nyx-reading.jpg");
 const NYX_HANGING_OUT_JPG: &[u8] = include_bytes!("../../../../brand/nyx-hanging-out.jpg");
 const NYX_VIPER_JPG: &[u8] = include_bytes!("../../../../brand/nyx-viper.jpg");
+const NYX_THINKING_JPG: &[u8] = include_bytes!("../../../../brand/nyx/actions/thinking/1.jpg");
+const NYX_WRITING_JPG: &[u8] = include_bytes!("../../../../brand/nyx/actions/writing/1.jpg");
 /// Below this page width the dock hides and the chat gets the whole page.
 /// The default 1100 px window leaves about 840 px beside the rail, so the
 /// dock shows there in its compact width.
@@ -43,9 +46,11 @@ const XP_PER_STEP: u32 = 25;
 pub(super) const XP_PER_LEVEL: u32 = 500;
 
 /// What Nyx is doing, shown in the corner box: a tool turn picks Working,
-/// Doctor or Reading by what the tool does, a game the user just left is
-/// Gaming, and anything else is Hanging out. The Viper personality wears
-/// the snake onesie whatever the mode.
+/// Doctor, Reading or Writing by what the tool does, a turn with no tool
+/// yet is Thinking, a game the user just left is Gaming, and anything else
+/// is Hanging out. The Viper personality wears the snake onesie whatever
+/// the mode. Each mode's own picture is its first pose; the rest are in
+/// [`nyx_wardrobe`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mood {
     Working,
@@ -54,6 +59,8 @@ pub(super) enum Mood {
     Reading,
     HangingOut,
     Viper,
+    Thinking,
+    Writing,
 }
 
 impl Mood {
@@ -65,6 +72,8 @@ impl Mood {
             Mood::Reading => NYX_READING_JPG,
             Mood::HangingOut => NYX_HANGING_OUT_JPG,
             Mood::Viper => NYX_VIPER_JPG,
+            Mood::Thinking => NYX_THINKING_JPG,
+            Mood::Writing => NYX_WRITING_JPG,
         }
     }
 
@@ -76,12 +85,14 @@ impl Mood {
             Mood::Reading => "loadout-nyx-reading",
             Mood::HangingOut => "loadout-nyx-hanging-out",
             Mood::Viper => "loadout-nyx-viper",
+            Mood::Thinking => "loadout-nyx-thinking",
+            Mood::Writing => "loadout-nyx-writing",
         }
     }
 }
 
 /// `GROKHUB_DECK_MOOD` (`working`, `gaming`, `doctor`, `reading`,
-/// `hanging-out`, `viper`) pins the picture for the deck screenshots
+/// `hanging-out`, `viper`, `thinking`, `writing`) pins the picture for the deck screenshots
 /// (`scripts/deck-shots.ps1`), where no turn or game can run.
 pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -91,6 +102,8 @@ pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
         "reading" => Some(Mood::Reading),
         "hanging-out" => Some(Mood::HangingOut),
         "viper" => Some(Mood::Viper),
+        "thinking" => Some(Mood::Thinking),
+        "writing" => Some(Mood::Writing),
         _ => None,
     }
 }
@@ -149,8 +162,15 @@ const READING_WORDS: &[&str] = &[
     "wiki",
 ];
 
+/// Words in a tool title that mean writing prose. Plain file writes and
+/// edits stay Working.
+const WRITING_WORDS: &[&str] = &[
+    "compose", "draft", "essay", "journal", "letter", "memo", "notes", "poem", "prose", "story",
+];
+
 /// The mode for a running tool, by the words in its title. PC care wins
-/// over looking things up; anything else is work at the desk.
+/// over looking things up, then writing prose; anything else is work at
+/// the desk.
 pub(super) fn tool_mood(title: &str) -> Mood {
     let lower = title.to_ascii_lowercase();
     let words: Vec<&str> = lower
@@ -162,17 +182,22 @@ pub(super) fn tool_mood(title: &str) -> Mood {
         Mood::Doctor
     } else if has(READING_WORDS) || words.iter().any(|w| w.starts_with("http")) {
         Mood::Reading
+    } else if has(WRITING_WORDS) {
+        Mood::Writing
     } else {
         Mood::Working
     }
 }
 
-/// Viper wins; then a running tool's mode; then a game the user just left.
-pub(super) fn mood_for(viper: bool, tool: Option<&str>, gaming: bool) -> Mood {
+/// Viper wins; then a running tool's mode; then a turn still thinking; then
+/// a game the user just left.
+pub(super) fn mood_for(viper: bool, tool: Option<&str>, thinking: bool, gaming: bool) -> Mood {
     if viper {
         Mood::Viper
     } else if let Some(title) = tool {
         tool_mood(title)
+    } else if thinking {
+        Mood::Thinking
     } else if gaming {
         Mood::Gaming
     } else {
@@ -506,22 +531,6 @@ fn paint_brackets(painter: &egui::Painter, rect: egui::Rect) {
         painter.line_segment([corner, corner + egui::vec2(arm * dx, 0.0)], stroke);
         painter.line_segment([corner, corner + egui::vec2(0.0, arm * dy)], stroke);
     }
-}
-
-fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(mood.key());
-    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
-        return Some(tex);
-    }
-    let rgba = image::load_from_memory(mood.art()).ok()?.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let tex = ctx.load_texture(
-        mood.key(),
-        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-    Some(tex)
 }
 
 /// The centred part of a `tex`-sized picture that fills `frame` without
@@ -1189,9 +1198,9 @@ impl Cabin {
     fn dock_companion(&mut self, ui: &mut egui::Ui) {
         let shown = self.shown_personality();
         let name = shown.name.as_str();
-        let art_on = super::personality_ui::wears_companion_art(&shown.id);
         let live = self.voice_is_on();
         let mood = self.companion_mood();
+        let look = self.dock_look_now();
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -1204,18 +1213,21 @@ impl Cabin {
                 ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
             ui.painter()
                 .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
-            if !art_on {
+            let tex = look
+                .and_then(|look| nyx_wardrobe::dock_pose(ui.ctx(), &look, mood))
+                .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
+            if let Some(tex) = tex {
+                egui::Image::from_texture(&tex)
+                    .uv(cover_uv(tex.size(), art.size()))
+                    .corner_radius(crate::theme::RADIUS_SM)
+                    .paint_at(ui, art);
+            } else {
                 let side = (art.height() * 0.5).min(art.width());
                 let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
                     let letter = super::personality_ui::initial_letter(name);
                     super::personality_ui::paint_letter_tile(ui, letter, side, true);
                 });
-            } else if let Some(tex) = companion_texture(ui.ctx(), mood) {
-                egui::Image::from_texture(&tex)
-                    .uv(cover_uv(tex.size(), art.size()))
-                    .corner_radius(crate::theme::RADIUS_SM)
-                    .paint_at(ui, art);
             }
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
@@ -1266,7 +1278,13 @@ impl Cabin {
             .app
             .as_ref()
             .is_some_and(|a| a.category == grokhub_core::focus_app::FocusCategory::Gaming);
-        mood_for(self.shown_personality_id() == "viper", tool, gaming)
+        let thinking = tool.is_none() && self.thinking_here();
+        mood_for(
+            self.shown_personality_id() == "viper",
+            tool,
+            thinking,
+            gaming,
+        )
     }
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
@@ -1665,18 +1683,21 @@ mod tests {
             Mood::Reading,
             Mood::HangingOut,
             Mood::Viper,
+            Mood::Thinking,
+            Mood::Writing,
         ];
         for mood in all {
             let img = image::load_from_memory(mood.art()).expect("mode art decodes");
             assert_eq!((img.width(), img.height()), (448, 350), "{mood:?}");
         }
         let mut keys: Vec<_> = all.iter().map(|m| m.key()).collect();
+        keys.sort();
         keys.dedup();
-        assert_eq!(keys.len(), 6);
+        assert_eq!(keys.len(), 8);
         let mut arts: Vec<_> = all.iter().map(|m| m.art().as_ptr()).collect();
         arts.sort();
         arts.dedup();
-        assert_eq!(arts.len(), 6, "each mode shows a different picture");
+        assert_eq!(arts.len(), 8, "each mode shows a different picture");
     }
 
     #[test]
@@ -1687,6 +1708,8 @@ mod tests {
         assert_eq!(parse_mood("reading"), Some(Mood::Reading));
         assert_eq!(parse_mood("hanging-out"), Some(Mood::HangingOut));
         assert_eq!(parse_mood("VIPER"), Some(Mood::Viper));
+        assert_eq!(parse_mood("thinking"), Some(Mood::Thinking));
+        assert_eq!(parse_mood("Writing"), Some(Mood::Writing));
         assert_eq!(parse_mood("hello"), None);
         assert_eq!(parse_mood(""), None);
     }
@@ -1701,6 +1724,12 @@ mod tests {
         assert_eq!(tool_mood("Fetch https://example.com/guide"), Mood::Reading);
         assert_eq!(tool_mood("https://example.com"), Mood::Reading);
         assert_eq!(tool_mood("Run cargo build"), Mood::Working);
+        assert_eq!(tool_mood("Draft a cover letter"), Mood::Writing);
+        assert_eq!(tool_mood("Compose the essay"), Mood::Writing);
+        assert_eq!(tool_mood("Add to my journal"), Mood::Writing);
+        assert_eq!(tool_mood("Write src/main.rs"), Mood::Working);
+        assert_eq!(tool_mood("Edit Cargo.toml"), Mood::Working);
+        assert_eq!(tool_mood("Search the web for essay tips"), Mood::Reading);
         assert_eq!(
             tool_mood("Edit src/fancy.rs"),
             Mood::Working,
@@ -1710,11 +1739,18 @@ mod tests {
     }
 
     #[test]
-    fn viper_then_a_tool_then_a_game_then_hanging_out() {
-        assert_eq!(mood_for(true, Some("Run cargo build"), true), Mood::Viper);
-        assert_eq!(mood_for(false, Some("Search the web"), true), Mood::Reading);
-        assert_eq!(mood_for(false, None, true), Mood::Gaming);
-        assert_eq!(mood_for(false, None, false), Mood::HangingOut);
+    fn viper_then_a_tool_then_thinking_then_a_game_then_hanging_out() {
+        assert_eq!(
+            mood_for(true, Some("Run cargo build"), true, true),
+            Mood::Viper
+        );
+        assert_eq!(
+            mood_for(false, Some("Search the web"), true, true),
+            Mood::Reading
+        );
+        assert_eq!(mood_for(false, None, true, true), Mood::Thinking);
+        assert_eq!(mood_for(false, None, false, true), Mood::Gaming);
+        assert_eq!(mood_for(false, None, false, false), Mood::HangingOut);
     }
 
     #[test]
@@ -1748,7 +1784,7 @@ mod tests {
         cabin.chat_job_thread = Some(cabin.threads[0].id.clone());
         assert_eq!(
             cabin.companion_mood(),
-            Mood::HangingOut,
+            Mood::Thinking,
             "thinking, no tool yet"
         );
 
@@ -1766,6 +1802,8 @@ mod tests {
         assert_eq!(cabin.companion_mood(), Mood::Reading);
         cabin.live_blocks[0].tool_title = "Run cargo test".into();
         assert_eq!(cabin.companion_mood(), Mood::Working);
+        cabin.live_blocks[0].tool_title = "Draft the release notes".into();
+        assert_eq!(cabin.companion_mood(), Mood::Writing);
 
         cabin.running = false;
         cabin.chat_job_thread = None;
