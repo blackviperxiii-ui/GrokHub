@@ -1127,6 +1127,17 @@ pub fn call_model(
         .ok_or_else(|| ClientError::Protocol(format!("`{model}` is not a provider model")))?;
     let p = provider(config_dir, pid)
         .ok_or_else(|| ClientError::Protocol(format!("no provider `{pid}`")))?;
+    // Playbooks 8, the last line: a caller that skipped the router still never
+    // sends a banned ask, or an 18+ chat to a provider that bans adult chat.
+    let mut req = std::borrow::Cow::Borrowed(req);
+    super::adult::scrub(&mut req.to_mut().input);
+    let to = dest(config_dir, model);
+    if super::adult::to_xai(&req.input, to) {
+        return Err(ClientError::Protocol(format!(
+            "18+ chat goes only to xAI or this computer's model, so {} wasn't sent this.",
+            grokhub_core::adult_guard::dest_name(to)
+        )));
+    }
     let key = key(config_dir, &p.id)
         .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();
@@ -1147,13 +1158,7 @@ pub fn call_model(
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
-    let mut body = request_body(p.kind, wire_model, effort, req, max_output);
-    // Playbooks 8: an explicit turn stays on OpenRouter's pick, never a stricter fallback.
-    let (text, _) = super::live::last_user_text(&req.input);
-    if super::adult::no_fallbacks(grokhub_core::adult_guard::dest_of(&p.base_url), &text) {
-        body["provider"] = json!({ "allow_fallbacks": false });
-    }
-    let body = body.to_string();
+    let body = request_body(p.kind, wire_model, effort, &req, max_output).to_string();
     let r = transport_for(config_dir)
         .post_within(&url, &p.headers(&key), &body, req.call_timeout)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;

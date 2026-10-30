@@ -233,7 +233,7 @@ pub fn call_model(
     sent.model = decision.send_model(&call.model);
     // Explicit turns go only to xAI or this computer's model.
     let on_provider =
-        decision.on_provider() && !adult::to_xai(&text, providers::dest(&dir, &sent.model));
+        decision.on_provider() && !adult::to_xai(&sent.input, providers::dest(&dir, &sent.model));
     if decision.on_provider() && !on_provider {
         sent.model = adult::xai_model(&call.model);
     }
