@@ -451,6 +451,10 @@ pub struct AppConfig {
     /// Also a quiet desktop notification when the companion card posts.
     #[serde(default)]
     pub game_companion_ping: bool,
+    /// Settings → Behavior: the game watcher's GSI file and loopback
+    /// listener (`grokhub_core::game_watch_gsi`). Off by default.
+    #[serde(default)]
+    pub game_watch: bool,
     /// Settings → Behavior: offer next steps for new 3D models in Downloads.
     /// Off by default.
     #[serde(default)]
@@ -832,6 +836,7 @@ impl Default for AppConfig {
             net_log: false,
             game_companion: false,
             game_companion_ping: false,
+            game_watch: false,
             model_drop: false,
             models_folder: String::new(),
             dock_panels: false,

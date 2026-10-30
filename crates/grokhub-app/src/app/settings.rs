@@ -1000,6 +1000,7 @@ impl Cabin {
                                                             self.ui_backup_row(ui);
                                                             self.ui_net_log_row(ui);
                                                             self.ui_game_companion_row(ui);
+                                                            self.ui_game_watch_row(ui);
                                                             self.ui_model_drop_row(ui);
                                                             let mut dock_panels = self.cfg.dock_panels;
                                                             if settings_toggle(
