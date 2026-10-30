@@ -542,19 +542,25 @@ async function pulse(s, config) {
   });
   console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
 
-  const run = await waitFor("the idea row", async () => {
+  // The rows stay disabled until More like this has returned, and the kept
+  // file is written before it does, so a click right away can land on a
+  // disabled row and do nothing.
+  const run = await waitFor("the idea row, enabled", async () => {
     const el = await wd("POST", `${s}/element`, {
       using: "xpath",
       value: "//li[contains(@aria-label,'smoke workboard')]//button[contains(@class,'idea-main')]",
     });
-    return el[ELEMENT];
+    return (await wd("GET", `${s}/element/${el[ELEMENT]}/enabled`)) ? el[ELEMENT] : null;
   });
   const calls = mockSeen.length;
   await wd("POST", `${s}/element/${run}/click`, {});
   const box = await waitFor("the chat box", () => find(s, "textarea[aria-label='Message']"));
+  let seen;
   const filled = await waitFor("the filled chat box", async () => {
-    const v = await wd("GET", `${s}/element/${box}/property/value`);
-    return v === PULSE_ACTION ? v : null;
+    seen = await wd("GET", `${s}/element/${box}/property/value`);
+    return seen === PULSE_ACTION ? seen : null;
+  }).catch((err) => {
+    throw new Error(`${err.message}; the box held ${JSON.stringify(seen)}`);
   });
   await sleep(1000);
   if (mockSeen.length !== calls) throw new Error("Let's do it sent the idea without the person");
