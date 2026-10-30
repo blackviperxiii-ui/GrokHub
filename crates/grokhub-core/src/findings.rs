@@ -168,6 +168,162 @@ pub fn is_impossible_one_tap(label: &str, goal: &str) -> bool {
     impossible_host_fix_reason(label, goal).is_some()
 }
 
+/// The batch pill's label.
+pub const DO_ALL: &str = "Do all";
+
+/// Fixes that destroy, overwrite or send something still need their own tap.
+/// Whole words only, so "shared" or "deleted" in a goal don't count.
+fn risky_fix(fix: &Fix) -> bool {
+    const RISKY: &[&str] = &[
+        "delete",
+        "remove",
+        "uninstall",
+        "wipe",
+        "erase",
+        "purge",
+        "rm",
+        "format",
+        "reset",
+        "overwrite",
+        "force",
+        "drop",
+        "kill",
+        "send",
+        "email",
+        "post",
+        "publish",
+        "push",
+        "upload",
+        "share",
+        "deploy",
+        "merge",
+        "pay",
+        "buy",
+    ];
+    let blob = format!("{} {}", fix.label, fix.goal).to_ascii_lowercase();
+    blob.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        RISKY.iter().any(|r| {
+            w.strip_prefix(r)
+                .is_some_and(|rest| ["", "s", "es", "ing"].contains(&rest))
+        })
+    })
+}
+
+/// Fixes that are choices (use A or B) rather than a list to work through.
+fn fixes_are_alternatives(fixes: &[Fix]) -> bool {
+    const CHOICE: &[&str] = &[
+        " or ",
+        "instead",
+        "alternatively",
+        "either ",
+        "option ",
+        "pick one",
+    ];
+    if fixes.iter().any(|f| {
+        let label = f.label.to_ascii_lowercase();
+        let goal = f.goal.to_ascii_lowercase();
+        CHOICE.iter().any(|w| label.contains(w))
+            || ["instead", "alternatively", "pick one"]
+                .iter()
+                .any(|w| goal.contains(w))
+    }) {
+        return true;
+    }
+    const PICK_VERBS: &[&str] = &[
+        "use ",
+        "switch to ",
+        "try ",
+        "choose ",
+        "pick ",
+        "go with ",
+        "keep ",
+    ];
+    PICK_VERBS.iter().any(|v| {
+        fixes
+            .iter()
+            .filter(|f| f.label.to_ascii_lowercase().starts_with(v))
+            .count()
+            >= 2
+    })
+}
+
+/// Read-only steps read best once the changes are made.
+fn explains(fix: &Fix) -> bool {
+    let label = fix.label.to_ascii_lowercase();
+    [
+        "explain",
+        "investigate",
+        "show",
+        "summarize",
+        "summarise",
+        "review",
+        "list",
+        "find",
+        "why",
+    ]
+    .iter()
+    .any(|v| label.starts_with(v))
+}
+
+/// What a Do all tap runs: the fixes in order, and the ones it leaves for
+/// their own tap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoAll {
+    pub run: Vec<Fix>,
+    pub skipped: Vec<Fix>,
+}
+
+impl DoAll {
+    /// One prompt per fix, numbered so the queue reads as progress, then the
+    /// summary ask.
+    pub fn prompts(&self) -> Vec<String> {
+        let n = self.run.len();
+        let mut out: Vec<String> = self
+            .run
+            .iter()
+            .enumerate()
+            .map(|(i, f)| format!("{DO_ALL} {}/{n} · {}", i + 1, f.prompt()))
+            .collect();
+        let labels = |fixes: &[Fix]| {
+            fixes
+                .iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut summary = format!(
+            "{DO_ALL} summary · In a few lines, say which of these got done and which didn't, and why: {}.",
+            labels(&self.run)
+        );
+        if !self.skipped.is_empty() {
+            summary.push_str(&format!(
+                " Left for their own tap because they delete, overwrite or send something: {}.",
+                labels(&self.skipped)
+            ));
+        }
+        out.push(summary);
+        out
+    }
+}
+
+impl Findings {
+    /// The Do all batch, when 2 or more independent fixes can run together.
+    /// None when the fixes are alternatives to pick from, or fewer than two
+    /// are safe to run without their own tap.
+    pub fn do_all(&self) -> Option<DoAll> {
+        if self.fixes.len() < 2 || fixes_are_alternatives(&self.fixes) {
+            return None;
+        }
+        let (skipped, safe): (Vec<Fix>, Vec<Fix>) = self.fixes.iter().cloned().partition(risky_fix);
+        if safe.len() < 2 {
+            return None;
+        }
+        let (last, mut run): (Vec<Fix>, Vec<Fix>) = safe.into_iter().partition(explains);
+        run.extend(last);
+        Some(DoAll { run, skipped })
+    }
+}
+
 impl Findings {
     /// From the tool's arguments: `{"findings":[{"severity","text"}],
     /// "fixes":[{"label","goal"}]}`. Findings come out most severe first.
@@ -301,6 +457,105 @@ mod tests {
                 {"label": "Explain all", "goal": "Explain each finding in plain words."}
             ]
         })
+    }
+
+    fn card_with(fixes: &[(&str, &str)]) -> Findings {
+        let fixes: Vec<Value> = fixes
+            .iter()
+            .map(|(label, goal)| json!({"label": label, "goal": goal}))
+            .collect();
+        Findings::from_json(&json!({
+            "findings": [{"severity": "high", "text": "nextdns can't bind port 53"}],
+            "fixes": fixes
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn do_all_runs_the_fixes_in_order_and_leaves_risky_ones_for_their_own_tap() {
+        let card = card_with(&[
+            ("Explain all", "Explain each finding in plain words."),
+            (
+                "Fix port 53 conflict",
+                "Free port 53 for nextdns, then confirm nextdns is running.",
+            ),
+            (
+                "Delete old journal logs",
+                "Delete the 2 GB of journal logs older than a week.",
+            ),
+            (
+                "Reinstall 6 packages",
+                "Reinstall the 6 packages with missing files.",
+            ),
+        ]);
+        let batch = card.do_all().expect("three safe fixes make a batch");
+        let labels = |fixes: &[Fix]| fixes.iter().map(|f| f.label.clone()).collect::<Vec<_>>();
+        // Changes first, the explanation once they're made.
+        assert_eq!(
+            labels(&batch.run),
+            [
+                "Fix port 53 conflict",
+                "Reinstall 6 packages",
+                "Explain all"
+            ]
+        );
+        assert_eq!(labels(&batch.skipped), ["Delete old journal logs"]);
+        assert_eq!(
+            batch.prompts(),
+            [
+                "Do all 1/3 · Fix port 53 conflict: Free port 53 for nextdns, then confirm nextdns is running.",
+                "Do all 2/3 · Reinstall 6 packages: Reinstall the 6 packages with missing files.",
+                "Do all 3/3 · Explain all: Explain each finding in plain words.",
+                "Do all summary · In a few lines, say which of these got done and which didn't, and why: \
+Fix port 53 conflict, Reinstall 6 packages, Explain all. Left for their own tap because they \
+delete, overwrite or send something: Delete old journal logs.",
+            ]
+        );
+    }
+
+    #[test]
+    fn do_all_stays_off_for_alternatives_and_lone_safe_fixes() {
+        for fixes in [
+            // Pick one, not a list.
+            vec![
+                ("Use NextDNS", "Point DNS at NextDNS."),
+                (
+                    "Use systemd-resolved",
+                    "Keep systemd-resolved as the resolver.",
+                ),
+            ],
+            vec![
+                ("Restart or reinstall nginx", "Restart nginx."),
+                ("Fix the config", "Fix the nginx config."),
+            ],
+            vec![
+                ("Pin the old driver", "Pin driver 550."),
+                ("Roll back the kernel", "Boot the LTS kernel instead."),
+            ],
+            // Only one fix is safe to batch.
+            vec![
+                ("Fix port 53 conflict", "Free port 53 for nextdns."),
+                ("Push the fix", "Commit and push the DNS fix."),
+            ],
+            vec![("Fix port 53 conflict", "Free port 53 for nextdns.")],
+        ] {
+            assert_eq!(card_with(&fixes).do_all(), None, "{fixes:?}");
+        }
+    }
+
+    #[test]
+    fn do_all_reads_whole_words_for_risk() {
+        let card = card_with(&[
+            (
+                "Restore the shared config",
+                "Restore the deleted shared nginx config from the backup.",
+            ),
+            ("Restart nginx", "Restart nginx and confirm it answers."),
+            ("Send the report", "Email the report to the team."),
+        ]);
+        let batch = card.do_all().expect("two safe fixes");
+        assert_eq!(batch.run.len(), 2);
+        assert_eq!(batch.skipped[0].label, "Send the report");
     }
 
     #[test]
