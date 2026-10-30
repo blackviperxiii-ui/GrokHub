@@ -4,10 +4,11 @@
 //! timeline for pointers and an end-of-match recap. No model is called and
 //! nothing leaves the machine; the local listener and UI are follow-ups.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// One thing that happened in a match.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     RoundStart { round: u32 },
     RoundEnd { round: u32, won: bool },
@@ -17,7 +18,7 @@ pub enum EventKind {
 }
 
 /// An event and when it was seen, in ms since the epoch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub at_ms: u64,
     pub kind: EventKind,
