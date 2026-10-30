@@ -1,7 +1,7 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
-    load_image_data_url, lock_titles, pick_file, play_audio, read_text_capped, record_once,
+    load_image_data_url, lock_titles, pick_file, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
 use crate::helpers::{
@@ -651,6 +651,8 @@ pub struct Cabin {
     /// Labs: the companion's own desktop window, while she is popped out.
     desktop_nyx: Option<desktop_nyx::DesktopNyx>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
+    /// The reply being spoken, for the desktop companion's mouth.
+    lips: crate::lipsync::LipSlot,
     cmd_line: String,
     cmd_hist: Vec<String>,
     agents: Vec<AgentJob>,
@@ -1280,6 +1282,7 @@ impl Cabin {
             voice_ready_at: None,
             desktop_nyx: None,
             voice_hold_rx: None,
+            lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: vec![],
             agents: vec![],
@@ -1756,6 +1759,7 @@ impl Cabin {
             voice_ready_at: None,
             desktop_nyx: None,
             voice_hold_rx: None,
+            lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: Vec::new(),
             agents: Vec::new(),
@@ -4729,12 +4733,10 @@ impl Cabin {
         } else {
             None
         };
+        let lips = self.lips.clone();
         std::thread::spawn(move || {
             if let Ok(bytes) = grok_tts(&key, &text, voice) {
-                let path = std::env::temp_dir().join("grokhub-speak.mp3");
-                if std::fs::write(&path, bytes).is_ok() {
-                    let _ = play_audio(&path);
-                }
+                crate::lipsync::speak_mp3(bytes, &lips);
             }
             if let Some(tx) = tx {
                 let _ = tx.send(());

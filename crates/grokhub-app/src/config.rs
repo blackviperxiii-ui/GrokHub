@@ -525,6 +525,10 @@ pub struct AppConfig {
     /// desktop is visible to anyone at the screen.
     #[serde(default)]
     pub desktop_nyx_adult: bool,
+    /// An outfit the user picked for the desktop from the right-click menu;
+    /// `None` lets her mode choose.
+    #[serde(default)]
+    pub desktop_nyx_outfit: Option<String>,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -873,6 +877,7 @@ impl Default for AppConfig {
             desktop_nyx_behind: false,
             desktop_nyx_pos: None,
             desktop_nyx_adult: false,
+            desktop_nyx_outfit: None,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,

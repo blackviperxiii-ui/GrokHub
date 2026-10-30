@@ -22,6 +22,7 @@ mod google_mcp_via_cli;
 mod helpers;
 mod host;
 mod icons;
+mod lipsync;
 mod imagine_auth;
 mod loops;
 mod markdown;
