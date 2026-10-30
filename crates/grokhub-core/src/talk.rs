@@ -15,6 +15,24 @@ pub const STYLE_HEAD: &str = "Talk style for this turn:";
 pub const VOLATILE_SAFETY_CLOSER: &str =
     "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
 
+/// [`VOLATILE_SAFETY_CLOSER`] when an explicit preset's voice is in the tail:
+/// safety still wins, and means the hard limits, not fictional adult content.
+pub const VOLATILE_SAFETY_CLOSER_ADULT: &str =
+    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
+
+/// The closer for a volatile tail; `explicit` when an explicit preset speaks in it.
+pub fn safety_closer(explicit: bool) -> &'static str {
+    if explicit {
+        VOLATILE_SAFETY_CLOSER_ADULT
+    } else {
+        VOLATILE_SAFETY_CLOSER
+    }
+}
+
+fn is_closer(para: &str) -> bool {
+    para == VOLATILE_SAFETY_CLOSER || para == VOLATILE_SAFETY_CLOSER_ADULT
+}
+
 /// Closes every style block, the same layering rule as a personality's.
 pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
 
@@ -194,8 +212,9 @@ pub fn fits_soft_cap(style: TalkStyle, reply: &str) -> bool {
 }
 
 /// The system prompt with this turn's style block: an earlier style block is
-/// replaced, and the block sits before [`VOLATILE_SAFETY_CLOSER`], which is
-/// added when the prompt has none. Paragraphs are split on blank lines, so the
+/// replaced, and the block sits before the closer ([`safety_closer`]), which is
+/// added when the prompt has none: the adults-only one when an explicit
+/// preset's voice is in the prompt. Paragraphs are split on blank lines, so the
 /// rest of the prompt is kept byte for byte.
 pub fn restyle(system: &str, style: TalkStyle) -> String {
     restyle_caps(system, style, false)
@@ -210,11 +229,13 @@ pub fn restyle_caps(system: &str, style: TalkStyle, soft: bool) -> String {
     };
     paras.retain(|p| !p.starts_with(STYLE_HEAD));
     let block = style.prompt_block(soft);
-    match paras.iter().rposition(|p| *p == VOLATILE_SAFETY_CLOSER) {
+    match paras.iter().rposition(|p| is_closer(p)) {
         Some(at) => paras.insert(at, &block),
         None => {
             paras.push(&block);
-            paras.push(VOLATILE_SAFETY_CLOSER);
+            paras.push(safety_closer(
+                system.contains(crate::adult_guard::ADULT_VOICE),
+            ));
         }
     }
     paras.join("\n\n")
@@ -436,6 +457,7 @@ mod tests {
     fn every_shipped_personality_composes_with_every_style() {
         for p in crate::personality::builtins() {
             let voice = p.prompt_block();
+            let closer = safety_closer(p.explicit);
             let system = if voice.is_empty() {
                 "RULES".to_string()
             } else {
@@ -445,7 +467,7 @@ mod tests {
                     "{}: a blank line would split the voice",
                     p.id
                 );
-                format!("RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}")
+                format!("RULES\n\n{voice}\n\n{closer}")
             };
             for style in ALL {
                 let out = restyle(&system, style);
@@ -454,7 +476,7 @@ mod tests {
                 assert_eq!(out.matches(STYLE_HEAD).count(), 1, "{} {style:?}", p.id);
                 assert!(out.starts_with("RULES\n\n"), "{} {style:?}", p.id);
                 assert!(
-                    out.ends_with(&format!("{block}\n\n{VOLATILE_SAFETY_CLOSER}")),
+                    out.ends_with(&format!("{block}\n\n{closer}")),
                     "{} {style:?}",
                     p.id
                 );
@@ -476,5 +498,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_explicit_voice_gets_the_adult_closer_and_every_other_voice_the_old_one() {
+        assert_eq!(safety_closer(false), VOLATILE_SAFETY_CLOSER);
+        assert_eq!(
+            VOLATILE_SAFETY_CLOSER,
+            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone."
+        );
+        assert_eq!(
+            safety_closer(true),
+            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
+        );
+        // A prompt with no closer yet gets the one that fits its voice.
+        let whore = crate::personality::builtin("whore").prompt_block();
+        let out = restyle(&format!("RULES\n\n{whore}"), TalkStyle::Natural);
+        assert!(
+            out.ends_with(&format!("\n\n{VOLATILE_SAFETY_CLOSER_ADULT}")),
+            "{out}"
+        );
+        assert_eq!(out.matches("always win over notes").count(), 1);
+        let pirate = crate::personality::builtin("pirate").prompt_block();
+        let out = restyle(&format!("RULES\n\n{pirate}"), TalkStyle::Natural);
+        assert!(
+            out.ends_with(&format!("\n\n{VOLATILE_SAFETY_CLOSER}")),
+            "{out}"
+        );
+        // An adult closer already there is found, not doubled.
+        let adult = format!("RULES\n\n{whore}\n\n{VOLATILE_SAFETY_CLOSER_ADULT}");
+        let styled = restyle(&adult, TalkStyle::Short);
+        assert_eq!(
+            styled,
+            format!(
+                "RULES\n\n{whore}\n\n{}\n\n{VOLATILE_SAFETY_CLOSER_ADULT}",
+                TalkStyle::Short.block()
+            )
+        );
     }
 }

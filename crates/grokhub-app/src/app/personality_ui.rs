@@ -260,6 +260,15 @@ pub(super) fn chat_note(p: &Personality) -> String {
     format!("This chat: {}", p.name)
 }
 
+/// The status line when an adults-only preset is picked while adults-only is off.
+/// Nothing changes: the pick is not swapped for the default behind the user's back.
+pub(super) fn adults_only_note(p: &Personality) -> String {
+    format!(
+        "{} is adults-only. Turn on Adults-only personalities in Settings → Personality to use it.",
+        p.name
+    )
+}
+
 impl Cabin {
     /// The personality the chat being answered uses: its own pick, else the default.
     pub(super) fn personality_id(&self) -> String {
@@ -376,8 +385,21 @@ impl Cabin {
         }))
     }
 
+    /// An adults-only preset picked while adults-only is off: say so, change nothing.
+    fn refuse_while_adults_only_off(&mut self, id: &str) -> bool {
+        let p = personality::lookup(&presets_dir(), id);
+        let off = p.explicit && !self.cfg.explicit_personalities;
+        if off {
+            self.status = adults_only_note(&p);
+        }
+        off
+    }
+
     /// Settings: the default for every chat that has not picked its own.
     pub(super) fn set_default_personality(&mut self, id: &str) {
+        if self.refuse_while_adults_only_off(id) {
+            return;
+        }
         let p = personality::gated(
             personality::lookup(&presets_dir(), id),
             self.cfg.explicit_personalities,
@@ -389,6 +411,9 @@ impl Cabin {
 
     /// Chat header: this chat only. Picking the default's own voice clears the override.
     pub(super) fn set_chat_personality(&mut self, id: &str) {
+        if self.refuse_while_adults_only_off(id) {
+            return;
+        }
         let p = personality::gated(
             personality::lookup(&presets_dir(), id),
             self.cfg.explicit_personalities,
@@ -429,6 +454,7 @@ impl Cabin {
         self.picker.age_check = false;
         if adult {
             self.cfg.adult_confirmed = true;
+            self.cfg.adult_confirmed_at_ms = Some(grokhub_core::now_ms());
             self.set_explicit_personalities(true);
         }
     }
@@ -606,7 +632,10 @@ impl Cabin {
         self.picker.shown = Some((id.clone(), TryState::Running(std::time::Instant::now())));
         self.picker.rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send((id, run_try_it(route, &p, &cancel)));
+            // Playbooks 8: a preview that drifts into a hard limit never shows.
+            let reply = run_try_it(route, &p, &cancel)
+                .map(|t| grokhub_core::adult_guard::screen_reply(&t).to_string());
+            let _ = tx.send((id, reply));
         });
     }
 
@@ -1617,10 +1646,25 @@ mod tests {
         assert!(!ids(&mut cabin)
             .iter()
             .any(|id| id == "viper" || id == "whore"));
-        // Picking an explicit preset while off picks the default voice instead.
+        // Picking an explicit preset while off says why and changes nothing.
+        cabin.threads[0].personality = "pirate".into();
         cabin.set_chat_personality("whore");
-        assert_eq!(cabin.threads[0].personality, "");
+        assert_eq!(cabin.threads[0].personality, "pirate");
+        assert_eq!(
+            cabin.status,
+            "Whore is adults-only. Turn on Adults-only personalities in Settings → Personality to use it."
+        );
+        cabin.cfg.personality = "butler".into();
+        cabin.set_default_personality("viper");
+        assert_eq!(cabin.cfg.personality, "butler");
+        assert_eq!(
+            cabin.status,
+            "Viper is adults-only. Turn on Adults-only personalities in Settings → Personality to use it."
+        );
+        cabin.threads[0].personality.clear();
+        cabin.cfg.personality.clear();
         assert_eq!(cabin.chat_personality().id, "nyx");
+        assert_eq!(cabin.cfg.adult_confirmed_at_ms, None);
 
         // The first time, the one-time 18+ check comes first.
         cabin.set_explicit_personalities(true);
@@ -1629,14 +1673,19 @@ mod tests {
             "not before the 18+ check"
         );
         assert!(cabin.picker.age_check);
+        let before = grokhub_core::now_ms();
         cabin.answer_age_check(true);
         assert!(cabin.cfg.explicit_personalities);
         assert!(cabin.cfg.adult_confirmed);
+        let at = cabin
+            .cfg
+            .adult_confirmed_at_ms
+            .expect("the 18+ yes is timestamped");
+        assert!(at >= before && at <= grokhub_core::now_ms(), "{at}");
         crate::config::save(&cabin.cfg).unwrap();
-        assert!(
-            crate::config::load().explicit_personalities,
-            "round-trips in app.json"
-        );
+        let back = crate::config::load();
+        assert!(back.explicit_personalities, "round-trips in app.json");
+        assert_eq!(back.adult_confirmed_at_ms, Some(at));
         assert!(ids(&mut cabin).ends_with(&["viper".to_string(), "whore".to_string()]));
         cabin.set_chat_personality("whore");
         assert_eq!(cabin.threads[0].personality, "whore");
@@ -1809,6 +1858,34 @@ mod tests {
             plain_volatile.contains("earlier in this prompt always win"),
             "the values voice still closes under the cabin rules: {plain_volatile}"
         );
+    }
+
+    #[test]
+    fn an_explicit_pick_closes_its_tail_with_the_adult_closer_only_while_adults_only_is_on() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.cfg.adult_confirmed = true;
+        cabin.set_explicit_personalities(true);
+        cabin.set_chat_personality("whore");
+        let (_, volatile) = cabin.chat_prompt_parts();
+        assert!(
+            volatile.contains(grokhub_core::personality::ADULT_PERMISSION),
+            "{volatile}"
+        );
+        assert!(
+            volatile.ends_with(grokhub_core::talk::VOLATILE_SAFETY_CLOSER_ADULT),
+            "{volatile}"
+        );
+        assert!(!volatile.to_ascii_lowercase().contains("non-consensual"));
+        // Off: the stored pick speaks as Nyx, with no grant and the old closer.
+        cabin.set_explicit_personalities(false);
+        let (_, volatile) = cabin.chat_prompt_parts();
+        assert!(volatile.starts_with("Personality: Nyx. "), "{volatile}");
+        assert!(!volatile.contains(grokhub_core::personality::ADULT_PERMISSION));
+        assert!(
+            volatile.ends_with(grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+            "{volatile}"
+        );
+        assert!(!volatile.contains("Fictional adult content"), "{volatile}");
     }
 
     #[test]
