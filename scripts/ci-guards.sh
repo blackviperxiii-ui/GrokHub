@@ -8,7 +8,8 @@
 #       label, or a non-release PR touches version lockstep files
 #   40) VERSION copies disagree (cargo xtask bump --check)
 #   60) a persist path spawns a thread or writes a file outside PersistService
-#   70) a workflow uses an action by tag or branch instead of a full commit SHA
+#   70) a workflow or composite action uses an action by tag or branch instead
+#       of a full commit SHA, or no workflow file can be read
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
