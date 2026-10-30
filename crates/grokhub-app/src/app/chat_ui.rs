@@ -1500,6 +1500,7 @@ impl Cabin {
                         let findings = super::findings_ui::newest_findings_row(
                             &self.chat_views,
                             &self.harness.findings_dismissed,
+                            &self.harness.findings_batched,
                         );
                         let findings_at = findings.as_ref().map(|(i, _)| *i);
                         self.ensure_run_evidence();
