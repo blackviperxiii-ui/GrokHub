@@ -252,6 +252,11 @@ impl Cabin {
         }
         self.persist_cfg();
         local::set_enabled(on);
+        if !on && local_sidecar::in_flight() == 0 {
+            // Off frees the model's memory now instead of after the idle timeout;
+            // a request still running finishes, and the idle rule unloads after it.
+            local_sidecar::stop_global();
+        }
         let installed = local::installed();
         if installed {
             self.refresh_models_now();

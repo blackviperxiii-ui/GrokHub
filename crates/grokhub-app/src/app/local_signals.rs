@@ -72,6 +72,8 @@ fn sample_loop(config_dir: &Path) {
                 gov = Governor::new();
                 local_gov::apply(Level::Normal, "normal use");
             }
+            // A speed test can load the model while the switch is off.
+            local_sidecar::tick_idle_unload();
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
@@ -86,6 +88,9 @@ fn sample_loop(config_dir: &Path) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
         }
         local_sidecar::tick_governor();
+        // The idle rule runs here too, so an unused model unloads on time
+        // even when nothing asks for it again.
+        local_sidecar::tick_idle_unload();
         std::thread::sleep(Duration::from_millis(g::interval_ms(s.power.as_ref())));
     }
 }
