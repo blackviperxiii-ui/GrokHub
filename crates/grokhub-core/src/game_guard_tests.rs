@@ -17,6 +17,9 @@ fn anticheat_executables_are_matched_in_any_case_and_by_file_name() {
         ("PnkBstrB.exe", "PunkBuster"),
         ("GameMon.exe", "nProtect GameGuard"),
         ("GameMon64.exe", "nProtect GameGuard"),
+        ("GameMon.des", "nProtect GameGuard"),
+        ("GameMon64.des", "nProtect GameGuard"),
+        (r"C:\Games\GameGuard\GameMon64.des", "nProtect GameGuard"),
         ("xxd-0.xem", "XIGNCODE3"),
         ("EAAntiCheat.GameService.exe", "EA Javelin"),
         (
@@ -42,6 +45,8 @@ fn anticheat_services_and_drivers_are_matched_in_any_case() {
         ("PnkBstrA", "PunkBuster"),
         ("xhunter1", "XIGNCODE3"),
         ("EAAntiCheatService", "EA Javelin"),
+        ("npggsvc", "nProtect GameGuard"),
+        ("NPGGSvc", "nProtect GameGuard"),
     ];
     for (svc, want) in cases {
         assert_eq!(detect_anticheat(NONE, &[*svc]), Some(*want), "{svc}");
@@ -140,8 +145,16 @@ fn ordinary_processes_and_lookalikes_are_not_an_anticheat() {
         "notvgc.exe",
         "EasyAntiCheat_Setup.exe",
         "faceit-overlay.exe",
+        "gamemon.des.bak",
+        "gamemon.dll",
     ];
-    let services = ["Spooler", "vgcx", "BEServiceHelper", "WinDefend"];
+    let services = [
+        "Spooler",
+        "vgcx",
+        "BEServiceHelper",
+        "WinDefend",
+        "npggsvc2",
+    ];
     assert_eq!(detect_anticheat(&exes, &services), None);
     assert_eq!(scan_anticheats(&exes, &services), AntiCheatScan::default());
     // Lookalikes of Riot games are not the game.

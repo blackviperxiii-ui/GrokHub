@@ -27,7 +27,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AntiCheat {
     pub name: &'static str,
-    /// Executable file names.
+    /// Process file names as the process list shows them (usually `.exe`).
     pub exes: &'static [&'static str],
     /// Service and kernel driver names (Service Control Manager).
     pub services: &'static [&'static str],
@@ -106,8 +106,15 @@ pub const ANTI_CHEATS: &[AntiCheat] = &[
     },
     AntiCheat {
         name: "nProtect GameGuard",
-        exes: &["gamemon.exe", "gamemon64.exe"],
-        services: &[],
+        // GameGuard's monitor runs as GameMon.des / GameMon64.des (an exe
+        // with its own extension); older builds used .exe names.
+        exes: &[
+            "gamemon.des",
+            "gamemon64.des",
+            "gamemon.exe",
+            "gamemon64.exe",
+        ],
+        services: &["npggsvc"],
         always_on: None,
     },
     AntiCheat {

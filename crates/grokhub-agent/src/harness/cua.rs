@@ -457,6 +457,11 @@ impl<C: CuaChild> CuaProxy<C> {
         }
     }
 
+    /// Halted in this process: no call reaches a child again.
+    pub fn is_halted(&self) -> bool {
+        self.halted
+    }
+
     fn child(&mut self) -> Result<&mut C, String> {
         if self.child.is_none() {
             if let Some(e) = &self.start_err {
