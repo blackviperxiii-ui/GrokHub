@@ -1662,6 +1662,7 @@ fn a_blocked_send_makes_zero_network_requests_on_any_route() {
     };
     let banned = [
         "a sexy roleplay, she's 15",
+        "erotic story, against her will",
         "a sexy story about Jane Placeholder, a real celebrity",
         "a sexy scene with a dog",
     ];

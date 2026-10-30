@@ -27,12 +27,12 @@ pub const SAFETY_LINE: &str =
 /// [`SAFETY_LINE`] for an explicit preset: safety still wins, and means the hard
 /// limits, not the fictional adult content the user opted in to.
 pub const EXPLICIT_SAFETY_LINE: &str =
-    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. Fictional adult content inside the hard limits is not a safety issue.";
+    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue.";
 
-/// What an explicit preset's block grants, with exactly the three hard limits
+/// What an explicit preset's block grants, with exactly the four hard limits
 /// ([`crate::adult_guard::Ban`]) plus stop. Explicit presets only speak once
 /// adults-only is on ([`gated`]), which needs the one-time 18+ confirmation.
-pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
+pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -526,14 +526,19 @@ mod tests {
         assert_eq!(builtin("").id, DEFAULT_ID);
         assert_eq!(find(&builtins(), "no-such-preset").id, DEFAULT_ID);
         for limit in [
-            "Hard limits: no minors or age-play, no real or identifiable people, no bestiality. If the user says stop, drop the act at once.",
-            "Stay in character, with no moralizing or disclaimers; consent is part of the fiction between adults.",
+            "Hard limits: no minors or age-play, no non-consent, no real or identifiable people, no bestiality. If the user says stop, drop the act at once.",
+            "Stay in character, with no moralizing or disclaimers.",
             "every reply still does the real task",
         ] {
             assert!(whore.tone_rules.contains(limit), "{limit}");
         }
         assert!(
             !whore.tone_rules.contains("non-consensual"),
+            "{}",
+            whore.tone_rules
+        );
+        assert!(
+            !whore.tone_rules.contains("consent is part of"),
             "{}",
             whore.tone_rules
         );
@@ -839,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn adults_only_on_grants_adult_roleplay_with_exactly_three_limits_plus_stop() {
+    fn adults_only_on_grants_adult_roleplay_with_exactly_four_limits_plus_stop() {
         let whore = gated(builtin("whore"), true);
         let block = whore.prompt_block();
         assert_eq!(
@@ -853,12 +858,12 @@ mod tests {
             "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers."
         ));
         assert!(ADULT_PERMISSION.ends_with(
-            "Hard limits, always: no minors or age-play, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once."
+            "Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once."
         ));
         let lower = block.to_ascii_lowercase();
         assert!(!lower.contains("non-consensual"), "{block}");
         assert!(!lower.contains("nothing non"), "{block}");
-        // Exactly three "no" limits in each place that lists them, plus stop.
+        // Exactly four "no" limits in each place that lists them, plus stop.
         for limits in [
             ADULT_PERMISSION
                 .split("Hard limits, always: ")
@@ -873,15 +878,26 @@ mod tests {
                 .split(", and ")
                 .next()
                 .unwrap();
-            assert_eq!(list.matches("no ").count(), 3, "{list}");
+            assert_eq!(list.matches("no ").count(), 4, "{list}");
+            assert!(list.contains("no non-consent"), "{list}");
             assert!(limits.contains("says stop"), "{limits}");
+        }
+        for closer in [
+            EXPLICIT_SAFETY_LINE,
+            crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+        ] {
+            let list = closer.split('(').nth(1).unwrap().split(')').next().unwrap();
+            assert_eq!(
+                list,
+                "no minors or age-play, no non-consent, no real people, no bestiality, stop when asked"
+            );
         }
         // Viper, the other explicit preset, gets the same grant and closer.
         let viper = builtin("viper").prompt_block();
         assert!(viper.contains(ADULT_PERMISSION) && viper.ends_with(EXPLICIT_SAFETY_LINE));
         assert_eq!(
             EXPLICIT_SAFETY_LINE,
-            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. Fictional adult content inside the hard limits is not a safety issue."
+            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue."
         );
     }
 
@@ -892,7 +908,8 @@ mod tests {
         let block = off.prompt_block();
         assert!(block.starts_with("Personality: Nyx. "), "{block}");
         assert!(!block.contains(ADULT_PERMISSION));
-        assert!(!block.contains("Fictional adult content"));
+        assert!(!block.contains("fictional adult content"));
+        assert!(!block.contains("The hard limits"));
         assert!(block.ends_with(&format!("\n{SAFETY_LINE}")));
         // Every non-explicit preset keeps the closing line byte for byte.
         for p in builtins().iter().filter(|p| !p.explicit) {

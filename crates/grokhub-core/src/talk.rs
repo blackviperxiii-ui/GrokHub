@@ -18,7 +18,7 @@ pub const VOLATILE_SAFETY_CLOSER: &str =
 /// [`VOLATILE_SAFETY_CLOSER`] when an explicit preset's voice is in the tail:
 /// safety still wins, and means the hard limits, not fictional adult content.
 pub const VOLATILE_SAFETY_CLOSER_ADULT: &str =
-    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits above, always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
+    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
 
 /// The closer for a volatile tail; `explicit` when an explicit preset speaks in it.
 pub fn safety_closer(explicit: bool) -> &'static str {
@@ -509,7 +509,7 @@ mod tests {
         );
         assert_eq!(
             safety_closer(true),
-            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits above, always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
+            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
         );
         // A prompt with no closer yet gets the one that fits its voice.
         let whore = crate::personality::builtin("whore").prompt_block();

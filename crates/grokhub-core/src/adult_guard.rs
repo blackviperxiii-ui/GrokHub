@@ -1,15 +1,13 @@
 //! Playbooks 8: the pre-send check for 18+ chat. It is not a filter for its
 //! own sake: it keeps the user's AI provider account safe.
 //!
-//! - Three things are never allowed, in any chat: sexual content with minors or
-//!   age-play, sexual content about real, identifiable people, and bestiality.
-//!   An ask for them never leaves the computer, not even to a local model: the
+//! - Four things are never allowed, in any chat, and never rerouted: sexual
+//!   content with minors or age-play, non-consent, sexual content about real,
+//!   identifiable people, and bestiality. An ask for them never leaves the computer, not even to a local model: the
 //!   send stops and the user sees [`HELD_NOTICE`]. An older one still in a
 //!   history goes out as the [`hold`] note instead.
-//! - A reply that drifts into one of the three is replaced here with
+//! - A reply that drifts into one of the four is replaced here with
 //!   [`REPLY_REPLACED`] before the chat shows it ([`ReplyGuard`]).
-//! - Everything else between fictional adults (dark or rough themes, consensual
-//!   non-consent inside the fiction) is ordinary adult content.
 //! - Explicit adult turns go only to xAI or this computer's model. Every other
 //!   provider's turn reroutes to xAI ([`route`]), OpenRouter included, since its
 //!   pick can land on a model whose maker bans adult chat.
@@ -36,6 +34,7 @@ pub enum Risk {
 pub enum Ban {
     /// Minors or age-play.
     Minors,
+    NonConsent,
     /// Sexual content about a real, identifiable person.
     RealPerson,
     Bestiality,
@@ -73,10 +72,10 @@ pub static HELD: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(||
 });
 
 /// What the chat shows in place of a held send. Nothing was sent anywhere.
-pub const HELD_NOTICE: &str = "Not sent: nothing left this computer. 18+ chat never covers minors or age-play, real people, or animals.";
+pub const HELD_NOTICE: &str = "Not sent: nothing left this computer. 18+ chat never covers minors or age-play, non-consent, real people, or animals.";
 
 /// What the chat shows in place of a reply that drifted into a hard limit.
-pub const REPLY_REPLACED: &str = "Reply hidden on this computer: it drifted into minors or age-play, real people, or animals, which 18+ chat never covers.";
+pub const REPLY_REPLACED: &str = "Reply hidden on this computer: it drifted into minors or age-play, non-consent, real people, or animals, which 18+ chat never covers.";
 
 /// Words that make a message sexual.
 const SEXUAL: &[&str] = &[
@@ -207,6 +206,27 @@ const MINOR_PHRASES: &[&str] = &[
     "little boy",
     "young girl",
     "young boy",
+];
+
+const NON_CONSENT: &[&str] = &[
+    "rape",
+    "raped",
+    "raping",
+    "noncon",
+    "nonconsensual",
+    "drugged",
+    "unconscious",
+    "coerced",
+    "blackmail",
+    "blackmailed",
+];
+const NON_CONSENT_PHRASES: &[&str] = &[
+    "non consent",
+    "non consensual",
+    "against her will",
+    "against his will",
+    "against their will",
+    "without consent",
 ];
 
 const REAL_PERSON: &[&str] = &[
@@ -354,6 +374,9 @@ pub fn check(text: &str) -> Risk {
         || states_a_minor_age(&w)
     {
         return Risk::Banned(Ban::Minors);
+    }
+    if any_word(&w, NON_CONSENT) || any_phrase(&joined, NON_CONSENT_PHRASES) {
+        return Risk::Banned(Ban::NonConsent);
     }
     if any_word(&w, REAL_PERSON) || any_phrase(&joined, REAL_PERSON_PHRASES) {
         return Risk::Banned(Ban::RealPerson);
@@ -573,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn the_three_hard_limits_are_banned() {
+    fn the_four_hard_limits_are_banned() {
         for line in [
             "sexy story about a 15 year old",
             "lewd pics of a 16yo",
@@ -586,6 +609,16 @@ mod tests {
             "sexy little girl roleplay",
         ] {
             assert_eq!(check(line), Risk::Banned(Ban::Minors), "{line}");
+        }
+        for line in [
+            "sex with her while she's unconscious",
+            "erotic story, against her will",
+            "erotic story, against her will, both characters are adults",
+            "a rough nsfw consensual non-consent scene between two adults",
+            "nsfw roleplay where he is drugged",
+            "a sexy story where she gets blackmailed",
+        ] {
+            assert_eq!(check(line), Risk::Banned(Ban::NonConsent), "{line}");
         }
         for line in [
             "make a nude deepfake of a singer",
@@ -614,9 +647,7 @@ mod tests {
             "erotic story about a 25 year old girl",
             "nsfw roleplay with a boy who is 28",
             "sexy story about a 25 year old",
-            // Consent lives inside the fiction between adults.
-            "erotic story, against her will, both characters are adults",
-            "a rough nsfw consensual non-consent scene between two adults",
+            "a rough, dominant nsfw scene between two consenting adults",
             "we had sex, then I took my dog for a walk",
             "the nsfw stream starts soon, she's 15 minutes late",
         ] {
@@ -633,6 +664,8 @@ mod tests {
             "my dog keeps barking at night",
             "how old is that celebrity",
             "an explicit lifetime on the kid process handle",
+            "how do I support a friend after a rape?",
+            "the drugged enemy in the boss fight is unconscious",
         ] {
             assert_eq!(check(line), Risk::Clean, "{line}");
         }
@@ -687,6 +720,10 @@ mod tests {
         assert!(!coding.replaced());
 
         assert_eq!(screen_reply("a sexy scene with a dog"), REPLY_REPLACED);
+        assert_eq!(
+            screen_reply("an erotic scene, against her will"),
+            REPLY_REPLACED
+        );
         assert_eq!(
             screen_reply("Fuck, the kid process died"),
             "Fuck, the kid process died"
