@@ -205,17 +205,12 @@ fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
         "under its row"
     );
 
+    cabin.status.clear();
     click_at(&ctx, &mut cabin, p.at(super::indexer_ui::FORGET_THESE));
+    // Wait for the purge thread to report (it sets the status and the index
+    // together), not a fixed time: a busy Windows runner took over 4s.
     let start = std::time::Instant::now();
-    while cabin
-        .harness
-        .indexer
-        .index
-        .facts
-        .values()
-        .any(|v| !v.is_empty())
-        && start.elapsed() < std::time::Duration::from_secs(4)
-    {
+    while cabin.status.is_empty() && start.elapsed() < std::time::Duration::from_secs(30) {
         cabin.poll_forget();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
