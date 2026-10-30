@@ -573,7 +573,7 @@ mod tests {
         // The chat paints this block as the recap card, so the heading must match.
         assert!(
             rules.contains(&format!(
-                "End multi-step work with {}: a Done/Partly done/Not done line per task",
+                "End multi-step work with {}: Done:, Partly done: or Not done: per task",
                 grokhub_core::recap::RECAP_HEAD
             )),
             "{rules}"
