@@ -377,6 +377,13 @@ pub fn fallback_active() -> bool {
     FALLBACK_ACTIVE.load(Ordering::SeqCst)
 }
 
+/// The model should be loaded ahead of time: offline, or online with no cloud
+/// model answering. Online with the cloud up, it loads on demand only.
+pub fn warm_wanted() -> bool {
+    super::connectivity::sync_from_core();
+    super::connectivity::state().prefer_local() || fallback_active()
+}
+
 /// What a route may do with the local model for one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalGate {
