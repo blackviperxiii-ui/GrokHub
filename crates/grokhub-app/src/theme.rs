@@ -1183,7 +1183,12 @@ pub fn animate_selection_secs(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) 
         .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
 
+/// One button feel channel. Reduced motion snaps it, so a hover still reads
+/// but nothing eases.
 fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    if !motion_ok(ui) {
+        return if on { 1.0 } else { 0.0 };
+    }
     ui.ctx()
         .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
@@ -1575,7 +1580,8 @@ fn feel_motion(
     let scale = feel_scale(hover_t, press_t) + 0.01 * focus_t;
     let mix = hover_mix(hover_t, press_t) + grokhub_core::FOCUS_WASH * focus_t;
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
-    let lift = if rise {
+    // Reduced motion: no rise at all.
+    let lift = if rise && motion_ok(ui) {
         feel_lift(hover_t, press_t)
     } else {
         0.0

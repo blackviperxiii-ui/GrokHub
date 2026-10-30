@@ -170,6 +170,20 @@ static LEDGER: Mutex<LedgerCache> = Mutex::new(LedgerCache {
     week: None,
 });
 
+/// Tests: the ledger as a fresh process has it, still loading. Settings now
+/// paints every section, so an earlier test in the same `cargo test` process
+/// may have read the ledger already.
+#[cfg(test)]
+fn ledger_still_loading_for_test() {
+    if let Ok(mut g) = LEDGER.lock() {
+        *g = LedgerCache {
+            at: Some(Instant::now()),
+            busy: false,
+            week: None,
+        };
+    }
+}
+
 /// The last seven days of the egress log. The log is sealed and a read may
 /// wait on the keyring, so it is read off the UI thread and kept for
 /// [`LEDGER_TTL`].
@@ -751,6 +765,7 @@ mod tests {
 
     #[test]
     fn at_1100x720_the_hero_stays_ragged_right_and_clear_of_the_switches() {
+        ledger_still_loading_for_test();
         let mut cabin = Cabin::quiet_for_test();
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);

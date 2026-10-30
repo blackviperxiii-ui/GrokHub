@@ -60,6 +60,8 @@ impl Cabin {
 
     pub(super) fn ui_titlebar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // First thing each frame: everything after reads the reduced-motion flag.
+        crate::motion::sync_reduced(&ctx, self.cfg.reduce_motion);
         let mut run_pending_update = false;
         let update_chip = update_chip_label(self.update_pending_now());
         let loadout = crate::theme::is_loadout_paint();
@@ -354,7 +356,8 @@ impl Cabin {
         } else {
             crate::theme::muted()
         };
-        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        let pose = crate::icons::rail_pose(ui, &resp, icon, active);
+        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color, pose);
         crate::theme::paint_focus_ring(ui, tile_rect, 8.0, &resp);
         resp.on_hover_text(tip)
     }
@@ -405,7 +408,8 @@ impl Cabin {
         // slot, or a 1.035 scale on a full-width row slides them ~4px left.
         let icon_c = egui::pos2(slot.left() + 20.0, slot.center().y);
         let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
-        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        let pose = crate::icons::rail_pose(ui, &resp, icon, active);
+        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color, pose);
         let text_left = slot.left() + 38.0;
         let text_right = slot.right() - 12.0;
         let painted = fit_rail_label(ui, label, (text_right - text_left).max(8.0));

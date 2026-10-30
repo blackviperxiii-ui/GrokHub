@@ -714,7 +714,10 @@ impl Cabin {
         // Prefer the real free rect width when it disagrees with available_width
         // (indent / ScrollArea), so absolute column rects match the cards' max_rect.
         let avail = avail_raw.min(arect.width()).max(1.0);
-        let row_h = arect.intersect(clip).height().max(200.0);
+        // Sized as if a jump had put this section's title at the top of the
+        // view, so the row keeps one height while Settings scrolls past it.
+        let into_section = arect.top() - ui.max_rect().top();
+        let row_h = (clip.height() - super::settings::SPY_TOP_PAD - into_section).max(200.0);
         let cols_widths = two_col_widths(avail);
         let (grid_w, detail_w) = cols_widths.unwrap_or((avail, avail));
         let cols = grid_cols(grid_w);

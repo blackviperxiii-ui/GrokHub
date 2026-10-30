@@ -60,25 +60,56 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
     } else {
         crate::theme::muted()
     };
-    paint_chrome_glyph(ui, rect, kind, color);
+    let cue = crate::motion::icon::Cue::of(&resp, false);
+    let pose = crate::motion::icon::pose(ui, resp.id, cue, chrome_kick(kind));
+    paint_chrome_glyph(ui, rect, kind, color, pose);
     let name = titlebar_chrome_tip(kind, false);
     let enabled = resp.enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
     resp
 }
 
-fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: egui::Color32) {
+/// How each chrome glyph answers the pointer: the × turns a quarter (it
+/// lands looking the same), minimize dips, the others rise.
+fn chrome_kick(kind: ChromeBtn) -> crate::motion::icon::Kick {
+    use crate::motion::icon::Kick;
+    match kind {
+        ChromeBtn::Close => Kick::Turn(std::f32::consts::FRAC_PI_2),
+        ChromeBtn::Minimize => Kick::Nudge(egui::vec2(0.0, 1.0)),
+        ChromeBtn::Menu | ChromeBtn::Maximize | ChromeBtn::Restore => Kick::Lift,
+    }
+}
+
+fn paint_chrome_glyph(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    kind: ChromeBtn,
+    color: egui::Color32,
+    pose: crate::motion::icon::Pose,
+) {
     let painter = ui.painter();
     let stroke = egui::Stroke::new(1.25_f32, color);
     let side = 10.0_f32;
     let r = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+    let c = r.center();
+    let m = |p: egui::Pos2| pose.map(c, p);
+    // A square outline through the pose, so it turns and scales with the rest.
+    let square = |sq: egui::Rect| {
+        let pts = [
+            sq.left_top(),
+            sq.right_top(),
+            sq.right_bottom(),
+            sq.left_bottom(),
+        ];
+        pts.map(m).to_vec()
+    };
     match kind {
         ChromeBtn::Close => {
-            painter.line_segment([r.left_top(), r.right_bottom()], stroke);
-            painter.line_segment([r.right_top(), r.left_bottom()], stroke);
+            painter.line_segment([m(r.left_top()), m(r.right_bottom())], stroke);
+            painter.line_segment([m(r.right_top()), m(r.left_bottom())], stroke);
         }
         ChromeBtn::Maximize => {
-            painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
+            painter.add(egui::Shape::closed_line(square(r), stroke));
         }
         ChromeBtn::Restore => {
             let inset = 2.5_f32;
@@ -90,28 +121,34 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
                 egui::pos2(r.left(), r.top() + inset),
                 egui::pos2(r.right() - inset, r.bottom()),
             );
-            painter.rect_stroke(back, 0.0, stroke, egui::StrokeKind::Middle);
-            painter.rect_filled(front, 0.0, crate::theme::bg());
-            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Middle);
+            painter.add(egui::Shape::closed_line(square(back), stroke));
+            painter.add(egui::Shape::convex_polygon(
+                square(front),
+                crate::theme::bg(),
+                stroke,
+            ));
         }
         ChromeBtn::Minimize => {
             let y = r.center().y;
-            painter.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
+            painter.line_segment(
+                [m(egui::pos2(r.left(), y)), m(egui::pos2(r.right(), y))],
+                stroke,
+            );
         }
         ChromeBtn::Menu => {
             let y0 = r.top() + 1.0;
             let y1 = r.center().y;
             let y2 = r.bottom() - 1.0;
             painter.line_segment(
-                [egui::pos2(r.left(), y0), egui::pos2(r.right(), y0)],
+                [m(egui::pos2(r.left(), y0)), m(egui::pos2(r.right(), y0))],
                 stroke,
             );
             painter.line_segment(
-                [egui::pos2(r.left(), y1), egui::pos2(r.right(), y1)],
+                [m(egui::pos2(r.left(), y1)), m(egui::pos2(r.right(), y1))],
                 stroke,
             );
             painter.line_segment(
-                [egui::pos2(r.left(), y2), egui::pos2(r.right(), y2)],
+                [m(egui::pos2(r.left(), y2)), m(egui::pos2(r.right(), y2))],
                 stroke,
             );
         }
