@@ -1506,6 +1506,36 @@ mod tests {
     }
 
     #[test]
+    fn small_talk_titles_are_not_topics() {
+        assert!(!topic_searchable("How are you"));
+        assert!(!topic_searchable("how are you, grok?"));
+        assert!(!topic_searchable("Good morning!"));
+        assert!(!topic_searchable("What's up"));
+        // A real subject that starts like a greeting still counts.
+        assert!(topic_searchable("Good morning coffee"));
+        let mut p = InterestProfile::default();
+        p.observe_chat("c1", "How are you?", 1);
+        p.observe_chat("c2", "How are you?", 2);
+        assert!(p.graph.evidence.is_empty(), "{:?}", p.graph.evidence);
+    }
+
+    #[test]
+    fn a_skipped_chat_topic_stays_skipped_despite_more_chats() {
+        let mut p = InterestProfile::default();
+        assert!(p.add("Home espresso", InterestSource::Chats, 1));
+        p.observe_chat("c1", "Home espresso", 1);
+        p.observe_chat("c2", "Home espresso", 2);
+        let ready =
+            |p: &InterestProfile| p.find("Home espresso").is_some_and(|t| p.topic_is_ready(t));
+        assert!(ready(&p), "two chats of evidence at the start weight");
+        if let Some(t) = p.find_mut("Home espresso") {
+            t.weight = InterestSource::Chats.start_weight() - 1;
+        }
+        p.observe_chat("c3", "Home espresso", 3);
+        assert!(!ready(&p), "dismissed under its start weight");
+    }
+
+    #[test]
     fn seeding_skips_cabin_chrome_titles() {
         let mut p = InterestProfile::default();
         // Two chats with the same good title promote; chrome titles never land.
