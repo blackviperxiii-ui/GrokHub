@@ -227,7 +227,7 @@ approve, the cabin's three permission modes.
 
 **3f, Pulse.** A Pulse page shows the cabin's Feed and Ideas from the same
 `updates.json`, ranked by the same rules (`grokhub_core::pulse`), with the
-MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
+Pulse ledger (`memory/pulse-ledger.md`) as input (`src-tauri/src/pulse.rs`).
 
 - Feed opens first, one column of cards, newest first, ten at a time with
   more as you scroll (`ui/src/FeedCard.tsx`). A card shows the topic emoji
@@ -259,7 +259,8 @@ MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
   open journal questions, interest topics, recent chats and recent feed
   posts. A written idea retires after 14 days unless it was edited.
 - Dismiss, Not this, Love and Accept write the cabin's one-line ledger entry
-  to the global MEMORY.md, so the next ranking learns from them. Snooze hides
+  to `memory/pulse-ledger.md` (older lines still in MEMORY.md are read too),
+  so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
 - Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its

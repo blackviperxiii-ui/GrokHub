@@ -46,7 +46,7 @@ fn pulse_texts_w(cabin: &mut super::Cabin, w: f32, h: f32) -> Vec<String> {
 }
 
 fn pulse_memory() -> String {
-    crate::config::read_memory("MEMORY.md")
+    crate::config::read_memory(grokhub_core::pulse::LEDGER_FILE)
 }
 
 fn pulse_ids(cabin: &mut super::Cabin, now: u64) -> Vec<(String, i64, &'static str)> {
