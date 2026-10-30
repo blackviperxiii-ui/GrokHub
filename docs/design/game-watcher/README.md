@@ -56,6 +56,11 @@ game feed ──> adapter ──> events ──> timeline (in memory, then disk 
 
 Run: `cargo test -p grokhub-core --lib game_watch`.
 
+Adapters on the same events (also not wired in yet):
+
+- `game_watch_league.rs`: League over the Live Client Data API. `LeaguePoller` reads `allgamedata` from `https://127.0.0.1:2999` about once a second while `League of Legends.exe` runs, backing off to 16 s while the port is closed, and diffs the event list by `EventID`. Its HTTP client accepts the self-signed certificate for that one origin only, follows no redirects and skips proxies. Assists aren't counted yet.
+- `game_watch_wow.rs`: WoW combat log tail. `CombatLogTail` reads only new bytes of the newest `WoWCombatLog*.txt` in `_retail_/Logs` (at most 1 MiB per read) and follows a new file or a truncated one. `ENCOUNTER_START` / `ENCOUNTER_END` become pull start and end (kill or wipe). The player's deaths count from `UNIT_DIED`: the log never names the player, so the player is the unit flagged both a player and "mine" (`0x511`).
+
 Not in the PoC: the listener, the `.cfg` writer, Settings, the overlay and the card. Those are the follow-ups below.
 
 ## Follow-up cards (not Ready)
