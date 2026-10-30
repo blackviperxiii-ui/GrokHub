@@ -5152,6 +5152,9 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
+        // The process-wide sidecar is a static, so nothing drops it at exit: stop
+        // llama-server here or it keeps the model loaded after the cabin is gone.
+        grokhub_agent::route::local_sidecar::stop_global();
         // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 

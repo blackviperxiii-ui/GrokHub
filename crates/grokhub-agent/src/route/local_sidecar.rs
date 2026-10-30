@@ -76,11 +76,16 @@ pub(crate) fn unix_ms() -> u64 {
 /// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
+/// Unix seconds when the last request finished. Idle time counts from the
+/// later of this and the last start, so a long request doesn't end idle.
+static LAST_DONE_SECS: AtomicU64 = AtomicU64::new(0);
+
 /// Held for the length of one request (see [`busy`]).
 pub struct Busy(());
 
 impl Drop for Busy {
     fn drop(&mut self) {
+        LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -487,8 +492,12 @@ pub fn runtime(config_dir: &Path) -> Runtime {
         return Runtime::Error(e);
     }
     match global_slot().try_lock() {
-        Ok(slot) if slot.is_some() => Runtime::Running,
-        Ok(_) => Runtime::Ready,
+        // `alive` asks the OS (and reaps a child that already exited), so a
+        // stopped or killed server never reads as running.
+        Ok(slot) => match slot.as_ref() {
+            Some(side) if side.alive() => Runtime::Running,
+            _ => Runtime::Ready,
+        },
         Err(_) => Runtime::Loading,
     }
 }
@@ -699,12 +708,26 @@ pub fn touch_global() {
 }
 
 /// Stop the sidecar when it has been idle longer than its unload timeout.
+///
+/// Idle means no request in flight and none started or finished within the
+/// timeout, so a long request is never cut off and the next one doesn't
+/// reload a model that was just stopped.
 pub fn tick_idle_unload() {
+    if in_flight() > 0 {
+        return;
+    }
     let mut slot = global_slot().lock().expect("sidecar global");
     let Some(side) = slot.as_ref() else {
         return;
     };
-    let last = side.last_used_secs.load(Ordering::SeqCst);
+    // A request may have taken its guard while this waited for the lock.
+    if in_flight() > 0 {
+        return;
+    }
+    let last = side
+        .last_used_secs
+        .load(Ordering::SeqCst)
+        .max(LAST_DONE_SECS.load(Ordering::SeqCst));
     if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
         if let Some(side) = slot.take() {
             side.stop();
@@ -970,6 +993,96 @@ pub mod fake_server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
+    fn idle_child_sidecar(idle_unload_secs: u64, last_used_secs: u64) -> Sidecar {
+        #[cfg(windows)]
+        let child = Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        Sidecar {
+            child: Mutex::new(child),
+            host: "127.0.0.1".into(),
+            port: 9,
+            token: "t".into(),
+            binary: PathBuf::from("llama-server"),
+            model: PathBuf::from("m.gguf"),
+            restarts: AtomicU64::new(0),
+            last_used_secs: AtomicU64::new(last_used_secs),
+            idle_unload_secs,
+            launch: None,
+        }
+    }
+
+    #[test]
+    fn a_server_that_exited_reads_ready_and_is_reaped() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-dead-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
+        std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        stop_global();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        assert_eq!(runtime(&dir), Runtime::Running);
+        // Killed from outside (a shell `kill`, a crash): the OS has it as exited
+        // but nobody has waited on it yet.
+        {
+            let slot = global_slot().lock().unwrap();
+            let mut child = slot.as_ref().unwrap().child.lock().unwrap();
+            child.kill().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            #[cfg(unix)]
+            {
+                let pid = child.id();
+                while std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .is_ok_and(|st| !st.contains(") Z "))
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+            let _ = deadline;
+        }
+        assert_eq!(runtime(&dir), Runtime::Ready);
+        #[cfg(target_os = "linux")]
+        {
+            let pid = global_pid().unwrap();
+            assert!(
+                std::fs::metadata(format!("/proc/{pid}")).is_err(),
+                "the status read must reap the exited child, not leave it defunct"
+            );
+        }
+        stop_global();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idle_unload_waits_for_requests_in_flight_and_counts_from_the_last_one_done() {
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        let held = busy();
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "a request in flight is never cut off by the idle rule"
+        );
+        drop(held);
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "a request that just finished keeps the model warm for the timeout"
+        );
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        tick_idle_unload();
+        assert_eq!(global_pid(), None, "idle past the timeout unloads");
+    }
     use crate::route::local::LocalRuntime;
     use fake_server::FakeServer;
 
