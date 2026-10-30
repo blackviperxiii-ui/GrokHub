@@ -1048,6 +1048,11 @@ mod tests {
             }
             let _ = deadline;
         }
+        // Windows ends a killed process asynchronously, so give it a moment to exit.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runtime(&dir) == Runtime::Running && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(runtime(&dir), Runtime::Ready);
         #[cfg(target_os = "linux")]
         {
