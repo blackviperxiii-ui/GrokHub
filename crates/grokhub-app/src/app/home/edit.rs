@@ -213,10 +213,17 @@ impl Cabin {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if ui
-                                            .button(crate::icons::ph::regular::X)
-                                            .on_hover_text("Close")
-                                            .clicked()
+                                        if crate::icons::glyph_button(
+                                            ui,
+                                            crate::icons::ph::regular::X,
+                                            24.0,
+                                            crate::theme::muted(),
+                                            crate::motion::icon::Kick::Turn(
+                                                std::f32::consts::FRAC_PI_2,
+                                            ),
+                                        )
+                                        .on_hover_text("Close")
+                                        .clicked()
                                         {
                                             close = true;
                                         }

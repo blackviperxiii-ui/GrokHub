@@ -334,8 +334,17 @@ impl Engine for NativeEngine {
         if image.is_none() && crate::memory::is_dream_command(text) {
             return self.dream_now(emit);
         }
-        // Playbooks 8: a banned ask is never sent, stored or sorted; the held note goes instead.
-        let text = grokhub_core::adult_guard::hold(text).unwrap_or(text);
+        // Playbooks 8: a banned ask is never sent, stored or sorted. The chat
+        // shows a plain local notice and no model is called.
+        if grokhub_core::adult_guard::hold(text).is_some() {
+            emit(AcpEvent::Text(
+                grokhub_core::adult_guard::HELD_NOTICE.into(),
+            ));
+            emit(AcpEvent::Done {
+                stop_reason: "end_turn".into(),
+            });
+            return Ok(());
+        }
         self.write_brief(text, image.is_some());
         if let Some(seed) = self
             .episode_seed
@@ -1260,19 +1269,20 @@ mod tests {
             }
         })
         .unwrap();
+        assert_eq!(shown, grokhub_core::adult_guard::HELD_NOTICE);
         assert_eq!(
-            shown,
-            format!("{}\n\nhey", grokhub_core::adult_guard::HEADS_UP_HELD)
+            client.0.lock().unwrap().len(),
+            0,
+            "a held send makes no model request at all"
         );
-        let sent = client.0.lock().unwrap();
-        assert!(!sent.is_empty());
-        for req in sent.iter() {
-            let body = format!("{:?}", req.input);
-            assert!(!body.contains("schoolgirl"), "{body}");
-        }
-        let kept = format!("{:?}", eng.history);
-        assert!(!kept.contains("schoolgirl"), "{kept}");
-        assert!(kept.contains("Loadout held this message back"), "{kept}");
+        assert!(eng.history.is_empty(), "{:?}", eng.history);
+        assert!(
+            crate::brain::read_briefs(&dir).is_empty(),
+            "a held ask is never sorted"
+        );
+        // A clean ask after it goes out as usual.
+        eng.prompt("hello there", None, &mut |_| {}).unwrap();
+        assert_eq!(client.0.lock().unwrap().len(), 1);
     }
 
     fn engine(
