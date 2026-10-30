@@ -70,9 +70,11 @@ fn builtin_art(file: &str) -> Option<&'static [u8]> {
 }
 
 /// The outfit Nyx wears for `mood`: the shipped one the companion file
-/// names, or the default when a mode has no picture of its own.
+/// names, or the default when a mode has no picture of its own. Adult
+/// outfits are included; the wardrobe only asks for an explicit mode with
+/// adults-only personalities on.
 pub(super) fn mood_outfit(mood: Mood) -> &'static grokhub_core::companion::Outfit {
-    grokhub_core::companion::nyx().outfit_for(mood, false)
+    grokhub_core::companion::nyx().outfit_for(mood, true)
 }
 
 /// The embedded picture for `mood`, by way of the companion file.
@@ -1778,10 +1780,7 @@ mod tests {
         assert_eq!(mood_art(Mood::Thinking), NYX_THINKING_JPG);
         assert_eq!(mood_art(Mood::Writing), NYX_WRITING_JPG);
         assert_eq!(mood_art(Mood::Raunchy), NYX_RAUNCHY_JPG);
-        assert!(
-            !mood_outfit(Mood::Raunchy).adult,
-            "shipped art is never adult"
-        );
+        assert!(mood_outfit(Mood::Raunchy).adult, "raunchy is adults only");
         assert_eq!(builtin_art("brand/nyx-nothing.jpg"), None);
     }
 

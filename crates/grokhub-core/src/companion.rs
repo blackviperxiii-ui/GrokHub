@@ -5,8 +5,9 @@
 //! desktop companion both pick their picture from here, so there is one
 //! source of what the companion is doing and what she wears for it.
 //!
-//! Adults-only outfits never ship in the public repo. They load only from
-//! `{config}/companions/<id>/adult/adult.toml` on the user's own PC, and
+//! Adults-only outfits are marked `adult = true` and shown only with
+//! adults-only personalities on. A user can add more from
+//! `{config}/companions/<id>/adult/adult.toml` on their own PC, and
 //! everything read from that folder counts as adult whatever the file says.
 
 use std::path::{Path, PathBuf};
@@ -116,8 +117,8 @@ pub struct Outfit {
     pub file: String,
     #[serde(default)]
     pub moods: Vec<Mood>,
-    /// Shown only with adults-only personalities on. Never true for a
-    /// shipped outfit; forced on for anything read from the adult folder.
+    /// Shown only with adults-only personalities on. Forced on for
+    /// anything read from the adult folder.
     #[serde(default)]
     pub adult: bool,
     /// Eyes-closed patch for blinking.
@@ -284,7 +285,7 @@ impl Companion {
             .any(|o| (adults_ok || !o.adult) && o.moods.contains(&mood))
     }
 
-    /// Whether any shipped outfit claims to be adult. Always false for a
+    /// Whether any outfit in this list is adult. False for a
     /// companion file in the repo; the CI guard and a test keep it so.
     pub fn ships_adult_art(&self) -> bool {
         self.outfits.iter().any(|o| o.adult)
@@ -513,21 +514,27 @@ y = 40
         assert_eq!(nyx.name, "Nyx");
         assert_eq!(nyx.default_outfit, "hanging-out");
         assert_eq!(nyx.outfits.len(), 9);
-        assert!(!nyx.ships_adult_art(), "adult art never ships in the repo");
+        assert!(nyx.ships_adult_art(), "the raunchy outfit ships adult");
         for o in &nyx.outfits {
             assert!(o.file.starts_with("brand/nyx"), "{}", o.file);
             assert!(o.file.ends_with(".jpg"), "{}", o.file);
         }
         for mood in Mood::ALL {
-            assert!(nyx.has_outfit_for(mood, false), "{mood:?}");
-            assert_eq!(nyx.outfit_for(mood, false).id, mood.slug(), "{mood:?}");
+            assert!(nyx.has_outfit_for(mood, true), "{mood:?}");
+            assert_eq!(nyx.outfit_for(mood, true).id, mood.slug(), "{mood:?}");
         }
+        assert!(!nyx.has_outfit_for(Mood::Raunchy, false));
+        assert_eq!(
+            nyx.outfit_for(Mood::Raunchy, false).id,
+            "hanging-out",
+            "adults-only off hides the shipped raunchy outfit"
+        );
         assert_eq!(
             nyx.outfit_for(Mood::Thinking, false).file,
             "brand/nyx/actions/thinking/1.jpg"
         );
         assert_eq!(
-            nyx.outfit_for(Mood::Raunchy, false).file,
+            nyx.outfit_for(Mood::Raunchy, true).file,
             "brand/nyx-raunchy.jpg"
         );
     }
