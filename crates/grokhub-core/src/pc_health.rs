@@ -281,24 +281,6 @@ pub fn cpu_util_between(prev: (u64, u64), cur: (u64, u64)) -> Option<u8> {
     Some(((total - idle) * 100 / total) as u8)
 }
 
-/// Windows: the game's exe name (no `.exe`) from the first store-library
-/// path in a process list (see `local_governor::game_in_exe_paths`).
-pub fn game_label_from_exe_paths(paths: &[String]) -> Option<String> {
-    paths.iter().find_map(|p| {
-        if !crate::local_governor::game_in_exe_paths(std::slice::from_ref(p)) {
-            return None;
-        }
-        let file = p.rsplit(['\\', '/']).next()?;
-        let stem = match file.len().checked_sub(4) {
-            Some(i) if file.is_char_boundary(i) && file[i..].eq_ignore_ascii_case(".exe") => {
-                &file[..i]
-            }
-            _ => file,
-        };
-        (!stem.is_empty()).then(|| stem.to_string())
-    })
-}
-
 /// Game running: process hit (card 16.1 / local_governor) or sustained GPU busy.
 pub fn game_running(procs: &[(String, String)], gpu_util: Option<u8>) -> bool {
     if crate::local_governor::game_in_processes(procs) {
@@ -711,24 +693,6 @@ mod tests {
         assert_eq!(cpu_util_between(pb, pb), None);
         assert_eq!(cpu_util_between(pb, pa), None);
         assert_eq!(parse_proc_stat_cpu("intr 1 2 3\n"), None);
-    }
-
-    #[test]
-    fn windows_game_label_is_the_store_exe_name() {
-        let paths = vec![
-            r"C:\Windows\explorer.exe".to_string(),
-            r"C:\Program Files (x86)\Steam\steamapps\common\Hades\x64\Hades.exe".to_string(),
-        ];
-        assert_eq!(game_label_from_exe_paths(&paths).as_deref(), Some("Hades"));
-        let upper = [r"D:\XboxGames\Forza\Content\ForzaHorizon5.Exe".to_string()];
-        assert_eq!(
-            game_label_from_exe_paths(&upper).as_deref(),
-            Some("ForzaHorizon5")
-        );
-        assert_eq!(
-            game_label_from_exe_paths(&[r"C:\Windows\explorer.exe".to_string()]),
-            None
-        );
     }
 
     #[test]

@@ -6,8 +6,6 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-#[cfg(windows)]
-use grokhub_core::pc_health::game_label_from_exe_paths;
 use grokhub_core::pc_health::{
     self as ph, observe, summary_card, GameSession, ObserveOut, PcHealthLedger, SensorSample,
     SAMPLE_EVERY_MS,
@@ -242,12 +240,12 @@ fn collect_linux(now: u64, cpu_prev: Option<(u64, u64)>) -> Probe {
 
 #[cfg(windows)]
 fn collect_windows(now: u64) -> Probe {
-    // Full exe paths, like the wind-down check: a game is an exe under a
-    // store's library (Steam, Epic, GOG, Xbox). nvidia-smi when present.
-    let paths = windows_process_paths();
+    // Process names from a Toolhelp snapshot and Steam's RunningAppID, like
+    // the wind-down check: no process is opened, so no anti-cheat sees it.
+    // nvidia-smi when present.
     let mut sample = SensorSample {
         at_ms: now,
-        game_label: game_label_from_exe_paths(&paths),
+        game_label: grokhub_desktop::game_guard::windows_game_label(),
         ..Default::default()
     };
     let mut busiest = None;
@@ -257,7 +255,7 @@ fn collect_windows(now: u64) -> Probe {
         sample.gpu_clock_mhz = Some(c);
         busiest = max_u;
     }
-    let game_up = grokhub_core::local_governor::game_in_process_list(&paths) == Some(true)
+    let game_up = grokhub_desktop::game_guard::windows_game() == Some(true)
         || game_running(&[], busiest.or(sample.gpu_util_pct));
     Probe {
         game_up,
@@ -326,28 +324,6 @@ fn read_first_amdgpu_busy() -> Option<u8> {
         }
     }
     None
-}
-
-/// This session's processes, one line each: the full exe path, or `?name`
-/// when the path can't be read (see `game_in_process_list`).
-#[cfg(windows)]
-fn windows_process_paths() -> Vec<String> {
-    let Some(text) = probe_cmd(
-        "powershell",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$s = (Get-Process -Id $PID).SessionId; Get-Process | Where-Object SessionId -eq $s | ForEach-Object { if ($_.Path) { $_.Path } else { '?' + $_.ProcessName } }",
-        ],
-    ) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .take(1000)
-        .collect()
 }
 
 #[cfg(test)]
