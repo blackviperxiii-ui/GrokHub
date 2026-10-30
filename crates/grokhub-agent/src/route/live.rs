@@ -498,7 +498,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let settings = spend::spend_settings();
     let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
     laps.mark("route:week_budget");
-    let rt = super::local::runtime();
+    // The on-device estimator runs only offline: online it would load the local
+    // model for every call, and the cloud is the route anyway.
+    super::connectivity::sync_from_core();
+    let rt = super::connectivity::state()
+        .prefer_local()
+        .then(super::local::runtime)
+        .flatten();
     let d = estimate(
         &DifficultyInput {
             text: call.text,
@@ -723,6 +729,14 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     }
     if let Some(ask) = &route.premium_ask {
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
+    }
+    if !route.no_route {
+        super::local::note_fallback(
+            route
+                .rule_ids
+                .iter()
+                .any(|r| r == "local:cloud_down" || r == "local:no_keys"),
+        );
     }
     // An offline turn leaves a line: where it went (local, kept, cloud queue).
     if let Some(rule) = route.rule_ids.iter().find(|r| r.starts_with("offline:")) {

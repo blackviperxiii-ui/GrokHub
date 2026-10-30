@@ -880,16 +880,27 @@ impl Router {
                 .copied()
                 .filter(|id| !local::is_local(id))
                 .collect();
-            // Grok stays primary: under Throttle, or for a heavy step before
-            // RampUp, online background work stays off the device.
-            let hold = local::online_hold(&input.local, input.class, input.ctx_tokens);
-            let pool = if hold.is_some() { &cloud_ids } else { &ids };
+            // Online, the cloud always wins while any cloud model can take the step:
+            // the device is the last resort, never a cheaper pick.
+            let pool = if cloud_ids.is_empty() {
+                &ids
+            } else {
+                &cloud_ids
+            };
             let mut pick = Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules);
-            if let Some(rule) = hold {
-                rules.push(rule.into());
-            }
-            // Cloud pool empty + local already won (cheapest/table): retag as cloud_down.
-            // Do not fire when a healthy cloud id remains — local may win online on purpose.
+            // No sign-in or key: no cloud model can answer, whatever the list says.
+            let no_keys = rules.iter().any(|r| r == "cost:not_included");
+            // With no cloud model left, the device takes what it would take offline.
+            let as_offline = local::LocalGate {
+                offline: true,
+                ..input.local.clone()
+            };
+            let last_resort = elig || local::eligible(&as_offline, input.class, input.ctx_tokens);
+            let local_id = reg.models.keys().map(String::as_str).find(|id| {
+                local::admits(&as_offline, id, input.class, input.ctx_tokens)
+                    && policy::fits(reg, profiles, id, fit, &input.spend, now_ms)
+            });
+            // Cloud pool empty + local already won: retag as cloud_down.
             let cloud_pool_empty_local = !input.local.offline
                 && !pick.no_route
                 && local::is_local(&pick.model)
@@ -903,10 +914,17 @@ impl Router {
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
-            } else if (pick.no_route && elig) || cloud_pool_empty_local {
-                // Plan models down / no healthy cloud route: fall back to local when eligible.
-                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
-                    rules.push("local:cloud_down".into());
+            } else if ((pick.no_route || no_keys) && last_resort) || cloud_pool_empty_local {
+                // Plan models down / no healthy cloud route / no keys: fall back to local.
+                if let Some(id) = local_id {
+                    rules.push(
+                        if no_keys {
+                            "local:no_keys"
+                        } else {
+                            "local:cloud_down"
+                        }
+                        .into(),
+                    );
                     pick = ModelPick {
                         model: id.to_string(),
                         no_route: false,
@@ -1063,6 +1081,12 @@ impl Router {
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
                 format!(
                     "{tier_word} · {}: {from} (local) is too small for this step.",
+                    effort_word(effort.as_deref())
+                )
+            }
+            (Some(from), _) if rules.iter().any(|r| r == "local:no_keys") => {
+                format!(
+                    "{tier_word} · {}: {from} needs a sign-in or key (using local).",
                     effort_word(effort.as_deref())
                 )
             }
