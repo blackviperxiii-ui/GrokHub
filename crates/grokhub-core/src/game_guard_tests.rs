@@ -9,8 +9,8 @@ fn anticheat_executables_are_matched_in_any_case_and_by_file_name() {
         ("EasyAntiCheat_EOS.exe", "Easy Anti-Cheat"),
         ("BEService.exe", "BattlEye"),
         ("BEService_x64.exe", "BattlEye"),
-        ("vgc.exe", "Vanguard"),
-        ("VGTRAY.EXE", "Vanguard"),
+        ("VALORANT-Win64-Shipping.exe", "Vanguard"),
+        ("League of Legends.exe", "Vanguard"),
         ("faceit.exe", "FACEIT"),
         ("FaceitClient.exe", "FACEIT"),
         ("PnkBstrA.exe", "PunkBuster"),
@@ -37,8 +37,6 @@ fn anticheat_services_and_drivers_are_matched_in_any_case() {
         ("EasyAntiCheat_EOS", "Easy Anti-Cheat"),
         ("BEService", "BattlEye"),
         ("BEDaisy", "BattlEye"),
-        ("vgc", "Vanguard"),
-        ("vgk", "Vanguard"),
         ("FACEIT", "FACEIT"),
         ("ESEADriver2", "ESEA"),
         ("PnkBstrA", "PunkBuster"),
@@ -48,6 +46,89 @@ fn anticheat_services_and_drivers_are_matched_in_any_case() {
     for (svc, want) in cases {
         assert_eq!(detect_anticheat(NONE, &[*svc]), Some(*want), "{svc}");
     }
+}
+
+#[test]
+fn vanguard_alone_is_installed_and_idle_not_running() {
+    // vgk (driver), vgc (service) and the tray icon run from install on.
+    for (exes, services) in [
+        (&["vgc.exe"][..], NONE),
+        (&["VGTRAY.EXE"][..], NONE),
+        (NONE, &["vgk"][..]),
+        (NONE, &["VGC"][..]),
+        (&["vgc.exe", "vgtray.exe"][..], &["vgk", "vgc"][..]),
+    ] {
+        let scan = scan_anticheats(exes, services);
+        assert_eq!(
+            scan,
+            AntiCheatScan {
+                running: None,
+                idle: Some("Vanguard")
+            },
+            "{exes:?} {services:?}"
+        );
+        assert_eq!(detect_anticheat(exes, services), None);
+    }
+    // The Riot Client and League's lobby client are not the protected game.
+    let launchers = [
+        "RiotClientServices.exe",
+        "RiotClientUx.exe",
+        "Riot Client.exe",
+        "LeagueClient.exe",
+        "LeagueClientUx.exe",
+    ];
+    assert_eq!(
+        scan_anticheats(&launchers, &["vgk", "vgc"]),
+        AntiCheatScan {
+            running: None,
+            idle: Some("Vanguard")
+        }
+    );
+    assert_eq!(scan_anticheats(&launchers, NONE), AntiCheatScan::default());
+}
+
+#[test]
+fn a_riot_game_makes_vanguard_count_as_running() {
+    for game in [
+        "VALORANT.exe",
+        "VALORANT-Win64-Shipping.exe",
+        "League of Legends.exe",
+        r"C:\Riot Games\League of Legends\Game\League of Legends.exe",
+        "2XKO.exe",
+        "Lion-Win64-Shipping.exe",
+    ] {
+        let scan = scan_anticheats(&["vgtray.exe", game], &["vgk", "vgc"]);
+        assert_eq!(
+            scan,
+            AntiCheatScan {
+                running: Some("Vanguard"),
+                idle: None
+            },
+            "{game}"
+        );
+    }
+    // The game can't run without Vanguard, so the game alone is enough.
+    assert_eq!(
+        detect_anticheat(&["League of Legends.exe"], NONE),
+        Some("Vanguard")
+    );
+}
+
+#[test]
+fn every_entry_but_vanguard_counts_its_own_names_as_running() {
+    for ac in ANTI_CHEATS {
+        assert_eq!(ac.always_on.is_some(), ac.name == "Vanguard", "{}", ac.name);
+    }
+    // BattlEye's service alone still blocks as before, Vanguard idle or not.
+    let scan = scan_anticheats(&["explorer.exe"], &["BEService", "vgk"]);
+    assert_eq!(
+        scan,
+        AntiCheatScan {
+            running: Some("BattlEye"),
+            idle: Some("Vanguard")
+        }
+    );
+    assert_eq!(scan_anticheats(NONE, &["BEService"]).idle, None);
 }
 
 #[test]
@@ -62,6 +143,16 @@ fn ordinary_processes_and_lookalikes_are_not_an_anticheat() {
     ];
     let services = ["Spooler", "vgcx", "BEServiceHelper", "WinDefend"];
     assert_eq!(detect_anticheat(&exes, &services), None);
+    assert_eq!(scan_anticheats(&exes, &services), AntiCheatScan::default());
+    // Lookalikes of Riot games are not the game.
+    assert_eq!(
+        scan_anticheats(
+            &["valorant.exe.bak", "League of Legends Setup.exe"],
+            &["vgk"]
+        )
+        .running,
+        None
+    );
     assert_eq!(detect_anticheat(NONE, NONE), None);
 }
 
@@ -134,12 +225,14 @@ fn every_gaming_signal_turns_the_guard_on_and_none_leaves_it_clear() {
         ac,
         GameGuard {
             anticheat: Some("Vanguard"),
-            gaming: true
+            gaming: true,
+            idle_anticheat: None,
         }
     );
     let gaming = GameGuard {
         anticheat: None,
         gaming: true,
+        idle_anticheat: None,
     };
     assert_eq!(
         on(GuardSignals {
@@ -189,6 +282,105 @@ fn a_clear_guard_blocks_nothing() {
         assert_eq!(g.blocks(what), None, "{what:?}");
     }
     assert_eq!(g.status_line(), None);
+    assert_eq!(g.idle_note(), None);
+    assert_eq!(g.panel_note(), None);
+}
+
+/// The guard the readers build from these process and service names.
+fn guard_from(exes: &[&str], services: &[&str]) -> GameGuard {
+    let scan = scan_anticheats(exes, services);
+    decide(&GuardSignals {
+        anticheat: scan.running,
+        idle_anticheat: scan.idle,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn vanguard_installed_with_no_riot_game_pauses_nothing_and_says_so() {
+    let g = guard_from(&["vgtray.exe"], &["vgk", "vgc"]);
+    assert_eq!(
+        g,
+        GameGuard {
+            anticheat: None,
+            gaming: false,
+            idle_anticheat: Some("Vanguard"),
+        }
+    );
+    assert!(g.is_clear());
+    for what in [
+        Guarded::DesktopControl,
+        Guarded::ScreenCapture,
+        Guarded::ScreenRecording,
+        Guarded::WindowCheck,
+    ] {
+        assert_eq!(g.blocks(what), None, "{what:?}");
+    }
+    assert_eq!(g.status_line(), None);
+    let note = "Riot Vanguard is installed. It runs all the time, even with no Riot game open; desktop control pauses only while a Riot game runs.";
+    assert_eq!(g.idle_note(), Some(note));
+    assert_eq!(g.panel_note().as_deref(), Some(note));
+    // A non-Riot game still pauses as gaming, and the note stays under it.
+    let steam = decide(&GuardSignals {
+        steam_app: Some(730),
+        idle_anticheat: Some("Vanguard"),
+        ..Default::default()
+    });
+    assert!(steam.blocks(Guarded::DesktopControl).is_some());
+    assert_eq!(
+        steam.panel_note(),
+        Some(format!("Game mode: desktop control paused\n{note}"))
+    );
+}
+
+#[test]
+fn a_riot_game_with_vanguard_blocks_everything_as_an_anticheat() {
+    for (exes, services) in [
+        (
+            &["vgtray.exe", "VALORANT-Win64-Shipping.exe"][..],
+            &["vgk"][..],
+        ),
+        (&["League of Legends.exe"][..], &["vgc"][..]),
+    ] {
+        let g = guard_from(exes, services);
+        assert_eq!(
+            g,
+            GameGuard {
+                anticheat: Some("Vanguard"),
+                gaming: true,
+                idle_anticheat: None,
+            },
+            "{exes:?}"
+        );
+        assert_eq!(
+            g.blocks(Guarded::ScreenRecording).as_deref(),
+            Some(
+                "Screen recording is blocked while Vanguard is running so it doesn't flag this PC."
+            )
+        );
+        assert_eq!(
+            g.panel_note().as_deref(),
+            Some("Anti-cheat running (Vanguard): desktop control, screen capture and window checks paused")
+        );
+    }
+}
+
+#[test]
+fn battleye_alone_still_blocks_everything() {
+    let g = guard_from(&["BEService.exe"], &[]);
+    assert_eq!(
+        g,
+        GameGuard {
+            anticheat: Some("BattlEye"),
+            gaming: true,
+            idle_anticheat: None,
+        }
+    );
+    assert_eq!(
+        g.blocks(Guarded::WindowCheck).as_deref(),
+        Some("Reading other windows is blocked while BattlEye is running so it doesn't flag this PC.")
+    );
+    assert_eq!(g.idle_note(), None);
 }
 
 #[test]
@@ -196,6 +388,7 @@ fn gaming_pauses_desktop_control_and_capture_but_not_recording_or_window_checks(
     let g = GameGuard {
         anticheat: None,
         gaming: true,
+        idle_anticheat: None,
     };
     assert_eq!(
         g.blocks(Guarded::DesktopControl).as_deref(),

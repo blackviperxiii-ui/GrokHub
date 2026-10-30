@@ -778,6 +778,7 @@ mod tests {
         s.backend_mut().guard = grokhub_core::game_guard::GameGuard {
             anticheat: Some("BattlEye"),
             gaming: true,
+            idle_anticheat: None,
         };
         // A click on Send would park for approval; the guard answers first.
         s.backend_mut().controls = vec![(0, 0, 100, 50, "Send", "push button")];

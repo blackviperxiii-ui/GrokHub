@@ -2307,6 +2307,7 @@ mod tests {
         let gaming = GameGuard {
             anticheat: None,
             gaming: true,
+            idle_anticheat: None,
         };
         let ops = [
             ComputerOp::Click { x: 10, y: 20 },
@@ -2339,6 +2340,7 @@ mod tests {
         let eac = GameGuard {
             anticheat: Some("Easy Anti-Cheat"),
             gaming: true,
+            idle_anticheat: None,
         };
         let out = run_computer_op_under(&ComputerOp::Click { x: 1, y: 2 }, None, eac);
         assert!(

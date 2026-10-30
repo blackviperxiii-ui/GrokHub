@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[cfg(any(target_os = "linux", windows))]
-use grokhub_core::game_guard::{decide, detect_anticheat, GuardSignals};
+use grokhub_core::game_guard::{decide, scan_anticheats, GuardSignals};
 pub use grokhub_core::game_guard::{GameGuard, Guarded};
 
 /// How long one reading is reused.
@@ -99,8 +99,10 @@ fn read() -> GameGuard {
             names.push(grokhub_core::game_guard::file_name_lower(first));
         }
     }
+    let anticheats = scan_anticheats::<_, &str>(&names, &[]);
     decide(&GuardSignals {
-        anticheat: detect_anticheat::<_, &str>(&names, &[]),
+        anticheat: anticheats.running,
+        idle_anticheat: anticheats.idle,
         steam_app: grokhub_core::game_companion::running_from_cmdlines(&procs),
         game_process: grokhub_core::local_governor::game_in_processes(&procs),
         listed_game: listed(&names, &deny_list()),
@@ -143,8 +145,10 @@ fn read() -> GameGuard {
     let procs = process_names().unwrap_or_default();
     let names: Vec<String> = procs.into_iter().map(|(_, n)| n).collect();
     let services = running_services();
+    let anticheats = scan_anticheats(&names, &services);
     decide(&GuardSignals {
-        anticheat: detect_anticheat(&names, &services),
+        anticheat: anticheats.running,
+        idle_anticheat: anticheats.idle,
         steam_app: steam_running_app(),
         game_process: grokhub_core::game_guard::windows_game_exe(&names, &epic_game_exes())
             .is_some(),
