@@ -1240,9 +1240,14 @@ pub fn stream_routed(
                     note = screen.heads_up_local.clone();
                 }
                 let out = super::local::serve_request(class, &sent, cancel);
-                if out.is_ok() {
+                if let Ok(turn) = &out {
                     if let Some(note) = &note {
                         sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                    }
+                    // The chat shows streamed text, so the local answer goes out
+                    // as one delta, like a provider's.
+                    if !turn.text.is_empty() {
+                        sink(StreamEvent::TextDelta(turn.text.clone()));
                     }
                 }
                 out

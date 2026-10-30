@@ -1552,7 +1552,10 @@ fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
     let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
     assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
     assert!(!shown.contains("through xAI"), "{shown}");
-    assert_eq!(shown, format!("{heads_up}\n\n"));
+    assert_eq!(
+        shown, out.text,
+        "the chat shows the local answer, not just the heads-up"
+    );
     assert_eq!(wire.n(), 0, "nothing reached Anthropic");
     let _ = std::fs::remove_dir_all(dir);
 }
