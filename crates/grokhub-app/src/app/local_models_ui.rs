@@ -1,7 +1,7 @@
 //! New local model suggestions (`grokhub_core::local_model_news`), opt-in
 //! under Settings → Pulse → Sources. Once a week, off the UI thread: read
 //! this PC's hardware and the installed model, score the catalog, and read
-//! the official publishers' newest GGUF repos on Hugging Face. A catalog
+//! huihui-ai's newest abliterated GGUF repos on Hugging Face. A catalog
 //! upgrade card opens the model picker on that model, where Download is the
 //! approval; a release card only links Hugging Face.
 
@@ -92,14 +92,14 @@ fn deck_machine() -> Machine {
             simd: CpuSimd::Avx2,
             llama_build: Some(99_999),
         },
-        installed: grokhub_core::local_setup::model_by_id("gemma-4-12b-it-q4_k_m"),
+        installed: grokhub_core::local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k"),
     }
 }
 
 fn deck_reply(url: &str) -> Result<String, String> {
-    if url.contains("author=ggml-org") {
+    if url.contains("author=huihui-ai") {
         Ok(
-            r#"[{"id":"ggml-org/Qwen3-14B-GGUF"},{"id":"ggml-org/embeddinggemma-300M-GGUF"}]"#
+            r#"[{"id":"huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"},{"id":"huihui-ai/Qwen3-14B-GGUF"},{"id":"huihui-ai/Huihui-embeddinggemma-300M-abliterated-GGUF"}]"#
                 .into(),
         )
     } else {
@@ -247,7 +247,7 @@ impl Cabin {
         ui.indent("pulse-local-models", |ui| {
             crate::cards::help_text(
                 ui,
-                &format!("Once a week, from this PC's memory and the official model publishers on Hugging Face. Only models in {}'s checked catalog download, from Settings.", grokhub_core::brand::product_name()),
+                &format!("Once a week, from this PC's memory and huihui-ai's abliterated builds on Hugging Face. Only models in {}'s checked catalog download, from Settings.", grokhub_core::brand::product_name()),
             );
             if crate::cards::ghost_pill(ui, "Check now") {
                 self.news_now().last_check_ms = 0;
@@ -266,7 +266,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_check_offers_the_bigger_catalog_model_and_reads_both_publishers() {
+    fn a_check_offers_the_bigger_catalog_model_and_reads_huihui_ai_only() {
         let mut asked = Vec::new();
         let run = run_check(&deck_machine(), &mut |url| {
             asked.push(url.to_string());
@@ -277,12 +277,15 @@ mod tests {
             run.upgrade.as_ref().map(Suggestion::title).as_deref(),
             Some("Gemma 4 31B fits this PC")
         );
-        // The 14B (9.8 GB) runs bigger than the installed 12B (8.2 GB).
+        // The 14B (9.8 GB) runs bigger than the installed 12B (8.2 GB); the
+        // build that isn't abliterated is never linked.
         let names: Vec<String> = run.releases.iter().map(Suggestion::title).collect();
-        assert_eq!(names, vec!["New on Hugging Face: Qwen3-14B-GGUF"]);
-        assert_eq!(asked.len(), 2);
-        assert!(asked[0].contains("author=ggml-org"));
-        assert!(asked[1].contains("author=lmstudio-community"));
+        assert_eq!(
+            names,
+            vec!["New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF"]
+        );
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].contains("author=huihui-ai"));
     }
 
     #[test]
@@ -327,7 +330,7 @@ mod tests {
             .any(|c| c.title == "Gemma 4 31B fits this PC"));
         assert_eq!(cabin.sources.models.note, "Checked. 1 new for this PC.");
         let mut later = run_check(&deck_machine(), &mut deck_reply);
-        later.read = vec!["ggml-org/Qwen3-14B-GGUF".into()];
+        later.read = vec!["huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF".into()];
         // Seen on the first check, so it never posts.
         cabin.finish_local_models(later, 6);
         assert_eq!(cabin.updates.len(), before + 1);
@@ -337,17 +340,24 @@ mod tests {
         );
         let saved = lm::load(&crate::config::config_dir());
         assert!(saved.seeded);
-        assert!(saved.suggested.contains("catalog:gemma-4-31b-it-q4_k_m"));
+        assert!(saved
+            .suggested
+            .contains("catalog:gemma-4-31b-it-abliterated-q4_k"));
     }
 
     #[test]
     fn the_upgrade_link_opens_the_picker_on_that_model() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
-        assert!(cabin.open_local_model_link("grokhub://local-model/gemma-4-31b-it-q4_k_m"));
+        assert!(
+            cabin.open_local_model_link("grokhub://local-model/gemma-4-31b-it-abliterated-q4_k")
+        );
         assert_eq!(cabin.nav, Nav::Settings);
         assert_eq!(cabin.settings_sec, SettingsSec::Defaults);
-        assert_eq!(cabin.setup.choice.as_deref(), Some("gemma-4-31b-it-q4_k_m"));
+        assert_eq!(
+            cabin.setup.choice.as_deref(),
+            Some("gemma-4-31b-it-abliterated-q4_k")
+        );
         assert!(!cabin.open_local_model_link("https://huggingface.co/ggml-org/Qwen3-14B-GGUF"));
         assert!(!cabin.open_local_model_link("grokhub://local-model/not-a-model"));
     }

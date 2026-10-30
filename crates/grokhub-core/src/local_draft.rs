@@ -1,8 +1,7 @@
 //! Speculative decoding: which draft model goes with which model, and when
 //! one is used. The pairs come from the catalog's `drafter` column (Gemma 4
-//! E4B/12B/26B/31B draft with E2B; Muse Glimmer with its official DFlash
-//! drafter); a model whose GGUF carries multi-token-prediction heads drafts
-//! with them instead. Any pair, catalog or community file, must hash to the
+//! E4B/12B/26B/31B draft with E2B); a model whose GGUF carries
+//! multi-token-prediction heads drafts with them instead. Any pair, catalog or community file, must hash to the
 //! same tokenizer. The engine's own `--help` says which flags it has. A
 //! drafter is used only in RampUp or Normal, only when both fit, and only
 //! after the speed test found it accepted at least 40% of its guesses and

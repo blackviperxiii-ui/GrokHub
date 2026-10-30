@@ -707,7 +707,7 @@ async function plan(s, workspace) {
 }
 
 // Settings → Local AI: on Windows smoke, capture Get engine → progress →
-// ready → Muse draft offer (PR proof). Then Manual takes a model file whose
+// ready → Gemma 4 12B draft offer (PR proof). Then Manual takes a model file whose
 // name says its safety training was removed only after the notice is read,
 // and Reset to Auto puts local_ai.json back.
 async function localAi(s, config) {
@@ -811,7 +811,7 @@ async function localAi(s, config) {
       console.log("Get engine absent; shot ready state only");
     }
 
-    // 4) Muse Glimmer → Install and run draft model offer (drafter not on disk).
+    // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).
     await click(s, ".local-ai button.mode-manual");
     const showAll = await wd("POST", `${s}/elements`, {
       using: "css selector",
@@ -824,24 +824,24 @@ async function localAi(s, config) {
         break;
       }
     }
-    const muse = await waitFor("Muse Glimmer in the picker", async () => {
+    const gemma = await waitFor("Gemma 4 12B in the picker", async () => {
       const el = await wd("POST", `${s}/element`, {
         using: "xpath",
-        value: "//li[contains(@class,'local-model')][@aria-label='Muse Glimmer 30B']//input",
+        value: "//li[contains(@class,'local-model')][@aria-label='Gemma 4 12B']//input",
       });
       return el[ELEMENT];
     });
-    await wd("POST", `${s}/element/${muse}/click`, {});
-    const offer = await waitFor("the Muse draft offer", async () => {
+    await wd("POST", `${s}/element/${gemma}/click`, {});
+    const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
       const t = await textOf(s, ".local-ai .local-draft-offer");
-      return /Install and run draft model/i.test(t) && /Muse Glimmer/i.test(t) ? t : null;
+      return /Install and run draft model/i.test(t) && /Gemma 4 E2B/i.test(t) ? t : null;
     });
     await scrollIntoView(s, ".local-ai .local-draft-offer");
-    await shot(s, "settings-local-ai-muse-draft-offer");
-    console.log(`shot Muse draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
+    await shot(s, "settings-local-ai-gemma-draft-offer");
+    console.log(`shot Gemma draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
 
     await click(s, ".local-ai button.reset-local");
-    await waitFor("the reset note after Muse", async () => {
+    await waitFor("the reset note after the draft offer", async () => {
       const t = await textOf(s, ".local-ai .local-note");
       return t === "Back to Auto." ? t : null;
     });

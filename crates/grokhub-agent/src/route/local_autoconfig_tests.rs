@@ -335,19 +335,27 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
     ));
 
     assert_eq!(
-        next_smaller("gemma-4-26b-a4b-it-q4_k_m").map(|m| m.name),
+        next_smaller("gemma-4-26b-a4b-it-abliterated-q4_k").map(|m| m.name),
         Some("Gemma 4 12B")
     );
     assert_eq!(
-        next_smaller("gemma-4-31b-it-q4_k_m").map(|m| m.name),
-        Some("Gemma 4 26B-A4B"),
-        "the optional Muse Glimmer is skipped"
+        next_smaller("gemma-4-31b-it-abliterated-q4_k").map(|m| m.name),
+        Some("Gemma 4 26B-A4B")
     );
-    assert_eq!(next_smaller("gemma-4-e2b-it-q4_k_m"), None);
+    assert_eq!(next_smaller("gemma-4-e2b-it-abliterated-q4_k"), None);
     assert_eq!(
-        catalog_model_for(Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf")).map(|m| m.id),
-        Some("gemma-4-e4b-it-q4_k_m")
+        catalog_model_for(Path::new(
+            "/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"
+        ))
+        .map(|m| m.id),
+        Some("gemma-4-e4b-it-abliterated-q4_k")
     );
+    // A stock Gemma 4 file from the older catalog runs as an unknown model.
+    assert_eq!(
+        catalog_model_for(Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf")),
+        None
+    );
+    assert_eq!(next_smaller("gemma-4-31b-it-q4_k_m"), None);
 }
 
 #[test]

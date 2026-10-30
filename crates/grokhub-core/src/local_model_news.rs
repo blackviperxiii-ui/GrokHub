@@ -2,10 +2,10 @@
 //! curated catalog (`local_picker`) against this PC and, when a bigger model
 //! than the one it runs now is Recommended here, posts a card that opens the
 //! model picker on it, where Download (size shown) is the approval. It also
-//! reads the newest GGUF repos of the official publishers on Hugging Face
-//! (public API, no key) and posts the ones that would fit with headroom as a
-//! link: they are not in the hash-pinned catalog, so they never download from
-//! here.
+//! reads huihui-ai's newest GGUF repos on Hugging Face (public API, no key),
+//! keeps the abliterated builds, like the catalog's, and posts the ones that
+//! would fit with headroom as a link: they are not in the hash-pinned catalog,
+//! so they never download from here.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -19,8 +19,11 @@ pub const FILE_NAME: &str = "pulse-local-models.json";
 pub const SOURCE_NAME: &str = "Local models";
 /// One check a week.
 pub const CHECK_EVERY_MS: u64 = 7 * 24 * 60 * 60 * 1000;
-/// Publishers whose GGUF repos are read: straight quants of official weights.
-pub const PUBLISHERS: [&str; 2] = ["ggml-org", "lmstudio-community"];
+/// Publishers whose GGUF repos are read: the catalog's abliterated builds' own.
+pub const PUBLISHERS: [&str; 1] = ["huihui-ai"];
+/// A release is linked only when its repo name says it is abliterated, so every
+/// local model the app names stays an abliterated build.
+const REQUIRED_WORD: &str = "abliterated";
 /// Repos read per publisher, newest first.
 pub const REPOS_PER_PUBLISHER: usize = 20;
 /// Release links one check posts before the feedback score moves it.
@@ -33,18 +36,9 @@ pub const HEADROOM_PERCENT: u64 = 85;
 const Q4_MB_PER_B: f64 = 606.0;
 /// KV cache and runtime overhead on top of the weights.
 const RUN_OVERHEAD_MB: u64 = 1_536;
-/// Repos that are not a chat model, or not the official weights.
-const SKIP_WORDS: [&str; 10] = [
-    "abliterated",
-    "uncensored",
-    "embed",
-    "rerank",
-    "lora",
-    "whisper",
-    "tts",
-    "draft",
-    "mmproj",
-    "merge",
+/// Repos that are not a chat model, or not one model's weights.
+const SKIP_WORDS: [&str; 8] = [
+    "embed", "rerank", "lora", "whisper", "tts", "draft", "mmproj", "merge",
 ];
 
 /// The weekly check's memory.
@@ -212,7 +206,7 @@ pub fn releases(p: &Profile, installed_run_mb: u64, repos: &[String]) -> Vec<Sug
         .filter(|repo| !catalog_repos.contains(repo.as_str()))
         .filter(|repo| {
             let low = repo.to_ascii_lowercase();
-            !SKIP_WORDS.iter().any(|w| low.contains(w))
+            low.contains(REQUIRED_WORD) && !SKIP_WORDS.iter().any(|w| low.contains(w))
         })
         .filter_map(|repo| {
             let run_mb = est_run_mb(params_b(repo)?);
@@ -382,7 +376,12 @@ mod tests {
 
     #[test]
     fn a_24_gb_gpu_running_the_12b_is_offered_the_31b() {
-        let up = upgrade(&gpu(24_576), "gemma-4-12b-it-q4_k_m", &BenchCache::new()).unwrap();
+        let up = upgrade(
+            &gpu(24_576),
+            "gemma-4-12b-it-abliterated-q4_k",
+            &BenchCache::new(),
+        )
+        .unwrap();
         assert_eq!(up.title(), "Gemma 4 31B fits this PC");
         assert_eq!(
             up.body(),
@@ -393,12 +392,12 @@ mod tests {
         assert_eq!(
             card.action,
             Some(crate::UpdateAction::DeepLink {
-                href: "grokhub://local-model/gemma-4-31b-it-q4_k_m".into()
+                href: "grokhub://local-model/gemma-4-31b-it-abliterated-q4_k".into()
             })
         );
         assert_eq!(
-            picker_link_id("grokhub://local-model/gemma-4-31b-it-q4_k_m"),
-            Some("gemma-4-31b-it-q4_k_m")
+            picker_link_id("grokhub://local-model/gemma-4-31b-it-abliterated-q4_k"),
+            Some("gemma-4-31b-it-abliterated-q4_k")
         );
         assert_eq!(picker_link_id("grokhub://local-model/not-a-model"), None);
     }
@@ -407,12 +406,20 @@ mod tests {
     fn no_upgrade_when_nothing_bigger_fits_or_nothing_is_installed() {
         // 8 GB: the 12B and up need more GPU memory, the E4B is already running.
         assert_eq!(
-            upgrade(&gpu(8_192), "gemma-4-e4b-it-q4_k_m", &BenchCache::new()),
+            upgrade(
+                &gpu(8_192),
+                "gemma-4-e4b-it-abliterated-q4_k",
+                &BenchCache::new()
+            ),
             None
         );
         // Already on the biggest.
         assert_eq!(
-            upgrade(&gpu(24_576), "gemma-4-31b-it-q4_k_m", &BenchCache::new()),
+            upgrade(
+                &gpu(24_576),
+                "gemma-4-31b-it-abliterated-q4_k",
+                &BenchCache::new()
+            ),
             None
         );
         assert_eq!(upgrade(&gpu(24_576), "unknown", &BenchCache::new()), None);
@@ -434,18 +441,22 @@ mod tests {
     #[test]
     fn releases_that_fit_with_headroom_and_beat_the_current_one_only() {
         let read = repos(&[
-            "ggml-org/Qwen3-14B-GGUF",
-            "ggml-org/Qwen3-32B-GGUF",
-            "ggml-org/Qwen3-4B-GGUF",
-            "lmstudio-community/Llama-3.3-8B-abliterated-GGUF",
-            "lmstudio-community/gemma-4-31B-it-GGUF",
-            "ggml-org/embeddinggemma-300M-GGUF",
-            "ggml-org/no-size-GGUF",
+            "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF",
+            "huihui-ai/Huihui-Qwen3-32B-abliterated-GGUF",
+            "huihui-ai/Huihui-Qwen3-4B-abliterated-GGUF",
+            "huihui-ai/Qwen3-14B-GGUF",
+            "huihui-ai/Huihui-gemma-4-31B-it-qat-q4_0-unquantized-abliterated-GGUF",
+            "huihui-ai/Huihui-embeddinggemma-300M-abliterated-GGUF",
+            "huihui-ai/no-size-abliterated-GGUF",
         ]);
         // 16 GB GPU running the E4B (5.9 GB).
         let got = releases(&gpu(16_384), 5_900, &read);
         let names: Vec<String> = got.iter().map(Suggestion::title).collect();
-        assert_eq!(names, vec!["New on Hugging Face: Qwen3-14B-GGUF"]);
+        assert_eq!(
+            names,
+            vec!["New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF"],
+            "too big, too small, not abliterated, in the catalog, not a chat model, no size"
+        );
         assert_eq!(
             got[0].body(),
             "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 35 tok/s here like Gemma 4 12B. Not in Loadout's checked catalog yet, so this only links it."
@@ -453,10 +464,15 @@ mod tests {
         let card = got[0].card(9);
         assert_eq!(
             card.citations,
-            vec!["https://huggingface.co/ggml-org/Qwen3-14B-GGUF"]
+            vec!["https://huggingface.co/huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"]
         );
         assert_eq!(card.action, None, "a release never downloads from Pulse");
         assert!(!is_upgrade_card(&card));
+        assert_eq!(PUBLISHERS, ["huihui-ai"]);
+        assert_eq!(
+            releases_url(PUBLISHERS[0]),
+            "https://huggingface.co/api/models?author=huihui-ai&search=GGUF&sort=createdAt&direction=-1&limit=20"
+        );
     }
 
     #[test]
@@ -472,7 +488,7 @@ mod tests {
     #[test]
     fn the_first_check_only_records_releases_and_each_posts_once() {
         let p = gpu(16_384);
-        let read = repos(&["ggml-org/Qwen3-14B-GGUF"]);
+        let read = repos(&["huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"]);
         let mut t = Tracker {
             on: true,
             ..Default::default()
@@ -480,11 +496,23 @@ mod tests {
         let first = t.check(None, releases(&p, 5_900, &read), &read, 2, 10);
         assert!(first.is_empty(), "a backlog never posts");
         assert!(t.seeded);
-        let newer = repos(&["ggml-org/Qwen3-14B-GGUF", "ggml-org/Phi-5-12B-GGUF"]);
+        let newer = repos(&[
+            "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF",
+            "huihui-ai/Huihui-Phi-5-12B-abliterated-GGUF",
+        ]);
         let second = t.check(None, releases(&p, 5_900, &newer), &newer, 2, 20);
         let names: Vec<String> = second.iter().map(Suggestion::title).collect();
-        assert_eq!(names, vec!["New on Hugging Face: Phi-5-12B-GGUF"]);
-        let up = || upgrade(&gpu(24_576), "gemma-4-12b-it-q4_k_m", &BenchCache::new());
+        assert_eq!(
+            names,
+            vec!["New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF"]
+        );
+        let up = || {
+            upgrade(
+                &gpu(24_576),
+                "gemma-4-12b-it-abliterated-q4_k",
+                &BenchCache::new(),
+            )
+        };
         assert_eq!(t.check(up(), Vec::new(), &[], 2, 30).len(), 1);
         assert!(t.check(up(), Vec::new(), &[], 2, 40).is_empty());
         assert!(!t.due(40));
