@@ -21,18 +21,18 @@ pub(super) fn recap_at(shown: &[ChatView], i: usize) -> Option<(ChatView, Recap,
         .rposition(|v| v.kind == ChatKind::User)
         .map_or(0, |u| u + 1);
     // A Do all summary sums up the batch, so its steps are every fix turn's.
-    let do_all = |u: usize| shown[u].body.starts_with(&format!("{DO_ALL} "));
-    if turn_start > 0
-        && shown[turn_start - 1]
-            .body
-            .starts_with(&format!("{DO_ALL} summary"))
-    {
+    // It stops at this batch's first fix, so an earlier batch never joins in.
+    let summary = |u: usize| shown[u].body.starts_with(&format!("{DO_ALL} summary"));
+    if turn_start > 0 && summary(turn_start - 1) {
         while let Some(u) = shown[..turn_start - 1]
             .iter()
             .rposition(|v| v.kind == ChatKind::User)
-            .filter(|&u| do_all(u))
+            .filter(|&u| shown[u].body.starts_with(&format!("{DO_ALL} ")) && !summary(u))
         {
             turn_start = u + 1;
+            if shown[u].body.starts_with(&format!("{DO_ALL} 1/")) {
+                break;
+            }
         }
     }
     let steps: Vec<ToolRow> = shown[turn_start..i]
@@ -259,6 +259,31 @@ mod tests {
         assert_eq!(reply.body, "");
         assert_eq!(recap_tally(&recap), "1 of 2 done");
         assert_eq!(titles(&steps), ["Edit resolved.conf", "Run pacman -S bind"]);
+    }
+
+    #[test]
+    fn a_second_do_all_batch_recaps_only_its_own_fixes() {
+        let batch = |n: &str, tool: &str| {
+            vec![
+                view(ChatKind::User, &format!("Do all 1/1 · Fix {n}: Fix it.")),
+                tools(&[("completed", tool)]),
+                view(ChatKind::Assistant, "Fixed."),
+                view(
+                    ChatKind::User,
+                    "Do all summary · End with the Finished recap",
+                ),
+                view(ChatKind::Assistant, "Finished\n- Done: Fixed"),
+            ]
+        };
+        let shown = [
+            batch("disk", "Clean cache"),
+            batch("port", "Edit resolved.conf"),
+        ]
+        .concat();
+        let (_, _, steps) = recap_at(&shown, 9).expect("the second batch did work");
+        assert_eq!(titles(&steps), ["Edit resolved.conf"]);
+        let (_, _, steps) = recap_at(&shown, 4).expect("the first batch did work");
+        assert_eq!(titles(&steps), ["Clean cache"]);
     }
 
     fn painted(recap: &Recap, steps: &[ToolRow]) -> (Vec<String>, Vec<egui::Stroke>) {
