@@ -10,6 +10,7 @@ mod broker;
 mod capture;
 #[cfg(target_os = "linux")]
 mod fallback;
+pub mod game_guard;
 mod harness_gate;
 pub mod host;
 mod keys;
@@ -105,6 +106,14 @@ pub fn run_cua_stdio() -> i32 {
             continue;
         }
         let cfg = crate::host::settings();
+        // The Cua driver is desktop control end to end: every call waits
+        // while the user is gaming or an anti-cheat runs.
+        if cfg.desktop_control {
+            if let Some(reply) = guard_refusal_line(&line, game_guard::current()) {
+                emit(&reply);
+                continue;
+            }
+        }
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
         let gate = hx::CuaGate {
             enabled: cfg.desktop_control,
@@ -116,6 +125,14 @@ pub fn run_cua_stdio() -> i32 {
         }
     }
     0
+}
+
+/// The refusal for a `tools/call` line the game guard holds, or `None` for
+/// any other line or a clear guard.
+fn guard_refusal_line(line: &str, guard: game_guard::GameGuard) -> Option<String> {
+    let call = harness_gate::parse_call(line)?;
+    let msg = guard.blocks(game_guard::Guarded::DesktopControl)?;
+    Some(harness_gate::refusal_reply(&call.id, &msg))
 }
 
 /// Linux only, the pinned release only, from `cuaDriverPath` or PATH.
@@ -277,11 +294,17 @@ pub(crate) fn publish_capture_backend(label: &str) {
         .unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
 }
 
+/// The Settings note under the desktop switch: the input and capture
+/// routes, plus a game guard line while something is paused. Never blocks.
 pub fn desktop_panel_lines() -> String {
-    grokhub_core::desktop_mcp::desktop_control_status(
+    let routes = grokhub_core::desktop_mcp::desktop_control_status(
         &active_input_label(),
         &active_capture_label(),
-    )
+    );
+    match game_guard::peek().status_line() {
+        Some(line) => format!("{routes}\n{line}"),
+        None => routes,
+    }
 }
 
 fn active_input_label() -> String {
@@ -370,6 +393,10 @@ pub fn request_desktop_test(enabled: bool) -> String {
     if !enabled {
         set_desktop_enabled(false);
         return grokhub_core::desktop_mcp::OFF_MSG.to_string();
+    }
+    // The test moves the pointer on every monitor.
+    if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::DesktopControl) {
+        return msg;
     }
     if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
         note_halt();
@@ -535,6 +562,10 @@ impl DesktopBackend for LiveBackend {
         apps::focus_window(title)
     }
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
+        // Reading every window's title sends each app (the game too) a message.
+        if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::WindowCheck) {
+            return Err(msg);
+        }
         apps::list_windows()
     }
     fn window_geometry(
@@ -557,6 +588,9 @@ impl DesktopBackend for LiveBackend {
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
         crate::host::target_at(x, y)
+    }
+    fn game_guard(&mut self) -> game_guard::GameGuard {
+        game_guard::current()
     }
 }
 
@@ -605,6 +639,10 @@ impl grokhub_agent::DesktopOps for NativeDesktop {
     fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
         let mut hinted = args.clone();
         let mut server = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        // A held call reads no window or control first; `call` refuses it.
+        if server.guard_refusal(name).is_some() {
+            return hinted;
+        }
         harness_gate::add_hints(&mut server, name, &mut hinted);
         hinted
     }
@@ -657,6 +695,9 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
 pub fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
     let mut backend: Option<Box<dyn DesktopBackend>> = None;
     move || {
+        if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::ScreenRecording) {
+            return Err(msg);
+        }
         if backend.is_none() {
             backend = Some(connect_backend()?);
         }
@@ -703,14 +744,19 @@ fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
 
 /// COMPUTER_CMD hands on a [`DesktopBackend`]: click, double-click, move,
 /// type, key and scroll. `None` for the ops that read the screen instead
-/// (act, wait_for, tabs, cursor, move to a monitor).
+/// (act, wait_for, tabs, cursor, move to a monitor). Nothing is sent while
+/// `guard` holds desktop control.
 #[cfg(any(windows, test))]
 pub(crate) fn drive_hands<B: DesktopBackend>(
     b: &mut B,
     op: &grokhub_core::recipe::ComputerOp,
+    guard: game_guard::GameGuard,
 ) -> Option<Result<String, String>> {
     use grokhub_core::desktop_mcp::{parse_key_combo, MouseButton};
     use grokhub_core::recipe::ComputerOp;
+    if let Some(msg) = guard.blocks(game_guard::Guarded::DesktopControl) {
+        return Some(Err(msg));
+    }
     fn click<B: DesktopBackend>(b: &mut B, x: i32, y: i32, times: u8) -> Result<(), String> {
         b.move_abs(x, y)?;
         for _ in 0..times {
@@ -758,7 +804,11 @@ pub fn windows_primary_frame() -> Result<image::RgbaImage, String> {
 /// backend, since xdotool and ydotool are Linux tools.
 #[cfg(windows)]
 pub fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
-    drive_hands(&mut windows::WindowsBackend::new(), op)
+    drive_hands(
+        &mut windows::WindowsBackend::new(),
+        op,
+        game_guard::current(),
+    )
 }
 
 #[cfg(test)]
@@ -888,6 +938,11 @@ mod tests {
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
     }
+    const CLEAR: game_guard::GameGuard = game_guard::GameGuard {
+        anticheat: None,
+        gaming: false,
+    };
+
     /// Records what COMPUTER_CMD hands sent to the backend.
     #[derive(Default)]
     struct Hands {
@@ -938,7 +993,7 @@ mod tests {
     fn computer_cmd_hands_drive_the_desktop_backend() {
         use grokhub_core::recipe::ComputerOp;
         let mut b = Hands::default();
-        let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 });
+        let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 }, CLEAR);
         assert_eq!(got, Some(Ok("double-clicked 40,7".to_string())));
         assert_eq!(
             b.sent,
@@ -951,7 +1006,8 @@ mod tests {
                 &mut b,
                 &ComputerOp::Key {
                     name: "ctrl+l".into()
-                }
+                },
+                CLEAR
             ),
             Some(Ok("key ctrl+l".to_string()))
         );
@@ -960,12 +1016,13 @@ mod tests {
                 &mut b,
                 &ComputerOp::Type {
                     text: "héllo".into()
-                }
+                },
+                CLEAR
             ),
             Some(Ok("typed 5 chars".to_string()))
         );
         assert_eq!(
-            drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }),
+            drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }, CLEAR),
             Some(Ok("scrolled 3".to_string()))
         );
         assert_eq!(
@@ -978,15 +1035,76 @@ mod tests {
             &mut b,
             &ComputerOp::Key {
                 name: "nosuchkey".into()
-            }
+            },
+            CLEAR
         )
         .unwrap()
         .is_err());
         assert_eq!(
-            drive_hands(&mut b, &ComputerOp::Cursor),
+            drive_hands(&mut b, &ComputerOp::Cursor, CLEAR),
             None,
             "reads stay on the shared path"
         );
         assert!(b.sent.is_empty());
+    }
+
+    #[test]
+    fn computer_cmd_hands_send_nothing_while_the_game_guard_holds() {
+        use grokhub_core::recipe::ComputerOp;
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+        };
+        let faceit = game_guard::GameGuard {
+            anticheat: Some("FACEIT"),
+            gaming: true,
+        };
+        let ops = [
+            ComputerOp::Click { x: 1, y: 2 },
+            ComputerOp::DoubleClick { x: 1, y: 2 },
+            ComputerOp::Move { x: 1, y: 2 },
+            ComputerOp::Type { text: "hi".into() },
+            ComputerOp::Key {
+                name: "ctrl+l".into(),
+            },
+            ComputerOp::Scroll { dy: 3 },
+        ];
+        for op in &ops {
+            let mut b = Hands::default();
+            assert_eq!(
+                drive_hands(&mut b, op, gaming),
+                Some(Err("Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())),
+                "{op:?}"
+            );
+            assert_eq!(
+                drive_hands(&mut b, op, faceit),
+                Some(Err("Desktop control is blocked while FACEIT is running so it doesn't flag this PC.".to_string())),
+                "{op:?}"
+            );
+            assert!(b.sent.is_empty(), "{op:?} reached SendInput");
+        }
+    }
+
+    #[test]
+    fn a_held_cua_call_is_refused_and_other_lines_pass() {
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+        };
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"click","arguments":{"x":1,"y":1}}}"#;
+        let reply: serde_json::Value =
+            serde_json::from_str(&guard_refusal_line(call, gaming).expect("refused")).unwrap();
+        assert_eq!(reply["id"], 4);
+        assert_eq!(reply["result"]["isError"], true);
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC."
+        );
+        assert_eq!(
+            guard_refusal_line(call, game_guard::GameGuard::default()),
+            None
+        );
+        let list = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
+        assert_eq!(guard_refusal_line(list, gaming), None);
     }
 }
