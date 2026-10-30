@@ -11,7 +11,7 @@ Repo sources: `local_governor` + `app/local_signals.rs` (thermal, memory, power,
 | # | Module | Purpose → what it shows | Sizes | Data | Interactions | Empty / offline |
 |---|---|---|---|---|---|---|
 | **System & Performance** |
-| 1 | PC Loadout | Health at a glance: score %, GPU driver, GPU/CPU temp, storage, RAM, startup apps, Run Tune-up/Details | L M (6 tiles) · S (score + hottest temp + top flag) | PARTIAL: memory/thermal/power from local_governor, disk from system_state; °C, driver, startup apps NEW | Tile → Details; Run Tune-up starts tune-up playbook through normal approval gates | "Sensors unavailable" tiles greyed, tune-up still offered |
+| 1 | PC Loadout | Health at a glance: RAM in use ("RAM N% used"), GPU driver, GPU/CPU temp, storage, RAM, startup apps, Run Tune-up/Details | L M (6 tiles) · S (hottest temp + top flag) | PARTIAL: memory/thermal/power from local_governor, disk from system_state; °C, driver, startup apps NEW | Tile → Details; Run Tune-up starts tune-up playbook through normal approval gates | "Sensors unavailable" tiles greyed, tune-up still offered |
 | 2 | Speeds | Down/up Mbps, ping, jitter, game-server ping, loss | L (4 tiles+rows+Run test) · M (2 tiles+ping/loss) · S (ping + ↓↑) | NEW (speed test + ping probe) | Run test; tap → history | "Not tested yet · Run test"; offline: "No connection" red |
 | 3 | Frame Rate | Live avg FPS, 1% low, sparkline | M · S | NEW (PresentMon/overlay hook) | Tap → per-game history | "Start a game to see FPS" |
 | 4 | Storage | Free per drive, big caches | M · S | EXISTS (system_state disk) | "Free up storage" chip → Chat | Single "—" bar if read fails |
