@@ -248,17 +248,17 @@ fn is_cloud_synced(dir: &Path, sync_roots: &[PathBuf]) -> bool {
 }
 
 /// Where a diagnostics zip goes: the Desktop, unless it syncs to the cloud,
-/// then Downloads, then the home folder, so a save never uploads itself.
+/// then Downloads, then the home folder. `None` when all three sync, so a
+/// save never uploads itself.
 fn pick_diagnostics_dir(
     desktop: PathBuf,
     downloads: PathBuf,
     home: PathBuf,
     sync_roots: &[PathBuf],
-) -> PathBuf {
-    [desktop, downloads]
+) -> Option<PathBuf> {
+    [desktop, downloads, home]
         .into_iter()
         .find(|d| !is_cloud_synced(d, sync_roots))
-        .unwrap_or(home)
 }
 
 /// `loadout-diagnostics-YYYYMMDD-HHMMSS.zip` from a wall-clock stamp.
@@ -273,7 +273,9 @@ pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
     let home = user_home().ok_or_else(missing)?;
     let desktop = desktop_dir().ok_or_else(missing)?;
     let downloads = downloads_dir().ok_or_else(missing)?;
-    let dir = pick_diagnostics_dir(desktop, downloads, home, &sync_roots_from_env());
+    let dir = pick_diagnostics_dir(desktop, downloads, home, &sync_roots_from_env()).ok_or_else(
+        || "Not saved: your Desktop, Downloads and home folder all sync to the cloud".to_string(),
+    )?;
     Ok(dir.join(diagnostics_zip_name(at)))
 }
 
@@ -981,14 +983,13 @@ mod tests {
 
     /// A localized or moved Desktop from `user-dirs.dirs` wins over
     /// `~/Desktop`; without one the bundle goes to `~/Desktop`.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_cloud_synced_desktop_falls_back_to_a_local_folder() {
         let home = PathBuf::from("/home/user");
         let downloads = home.join("Downloads");
         assert_eq!(
             pick_diagnostics_dir(home.join("Desktop"), downloads.clone(), home.clone(), &[]),
-            home.join("Desktop"),
+            Some(home.join("Desktop")),
             "a plain local Desktop keeps the zip"
         );
         assert_eq!(
@@ -998,7 +999,7 @@ mod tests {
                 home.clone(),
                 &[]
             ),
-            downloads,
+            Some(downloads),
             "a OneDrive-style Desktop sends it to Downloads"
         );
         let corp = PathBuf::from("/home/user/Work Sync");
@@ -1009,8 +1010,19 @@ mod tests {
                 home.clone(),
                 std::slice::from_ref(&corp)
             ),
-            home,
+            Some(home.clone()),
             "a sync root named in the environment counts, and home is the last resort"
+        );
+        let synced_home = PathBuf::from("/home/user/OneDrive");
+        assert_eq!(
+            pick_diagnostics_dir(
+                synced_home.join("Desktop"),
+                synced_home.join("Downloads"),
+                synced_home.clone(),
+                &[]
+            ),
+            None,
+            "when every folder syncs, nothing is written"
         );
         for synced in [
             "/home/user/OneDrive - Contoso/Desktop",
@@ -1046,6 +1058,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn desktop_follows_xdg_user_dirs() {
         let home = std::env::temp_dir().join(format!("gh-diag-xdg-{}", std::process::id()));

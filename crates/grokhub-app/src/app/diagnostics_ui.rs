@@ -61,7 +61,7 @@ impl Cabin {
             if crate::cards::settings_action(
                 ui,
                 "Save diagnostics for this chat",
-                "Writes loadout-diagnostics-DATE-TIME.zip to your Desktop, or to Downloads when the Desktop syncs to the cloud.",
+                "Writes loadout-diagnostics-DATE-TIME.zip to your Desktop, or to a local folder when the Desktop syncs to the cloud.",
                 "Save",
             ) {
                 self.save_chat_diagnostics(None);
