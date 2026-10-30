@@ -130,7 +130,7 @@ Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -pe
 Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
 # Nyx's corner box in each mode, beside the approved pictures in
 # docs/design/loadout-baseline-v1/nyx-modes/.
-foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
+foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper', 'raunchy') {
     Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
     Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
 }
