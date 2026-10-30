@@ -120,7 +120,7 @@ impl NetLog {
             }
             Some(ms) => {
                 self.fails = 0;
-                if ms >= SLOW_MS {
+                if ms > SLOW_MS {
                     self.slow.push(Slow {
                         at_ms: now_ms,
                         latency_ms: ms,
@@ -326,6 +326,21 @@ mod tests {
             vec![Slow {
                 at_ms: at,
                 latency_ms: 450
+            }]
+        );
+    }
+
+    #[test]
+    fn a_slow_minute_is_strictly_slower_than_the_threshold() {
+        let mut log = NetLog::default();
+        log.note(Some(SLOW_MS), DAY0, 0);
+        assert!(log.slow.is_empty(), "exactly {SLOW_MS} ms is not slow");
+        log.note(Some(SLOW_MS + 1), DAY0 + MIN, 0);
+        assert_eq!(
+            log.slow,
+            vec![Slow {
+                at_ms: DAY0 + MIN,
+                latency_ms: SLOW_MS + 1
             }]
         );
     }

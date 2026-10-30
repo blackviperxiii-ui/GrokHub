@@ -52,10 +52,30 @@ fn log_dir() -> std::path::PathBuf {
     crate::config::config_dir()
 }
 
-/// Where the CSV export goes: the user's Downloads folder.
+/// Where the CSV export goes: the user's Downloads folder, under USERPROFILE
+/// on Windows (a HOME set there can point somewhere else) and HOME elsewhere.
 fn downloads() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    downloads_in(
+        cfg!(windows),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+/// Kept as `OsString` so a home path that is not UTF-8 still works.
+fn downloads_in(
+    windows: bool,
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    let set = |v: Option<std::ffi::OsString>| v.filter(|s| !s.is_empty());
+    let (first, second) = if windows {
+        (userprofile, home)
+    } else {
+        (home, userprofile)
+    };
+    set(first)
+        .or_else(|| set(second))
         .map(std::path::PathBuf::from)
         .unwrap_or_default()
         .join("Downloads")
@@ -123,13 +143,16 @@ impl Cabin {
         let change = self.net_now().note(latency, now, offset_min);
         match change {
             Some(Change::Dropped) => {
-                self.focus.net.note = format!(
+                let line = format!(
                     "Offline since {}: neither public resolver answered.",
                     grokhub_core::pulse_writer::local_hm(
                         self.net_now().outages.last().map_or(now, |o| o.start_ms),
                         offset_min
                     )
                 );
+                // `status_toasts` raises this on every page, not just in Settings.
+                self.status = line.clone();
+                self.focus.net.note = line;
             }
             Some(Change::Restored(minutes)) => {
                 let since = self.net_now().outages.last().map_or(now, |o| o.start_ms);
@@ -259,6 +282,35 @@ mod tests {
     const MIN: u64 = 60_000;
 
     #[test]
+    fn the_csv_goes_to_downloads_under_userprofile_on_windows() {
+        let os = |s: &str| Some(std::ffi::OsString::from(s));
+        assert_eq!(
+            downloads_in(true, os("C:/Users/user/AppData/Local"), os("C:/Users/user")),
+            std::path::PathBuf::from("C:/Users/user").join("Downloads")
+        );
+        assert_eq!(
+            downloads_in(false, os("/home/user"), os("/elsewhere")),
+            std::path::PathBuf::from("/home/user").join("Downloads")
+        );
+        assert_eq!(
+            downloads_in(true, os("C:/Users/user"), os("")),
+            std::path::PathBuf::from("C:/Users/user").join("Downloads"),
+            "an empty USERPROFILE falls back to HOME"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_that_is_not_utf8_still_gets_its_downloads() {
+        use std::os::unix::ffi::OsStringExt;
+        let home = std::ffi::OsString::from_vec(b"/home/us\xffer".to_vec());
+        assert_eq!(
+            downloads_in(false, Some(home.clone()), None),
+            std::path::PathBuf::from(home).join("Downloads")
+        );
+    }
+
+    #[test]
     fn off_sends_nothing() {
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.net_log = false;
@@ -288,6 +340,10 @@ mod tests {
         assert_eq!(
             cabin.focus.net.note,
             "Offline since 02:01: neither public resolver answered."
+        );
+        assert_eq!(
+            cabin.status, "Offline since 02:01: neither public resolver answered.",
+            "a drop shows on Pulse and Chat too"
         );
         at += 4 * MIN;
         cabin.note_probe(Some(30), at, 0);
