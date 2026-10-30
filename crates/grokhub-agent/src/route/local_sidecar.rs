@@ -200,7 +200,7 @@ pub fn is_loopback_host(host: &str) -> bool {
 
 /// Command line for llama-server: host locked to loopback, plus
 /// hardware-aware perf flags from [`super::local_perf`]. The API key never
-/// goes on the command line: [`llama_command`] passes it as `LLAMA_API_KEY`
+/// goes on the command line: `llama_command` passes it as `LLAMA_API_KEY`
 /// in the child's environment, out of the process list.
 pub fn llama_args(model: &Path, host: &str, port: u16) -> Vec<String> {
     llama_args_with_perf(model, host, port, &super::local_perf::current_defaults())
