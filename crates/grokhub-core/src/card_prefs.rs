@@ -160,6 +160,18 @@ fn kind_key(kind: UpdateKind) -> &'static str {
     }
 }
 
+/// Kinds that report what happened rather than suggest something.
+fn is_report(kind: UpdateKind) -> bool {
+    matches!(
+        kind,
+        UpdateKind::Digest
+            | UpdateKind::SelfChange
+            | UpdateKind::AutomationDone
+            | UpdateKind::ScheduleCreated
+            | UpdateKind::DoneForYou
+    )
+}
+
 fn is_stop(word: &str) -> bool {
     STOP.contains(&word)
 }
@@ -346,7 +358,13 @@ pub fn apply_card_event(
     after_open: Option<bool>,
     now: u64,
 ) {
-    let (kind_delta, group_delta, topic_delta) = event_deltas(event, after_open);
+    let (mut kind_delta, group_delta, topic_delta) = event_deltas(event, after_open);
+    // A report (digest, run report, self change) is read where it lands and
+    // closed: that is "seen", not "less of these". Without this the whole kind
+    // sank below zero. Its group and topics still learn.
+    if is_report(card.kind) && matches!(event, CardEvent::Dismissed | CardEvent::Rejected) {
+        kind_delta = Some(Delta::Count);
+    }
     if let Some(delta) = kind_delta {
         bump(&mut prefs.kinds, kind_key(card.kind), delta, now);
     }
@@ -876,6 +894,26 @@ mod tests {
         assert_eq!(down.pos, 0.0);
         assert!((down.neg - 1.0).abs() < 1e-12);
         assert_eq!(down.n, 1);
+    }
+
+    #[test]
+    fn closing_a_report_unread_is_seen_not_less_of_its_kind() {
+        let digest = crate::update_feed::digest_card("digest:week", "Weekly digest", "body", 10);
+        let tip = crate::update_feed::suggestion_card("tip:1", "Try split panes", "body", 10);
+        let mut prefs = CardPrefs::default();
+        for event in [CardEvent::Dismissed, CardEvent::Rejected] {
+            apply_card_event(&mut prefs, &digest, event, Some(false), 10);
+            apply_card_event(&mut prefs, &tip, event, Some(false), 10);
+        }
+        // The digest kind only counts the closes.
+        let kind = weight_of(&prefs.kinds, "digest");
+        assert_eq!((kind.pos, kind.neg, kind.n), (0.0, 0.0, 2));
+        // Its own source still learns the close.
+        let group = weight_of(&prefs.groups, &signal_group(&digest));
+        assert!((group.neg - 4.0).abs() < 1e-12, "{}", group.neg);
+        // A suggestion closed unread is still "fewer of these".
+        let kind = weight_of(&prefs.kinds, "suggestion");
+        assert!((kind.neg - 2.5).abs() < 1e-12, "{}", kind.neg);
     }
 
     #[test]

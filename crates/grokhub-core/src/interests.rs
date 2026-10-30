@@ -387,6 +387,11 @@ impl InterestProfile {
         if t.weight > InterestSource::Chats.start_weight() {
             return true;
         }
+        // Dismissed under where it started: chat evidence alone no longer
+        // brings it back, so a skipped topic stays skipped.
+        if t.weight < t.source.start_weight() {
+            return false;
+        }
         self.graph
             .evidence
             .iter()
@@ -889,7 +894,7 @@ pub fn topic_searchable(topic: &str) -> bool {
     if lower.contains(':') {
         return false;
     }
-    if CABIN_TOPIC_BLOCK.contains(&lower.as_str()) {
+    if CABIN_TOPIC_BLOCK.contains(&lower.as_str()) || is_small_talk(&lower) {
         return false;
     }
     let words: Vec<&str> = lower.split_whitespace().collect();
@@ -973,6 +978,39 @@ pub fn topics_in_memory(raw: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Greetings and check-ins: a chat titled "How are you" is small talk, not
+/// something to follow.
+const SMALL_TALK: &[&str] = &[
+    "how are you",
+    "how are you doing",
+    "how's it going",
+    "hows it going",
+    "how is it going",
+    "how was your day",
+    "what's up",
+    "whats up",
+    "sup",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "good night",
+    "hello there",
+    "hey there",
+    "hi there",
+    "thank you",
+    "thanks a lot",
+    "nice to meet you",
+    "how have you been",
+];
+
+/// `lower` (already lowercased) is a greeting or check-in, ignoring trailing
+/// punctuation and a name after a comma ("how are you, grok").
+fn is_small_talk(lower: &str) -> bool {
+    let head = lower.split(',').next().unwrap_or(lower);
+    let head = head.trim().trim_end_matches(['?', '!', '.']).trim();
+    SMALL_TALK.contains(&head)
 }
 
 /// Chat / Settings chrome titles that are never interests.

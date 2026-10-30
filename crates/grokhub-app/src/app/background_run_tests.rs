@@ -805,7 +805,8 @@ fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
         cabin.card_prefs.groups["run:cold-src"].neg, 3.0,
         "closed unopened"
     );
-    assert_eq!(cabin.card_prefs.kinds["automation_done"].neg, 1.5);
+    // A run report closed unread is "seen": its group learns, its kind doesn't sink.
+    assert_eq!(cabin.card_prefs.kinds["automation_done"].neg, 0.0);
     let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
     let events: Vec<String> = signals
         .lines()
