@@ -57,17 +57,25 @@ fn log_dir() -> std::path::PathBuf {
 fn downloads() -> std::path::PathBuf {
     downloads_in(
         cfg!(windows),
-        std::env::var("HOME").ok().as_deref(),
-        std::env::var("USERPROFILE").ok().as_deref(),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
     )
 }
 
+/// Kept as `OsString` so a home path that is not UTF-8 still works.
 fn downloads_in(
     windows: bool,
-    home: Option<&str>,
-    userprofile: Option<&str>,
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
 ) -> std::path::PathBuf {
-    grokhub_core::session_home(windows, home, userprofile)
+    let set = |v: Option<std::ffi::OsString>| v.filter(|s| !s.is_empty());
+    let (first, second) = if windows {
+        (userprofile, home)
+    } else {
+        (home, userprofile)
+    };
+    set(first)
+        .or_else(|| set(second))
         .map(std::path::PathBuf::from)
         .unwrap_or_default()
         .join("Downloads")
@@ -142,7 +150,7 @@ impl Cabin {
                         offset_min
                     )
                 );
-                // The status bar shows on every page, not just in Settings.
+                // `status_toasts` raises this on every page, not just in Settings.
                 self.status = line.clone();
                 self.focus.net.note = line;
             }
@@ -275,21 +283,30 @@ mod tests {
 
     #[test]
     fn the_csv_goes_to_downloads_under_userprofile_on_windows() {
+        let os = |s: &str| Some(std::ffi::OsString::from(s));
         assert_eq!(
-            downloads_in(
-                true,
-                Some("C:/Users/user/AppData/Local"),
-                Some("C:/Users/user")
-            ),
+            downloads_in(true, os("C:/Users/user/AppData/Local"), os("C:/Users/user")),
             std::path::PathBuf::from("C:/Users/user").join("Downloads")
         );
         assert_eq!(
-            downloads_in(false, Some("/home/user"), Some("/elsewhere")),
+            downloads_in(false, os("/home/user"), os("/elsewhere")),
             std::path::PathBuf::from("/home/user").join("Downloads")
         );
         assert_eq!(
-            downloads_in(true, Some("C:/Users/user"), None),
-            std::path::PathBuf::from("C:/Users/user").join("Downloads")
+            downloads_in(true, os("C:/Users/user"), os("")),
+            std::path::PathBuf::from("C:/Users/user").join("Downloads"),
+            "an empty USERPROFILE falls back to HOME"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_that_is_not_utf8_still_gets_its_downloads() {
+        use std::os::unix::ffi::OsStringExt;
+        let home = std::ffi::OsString::from_vec(b"/home/us\xffer".to_vec());
+        assert_eq!(
+            downloads_in(false, Some(home.clone()), None),
+            std::path::PathBuf::from(home).join("Downloads")
         );
     }
 
