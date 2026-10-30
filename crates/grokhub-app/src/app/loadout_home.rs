@@ -586,6 +586,60 @@ fn cover_uv(tex: [usize; 2], frame: egui::Vec2) -> egui::Rect {
     egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v))
 }
 
+/// `GROKHUB_DECK_PEDESTAL=1` shows the desktop companion's holo pedestal in
+/// the corner box for the deck screenshots, with the companion cutout
+/// standing on it, so each theme's pedestal can be checked before the
+/// desktop window exists. Deck shots only.
+fn pedestal_preview_pinned() -> bool {
+    deck_switch_is("GROKHUB_DECK_PEDESTAL", "1")
+}
+
+/// The full companion cutout (`brand/companion.png`, transparent
+/// background) as a texture.
+pub(super) fn companion_cutout(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("loadout-companion-cutout");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(tex);
+    }
+    let rgba = image::load_from_memory(COMPANION_PNG).ok()?.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        "loadout-companion-cutout",
+        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Where a cutout of `tex_size` pixels stands on the pedestal in `frame`:
+/// scaled to fit the frame's height above the disc, feet on the disc.
+pub(super) fn cutout_rect(frame: egui::Rect, tex_size: [usize; 2]) -> egui::Rect {
+    let l = crate::pedestal::layout(frame);
+    let (tw, th) = (tex_size[0].max(1) as f32, tex_size[1].max(1) as f32);
+    let h = (l.feet.y - frame.top() - 8.0).max(1.0);
+    let w = (h * tw / th).min(frame.width());
+    let h = w * th / tw;
+    egui::Rect::from_min_size(
+        egui::pos2(l.feet.x - w * 0.5, l.feet.y - h),
+        egui::vec2(w, h),
+    )
+}
+
+fn paint_pedestal_preview(ui: &mut egui::Ui, frame: egui::Rect) {
+    let still = crate::motion::reduced_motion(ui);
+    let t = ui.input(|i| i.time);
+    let colors = crate::pedestal::colors(None);
+    let painter = ui.painter().with_clip_rect(frame);
+    crate::pedestal::paint(&painter, frame, t, still, &colors);
+    if let Some(tex) = companion_cutout(ui.ctx()) {
+        egui::Image::from_texture(&tex).paint_at(ui, cutout_rect(frame, tex.size()));
+    }
+    if let Some(wait) = crate::pedestal::repaint_after(still) {
+        ui.ctx().request_repaint_after(wait);
+    }
+}
+
 /// Circular face crop of the companion for Hangout bubbles and the chat header.
 pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let id = egui::Id::new("loadout-companion-face");
@@ -1256,7 +1310,9 @@ impl Cabin {
             let tex = look
                 .and_then(|look| nyx_wardrobe::dock_pose(ui.ctx(), &look, activity))
                 .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
-            if let Some(tex) = tex {
+            if pedestal_preview_pinned() {
+                paint_pedestal_preview(ui, art);
+            } else if let Some(tex) = tex {
                 egui::Image::from_texture(&tex)
                     .uv(cover_uv(tex.size(), art.size()))
                     .corner_radius(crate::theme::RADIUS_SM)
@@ -1715,6 +1771,53 @@ mod tests {
     fn companion_art_decodes() {
         let img = image::load_from_memory(COMPANION_PNG).expect("brand/companion.png decodes");
         assert!(img.width() > 100 && img.height() > 100);
+    }
+
+    #[test]
+    fn the_pedestal_preview_stands_the_cutout_on_the_disc() {
+        let frame = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(276.0, 215.0));
+        let r = cutout_rect(frame, [351, 440]);
+        let l = crate::pedestal::layout(frame);
+        assert!((r.bottom() - l.feet.y).abs() < 1e-3, "feet on the disc");
+        assert!((r.center().x - l.feet.x).abs() < 1e-3, "centred");
+        assert!(
+            (r.top() - 8.0).abs() < 1e-3,
+            "fills the height above the disc"
+        );
+        assert!(
+            (r.width() / r.height() - 351.0 / 440.0).abs() < 1e-4,
+            "no stretch"
+        );
+        // A wide, short frame is limited by width instead.
+        let wide = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 400.0));
+        let r = cutout_rect(wide, [351, 440]);
+        assert_eq!(r.width(), 100.0);
+        assert!(r.top() > 8.0);
+    }
+
+    #[test]
+    fn the_pedestal_pin_is_a_deck_switch() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_pedestal = std::env::var("GROKHUB_DECK_PEDESTAL").ok();
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        std::env::remove_var("GROKHUB_DECK_PEDESTAL");
+        assert!(!pedestal_preview_pinned());
+        std::env::set_var("GROKHUB_DECK_PEDESTAL", "1");
+        assert!(
+            !pedestal_preview_pinned(),
+            "nothing without GROKHUB_DECK_SHOT"
+        );
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        assert!(pedestal_preview_pinned());
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_pedestal {
+            Some(v) => std::env::set_var("GROKHUB_DECK_PEDESTAL", v),
+            None => std::env::remove_var("GROKHUB_DECK_PEDESTAL"),
+        }
     }
 
     #[test]
