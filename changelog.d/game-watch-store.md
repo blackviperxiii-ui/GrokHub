@@ -1,0 +1,1 @@
+- The game watcher now keeps each finished match on disk for 30 days (up to 200 per game), can answer questions about a match from a short summary using the local model first, and Settings says which game it supports first based on your most played Steam game.
