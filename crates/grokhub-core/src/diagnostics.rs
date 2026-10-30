@@ -1,7 +1,8 @@
 //! One-click diagnostics. No secrets.
 //!
 //! Labs Diagnostics mode exports a chat/session debug bundle to the Desktop
-//! as `loadout-diagnostics-DATE-TIME.zip` (JSON + readable Markdown). Paths
+//! (Downloads when the Desktop syncs to the cloud) as
+//! `loadout-diagnostics-DATE-TIME.zip` (JSON + readable Markdown). Paths
 //! under the user's home become `/home/user`; tokens, emails, and credential-
 //! like strings are redacted before anything is written.
 
@@ -220,14 +221,75 @@ pub fn desktop_dir() -> Option<PathBuf> {
     Some(platform.unwrap_or_else(|| home.join("Desktop")))
 }
 
+/// The user's Downloads folder, found the same way as [`desktop_dir`].
+fn downloads_dir() -> Option<PathBuf> {
+    let home = user_home()?;
+    let platform = dirs::download_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
+        .filter(|d| d != &home);
+    Some(platform.unwrap_or_else(|| home.join("Downloads")))
+}
+
+/// Folders a sync client uploads: the OneDrive roots Windows names in the
+/// environment.
+fn sync_roots_from_env() -> Vec<PathBuf> {
+    ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// True when `dir` sits inside a cloud-synced folder: one of `sync_roots`,
+/// or a path part named like a OneDrive, Dropbox, Google Drive or iCloud
+/// Drive sync root.
+fn is_cloud_synced(dir: &Path, sync_roots: &[PathBuf]) -> bool {
+    if sync_roots.iter().any(|root| dir.starts_with(root)) {
+        return true;
+    }
+    dir.components().any(|part| {
+        let name = part.as_os_str().to_string_lossy().to_ascii_lowercase();
+        name == "onedrive"
+            || name.starts_with("onedrive - ")
+            || name == "dropbox"
+            || name.starts_with("dropbox (")
+            || name == "google drive"
+            || name == "my drive"
+            || name == "icloud drive"
+            || name == "mobile documents"
+    })
+}
+
+/// Where a diagnostics zip goes: the Desktop, unless it syncs to the cloud,
+/// then Downloads, then the home folder. `None` when all three sync, so a
+/// save never uploads itself.
+fn pick_diagnostics_dir(
+    desktop: PathBuf,
+    downloads: PathBuf,
+    home: PathBuf,
+    sync_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    [desktop, downloads, home]
+        .into_iter()
+        .find(|d| !is_cloud_synced(d, sync_roots))
+}
+
 /// `loadout-diagnostics-YYYYMMDD-HHMMSS.zip` from a wall-clock stamp.
 pub fn diagnostics_zip_name(at: SystemTime) -> String {
     format!("loadout-diagnostics-{}.zip", file_stamp(at))
 }
 
-/// Destination path on the Desktop for a new export.
+/// Destination path for a new export: the Desktop, or a local folder when
+/// the Desktop syncs to the cloud (see [`pick_diagnostics_dir`]).
 pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
-    let dir = desktop_dir().ok_or_else(|| "HOME is unset; cannot find Desktop".to_string())?;
+    let missing = || "HOME is unset; cannot find Desktop".to_string();
+    let home = user_home().ok_or_else(missing)?;
+    let desktop = desktop_dir().ok_or_else(missing)?;
+    let downloads = downloads_dir().ok_or_else(missing)?;
+    let dir = pick_diagnostics_dir(desktop, downloads, home, &sync_roots_from_env()).ok_or_else(
+        || "Not saved: your Desktop, Downloads and home folder all sync to the cloud".to_string(),
+    )?;
     Ok(dir.join(diagnostics_zip_name(at)))
 }
 
@@ -600,15 +662,21 @@ fn create_new_numbered(path: &Path) -> Result<(std::fs::File, PathBuf), String> 
     unreachable!("an unbounded name search returns or errors")
 }
 
-/// Status line after a successful Desktop write (triggers a Saved toast;
-/// the chat's notice carries the Open folder action).
-pub fn diagnostics_saved_status(path: &Path) -> String {
-    format!(
-        "Saved {} to your Desktop",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("diagnostics.zip")
-    )
+/// Status line after a successful write, naming the folder when it is not
+/// the Desktop (`on_desktop` false) (triggers a Saved toast; the chat's notice carries the Open
+/// folder action).
+pub fn diagnostics_saved_status(path: &Path, on_desktop: bool) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("diagnostics.zip");
+    match path.parent() {
+        Some(dir) if !on_desktop => format!(
+            "Saved {name} to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+            dir.display()
+        ),
+        _ => format!("Saved {name} to your Desktop"),
+    }
 }
 
 fn empty_dash(s: &str) -> &str {
@@ -833,7 +901,7 @@ mod tests {
         assert!(md.contains("Length cap:"), "{md}");
         assert!(md.contains("Why chat vs task:"), "{md}");
         assert_eq!(
-            diagnostics_saved_status(&path),
+            diagnostics_saved_status(&path, true),
             "Saved loadout-diagnostics-20231114-221320.zip to your Desktop"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -929,6 +997,81 @@ mod tests {
 
     /// A localized or moved Desktop from `user-dirs.dirs` wins over
     /// `~/Desktop`; without one the bundle goes to `~/Desktop`.
+    #[test]
+    fn a_cloud_synced_desktop_falls_back_to_a_local_folder() {
+        let home = PathBuf::from("/home/user");
+        let downloads = home.join("Downloads");
+        assert_eq!(
+            pick_diagnostics_dir(home.join("Desktop"), downloads.clone(), home.clone(), &[]),
+            Some(home.join("Desktop")),
+            "a plain local Desktop keeps the zip"
+        );
+        assert_eq!(
+            pick_diagnostics_dir(
+                home.join("OneDrive").join("Desktop"),
+                downloads.clone(),
+                home.clone(),
+                &[]
+            ),
+            Some(downloads),
+            "a OneDrive-style Desktop sends it to Downloads"
+        );
+        let corp = PathBuf::from("/home/user/Work Sync");
+        assert_eq!(
+            pick_diagnostics_dir(
+                corp.join("Desktop"),
+                corp.join("Downloads"),
+                home.clone(),
+                std::slice::from_ref(&corp)
+            ),
+            Some(home.clone()),
+            "a sync root named in the environment counts, and home is the last resort"
+        );
+        let synced_home = PathBuf::from("/home/user/OneDrive");
+        assert_eq!(
+            pick_diagnostics_dir(
+                synced_home.join("Desktop"),
+                synced_home.join("Downloads"),
+                synced_home.clone(),
+                &[]
+            ),
+            None,
+            "when every folder syncs, nothing is written"
+        );
+        for synced in [
+            "/home/user/OneDrive - Contoso/Desktop",
+            "/home/user/Dropbox/Desktop",
+            "/home/user/Dropbox (Personal)/Desktop",
+            "/home/user/Google Drive/My Drive/Desktop",
+            "/home/user/Library/Mobile Documents/com~apple~CloudDocs/Desktop",
+        ] {
+            assert!(is_cloud_synced(Path::new(synced), &[]), "{synced}");
+        }
+        for local in [
+            "/home/user/Desktop",
+            "/home/user/Schreibtisch",
+            "/home/user/onedrive-notes/Desktop",
+        ] {
+            assert!(!is_cloud_synced(Path::new(local), &[]), "{local}");
+        }
+    }
+
+    #[test]
+    fn saved_status_names_the_folder_when_it_is_not_the_desktop() {
+        let zip = Path::new("/home/user/Downloads/a.zip");
+        assert_eq!(
+            diagnostics_saved_status(Path::new("/home/user/Desktop/a.zip"), true),
+            "Saved a.zip to your Desktop"
+        );
+        assert_eq!(
+            diagnostics_saved_status(zip, false),
+            format!(
+                "Saved a.zip to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+                Path::new("/home/user/Downloads").display()
+            )
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn desktop_follows_xdg_user_dirs() {

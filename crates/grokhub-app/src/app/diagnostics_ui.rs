@@ -71,7 +71,7 @@ impl Cabin {
             if crate::cards::settings_action(
                 ui,
                 "Save diagnostics for this chat",
-                "Writes loadout-diagnostics-DATE-TIME.zip to your Desktop.",
+                "Writes loadout-diagnostics-DATE-TIME.zip to your Desktop, or to a local folder when the Desktop syncs to the cloud.",
                 "Save",
             ) {
                 self.save_chat_diagnostics(None);
@@ -357,7 +357,8 @@ impl Cabin {
         };
         match write_diagnostics_zip(&path, &export) {
             Ok(path) => {
-                self.status = diagnostics_saved_status(&path);
+                let on_desktop = path.parent() == grokhub_core::desktop_dir().as_deref();
+                self.status = diagnostics_saved_status(&path, on_desktop);
                 self.diagnostics_last_zip = Some(path);
                 self.diagnostics_notice = true;
             }
