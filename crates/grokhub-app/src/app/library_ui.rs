@@ -9,7 +9,7 @@ mod game_art;
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
 use grokhub_core::steam::{CoverKind, SteamGame};
 
-use super::loadout_home::{caption, card, diamond, objective_progress};
+use super::loadout_home::{caption, card, card_mark, objective_progress};
 use super::*;
 
 /// The detail column's width, and the grid's gap and smallest tile.
@@ -438,7 +438,7 @@ impl Cabin {
                 .find(|i| names_game(&i.text, &game.name))
                 .map(|i| i.text.clone())
                 .unwrap_or_else(|| m.title.clone());
-            egui::Frame::NONE
+            let objective = egui::Frame::NONE
                 .fill(crate::theme::surface())
                 .stroke(egui::Stroke::new(1.0, crate::theme::amber()))
                 .corner_radius(crate::theme::RADIUS_SM)
@@ -447,7 +447,7 @@ impl Cabin {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        diamond(ui, true);
+                        card_mark(ui);
                         ui.label(
                             egui::RichText::new("OBJECTIVE")
                                 .size(crate::theme::TYPE_CAPTION)
@@ -476,6 +476,7 @@ impl Cabin {
                     fill.set_width(bar.width() * frac);
                     ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
                 });
+            crate::motion::icon::note_card(ui, objective.response.rect);
         }
         let size = egui::vec2(w, 40.0);
         if crate::ui_kit::recipe::button(ui, None, "PLAY", true, size, true).clicked() {

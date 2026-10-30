@@ -290,6 +290,13 @@ impl Cabin {
         }
     }
 
+    /// Which game the in-game watcher supports first, from the Steam
+    /// library's playtime read now (`grokhub_core::game_watch_pick`).
+    fn game_watch_first_line(&mut self, now: u64) -> String {
+        let (_, games) = self.steam_library(now);
+        grokhub_core::game_watch_pick::settings_line(games)
+    }
+
     pub(super) fn ui_game_companion_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.game_companion;
         if crate::cards::settings_toggle(
@@ -304,6 +311,8 @@ impl Cabin {
             self.persist_cfg();
             self.status = "Saved".into();
         }
+        let line = self.game_watch_first_line(now_ms());
+        crate::cards::settings_note(ui, &line);
         if !self.cfg.game_companion {
             return;
         }
@@ -490,5 +499,36 @@ mod tests {
         assert!(cabin.focus.game.playing.is_none() && cabin.focus.game.news_rx.is_none());
         cabin.note_running(None, 2_000);
         assert!(cabin.focus.game.ended.is_none());
+    }
+
+    #[test]
+    fn settings_names_the_watchers_first_game_from_steam_playtime() {
+        let mut cabin = Cabin::quiet_for_test();
+        let now = now_ms();
+        let played = |id, name: &str, playtime_min| SteamGame {
+            playtime_min,
+            ..game(id, name)
+        };
+        cabin.sources.steam.seed_library_for_test(
+            vec![
+                played(7, "Hades", 9_000),
+                played(730, "Counter-Strike 2", 40),
+                played(570, "Dota 2", 400),
+            ],
+            true,
+            now,
+        );
+        assert_eq!(
+            cabin.game_watch_first_line(now),
+            "Game watcher: Dota 2 first, most played in your Steam library. League of Legends and World of Warcraft aren't on Steam, so they aren't ranked."
+        );
+        cabin
+            .sources
+            .steam
+            .seed_library_for_test(vec![game(7, "Hades")], true, now);
+        assert_eq!(
+            cabin.game_watch_first_line(now),
+            "Game watcher: Counter-Strike 2 first by default, since no supported game has playtime in your Steam library. League of Legends and World of Warcraft aren't on Steam, so they aren't ranked."
+        );
     }
 }

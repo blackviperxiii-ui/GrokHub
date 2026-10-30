@@ -306,7 +306,8 @@ function Write-ModelDrop([string]$root) {
 # builds shipped). $pinPersonality opens Settings → Personality
 # (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
 # selected, for slide 19 shots. $mood pins Nyx's corner box picture
-# (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
+# (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper,
+# raunchy),
 # since no turn or game runs here; every shot defaults to hanging-out.
 # $pinBehavior opens Settings →
 # Behavior for the Screenshot explain toggle. $screenshotOffer seeds a live

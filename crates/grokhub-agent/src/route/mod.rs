@@ -31,6 +31,7 @@ pub mod local_perf;
 pub mod local_sidecar;
 pub mod local_spec;
 pub mod log;
+pub mod match_ask;
 pub mod policy;
 pub mod providers;
 pub mod refresh;
@@ -207,6 +208,12 @@ pub fn call_model(
     // Playbooks 8: a banned ask never leaves the computer.
     let mut sent = call.clone();
     adult::scrub(&mut sent.input);
+    if let Some(out) = adult::held_reply(&sent.input) {
+        return Ok(Routed {
+            out,
+            tokens: CallTokens::default(),
+        });
+    }
     let text = live::last_user_text(&sent.input).0;
     let mut rc = RouteCall {
         provider: &call.provider,
@@ -275,7 +282,8 @@ pub fn call_model(
         &decision,
         &RouteDone::of(&out, started.elapsed()),
     );
-    let out = out?;
+    let mut out = out?;
+    out.text = grokhub_core::adult_guard::screen_reply(&out.text).to_string();
     let tokens = CallTokens::of(&sent, &out.usage);
     Ok(Routed { out, tokens })
 }

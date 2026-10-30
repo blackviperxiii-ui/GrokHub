@@ -725,7 +725,18 @@ impl Cabin {
                             );
                             ui.painter()
                                 .circle_filled(plus_r.center(), 18.0, crate::theme::panel());
-                            crate::icons::paint_plus_at(ui.painter(), plus_r, crate::theme::muted());
+                            let plus_pose = crate::motion::icon::pose(
+                                ui,
+                                plus.id,
+                                crate::motion::icon::Cue::of(&plus, false),
+                                crate::motion::icon::Kick::Turn(std::f32::consts::FRAC_PI_2),
+                            );
+                            crate::icons::paint_plus_at(
+                                ui.painter(),
+                                plus_r,
+                                crate::theme::muted(),
+                                plus_pose,
+                            );
                             if plus
                                 .on_hover_text("Upload a file or paste clipboard")
                                 .clicked()
@@ -748,13 +759,13 @@ impl Cabin {
                                     if crate::cards::imagine_seg_chip(ui, on, |ui| {
                                         match kind {
                                             ImagineKind::Image => {
-                                                crate::icons::paint_image_mode(ui, 16.0, ink);
+                                                crate::icons::paint_image_mode(ui, 16.0, ink, on);
                                             }
                                             ImagineKind::Video => {
-                                                crate::icons::paint_video_mode(ui, 16.0, ink);
+                                                crate::icons::paint_video_mode(ui, 16.0, ink, on);
                                             }
                                             ImagineKind::Agent => {
-                                                crate::icons::paint_agent_mode(ui, 16.0, ink);
+                                                crate::icons::paint_agent_mode(ui, 16.0, ink, on);
                                             }
                                         }
                                         ui.add_space(4.0);
@@ -875,6 +886,7 @@ impl Cabin {
                                         crate::icons::paint_menu_caret(ui, crate::theme::muted());
                                     });
                                 });
+                            crate::motion::icon::note_card(ui, style_inner.response.rect);
                             let style = ui
                                 .interact(
                                     style_inner.response.rect,
@@ -915,6 +927,7 @@ impl Cabin {
                                         crate::icons::paint_menu_caret(ui, crate::theme::muted());
                                     });
                                 });
+                            crate::motion::icon::note_card(ui, aspect_inner.response.rect);
                             let aspect_hit = ui
                                 .interact(
                                     aspect_inner.response.rect,
@@ -945,6 +958,7 @@ impl Cabin {
                                         crate::icons::paint_menu_caret(ui, crate::theme::muted());
                                     });
                                 });
+                            crate::motion::icon::note_card(ui, more_inner.response.rect);
                             let more = ui
                                 .interact(
                                     more_inner.response.rect,

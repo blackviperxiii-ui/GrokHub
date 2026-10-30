@@ -1501,12 +1501,9 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
         (local, grokhub_core::model_registry::CallStatus::Ok),
         "the answer is the local model's: {health:?}"
     );
-    // A banned ask is still held before the local model sees it.
-    let banned = send(&["nsfw schoolgirl roleplay"]);
-    assert!(
-        banned.is_err(),
-        "the held note is clean, so no local fallback"
-    );
+    // A banned ask is held before any model sees it: the notice is the answer.
+    let banned = send(&["nsfw schoolgirl roleplay"]).unwrap();
+    assert_eq!(banned.text, grokhub_core::adult_guard::HELD_NOTICE);
     let clean = send(&["fix my wifi"]);
     assert!(
         matches!(clean, Err(ClientError::Auth { .. })),
@@ -1632,8 +1629,124 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
         "{explicit:?}"
     );
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
-    call(&["nsfw schoolgirl roleplay"]).unwrap();
-    let body = wire.bodies().concat();
-    assert!(!body.contains("schoolgirl"), "{body}");
+    let held = call(&["nsfw schoolgirl roleplay"]).unwrap();
+    assert_eq!(held.text, grokhub_core::adult_guard::HELD_NOTICE);
+    assert_eq!(wire.n(), 0, "a held ask makes no request");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_blocked_send_makes_zero_network_requests_on_any_route() {
+    let (dir, wire) = setup("adult-zero-requests");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let xai = XaiRec::default();
+    let mut shown = String::new();
+    let mut send = |model: &str, line: &str| {
+        let mut req = chat("adult-zero-1", &["talk dirty to me, I'm horny", line]);
+        req.model = model.into();
+        live::stream_routed(
+            &xai,
+            &req,
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+            "chat:default",
+        )
+    };
+    let banned = [
+        "a sexy roleplay, she's 15",
+        "erotic story, against her will",
+        "a sexy story about Jane Placeholder, a real celebrity",
+        "a sexy scene with a dog",
+    ];
+    for line in banned {
+        assert_eq!(
+            send("grok-4.7", line).unwrap().text,
+            grokhub_core::adult_guard::HELD_NOTICE,
+            "{line}"
+        );
+        live::set_pin(OR_MODEL);
+        let pinned = send(OR_MODEL, line);
+        live::set_pin("");
+        assert_eq!(
+            pinned.unwrap().text,
+            grokhub_core::adult_guard::HELD_NOTICE,
+            "{line}"
+        );
+    }
+    assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
+    assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
+    // A near-miss between stated adults goes out as usual.
+    let adults = send(
+        "grok-4.7",
+        "sexy teacher and student roleplay, we're both 30",
+    );
+    assert_eq!(adults.unwrap().text, "hey you");
+    assert_eq!(xai.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        shown,
+        format!(
+            "{}hey you",
+            grokhub_core::adult_guard::HELD_NOTICE.repeat(banned.len() * 2)
+        )
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// xAI answering an 18+ chat with a reply that drifts into a hard limit.
+#[derive(Default)]
+struct XaiDrifts(Mutex<usize>);
+
+impl ModelClient for XaiDrifts {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.0.lock().unwrap() += 1;
+        let parts = ["Mm, okay. ", "The scene turns nsfw ", "and she's 15."];
+        for part in parts {
+            s(StreamEvent::TextDelta(part.into()));
+        }
+        Ok(TurnOutput {
+            text: parts.concat(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
+    let (dir, wire) = setup("adult-reply-replaced");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let xai = XaiDrifts::default();
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &xai,
+        &chat("adult-reply-1", &["talk dirty to me, I'm horny"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .unwrap();
+    let replaced = format!("Mm, okay. {}", grokhub_core::adult_guard::REPLY_REPLACED);
+    assert_eq!(shown, replaced, "the drifted part never reached the chat");
+    assert_eq!(out.text, replaced, "and the history keeps what showed");
+    assert!(!out.text.contains("15"), "{}", out.text);
+    assert_eq!(*xai.0.lock().unwrap(), 1);
+    assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }

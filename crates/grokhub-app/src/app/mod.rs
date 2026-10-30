@@ -173,6 +173,7 @@ mod findings_ui;
 mod fix_it;
 mod focus_ui;
 mod game_companion_ui;
+mod game_watch_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
