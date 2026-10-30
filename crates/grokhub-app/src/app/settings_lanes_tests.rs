@@ -89,6 +89,8 @@ fn always_confirm_stays_only_for_the_same_ask() {
 // Folded from PR #291.
 #[test]
 fn work_root_uses_the_home_folder() {
+    // HOME is process-wide: share the lock with every test that changes it.
+    let _g = crate::config::hold_test_config();
     struct RestoreHome {
         prev: Option<String>,
         #[cfg(windows)]
