@@ -1430,7 +1430,7 @@ fn local_model_routing_lines_match_the_privacy_docs() {
     let lines = super::privacy_page::LOCAL_ROUTING;
     assert_eq!(
         lines[0],
-        "Online, the cloud takes every step while any cloud model answers. This PC's model steps in only when none does."
+        "Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work."
     );
     assert_eq!(
         lines[4],

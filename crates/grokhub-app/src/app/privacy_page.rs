@@ -140,7 +140,7 @@ pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
 /// How the on-device model is used, from `Router::choose` and the sidecar.
 /// PRIVACY.md and the installer's privacy.txt list the same lines.
 pub(super) const LOCAL_ROUTING: [&str; 5] = [
-    "Online, the cloud takes every step while any cloud model answers. This PC's model steps in only when none does.",
+    "Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work.",
     "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
     "Sensitive data you haven't allowed to the cloud stays on this PC.",
     "The model loads only when it's needed and unloads when it sits idle.",
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(
             local_notes(true, true),
             [
-                "Online, the cloud takes every step while any cloud model answers. This PC's model steps in only when none does.",
+                "Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work.",
                 "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
                 "Sensitive data you haven't allowed to the cloud stays on this PC.",
                 "The model loads only when it's needed and unloads when it sits idle.",
