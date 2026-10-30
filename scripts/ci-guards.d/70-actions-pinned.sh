@@ -17,7 +17,7 @@ else
   # line as path:line:uses: value. grep exits 1 for no matches (fine) and 2
   # for a read error (fail closed).
   rc=0
-  uses=$(grep -noHE '(^|[[:space:]{,])uses:[[:space:]]*[^[:space:],}]+' \
+  uses=$(grep -noHE '(^|[[:space:]{,])uses:[[:space:]]*[^[:space:],}]*' \
     "${workflows[@]}" "${composites[@]}") || rc=$?
   if ((rc > 1)); then
     echo "ci-guards: could not read workflow files (grep exit $rc)" >&2

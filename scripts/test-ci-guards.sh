@@ -151,6 +151,11 @@ commit_pr
 run_guard fail "unpinned action in a flow-style list fails"
 
 fresh_pr
+printf '      - uses:\n          actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "a uses: value on the next line fails"
+
+fresh_pr
 printf '      - {uses: actions/cache@%s}\n' "$SHA" >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard pass "pinned action in a flow-style step passes"
