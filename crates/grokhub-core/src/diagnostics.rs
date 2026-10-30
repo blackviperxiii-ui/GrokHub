@@ -600,6 +600,34 @@ fn create_new_numbered(path: &Path) -> Result<(std::fs::File, PathBuf), String> 
     unreachable!("an unbounded name search returns or errors")
 }
 
+/// One line for the top of the preview: what the redaction hid, counted
+/// from the placeholders in the rendered bundle.
+pub fn diagnostics_redaction_summary(markdown: &str) -> String {
+    let keys =
+        markdown.matches("[redacted]").count() + markdown.matches("[redacted private key]").count();
+    let emails = markdown.matches("[email]").count();
+    let phones = markdown.matches("[phone]").count();
+    let paths = markdown.matches("/home/user").count();
+    let other = ["[card]", "[ssn]", "[address]"]
+        .iter()
+        .map(|t| markdown.matches(t).count())
+        .sum::<usize>();
+    let n = |count: usize, one: &str, many: &str| {
+        format!("{count} {}", if count == 1 { one } else { many })
+    };
+    let mut line = format!(
+        "Redacted: {}, {}, {}, {}",
+        n(keys, "key", "keys"),
+        n(emails, "email", "emails"),
+        n(phones, "phone", "phones"),
+        n(paths, "home path", "home paths"),
+    );
+    if other > 0 {
+        line.push_str(&format!(", {}", n(other, "other detail", "other details")));
+    }
+    line
+}
+
 /// Status line after a successful Desktop write (triggers a Saved toast;
 /// the chat's notice carries the Open folder action).
 pub fn diagnostics_saved_status(path: &Path) -> String {
@@ -1010,5 +1038,20 @@ mod tests {
             "{md}"
         );
         assert!(md.contains("[redacted private key]\ndone"), "{md}");
+    }
+
+    #[test]
+    fn the_preview_counts_what_redaction_hid() {
+        assert_eq!(
+            diagnostics_redaction_summary("no secrets here"),
+            "Redacted: 0 keys, 0 emails, 0 phones, 0 home paths"
+        );
+        assert_eq!(
+            diagnostics_redaction_summary(
+                "key [redacted] and [redacted]\n[redacted private key]\n\
+                 mail [email] at /home/user/a and /home/user/b, call [phone], card [card]"
+            ),
+            "Redacted: 3 keys, 1 email, 1 phone, 2 home paths, 1 other detail"
+        );
     }
 }

@@ -2,12 +2,31 @@
 
 use super::*;
 use grokhub_core::{
-    content_level_label, diagnostics_preview_lines, diagnostics_saved_status, diagnostics_zip_path,
+    content_level_label, diagnostics_markdown, diagnostics_preview_lines,
+    diagnostics_redaction_summary, diagnostics_saved_status, diagnostics_zip_path,
     redact_for_diagnostics, redact_turn, turn_says, why_chat_vs_task, write_diagnostics_zip,
     DiagnosticsClassifier, DiagnosticsExport, DiagnosticsPlaybook, DiagnosticsPolicy,
     DiagnosticsToolCall, DiagnosticsTurn,
 };
 use std::time::SystemTime;
+
+/// Labs Diagnostics state on the cabin.
+#[derive(Default)]
+pub(super) struct DiagnosticsState {
+    /// Last zip written (Open folder).
+    pub(super) last_zip: Option<std::path::PathBuf>,
+    /// The chat shows "Saved … / Open folder" for the last bundle until dismissed.
+    pub(super) notice: bool,
+    /// Built and redacted, shown for Save or Cancel; nothing is written yet.
+    pub(super) pending: Option<PendingDiagnostics>,
+}
+
+/// One bundle as the preview shows it. Save writes exactly this export.
+pub(super) struct PendingDiagnostics {
+    pub(super) export: DiagnosticsExport,
+    pub(super) markdown: String,
+    pub(super) summary: String,
+}
 
 impl Cabin {
     /// Settings / `/doctor` status line — lives with Labs Diagnostics doctor rows.
@@ -34,8 +53,8 @@ impl Cabin {
         }
         self.cfg.diagnostics_mode = on;
         if !on {
-            self.diagnostics_last_zip = None;
-            self.diagnostics_notice = false;
+            self.diagnostics.last_zip = None;
+            self.diagnostics.notice = false;
         }
         self.persist_cfg();
         self.status = "Saved".into();
@@ -71,12 +90,12 @@ impl Cabin {
             if crate::cards::settings_action(
                 ui,
                 "Save diagnostics for this chat",
-                "Writes loadout-diagnostics-DATE-TIME.zip to your Desktop.",
+                "Shows the redacted bundle first; Save there writes loadout-diagnostics-DATE-TIME.zip to your Desktop.",
                 "Save",
             ) {
                 self.save_chat_diagnostics(None);
             }
-            if self.diagnostics_last_zip.is_some() && crate::cards::ghost_pill(ui, "Open folder") {
+            if self.diagnostics.last_zip.is_some() && crate::cards::ghost_pill(ui, "Open folder") {
                 self.open_diagnostics_folder();
             }
         }
@@ -85,16 +104,17 @@ impl Cabin {
     /// Under the composer after a Save from a message or the chat menu: the
     /// file name with Open folder, until opened or dismissed.
     pub(super) fn paint_diagnostics_notice(&mut self, ui: &mut egui::Ui) {
-        if !self.diagnostics_notice {
+        if !self.diagnostics.notice {
             return;
         }
         let Some(name) = self
-            .diagnostics_last_zip
+            .diagnostics
+            .last_zip
             .as_deref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
         else {
-            self.diagnostics_notice = false;
+            self.diagnostics.notice = false;
             return;
         };
         ui.horizontal(|ui| {
@@ -106,10 +126,10 @@ impl Cabin {
             );
             if crate::cards::ghost_pill(ui, "Open folder") {
                 self.open_diagnostics_folder();
-                self.diagnostics_notice = false;
+                self.diagnostics.notice = false;
             }
             if crate::cards::ghost_pill(ui, "Dismiss") {
-                self.diagnostics_notice = false;
+                self.diagnostics.notice = false;
             }
         });
         ui.add_space(4.0);
@@ -117,7 +137,7 @@ impl Cabin {
 
     /// Open the Desktop folder that holds the last diagnostics zip.
     pub(super) fn open_diagnostics_folder(&mut self) {
-        let Some(path) = self.diagnostics_last_zip.clone() else {
+        let Some(path) = self.diagnostics.last_zip.clone() else {
             self.status = "No diagnostics file yet".into();
             return;
         };
@@ -127,7 +147,8 @@ impl Cabin {
         }
     }
 
-    /// Whole chat (`None`) or one turn (`Some(turn)`). Writes a Desktop zip.
+    /// Whole chat (`None`) or one turn (`Some(turn)`): builds the redacted
+    /// bundle and opens the preview. Nothing is written until Save there.
     pub(super) fn save_chat_diagnostics(&mut self, only_turn: Option<u32>) {
         if !self.cfg.diagnostics_mode {
             self.status = "Turn on Diagnostics mode in Settings → Labs first".into();
@@ -347,21 +368,110 @@ impl Cabin {
             .map(|s| redact_for_diagnostics(&s, home_ref))
             .collect();
 
-        let at = SystemTime::now();
-        let path = match diagnostics_zip_path(at) {
+        let markdown = diagnostics_markdown(&export);
+        let summary = diagnostics_redaction_summary(&markdown);
+        self.diagnostics.pending = Some(PendingDiagnostics {
+            export,
+            markdown,
+            summary,
+        });
+    }
+
+    /// Save in the preview: write exactly the bundle that was shown.
+    pub(super) fn confirm_diagnostics_save(&mut self) {
+        let Some(pending) = self.diagnostics.pending.take() else {
+            return;
+        };
+        let path = match diagnostics_zip_path(SystemTime::now()) {
             Ok(p) => p,
             Err(e) => {
                 self.status = e;
                 return;
             }
         };
-        match write_diagnostics_zip(&path, &export) {
+        match write_diagnostics_zip(&path, &pending.export) {
             Ok(path) => {
                 self.status = diagnostics_saved_status(&path);
-                self.diagnostics_last_zip = Some(path);
-                self.diagnostics_notice = true;
+                self.diagnostics.last_zip = Some(path);
+                self.diagnostics.notice = true;
             }
             Err(e) => self.status = format!("Couldn't save diagnostics: {e}"),
+        }
+    }
+
+    /// Cancel in the preview: nothing is written.
+    pub(super) fn cancel_diagnostics_save(&mut self) {
+        if self.diagnostics.pending.take().is_some() {
+            self.status = "Diagnostics not saved".into();
+        }
+    }
+
+    /// The redacted bundle in a dialog with Save and Cancel. Escape or a
+    /// click outside counts as Cancel.
+    pub(super) fn ui_diagnostics_preview(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.diagnostics.pending.as_ref() else {
+            return;
+        };
+        let mut save = false;
+        let mut cancel = false;
+        let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 760.0);
+        let modal = egui::Modal::new(egui::Id::new("diagnostics-preview"))
+            .backdrop_color(egui::Color32::from_black_alpha(153))
+            .frame(
+                egui::Frame::NONE
+                    .fill(crate::theme::elevated())
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
+                    .corner_radius(16.0)
+                    .inner_margin(egui::Margin::same(22)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(width);
+                ui.label(
+                    RichText::new("Diagnostics preview")
+                        .font(crate::theme::title_font(22.0))
+                        .color(crate::theme::fg()),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(&pending.summary)
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(12.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("diagnostics-preview-body")
+                    .max_height((ctx.content_rect().height() * 0.6).max(160.0))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&pending.markdown)
+                                    .monospace()
+                                    .size(crate::theme::FONT_META),
+                            )
+                            .wrap(),
+                        );
+                    });
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Save writes exactly this. Cancel writes nothing.")
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::cards::white_pill(ui, "Save") {
+                            save = true;
+                        }
+                        if crate::cards::ghost_pill(ui, "Cancel") {
+                            cancel = true;
+                        }
+                    });
+                });
+            });
+        if save {
+            self.confirm_diagnostics_save();
+        } else if cancel || modal.should_close() {
+            self.cancel_diagnostics_save();
         }
     }
 
@@ -545,6 +655,122 @@ mod tests {
     }
 
     #[test]
+    fn the_preview_writes_nothing_until_save_and_save_writes_what_it_showed() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("diag-preview");
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+
+        let home = std::env::temp_dir().join(format!("gh-diag-preview-{}", std::process::id()));
+        let desk = home.join("Desktop");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&desk).unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_up = std::env::var_os("USERPROFILE");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+
+        let mut cabin = Cabin::quiet_for_test();
+        let mut thread = crate::threads::ChatThread::new("Hangout", false);
+        thread.messages = std::sync::Arc::new(vec![
+            ("user".into(), "my key is sk-abcdefghijklmnopqrstuv".into()),
+            ("assistant".into(), "TURN_SAY:\nHid it.\n".into()),
+        ]);
+        cabin.messages = thread.messages.clone();
+        cabin.threads = vec![thread];
+        cabin.thread_idx = 0;
+        cabin.set_diagnostics_mode(true);
+        let zips = || std::fs::read_dir(&desk).unwrap().count();
+
+        cabin.save_chat_diagnostics(None);
+        let pending = cabin.diagnostics.pending.as_ref().expect("preview is open");
+        assert_eq!(
+            pending.summary,
+            "Redacted: 1 key, 0 emails, 0 phones, 0 home paths"
+        );
+        assert!(
+            pending.markdown.contains("my key is [redacted]"),
+            "{}",
+            pending.markdown
+        );
+        assert_eq!(zips(), 0, "nothing is written while the preview is open");
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut texts = Vec::new();
+        for frame in 0..2 {
+            let mut raw = raw.clone();
+            raw.time = Some(frame as f64 / 10.0);
+            let out =
+                crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_diagnostics_preview(ui.ctx()));
+            texts.clear();
+            out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        }
+        for want in [
+            "Diagnostics preview",
+            "Redacted: 1 key, 0 emails, 0 phones, 0 home paths",
+            "Save",
+            "Cancel",
+        ] {
+            assert!(texts.iter().any(|t| t == want), "{want} missing: {texts:?}");
+        }
+        assert!(
+            texts.iter().any(|t| t.contains("my key is [redacted]")),
+            "the redacted bundle is shown: {texts:?}"
+        );
+        assert!(
+            cabin.diagnostics.pending.is_some(),
+            "painting does not close it"
+        );
+
+        cabin.cancel_diagnostics_save();
+        assert!(cabin.diagnostics.pending.is_none());
+        assert_eq!(cabin.status, "Diagnostics not saved");
+        assert_eq!(zips(), 0, "Cancel writes no file");
+        assert!(cabin.diagnostics.last_zip.is_none());
+
+        cabin.save_chat_diagnostics(None);
+        let shown = cabin.diagnostics.pending.as_ref().unwrap().markdown.clone();
+        cabin.confirm_diagnostics_save();
+        assert!(cabin.diagnostics.pending.is_none());
+        let path = cabin
+            .diagnostics
+            .last_zip
+            .clone()
+            .expect("Save wrote a zip");
+        assert_eq!(zips(), 1);
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut md = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("diagnostics.md").unwrap(), &mut md)
+            .unwrap();
+        assert_eq!(md, shown, "the zip holds exactly what the preview showed");
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_up {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn save_writes_zip_when_mode_on() {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("diag-save-zip");
@@ -579,10 +805,11 @@ mod tests {
         cabin.thread_idx = 0;
         cabin.set_diagnostics_mode(true);
         cabin.save_chat_diagnostics(Some(2));
-        let path = cabin.diagnostics_last_zip.clone().expect("zip path");
+        cabin.confirm_diagnostics_save();
+        let path = cabin.diagnostics.last_zip.clone().expect("zip path");
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
         assert_eq!(cabin.status, format!("Saved {name} to your Desktop"));
-        assert!(cabin.diagnostics_notice);
+        assert!(cabin.diagnostics.notice);
         assert!(path.starts_with(&desk), "{path:?}");
         assert!(
             name.starts_with("loadout-diagnostics-") && name.ends_with(".zip"),
@@ -604,7 +831,8 @@ mod tests {
         let same = grokhub_core::diagnostics_zip_path(at).unwrap();
         std::fs::write(&same, b"earlier").unwrap();
         cabin.save_chat_diagnostics(Some(2));
-        let second = cabin.diagnostics_last_zip.clone().unwrap();
+        cabin.confirm_diagnostics_save();
+        let second = cabin.diagnostics.last_zip.clone().unwrap();
         assert_ne!(second, same);
         assert_eq!(std::fs::read(&same).unwrap(), b"earlier");
         assert!(path.is_file() && second.is_file());
@@ -670,8 +898,10 @@ mod tests {
         };
 
         cabin.save_chat_diagnostics(None);
+        cabin.confirm_diagnostics_save();
         let off = cabin
-            .diagnostics_last_zip
+            .diagnostics
+            .last_zip
             .clone()
             .expect("zip with logs off");
         let (json, md) = read(&off);
@@ -690,8 +920,10 @@ mod tests {
             "the box is saved"
         );
         cabin.save_chat_diagnostics(None);
+        cabin.confirm_diagnostics_save();
         let on = cabin
-            .diagnostics_last_zip
+            .diagnostics
+            .last_zip
             .clone()
             .expect("zip with logs on");
         assert_ne!(on, off);
