@@ -685,7 +685,7 @@ fn outfit_texture(
     let bytes = super::loadout_home::mood_art(mood_for_outfit(outfit, mood));
     let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-    let has_alpha = rgba.as_raw().chunks_exact(4).any(|p| p[3] < 250);
+    let has_alpha = rgba.as_raw().as_chunks::<4>().0.iter().any(|p| p[3] < 250);
     let mask = has_alpha.then(|| HitMask::from_rgba(w, h, rgba.as_raw(), 8));
     let tex = ctx.load_texture(
         key,
