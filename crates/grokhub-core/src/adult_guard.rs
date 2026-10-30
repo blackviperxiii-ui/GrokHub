@@ -342,6 +342,12 @@ pub fn heads_up_rerouted(name: &str) -> String {
     format!("Heads-up: I sent that one through xAI instead of {name}. {name} bans adult chat and can ban the account for it.")
 }
 
+/// The heads-up when xAI couldn't take a rerouted explicit turn and this
+/// computer's model answered it instead.
+pub fn heads_up_local(name: &str) -> String {
+    format!("Heads-up: I sent that one to this computer's model instead of {name}. {name} bans adult chat and can ban the account for it.")
+}
+
 /// A provider's name for the heads-up.
 pub fn dest_name(dest: Dest) -> &'static str {
     match dest {

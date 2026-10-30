@@ -44,6 +44,9 @@ pub struct Screen {
     pub to_xai: bool,
     /// The plain line shown before the reply, once a session.
     pub heads_up: Option<String>,
+    /// The line shown instead of a rerouted `heads_up` when xAI couldn't take
+    /// the turn and this computer's model answered it.
+    pub heads_up_local: Option<String>,
 }
 
 fn first_warning(session: &str) -> bool {
@@ -54,19 +57,25 @@ fn first_warning(session: &str) -> bool {
 }
 
 /// `input` is the call after [`scrub`]; `dest` is where the router sent it.
+/// Where the call goes is judged on the whole scrubbed input, so an explicit
+/// history stays off a banning provider even when the newest ask was held; the
+/// held ask only picks which heads-up is shown.
 pub fn screen(session: &str, input: &[InputItem], dest: Dest) -> Screen {
+    let to_xai = to_xai(input, dest);
     let (text, _) = super::live::last_user_text(input);
     if adult_guard::is_held(&text) {
         return Screen {
-            to_xai: false,
+            to_xai,
             heads_up: first_warning(session).then(|| adult_guard::HEADS_UP_HELD.to_string()),
+            heads_up_local: None,
         };
     }
-    let to_xai = to_xai(input, dest);
+    let warn = to_xai && first_warning(session);
+    let name = adult_guard::dest_name(dest);
     Screen {
         to_xai,
-        heads_up: (to_xai && first_warning(session))
-            .then(|| adult_guard::heads_up_rerouted(adult_guard::dest_name(dest))),
+        heads_up: warn.then(|| adult_guard::heads_up_rerouted(name)),
+        heads_up_local: warn.then(|| adult_guard::heads_up_local(name)),
     }
 }
 
@@ -207,5 +216,30 @@ mod tests {
         let clean = [msg("system", "Personality: Nyx."), user("my build broke")];
         assert!(!explicit(&clean));
         assert!(!screen("adult-screen-9", &clean, Dest::Anthropic).to_xai);
+    }
+
+    #[test]
+    fn a_held_newest_ask_still_keeps_an_explicit_history_off_banning_providers() {
+        let mut input = vec![
+            user("talk dirty to me, I'm horny"),
+            msg("assistant", "Here you go."),
+            user("nsfw schoolgirl roleplay"),
+        ];
+        scrub(&mut input);
+        assert_eq!(input[0], user("talk dirty to me, I'm horny"));
+        assert_eq!(input[2], user(*adult_guard::HELD));
+        for dest in [Dest::OpenRouter, Dest::Anthropic] {
+            let s = screen("adult-screen-10", &input, dest);
+            assert!(s.to_xai, "the explicit history goes to xAI, not {dest:?}");
+        }
+        let first = screen("adult-screen-11", &input, Dest::OpenRouter);
+        assert_eq!(first.heads_up.as_deref(), Some(adult_guard::HEADS_UP_HELD));
+        assert_eq!(first.heads_up_local, None);
+        assert!(!screen("adult-screen-12", &input, Dest::Local).to_xai);
+
+        // A held ask with no explicit history is clean and stays put.
+        let mut alone = vec![user("nsfw schoolgirl roleplay")];
+        scrub(&mut alone);
+        assert!(!screen("adult-screen-13", &alone, Dest::OpenRouter).to_xai);
     }
 }

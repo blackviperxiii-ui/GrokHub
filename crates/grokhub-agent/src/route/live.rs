@@ -969,6 +969,23 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
     })
 }
 
+/// The health line for a call that failed and was answered by another model,
+/// so the model it was sent to is never counted healthy. Never fails the call.
+fn note_failure(config_dir: &Path, call: &RouteCall<'_>, err: &ClientError, elapsed: Duration) {
+    if cfg!(test) && !crate::perm::config_pinned() {
+        return;
+    }
+    let done = RouteDone {
+        http: http_of(err),
+        error: err.to_string(),
+        latency_ms: elapsed.as_millis() as u64,
+        ..RouteDone::default()
+    };
+    if let Some(obs) = observation(call, &done, grokhub_core::now_ms()) {
+        let _ = append_observation(config_dir, &obs);
+    }
+}
+
 /// Write the route span and the health line for one call. Never fails the call.
 /// `call.effort` is what was sent.
 pub fn route_log(
@@ -1162,9 +1179,17 @@ pub fn stream_routed(
         }
         sink(ev)
     };
-    if let Some(note) = &screen.heads_up {
-        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+    let streams_xai = !on_device && !on_provider;
+    // On xAI the heads-up waits for xAI's first event, so a local fallback can
+    // still say where the turn really went.
+    let mut note = screen.heads_up.clone();
+    if !streams_xai {
+        if let Some(note) = &note {
+            sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+        }
     }
+    // xAI's error and how long it took, when this computer's model answered instead.
+    let mut xai_failed: Option<(ClientError, Duration)> = None;
     let out = if on_device {
         // Pass the full request so cabin web_search / web_fetch tool calls round-trip
         // through the agent loop (OpenAI-compatible tools on the local sidecar).
@@ -1188,21 +1213,57 @@ pub fn stream_routed(
         }
         out
     } else {
-        match client.stream(&sent, cancel, sink) {
+        let mut streamed = false;
+        let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
+            if !streamed {
+                streamed = true;
+                if let Some(note) = &note {
+                    sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                }
+            }
+            sink(ev)
+        });
+        match out {
             // An 18+ chat xAI couldn't take (signed out, down) falls back to this
-            // computer's model, never to a provider that bans adult chat.
+            // computer's model, never to a provider that bans adult chat. Only
+            // when xAI showed nothing yet: a half-streamed xAI answer is never
+            // finished by another model.
             Err(err)
-                if !matches!(err, ClientError::Cancelled)
+                if !streamed
+                    && !matches!(err, ClientError::Cancelled)
                     && super::local::available()
                     && super::adult::explicit(&sent.input) =>
             {
+                xai_failed = Some((err, started.elapsed()));
                 on_device = true;
-                super::local::serve_request(class, &sent, cancel)
+                if screen.heads_up_local.is_some() {
+                    note = screen.heads_up_local.clone();
+                }
+                let out = super::local::serve_request(class, &sent, cancel);
+                if let Ok(turn) = &out {
+                    if let Some(note) = &note {
+                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                    }
+                    // The chat shows streamed text, so the local answer goes out
+                    // as one delta, like a provider's.
+                    if !turn.text.is_empty() {
+                        sink(StreamEvent::TextDelta(turn.text.clone()));
+                    }
+                }
+                out
             }
-            out => out,
+            out => {
+                // xAI answered without a single event: the heads-up still shows.
+                if !streamed && out.is_ok() {
+                    if let Some(note) = &note {
+                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                    }
+                }
+                out
+            }
         }
     };
-    let out = match (out, &screen.heads_up) {
+    let out = match (out, &note) {
         (Ok(mut turn), Some(note)) => {
             turn.text = format!("{note}\n\n{}", turn.text);
             Ok(turn)
@@ -1210,13 +1271,18 @@ pub fn stream_routed(
         (out, _) => out,
     };
     timing::record("send:model_call", started.elapsed());
+    call.effort = effort.as_deref();
+    call.model = &model;
+    if let Some((err, elapsed)) = &xai_failed {
+        // xAI's health line says it failed; the answer is logged as the local model's.
+        note_failure(&dir, &call, err, *elapsed);
+        call.model = super::local::live_tier();
+    }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
     } else if on_provider {
         call.provider = &decision.route.provider;
     }
-    call.effort = effort.as_deref();
-    call.model = &model;
     route_log(
         &dir,
         &call,

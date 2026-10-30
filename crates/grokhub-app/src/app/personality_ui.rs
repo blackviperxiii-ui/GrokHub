@@ -556,12 +556,7 @@ impl Cabin {
                 &dir,
                 grokhub_agent::route::providers::CALL_DATA,
             );
-            let adult_ok = !explicit
-                || matches!(
-                    grokhub_agent::route::providers::dest(&dir, &pick),
-                    grokhub_core::adult_guard::Dest::Xai | grokhub_core::adult_guard::Dest::Local
-                );
-            if adult_ok && usable.iter().any(|u| u == pid) {
+            if takes_adult(&dir, &pick, explicit) && usable.iter().any(|u| u == pid) {
                 return Some(TryRoute::Provider(pick));
             }
         }
@@ -573,9 +568,11 @@ impl Cabin {
     }
 
     /// Cheap per-frame check for the Selected card: is there anywhere a Try it could go?
-    /// [`Self::try_route`] makes the real choice on click.
-    pub(super) fn can_try(&self) -> bool {
-        !self.cfg.provider_model.trim().is_empty()
+    /// [`Self::try_route`] makes the real choice on click. `explicit`: the shown preset
+    /// is an 18+ voice, so a provider pick only counts when it may take adult chat.
+    pub(super) fn can_try(&self, explicit: bool) -> bool {
+        let pick = self.cfg.provider_model.trim();
+        (!pick.is_empty() && takes_adult(&crate::config::config_dir(), pick, explicit))
             || self.llm_ready()
             || (self.cfg.local_model && grokhub_agent::route::local::installed())
     }
@@ -705,7 +702,7 @@ impl Cabin {
             .filter(|id| presets.iter().any(|p| p.id == *id))
             .unwrap_or(focus.clone());
         let showcased = personality::find(&presets, &showcase_id);
-        let can_try = self.can_try();
+        let can_try = self.can_try(showcased.explicit);
         let mut act_on: Option<CardAct> = None;
         let mut hover_id: Option<String> = None;
         let avail_raw = ui.available_width().max(1.0);
@@ -1536,6 +1533,17 @@ fn paint_detail_panel(
     act
 }
 
+/// A provider pick may take this Try it: always for a clean voice; for an 18+ one only
+/// when it is xAI or this computer's, since the others ban adult chat (or, like
+/// OpenRouter, may pass it to a model that does).
+fn takes_adult(dir: &std::path::Path, pick: &str, explicit: bool) -> bool {
+    !explicit
+        || matches!(
+            grokhub_agent::route::providers::dest(dir, pick),
+            grokhub_core::adult_guard::Dest::Xai | grokhub_core::adult_guard::Dest::Local
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1824,7 +1832,7 @@ mod tests {
         cabin.secrets = Default::default();
         cabin.cfg.provider_model.clear();
         cabin.cfg.local_model = false;
-        assert!(!cabin.can_try());
+        assert!(!cabin.can_try(false));
         assert_eq!(cabin.try_route(false), None);
         // Nothing turns red: no failure is stored, and nothing runs.
         cabin.try_personality("pirate");
@@ -1878,7 +1886,10 @@ mod tests {
         cabin.cfg.local_model = false;
         // A provider pick without its key or grant says what is missing.
         cabin.cfg.provider_model = "openrouter/vendor/model-x".into();
-        assert!(cabin.can_try());
+        assert!(cabin.can_try(false));
+        // An 18+ voice can't go to that provider, so with nothing else there's no Try it.
+        assert!(!cabin.can_try(true));
+        assert_eq!(cabin.try_route(true), None);
         assert_eq!(cabin.try_route(false), None);
         cabin.try_personality("pirate");
         assert_eq!(
@@ -1892,6 +1903,11 @@ mod tests {
         cabin.cfg.api_key = "sk-abcdefghijklmnopqrstuv".into();
         assert_eq!(
             cabin.try_route(false),
+            Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
+        );
+        assert!(cabin.can_try(true), "an 18+ voice can try it on Grok");
+        assert_eq!(
+            cabin.try_route(true),
             Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
         );
     }
