@@ -5390,6 +5390,20 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             companion.companion_card(at),
             "Deep Rock Galactic",
         ));
+        rows.push((
+            "recap_card",
+            crate::game_watch::recap_card(
+                "Counter-Strike 2",
+                &crate::game_watch::Recap {
+                    won: 13,
+                    lost: 9,
+                    ..Default::default()
+                },
+                &[],
+                at,
+            ),
+            "Counter-Strike 2",
+        ));
         rows
     }
 
