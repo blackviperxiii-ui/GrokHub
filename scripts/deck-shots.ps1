@@ -322,7 +322,7 @@ function Write-ModelDrop([string]$root) {
 # canned Steam replies (GROKHUB_DECK_ACHIEVEMENTS), for slide 14.
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '', [switch]$askOffer) {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '', [switch]$askOffer, [switch]$pedestal) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -411,6 +411,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         $env:GROKHUB_DECK_WIND_DOWN = $windDown
     } else { Remove-Item Env:GROKHUB_DECK_WIND_DOWN -ErrorAction SilentlyContinue }
     if ($nav) { $env:GROKHUB_DECK_NAV = $nav } else { Remove-Item Env:GROKHUB_DECK_NAV -ErrorAction SilentlyContinue }
+    if ($pedestal) { $env:GROKHUB_DECK_PEDESTAL = '1' } else { Remove-Item Env:GROKHUB_DECK_PEDESTAL -ErrorAction SilentlyContinue }
     if ($localModels) {
         Write-Utf8 (Join-Path $cfg 'pulse-local-models.json') '{"on":true,"lastCheckMs":0,"seeded":true}'
         $env:GROKHUB_DECK_LOCAL_MODELS = '1'
