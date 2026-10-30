@@ -350,8 +350,8 @@ needs its own tap."
             [
                 "Do all 2/3 · Reinstall 6 packages: Reinstall the 6 packages with missing files.",
                 "Do all 3/3 · Explain all: Explain each finding in plain words.",
-                "Do all summary · In a few lines, say which of these got done and which didn't, and why: \
-Fix port 53 conflict, Reinstall 6 packages, Explain all. Left for their own tap because they \
+                "Do all summary · End with the Finished recap, one line per fix (Done, Partly done or Not \
+done, with a few words of result): Fix port 53 conflict, Reinstall 6 packages, Explain all. Left for their own tap because they \
 delete, overwrite or send something: Delete old journal logs.",
             ]
         );

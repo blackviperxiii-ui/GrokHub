@@ -292,7 +292,7 @@ impl DoAll {
                 .join(", ")
         };
         let mut summary = format!(
-            "{DO_ALL} summary · In a few lines, say which of these got done and which didn't, and why: {}.",
+            "{DO_ALL} summary · End with the Finished recap, one line per fix (Done, Partly done or Not done, with a few words of result): {}.",
             labels(&self.run)
         );
         if !self.skipped.is_empty() {
@@ -506,8 +506,8 @@ mod tests {
                 "Do all 1/3 · Fix port 53 conflict: Free port 53 for nextdns, then confirm nextdns is running.",
                 "Do all 2/3 · Reinstall 6 packages: Reinstall the 6 packages with missing files.",
                 "Do all 3/3 · Explain all: Explain each finding in plain words.",
-                "Do all summary · In a few lines, say which of these got done and which didn't, and why: \
-Fix port 53 conflict, Reinstall 6 packages, Explain all. Left for their own tap because they \
+                "Do all summary · End with the Finished recap, one line per fix (Done, Partly done or Not \
+done, with a few words of result): Fix port 53 conflict, Reinstall 6 packages, Explain all. Left for their own tap because they \
 delete, overwrite or send something: Delete old journal logs.",
             ]
         );

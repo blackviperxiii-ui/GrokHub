@@ -224,6 +224,7 @@ mod pulse;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
+mod recap_ui;
 mod release_radar_ui;
 #[cfg(test)]
 mod repaint_timer_tests;

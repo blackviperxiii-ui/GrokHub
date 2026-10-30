@@ -1600,17 +1600,32 @@ impl Cabin {
                                 .filter(|v| v.kind == ChatKind::User)
                                 .count()
                                 .max(1) as u32;
+                            // A reply after real work that ends in a Finished
+                            // block paints without it, then as a recap card.
+                            let recap = super::recap_ui::recap_at(shown, i);
                             let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                let mut p = paint_chat_block_with(
-                                    ui,
-                                    block,
-                                    thought_shows_label(prev_expanded),
-                                    thought_shows_acts(next_expanded),
-                                    fold,
-                                    reply_acts && !privacy_here,
-                                    diagnostics,
-                                    diag_turn,
-                                );
+                                let reply = recap.as_ref().map_or(block, |r| &r.0);
+                                let mut p = if reply.body.trim().is_empty() {
+                                    ChatBlockPaint {
+                                        act: ChatBlockAct::None,
+                                        drawn: true,
+                                        thought_fold: fold,
+                                    }
+                                } else {
+                                    paint_chat_block_with(
+                                        ui,
+                                        reply,
+                                        thought_shows_label(prev_expanded),
+                                        thought_shows_acts(next_expanded),
+                                        fold,
+                                        reply_acts && !privacy_here,
+                                        diagnostics,
+                                        diag_turn,
+                                    )
+                                };
+                                if let Some((_, r, steps)) = &recap {
+                                    super::recap_ui::paint_recap_card(ui, r, steps);
+                                }
                                 if privacy_here {
                                     if skill_at == Some(i) {
                                         skill_hit = super::skill_undo::paint_skill_undo_rows(
