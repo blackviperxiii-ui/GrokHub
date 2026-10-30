@@ -584,9 +584,25 @@ fn with_the_flag_on_only_background_work_goes_local_and_sensitive_data_stays_on_
     let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
     let table = RoutingTable::default();
     let gate = || LocalGate::now(false, false, false);
+    // Online with the cloud answering, background work stays in the cloud.
+    assert_eq!(
+        Router::choose(
+            &ask("background:summarize", gate()),
+            &reg,
+            &profiles,
+            &table,
+            10
+        )
+        .model,
+        "grok-4.7"
+    );
+    // With the cloud down, the local route takes it.
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state =
+        grokhub_core::model_registry::ModelState::Quarantined;
     let r = Router::choose(
         &ask("background:summarize", gate()),
-        &reg,
+        &down,
         &profiles,
         &table,
         10,
@@ -665,7 +681,7 @@ fn with_the_flag_on_only_background_work_goes_local_and_sensitive_data_stays_on_
     assert_eq!(
         Router::choose(
             &ask("background:summarize", gate()),
-            &reg,
+            &down,
             &profiles,
             &table,
             10
@@ -719,12 +735,12 @@ fn the_settings_toggle_routes_local_only_while_a_runtime_is_installed() {
     assert!(!local::installed() && !local::available());
     assert!(LocalSource.fetch().is_err());
     assert_eq!(pick("background:summarize"), "grok-4.7");
-    // A runtime installed: the toggle goes live for background work only, never for chat.
+    // A runtime installed: online, the cloud still wins while it answers; local is the last resort.
     let rt = Installed::with(Arc::new(FakeRt));
     assert!(local::installed() && local::available());
     assert_eq!(LocalSource.fetch().map(|l| l.models.len()), Ok(2));
-    assert_eq!(pick("background:summarize"), "local:small");
-    assert_eq!(pick("background:triage"), "local:small");
+    assert_eq!(pick("background:summarize"), "grok-4.7");
+    assert_eq!(pick("background:triage"), "grok-4.7");
     assert_eq!(pick("chat:default"), "grok-4.7");
     // Toggle off: back to the cloud on the next call.
     local::set_enabled(false);
@@ -738,7 +754,11 @@ fn the_settings_toggle_routes_local_only_while_a_runtime_is_installed() {
 fn a_local_call_writes_no_egress_line() {
     let dir = test_dir("r3a-egress");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
-    grokhub_core::model_registry::store::save_registry(&dir, &fleet()).unwrap();
+    // Online, local takes the step only with the cloud down.
+    let mut reg = fleet();
+    reg.models.get_mut("grok-4.7").unwrap().state =
+        grokhub_core::model_registry::ModelState::Quarantined;
+    grokhub_core::model_registry::store::save_registry(&dir, &reg).unwrap();
     let _on = ForceOn::with(Some(Arc::new(FakeRt)));
     let input = vec![crate::client::InputItem::Message {
         role: "user".into(),
@@ -764,6 +784,10 @@ fn a_local_call_writes_no_egress_line() {
     }
     let routed = super::call_model(&Never, &call, &crate::CancelToken::new()).unwrap();
     assert_eq!(routed.out.text, r#"{"summary":"two lines"}"#);
+    assert!(
+        local::fallback_active(),
+        "the cabin shows the local fallback"
+    );
     assert!(
         read_egress(&dir).is_empty(),
         "0 egress lines from a local route"
@@ -811,7 +835,7 @@ fn gate_at(level: grokhub_core::local_governor::Level, sensitive: bool) -> Local
 }
 
 #[test]
-fn online_background_work_goes_local_only_in_ramp_up_and_normal() {
+fn online_background_work_goes_local_only_when_the_cloud_is_down() {
     use grokhub_core::local_governor::Level;
     use grokhub_core::model_registry::ModelState;
     let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
@@ -833,26 +857,27 @@ fn online_background_work_goes_local_only_in_ramp_up_and_normal() {
     let s = |m: &str, no: bool, rule: &str| (m.to_string(), no, rule.to_string());
     let small = 500;
     let heavy = local::ctx_cap() / 2 + 1;
-    // (level, light step, heavy step, light step with the cloud down)
+    // (level, light step, heavy step, light step with the cloud down): online the
+    // cloud takes every step while it answers, at any governor level.
     let mut down = fleet();
     down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
     for (level, light, big, outage) in [
         (
             Level::RampUp,
-            s("local:small", false, ""),
-            s("local:small", false, ""),
+            s("grok-4.7", false, ""),
+            s("grok-4.7", false, ""),
             s("local:small", false, "local:cloud_down"),
         ),
         (
             Level::Normal,
-            s("local:small", false, ""),
-            s("grok-4.7", false, "local:heavy_waits"),
+            s("grok-4.7", false, ""),
+            s("grok-4.7", false, ""),
             s("local:small", false, "local:cloud_down"),
         ),
         (
             Level::Throttle,
-            s("grok-4.7", false, "local:throttled"),
-            s("grok-4.7", false, "local:throttled"),
+            s("grok-4.7", false, ""),
+            s("grok-4.7", false, ""),
             s("local:small", false, "local:cloud_down"),
         ),
         (
