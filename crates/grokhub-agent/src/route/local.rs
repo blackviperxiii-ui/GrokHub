@@ -85,11 +85,20 @@ static TIER: AtomicUsize = AtomicUsize::new(0);
 /// tick, so the Settings toggle takes effect without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
+    if !on {
+        // Off: nothing falls back to the device, so drop the chip and keep-warm.
+        note_fallback(false);
+    }
 }
 
 /// The Settings toggle alone, for the governor's sampler.
 pub fn switched_on() -> bool {
     ENABLED.load(Ordering::SeqCst)
+}
+
+/// [`switched_on`], or forced on for this test thread.
+pub(crate) fn toggle_on() -> bool {
+    switched_on() || test_on()
 }
 
 /// The route is live: the toggle is on, a runtime is [`installed`], and the
@@ -369,12 +378,15 @@ static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
 
 /// Live path: the last routed call went to the device because no cloud model could take it.
+///
+/// A turn that started before Local AI was turned off can finish after it; its
+/// `true` is dropped then, so the chip and keep-warm stay off.
 pub fn note_fallback(active: bool) {
-    FALLBACK_ACTIVE.store(active, Ordering::SeqCst);
+    FALLBACK_ACTIVE.store(active && toggle_on(), Ordering::SeqCst);
 }
 
 pub fn fallback_active() -> bool {
-    FALLBACK_ACTIVE.load(Ordering::SeqCst)
+    FALLBACK_ACTIVE.load(Ordering::SeqCst) && toggle_on()
 }
 
 /// The model should be loaded ahead of time: offline, or online with no cloud
@@ -604,15 +616,17 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
 /// flight for as long as it holds the runtime.
 fn ensure_production_runtime() -> Option<super::local_sidecar::Busy> {
     let dir = config_dir()?;
-    match super::local_sidecar::acquire(&dir) {
+    match super::local_sidecar::acquire_for_request(&dir) {
         Ok(busy) => {
             set_bootstrap_error(None);
             Some(busy)
         }
-        // A governor pause or the crash breaker isn't a broken install; both
-        // lift on their own.
+        // Turned off mid-request, a governor pause or the crash breaker isn't
+        // a broken install.
         Err(_)
-            if super::local_gov::paused()
+            if !toggle_on()
+                || super::local_sidecar::stop_pending()
+                || super::local_gov::paused()
                 || super::local_gov::may_start(super::local_sidecar::unix_ms()).is_err() =>
         {
             None
