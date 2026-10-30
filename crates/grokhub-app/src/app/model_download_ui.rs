@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn the_confirm_reads_the_free_disk_when_it_opens() {
-        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
         let mut app = Cabin::quiet_for_test();
         // Launch saw plenty of room; the drive has since filled up.
         app.setup.hw = Some(ls::Hardware {
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn a_draft_model_asks_before_it_downloads_too() {
-        let g12 = ls::model_by_id("gemma-4-12b-it-q4_k_m").expect("12B");
+        let g12 = ls::model_by_id("gemma-4-12b-it-abliterated-q4_k").expect("12B");
         // The test home has no draft model yet, so the 12B is offered one.
         let d = ld::offer(g12.file, &drafters_dir()).expect("a draft model for the 12B");
         assert_eq!(md::partial_bytes(&drafters_dir(), d), None);
@@ -818,7 +818,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("dir");
         let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
         let dir = root.join("models");
-        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
         // The real fetch carries no data, so the egress guard lets both Hugging Face calls through.
         assert_eq!(crate::xai::egress_ok(&md::download_url(e2b), &[]), Ok(()));
         assert_eq!(crate::xai::egress_ok(&md::tree_url(e2b.repo), &[]), Ok(()));
@@ -874,8 +874,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grokhub-dl-draft-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
-        let g12 = ls::model_by_id("gemma-4-12b-it-q4_k_m").expect("12B");
-        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
+        let g12 = ls::model_by_id("gemma-4-12b-it-abliterated-q4_k").expect("12B");
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
         let drafters = root.join("models").join(ld::DRAFTERS_DIR);
         // Offered for the 12B until it's on disk; the line says it is optional.
         assert_eq!(ld::offer(g12.file, &drafters).map(|d| d.id), Some(e2b.id));
@@ -929,11 +929,11 @@ mod tests {
 
     #[test]
     fn each_ending_reads_as_a_plain_status_line() {
-        let m = ls::model_by_id("gemma-4-e4b-it-q4_k_m").expect("E4B");
+        let m = ls::model_by_id("gemma-4-e4b-it-abliterated-q4_k").expect("E4B");
         let dir = Path::new("/home/v/GrokHub/models");
         assert_eq!(
             outcome_status(m, &Outcome::Paused { done: 2_100 * MIB }, dir),
-            "Paused Gemma 4 E4B at 2.1 GB of 5 GB. Resume picks up where it stopped."
+            "Paused Gemma 4 E4B at 2.1 GB of 4.9 GB. Resume picks up where it stopped."
         );
         assert_eq!(
             outcome_status(m, &Outcome::Cancelled, dir),
@@ -955,11 +955,11 @@ mod tests {
             id: m.id.into(),
             file: m.file.into(),
             sha256: "a".repeat(64),
-            bytes: 5_089 * MIB,
+            bytes: 5_057 * MIB,
         };
         assert_eq!(
             outcome_status(m, &Outcome::Done(rec), dir),
-            format!("Downloaded Gemma 4 E4B (5 GB) to {}", dir.display())
+            format!("Downloaded Gemma 4 E4B (4.9 GB) to {}", dir.display())
         );
     }
 }
