@@ -2388,10 +2388,12 @@ mod tests {
         let gaming = GameGuard {
             anticheat: None,
             gaming: true,
+            idle_anticheat: None,
         };
         let vanguard = GameGuard {
             anticheat: Some("Vanguard"),
             gaming: true,
+            idle_anticheat: None,
         };
         let paused = "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.";
         let tools = [
@@ -2447,6 +2449,15 @@ mod tests {
         assert_eq!(s.backend_mut().log, vec!["list".to_string()]);
         // Clear again: the same calls go through.
         s.backend_mut().guard = GameGuard::default();
+        assert!(s.invoke("screenshot", &json!({})).is_ok());
+        assert!(s.invoke("click", &json!({"x":1,"y":1})).is_ok());
+        // Riot Vanguard installed with no Riot game open pauses nothing.
+        let vg = crate::game_guard::scan_anticheats(&["vgtray.exe"], &["vgk", "vgc"]);
+        s.backend_mut().guard = crate::game_guard::decide(&crate::game_guard::GuardSignals {
+            anticheat: vg.running,
+            idle_anticheat: vg.idle,
+            ..Default::default()
+        });
         assert!(s.invoke("screenshot", &json!({})).is_ok());
         assert!(s.invoke("click", &json!({"x":1,"y":1})).is_ok());
     }

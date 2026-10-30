@@ -295,13 +295,14 @@ pub(crate) fn publish_capture_backend(label: &str) {
 }
 
 /// The Settings note under the desktop switch: the input and capture
-/// routes, plus a game guard line while something is paused. Never blocks.
+/// routes, plus a game guard line while something is paused or an always-on
+/// anti-cheat is installed. Never blocks.
 pub fn desktop_panel_lines() -> String {
     let routes = grokhub_core::desktop_mcp::desktop_control_status(
         &active_input_label(),
         &active_capture_label(),
     );
-    match game_guard::peek().status_line() {
+    match game_guard::peek().panel_note() {
         Some(line) => format!("{routes}\n{line}"),
         None => routes,
     }
@@ -941,6 +942,7 @@ mod tests {
     const CLEAR: game_guard::GameGuard = game_guard::GameGuard {
         anticheat: None,
         gaming: false,
+        idle_anticheat: None,
     };
 
     /// Records what COMPUTER_CMD hands sent to the backend.
@@ -1054,10 +1056,12 @@ mod tests {
         let gaming = game_guard::GameGuard {
             anticheat: None,
             gaming: true,
+            idle_anticheat: None,
         };
         let faceit = game_guard::GameGuard {
             anticheat: Some("FACEIT"),
             gaming: true,
+            idle_anticheat: None,
         };
         let ops = [
             ComputerOp::Click { x: 1, y: 2 },
@@ -1090,6 +1094,7 @@ mod tests {
         let gaming = game_guard::GameGuard {
             anticheat: None,
             gaming: true,
+            idle_anticheat: None,
         };
         let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"click","arguments":{"x":1,"y":1}}}"#;
         let reply: serde_json::Value =
