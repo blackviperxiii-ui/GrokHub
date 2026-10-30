@@ -12,6 +12,7 @@ A rename is a one-line change to `brand.json`; new art is a file swap.
 | `nyx/actions/<mode>/<n>.jpg`, `nyx/defaults/<preset>/<n>.jpg` | Nyx's other poses: more per mode (plus Thinking and Writing), and each built-in personality's outfit, shown in every mode and on its picker tile. The folders are mapped in `docs/design/loadout-baseline-v1/nyx-modes/README.md` | the cabin's home dock (`crates/grokhub-app/src/app/loadout_home/nyx_wardrobe.rs`) and Settings → Personality |
 | `nyx-working.jpg`, `nyx-gaming.jpg`, `nyx-doctor.jpg`, `nyx-reading.jpg`, `nyx-hanging-out.jpg` | Nyx in the home dock's corner box, one per mode: a coding tool, a game you just left, a PC-care tool, a search or read, and just talking | the cabin's home dock |
 | `nyx-viper.jpg` | Nyx in the snake onesie, shown in every mode while the Viper personality is on | the cabin's home dock |
+| `nyx-raunchy.jpg` | Nyx in the raunchy outfit, shown in every mode while another explicit personality is on and adults-only personalities are switched on | the cabin's home dock |
 
 Swap art by replacing a file with one of the same name. Keep a square
 `viewBox` on the SVGs so they scale cleanly. `companion.png` is a cutout

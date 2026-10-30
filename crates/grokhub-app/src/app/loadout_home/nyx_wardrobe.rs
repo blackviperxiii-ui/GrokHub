@@ -2,9 +2,9 @@
 //! can show. Nyx changes with what she is doing (a set of poses per mood);
 //! every other built-in voice is Nyx in that voice's outfit, the same set in
 //! every mood. A set shows one pose at a time and moves on to the next pose
-//! only when the mood changes, so nothing flickers. Explicit outfits (Viper's
-//! and the other adults-only presets') show only while adults-only
-//! personalities are on and the 18+ check was answered yes.
+//! only when what the chat is doing changes, so nothing flickers. Explicit
+//! outfits (Viper's onesie, the raunchy outfit) come only through
+//! [`outfit_for`]'s adults-only gate, and are checked against it again here.
 //!
 //! The pictures are 448 x 350 crops of the originals in
 //! `docs/design/loadout-baseline-v1/nyx-modes/`, kept under `brand/nyx/`.
@@ -24,8 +24,8 @@ const CYCLE: &str = "nyx-wardrobe-cycle";
 const DOCK_TEX: &str = "nyx-wardrobe-dock";
 /// ctx key for this frame's explicit-art gate.
 const EXPLICIT_OK: &str = "nyx-wardrobe-explicit-ok";
-/// Viper wears Nyx's [`Mood::Viper`] set.
-const VIPER_ID: &str = "viper";
+/// The explicit built-in voices and the outfit [`outfit_for`] gives each.
+const EXPLICIT_VOICES: &[(&str, Mood)] = &[("viper", Mood::Viper), ("whore", Mood::Raunchy)];
 
 /// One picture, as the dock shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,118 +70,93 @@ const MOOD_EXTRAS: &[(Mood, &[Pose])] = &[
     (Mood::Writing, poses!("actions/writing": 2, 3, 4, 5)),
     (Mood::HangingOut, poses!("defaults/nyx": 4, 5)),
     (Mood::Viper, poses!("defaults/viper": 2, 3, 4, 5)),
+    (Mood::Raunchy, poses!("defaults/whore": 1, 2, 3, 4, 5)),
 ];
 
-/// A built-in voice's own outfit. `explicit` must match the preset's own
-/// flag in `personalities.toml` (a test checks).
+/// A built-in voice's own outfit.
 struct Outfit {
     id: &'static str,
-    explicit: bool,
     poses: &'static [Pose],
 }
 
-/// Every built-in voice but Nyx (who follows her mood) and Viper (who wears
-/// [`Mood::Viper`]'s set).
+/// Every built-in voice but Nyx (who follows her mood) and the explicit ones
+/// (whose outfit is a mood, [`EXPLICIT_VOICES`]).
 const OUTFITS: &[Outfit] = &[
     Outfit {
         id: "bard",
-        explicit: false,
         poses: poses!("defaults/bard": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "butler",
-        explicit: false,
         poses: poses!("defaults/butler": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "chief-engineer",
-        explicit: false,
         poses: poses!("defaults/chief-engineer": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "concise-pro",
-        explicit: false,
         poses: poses!("defaults/concise-pro": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "drill-sergeant",
-        explicit: false,
         poses: poses!("defaults/drill-sergeant": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "friendly-neighbor",
-        explicit: false,
         poses: poses!("defaults/friendly-neighbor": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "genie",
-        explicit: false,
         poses: poses!("defaults/genie": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "gentle-listener",
-        explicit: false,
         poses: poses!("defaults/gentle-listener": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "hype-coach",
-        explicit: false,
         poses: poses!("defaults/hype-coach": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "lawyer-precise",
-        explicit: false,
         poses: poses!("defaults/lawyer-precise": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "mission-control",
-        explicit: false,
         poses: poses!("defaults/mission-control": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "noir-detective",
-        explicit: false,
         poses: poses!("defaults/noir-detective": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "pirate",
-        explicit: false,
         poses: poses!("defaults/pirate": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "professor",
-        explicit: false,
         poses: poses!("defaults/professor": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "retro-hacker",
-        explicit: false,
         poses: poses!("defaults/retro-hacker": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "sarcastic-sidekick",
-        explicit: false,
         poses: poses!("defaults/sarcastic-sidekick": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "southern-mechanic",
-        explicit: false,
         poses: poses!("defaults/southern-mechanic": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "surfer",
-        explicit: false,
         poses: poses!("defaults/surfer": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "zen-mentor",
-        explicit: false,
         poses: poses!("defaults/zen-mentor": 1, 2, 3, 4, 5),
-    },
-    Outfit {
-        id: "whore",
-        explicit: true,
-        poses: poses!("defaults/whore": 1, 2, 3, 4, 5),
     },
 ];
 
@@ -206,61 +181,78 @@ pub(in crate::app) fn mood_look(mood: Mood) -> Look {
     poses.extend_from_slice(extras);
     Look {
         set: mood.key(),
-        explicit: mood == Mood::Viper,
+        explicit: is_explicit(mood),
         poses,
     }
 }
 
-/// The outfit a built-in voice wears in every mood. Nyx and custom voices
-/// have none.
+/// The moods that are outfits for explicit voices.
+fn is_explicit(mood: Mood) -> bool {
+    matches!(mood, Mood::Viper | Mood::Raunchy)
+}
+
+/// The outfit a non-explicit built-in voice wears in every mood. Nyx, the
+/// explicit voices and custom voices have none.
 fn outfit_look(id: &str) -> Option<Look> {
-    if id == VIPER_ID {
-        return Some(mood_look(Mood::Viper));
-    }
     OUTFITS.iter().find(|o| o.id == id).map(|o| Look {
         set: o.id,
-        explicit: o.explicit,
+        explicit: false,
         poses: o.poses.to_vec(),
     })
 }
 
 /// The voice is drawn as Nyx in its own outfit.
 pub(in crate::app) fn has_outfit(id: &str) -> bool {
-    id == VIPER_ID || OUTFITS.iter().any(|o| o.id == id)
+    EXPLICIT_VOICES.iter().any(|(v, _)| *v == id) || OUTFITS.iter().any(|o| o.id == id)
 }
 
-/// What the corner box shows for voice `id` in `mood`: Nyx's mood set, or
-/// the voice's own outfit set. A deck pin (`pinned`) shows the mood's set on
-/// any drawn voice, as the mode screenshots expect. None (the letter tile)
-/// for voices with no art, and for explicit art while `explicit_ok` is off.
+/// What the corner box shows for voice `id` in `mood`: an explicit outfit
+/// mood's set ([`outfit_for`] already gated it), else the voice's own
+/// outfit set, else Nyx's mood set. A deck pin (`pinned`) shows the mood's
+/// set on any drawn voice, as the mode screenshots expect. None (the letter
+/// tile) for voices with no art, and for explicit art while `explicit_ok`
+/// is off.
 pub(in crate::app) fn dock_look(
     id: &str,
     mood: Mood,
     pinned: bool,
     explicit_ok: bool,
 ) -> Option<Look> {
-    let look = match outfit_look(id) {
-        Some(outfit) if !pinned => outfit,
-        Some(_) => mood_look(mood),
-        None if id == personality::DEFAULT_ID => mood_look(mood),
-        None => return None,
+    let look = if is_explicit(mood) {
+        mood_look(mood)
+    } else if id != personality::DEFAULT_ID && !has_outfit(id) {
+        return None;
+    } else {
+        match outfit_look(id) {
+            Some(outfit) if !pinned => outfit,
+            _ => mood_look(mood),
+        }
     };
     (!look.explicit || explicit_ok).then_some(look)
 }
 
-/// The picker's picture for voice `id`: the first pose of its set (Nyx's is
-/// her hanging-out picture). None for voices with no art, and for explicit
-/// art while `explicit_ok` is off.
+/// The picker's picture for voice `id`: its `defaults/<id>/1` pose, else
+/// the first pose of its set (Nyx's hanging-out picture, Viper's onesie).
+/// None for voices with no art, and for explicit art while `explicit_ok` is
+/// off.
 pub(in crate::app) fn thumbnail(id: &str, explicit_ok: bool) -> Option<Pose> {
+    let explicit = EXPLICIT_VOICES.iter().find(|(v, _)| *v == id);
     let look = if id == personality::DEFAULT_ID {
         mood_look(Mood::HangingOut)
+    } else if let Some((_, mood)) = explicit {
+        mood_look(*mood)
     } else {
         outfit_look(id)?
     };
     if look.explicit && !explicit_ok {
         return None;
     }
-    look.poses.first().copied()
+    let own = format!("nyx-defaults/{id}/1");
+    look.poses
+        .iter()
+        .find(|p| p.key == own)
+        .or(look.poses.first())
+        .copied()
 }
 
 /// Which pose of a set shows. The first time a set comes on it shows its
@@ -292,11 +284,12 @@ impl PoseCycle {
     }
 }
 
-/// The pose the dock shows now for `look` in `mood`.
-pub(in crate::app) fn dock_pose(ctx: &egui::Context, look: &Look, mood: Mood) -> Option<Pose> {
+/// The pose the dock shows now for `look` while the chat does `activity`
+/// ([`Cabin::companion_activity`], the mood under any outfit).
+pub(in crate::app) fn dock_pose(ctx: &egui::Context, look: &Look, activity: Mood) -> Option<Pose> {
     let i = ctx.data_mut(|d| {
         d.get_temp_mut_or_default::<PoseCycle>(egui::Id::new(CYCLE))
-            .pick(look.set, mood, look.poses.len())
+            .pick(look.set, activity, look.poses.len())
     });
     look.poses.get(i).copied()
 }
@@ -359,10 +352,11 @@ pub(in crate::app) fn explicit_ok(ctx: &egui::Context) -> bool {
 }
 
 impl Cabin {
-    /// Explicit outfits show only with adults-only personalities on and the
-    /// one-time 18+ check answered yes, the switch that shows explicit presets.
+    /// The one adults-only gate for explicit art: Settings → Adults-only
+    /// personalities, the switch that shows explicit presets. It only turns
+    /// on after the one-time 18+ check.
     pub(in crate::app) fn explicit_art_ok(&self) -> bool {
-        self.cfg.explicit_personalities && self.cfg.adult_confirmed
+        self.cfg.explicit_personalities
     }
 
     /// What the corner box shows right now for the shown voice.
@@ -381,7 +375,7 @@ impl Cabin {
 mod tests {
     use super::*;
 
-    const ALL_MOODS: [Mood; 8] = [
+    const ALL_MOODS: [Mood; 9] = [
         Mood::Working,
         Mood::Gaming,
         Mood::Doctor,
@@ -390,6 +384,7 @@ mod tests {
         Mood::Writing,
         Mood::HangingOut,
         Mood::Viper,
+        Mood::Raunchy,
     ];
 
     fn every_look() -> Vec<Look> {
@@ -400,6 +395,7 @@ mod tests {
 
     fn is_explicit_art(key: &str) -> bool {
         key == "loadout-nyx-viper"
+            || key == "loadout-nyx-raunchy"
             || key.starts_with("nyx-defaults/viper/")
             || key.starts_with("nyx-defaults/whore/")
     }
@@ -421,6 +417,7 @@ mod tests {
                 (Mood::Writing, 5),
                 (Mood::HangingOut, 3),
                 (Mood::Viper, 5),
+                (Mood::Raunchy, 6),
             ]
         );
         let working: Vec<&str> = mood_look(Mood::Working)
@@ -440,7 +437,12 @@ mod tests {
             mood_look(Mood::Thinking).poses[0].key,
             "loadout-nyx-thinking"
         );
+        assert_eq!(
+            mood_look(Mood::Raunchy).poses[1].key,
+            "nyx-defaults/whore/1"
+        );
         assert!(mood_look(Mood::Viper).explicit);
+        assert!(mood_look(Mood::Raunchy).explicit);
         assert!(!mood_look(Mood::Working).explicit);
     }
 
@@ -456,18 +458,19 @@ mod tests {
                 bytes.push(pose.jpg.as_ptr());
             }
         }
-        // 43 Nyx mood poses and 100 outfit poses (Viper's are among the moods).
-        assert_eq!(keys.len(), 143);
+        // 49 mood poses (Viper's and the raunchy set among them) and 95
+        // outfit poses.
+        assert_eq!(keys.len(), 144);
         keys.sort();
         keys.dedup();
-        assert_eq!(keys.len(), 143, "every pose has its own key");
+        assert_eq!(keys.len(), 144, "every pose has its own key");
         bytes.sort();
         bytes.dedup();
-        assert_eq!(bytes.len(), 143, "every pose is its own picture");
+        assert_eq!(bytes.len(), 144, "every pose is its own picture");
     }
 
     #[test]
-    fn every_built_in_voice_but_nyx_has_an_outfit_flagged_like_its_preset() {
+    fn every_built_in_voice_but_nyx_has_an_outfit_and_explicit_ones_wear_a_gated_mood() {
         let builtins = personality::builtins();
         assert_eq!(builtins.len(), 22);
         for p in &builtins {
@@ -475,9 +478,24 @@ mod tests {
                 assert!(!has_outfit(&p.id));
                 continue;
             }
-            let look = outfit_look(&p.id).unwrap_or_else(|| panic!("{} has no outfit", p.id));
-            assert_eq!(look.explicit, p.explicit, "{}", p.id);
-            assert_eq!(look.poses.len(), 5, "{}", p.id);
+            assert!(has_outfit(&p.id), "{}", p.id);
+            if p.explicit {
+                assert_eq!(outfit_look(&p.id), None, "{}", p.id);
+                let mood = outfit_for(&p.id, true, true).expect("explicit outfit");
+                let (_, want) = EXPLICIT_VOICES
+                    .iter()
+                    .find(|(v, _)| *v == p.id)
+                    .unwrap_or_else(|| panic!("{} is not listed as explicit", p.id));
+                assert_eq!(mood, *want, "{}", p.id);
+                assert!(mood_look(mood).explicit, "{}", p.id);
+            } else {
+                let look = outfit_look(&p.id).unwrap_or_else(|| panic!("{} has no outfit", p.id));
+                assert!(!look.explicit, "{}", p.id);
+                assert_eq!(look.poses.len(), 5, "{}", p.id);
+            }
+        }
+        for (id, _) in EXPLICIT_VOICES {
+            assert!(builtins.iter().any(|p| p.id == *id && p.explicit), "{id}");
         }
         for o in OUTFITS {
             assert!(
@@ -499,9 +517,14 @@ mod tests {
         assert_eq!(look("nyx", Mood::Writing), Some("loadout-nyx-writing"));
         assert_eq!(look("pirate", Mood::Working), Some("pirate"));
         assert_eq!(look("pirate", Mood::Gaming), Some("pirate"));
-        assert_eq!(look("whore", Mood::Reading), Some("whore"));
+        assert_eq!(look("whore", Mood::Raunchy), Some("loadout-nyx-raunchy"));
+        assert_eq!(
+            look("whore-copy", Mood::Raunchy),
+            Some("loadout-nyx-raunchy")
+        );
         assert_eq!(look("viper", Mood::Viper), Some("loadout-nyx-viper"));
-        assert_eq!(look("viper", Mood::Working), Some("loadout-nyx-viper"));
+        // With no outfit from the gate, an explicit voice shows Nyx's mode.
+        assert_eq!(look("viper", Mood::Working), Some("loadout-nyx-working"));
         assert_eq!(look("pirate-copy", Mood::Working), None, "custom voices");
         // A deck pin shows the mood's set on any drawn voice.
         let pinned = |id, mood| dock_look(id, mood, true, true).map(|l| l.set);
@@ -529,9 +552,14 @@ mod tests {
                 assert!(!is_explicit_art(pose.key), "{id} thumbnail {}", pose.key);
             }
         }
-        assert_eq!(dock_look("whore", Mood::HangingOut, false, false), None);
+        assert_eq!(dock_look("whore", Mood::Raunchy, false, false), None);
         assert_eq!(dock_look("viper", Mood::Viper, false, false), None);
         assert_eq!(dock_look("nyx", Mood::Viper, true, false), None);
+        assert_eq!(dock_look("pirate", Mood::Raunchy, true, false), None);
+        assert_eq!(
+            dock_look("whore", Mood::HangingOut, false, false).map(|l| l.set),
+            Some("loadout-nyx-hanging-out")
+        );
         assert_eq!(thumbnail("whore", false), None);
         assert_eq!(thumbnail("viper", false), None);
         // With the gate open they do show.
@@ -609,17 +637,23 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_needs_adults_only_and_the_18_plus_check() {
+    fn explicit_voices_dress_up_only_with_adults_only_on() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
         cabin.thread_idx = 0;
         cabin.messages = Arc::new(Vec::new());
-        for id in ["whore", "viper"] {
+        for (id, set) in [
+            ("whore", "loadout-nyx-raunchy"),
+            ("viper", "loadout-nyx-viper"),
+        ] {
             cabin.cfg.personality = id.into();
             cabin.cfg.explicit_personalities = false;
-            cabin.cfg.adult_confirmed = false;
-            assert!(!cabin.explicit_art_ok());
+            cabin.cfg.adult_confirmed = true;
+            assert!(
+                !cabin.explicit_art_ok(),
+                "the 18+ answer alone opens nothing"
+            );
             let off = cabin.dock_look_now().expect("Nyx shows instead");
             assert_eq!(
                 off.set, "loadout-nyx-hanging-out",
@@ -627,19 +661,22 @@ mod tests {
             );
             assert!(!off.explicit);
 
-            cabin.cfg.adult_confirmed = true;
-            let confirmed_only = cabin.dock_look_now().expect("still Nyx");
-            assert_eq!(confirmed_only.set, "loadout-nyx-hanging-out");
-
-            // Adults-only on but no 18+ answer: the voice shows, its art does not.
-            cabin.cfg.adult_confirmed = false;
             cabin.cfg.explicit_personalities = true;
-            assert_eq!(cabin.dock_look_now(), None, "{id} without the 18+ check");
-
-            cabin.cfg.adult_confirmed = true;
             let on = cabin.dock_look_now().expect("explicit art");
-            assert!(on.explicit, "{id} with adults-only on");
+            assert_eq!(on.set, set, "{id} with adults-only on");
+            assert!(on.explicit);
         }
+        // The outfit holds while the chat works; what it does moves the pose on.
+        cabin.cfg.personality = "whore".into();
+        cabin.messages = Arc::new(vec![("user".into(), "hi".into())]);
+        cabin.running = true;
+        cabin.chat_job_thread = Some(cabin.threads[0].id.clone());
+        assert_eq!(cabin.companion_mood(), Mood::Raunchy);
+        assert_eq!(cabin.companion_activity(), Mood::Thinking);
+        cabin.running = false;
+        cabin.chat_job_thread = None;
+        assert_eq!(cabin.companion_activity(), Mood::HangingOut);
+
         cabin.cfg.explicit_personalities = false;
         cabin.cfg.personality = "pirate".into();
         assert_eq!(cabin.dock_look_now().map(|l| l.set), Some("pirate"));

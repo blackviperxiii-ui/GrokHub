@@ -2053,6 +2053,53 @@ mod tests {
     }
 
     #[test]
+    fn picker_tiles_show_the_outfit_and_explicit_ones_only_with_adults_only_on() {
+        fn pictures(shape: &egui::Shape, n: &mut usize) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| pictures(s, n)),
+                s if s.texture_id() != egui::TextureId::default() => *n += 1,
+                _ => {}
+            }
+        }
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let builtins = personality::builtins();
+        let preset = |id: &str| {
+            builtins
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .expect("built-in")
+        };
+        let mut custom = preset("pirate");
+        custom.id = "pirate-copy".into();
+        custom.custom = true;
+        let count = |p: &Personality, adults: bool| {
+            let mut n = 0;
+            let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+                super::super::loadout_home::nyx_wardrobe::publish_explicit_ok(ui.ctx(), adults);
+                paint_preset_tile(ui, p, DETAIL_ICON, true);
+            });
+            for c in &out.shapes {
+                pictures(&c.shape, &mut n);
+            }
+            n
+        };
+        assert_eq!(
+            count(&preset("pirate"), false),
+            1,
+            "pirate wears its outfit"
+        );
+        assert_eq!(count(&preset("nyx"), false), 1);
+        assert_eq!(count(&custom, true), 0, "custom voices keep the letter");
+        for id in ["whore", "viper"] {
+            assert_eq!(count(&preset(id), false), 0, "{id} with adults-only off");
+            assert_eq!(count(&preset(id), true), 1, "{id} with adults-only on");
+        }
+    }
+
+    #[test]
     fn the_chat_picker_is_centred_and_wraps() {
         fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
             match shape {
