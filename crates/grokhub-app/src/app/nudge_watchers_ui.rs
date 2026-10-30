@@ -125,6 +125,10 @@ fn crash_counts_linux() -> Vec<CrashCount> {
                 if app.is_empty() || app.eq_ignore_ascii_case("grokhub") {
                     continue;
                 }
+                let message = v.get("MESSAGE").and_then(|x| x.as_str()).unwrap_or("");
+                if grokhub_core::nudge_watchers::is_log_noise(app, message) {
+                    continue;
+                }
                 counts
                     .entry(app.to_string())
                     .and_modify(|c| *c += 1)

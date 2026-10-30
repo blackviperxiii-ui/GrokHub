@@ -21,6 +21,10 @@ use crate::update_feed::{UpdateCard, UpdateStatus};
 pub const FILE_NAME: &str = "reactions.json";
 /// A category's score stays in `-SCORE_MAX..=SCORE_MAX`.
 pub const SCORE_MAX: i32 = 10;
+/// How low ignores alone can push a category. A feed posts many cards a
+/// day, so unopened posts used to sink a whole category to -10. Every other
+/// lowering outcome (dismissal, snooze, Less like this) can still go lower.
+pub const IGNORE_FLOOR: i32 = -3;
 /// Ignored this many times in a row quiets the category.
 pub const QUIET_AFTER_IGNORES: u32 = 3;
 /// Pulse rank points per score point.
@@ -99,7 +103,12 @@ impl Reactions {
         now_ms: u64,
     ) -> Option<String> {
         let entry = self.categories.entry(category.to_string()).or_default();
-        entry.score = (entry.score + outcome.delta()).clamp(-SCORE_MAX, SCORE_MAX);
+        let floor = if outcome == Outcome::Ignored {
+            IGNORE_FLOOR.min(entry.score)
+        } else {
+            -SCORE_MAX
+        };
+        entry.score = (entry.score + outcome.delta()).clamp(floor, SCORE_MAX);
         let mut quieted = None;
         if outcome == Outcome::Ignored {
             entry.ignored_run += 1;
@@ -340,8 +349,26 @@ mod tests {
         );
         r.more("hn posts");
         assert!(!r.quiet("hn posts"));
-        // Six ignores and a tap left -5; more lifts it by 3.
-        assert_eq!(r.score("hn posts"), -2);
+        // Ignores stop at the floor: six ignores and a tap left -3, and
+        // more lifts it by 3.
+        assert_eq!(r.score("hn posts"), 0);
+    }
+
+    #[test]
+    fn ignores_alone_stop_at_the_floor_and_dismissals_go_lower() {
+        let mut r = Reactions::default();
+        // A day of unopened web posts.
+        for _ in 0..12 {
+            r.record(Outcome::Ignored, "web posts", "DuckDuckGo", T0);
+        }
+        assert_eq!(r.score("web posts"), IGNORE_FLOOR);
+        assert_eq!(r.rank_boost("web posts"), -60);
+        // Dismissing is a real "no": it goes past the floor.
+        r.record(Outcome::Dismissed, "web posts", "DuckDuckGo", T0);
+        assert_eq!(r.score("web posts"), -5);
+        // And a later ignore never lifts it back to the floor.
+        r.record(Outcome::Ignored, "web posts", "DuckDuckGo", T0);
+        assert_eq!(r.score("web posts"), -5);
     }
 
     #[test]

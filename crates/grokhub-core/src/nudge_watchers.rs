@@ -438,6 +438,21 @@ pub fn detect_disk_low(snap: &WatcherSnapshot, threshold: u64) -> Option<Watcher
     })
 }
 
+/// Error lines that are routine hardware chatter, not an app crashing: the
+/// display brightness daemon probing monitors over i2c/DDC logs an error per
+/// screen every few seconds on many desktops.
+pub fn is_log_noise(app: &str, message: &str) -> bool {
+    let app = app.trim().to_ascii_lowercase();
+    if app == "ddcutil" {
+        return true;
+    }
+    if !app.contains("powerdevil") {
+        return false;
+    }
+    let msg = message.to_ascii_lowercase();
+    ["i2c", "ddc", "brightness"].iter().any(|w| msg.contains(w))
+}
+
 pub fn detect_crash_spike(snap: &WatcherSnapshot) -> Option<WatcherResult> {
     const MIN: u32 = 3;
     let hit = snap
@@ -628,6 +643,25 @@ mod tests {
             daily_max: DEFAULT_DAILY_MAX,
             disk_threshold_bytes: 20 * 1024 * 1024 * 1024,
         }
+    }
+
+    #[test]
+    fn display_probe_chatter_is_noise_and_real_errors_are_not() {
+        assert!(is_log_noise(
+            "org_kde_powerdevil",
+            "powerdevil: Failed to open /dev/i2c-4: Permission denied"
+        ));
+        assert!(is_log_noise(
+            "powerdevil",
+            "DDC/CI not supported on display 2"
+        ));
+        assert!(is_log_noise("ddcutil", "anything at all"));
+        assert!(!is_log_noise(
+            "org_kde_powerdevil",
+            "Segmentation fault (core dumped)"
+        ));
+        assert!(!is_log_noise("firefox", "i2c bus read failed"));
+        assert!(!is_log_noise("steam", "Segmentation fault"));
     }
 
     #[test]
