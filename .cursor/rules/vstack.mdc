@@ -8,3 +8,4 @@ alwaysApply: true
 - Claude Code: `.claude/settings.json` adds the vstack marketplace and turns on `vstack@vstack`, so it loads once you trust the folder. If `/plugin` doesn't list it, run `/plugin marketplace add blackviperxiii-ui/vstack` and `/plugin install vstack@vstack`.
 - Other agents (Codex, Copilot, Jules): run `npx skills add blackviperxiii-ui/vstack -g -y` before you start, so the skills install for your user and nothing lands in the repo.
 - Do not copy vstack skills or rules into this repository.
+- Start nontrivial work with `viper-mode`; run `follow-through` on issues and board cards.

@@ -42,3 +42,8 @@ You don't need Notion access: the issue is your copy of the card.
   merges it once the required checks pass. If auto-merge is off and the PR is
   green and not held, squash-merge it into beta yourself. Never merge into main.
 - No personal info in the repo: write 'user' for names and /home/user for paths.
+
+## vstack skills
+Load the vstack skills before you start (`npx skills add blackviperxiii-ui/vstack -g -y`, or read them from `https://github.com/blackviperxiii-ui/vstack/blob/main/skills/<name>/SKILL.md`). Do not copy them into this repo.
+- Every issue: `viper-mode` to plan and verify, `follow-through` from your start comment to the PR.
+- Before touching shared code: `blast-radius`. Bugs: `tdd`. PR body: `technical-writing`.
