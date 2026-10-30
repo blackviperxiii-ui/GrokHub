@@ -50,6 +50,8 @@ pub mod game_guard;
 pub mod game_watch;
 pub mod game_watch_dota;
 pub mod game_watch_gsi;
+pub mod game_watch_league;
+pub mod game_watch_wow;
 pub mod gguf;
 pub mod goal;
 pub mod governor;
