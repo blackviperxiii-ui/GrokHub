@@ -560,7 +560,8 @@ async function pulse(s, config) {
     seen = await wd("GET", `${s}/element/${box}/property/value`);
     return seen === PULSE_ACTION ? seen : null;
   }).catch((err) => {
-    throw new Error(`${err.message}; the box held ${JSON.stringify(seen)}`);
+    const held = seen === undefined ? "could not be read" : `held ${JSON.stringify(seen)}`;
+    throw new Error(`${err.message}; the box ${held}`);
   });
   await sleep(1000);
   if (mockSeen.length !== calls) throw new Error("Let's do it sent the idea without the person");
