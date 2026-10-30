@@ -27,6 +27,13 @@ Reach for these coding skills at the matching moment (same practice by hand if a
 - **statechart** for multi-state flows (online/offline/degraded, intentions)
 - **make-pr-easy-to-review** when opening a PR
 
+## Require vstack
+Coding agents working on this repo use the [vstack](https://github.com/blackviperxiii-ui/vstack) skills; start with `viper-mode`. Do not copy vstack skills or rules into this repository.
+- Claude Code: `.claude/settings.json` adds the vstack marketplace and turns on `vstack@vstack`, so it loads once you trust the folder. If `/plugin` doesn't list it, run `/plugin marketplace add blackviperxiii-ui/vstack` and `/plugin install vstack@vstack`.
+- Cursor: import `blackviperxiii-ui/vstack` as a team marketplace; set it to Required and enable Auto Refresh.
+- Other agents (Codex, Copilot, Jules): run `npx skills add blackviperxiii-ui/vstack -g -y` before you start, so the skills install for your user and nothing lands in the repo.
+- The `blast-radius`, `tdd` and `statechart` cues above are vstack skills (`/vstack:blast-radius` and so on once the plugin loads).
+
 ## Branch cleanup
 Delete own head after merge/close; scratch ASAP; never main/beta. GitHub auto-delete head branches is on.
 
