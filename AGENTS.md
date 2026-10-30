@@ -34,6 +34,13 @@ Coding agents working on this repo use the [vstack](https://github.com/blackvipe
 - Other agents (Codex, Copilot, Jules): run `npx skills add blackviperxiii-ui/vstack -g -y` before you start, so the skills install for your user and nothing lands in the repo.
 - The `blast-radius`, `tdd` and `statechart` cues above are vstack skills (`/vstack:blast-radius` and so on once the plugin loads).
 
+How to use vstack here:
+- Start nontrivial work with `viper-mode`. It routes to `how` and `why` before edits, `architect` for new modules, `blast-radius` before shared code, `tdd` for bugs and `interrogate` for reviews.
+- Issues and board cards: run `follow-through` from pickup to PR (start comment, blocked note, done with proof).
+- PR bodies and docs: `technical-writing`.
+- `ui/` TypeScript: `typescript-best-practices`. Multi-state flows: `statechart`. Before a beta to main promotion: `qa-walkthrough`.
+- No install? Read a skill straight from `https://github.com/blackviperxiii-ui/vstack/blob/main/skills/<name>/SKILL.md`.
+
 ## Branch cleanup
 Delete own head after merge/close; scratch ASAP; never main/beta. GitHub auto-delete head branches is on.
 
