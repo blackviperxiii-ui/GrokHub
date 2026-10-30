@@ -16,6 +16,14 @@ pub enum TrayCmd {
     Show,
     Halt,
     Quit,
+    /// Put the companion on the desktop, or dock her back.
+    DesktopNyx,
+}
+
+/// The tray item that pops the companion out onto the desktop or docks
+/// her back (Labs, Desktop companion).
+pub fn desktop_nyx_label() -> String {
+    format!("{} on desktop", grokhub_core::brand::companion_name())
 }
 
 pub fn tray_wanted() -> bool {
@@ -530,6 +538,14 @@ impl ksni::Tray for GrokTray {
             }
             .into(),
             StandardItem {
+                label: desktop_nyx_label(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.tx.send(TrayCmd::DesktopNyx);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
                 label: "Halt".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(TrayCmd::Halt);
@@ -626,10 +642,12 @@ fn windows_tray_attach() -> Option<TrayHost> {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     let (tx, rx) = mpsc::channel();
     let show = MenuItem::new("Show cabin", true, None);
+    let nyx = MenuItem::new(desktop_nyx_label(), true, None);
     let halt = MenuItem::new("Halt", true, None);
     let quit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
     let _ = menu.append(&show);
+    let _ = menu.append(&nyx);
     let _ = menu.append(&halt);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&quit);
@@ -641,6 +659,7 @@ fn windows_tray_attach() -> Option<TrayHost> {
         .build()
         .ok()?;
     let show_id = show.id().clone();
+    let nyx_id = nyx.id().clone();
     let halt_id = halt.id().clone();
     let quit_id = quit.id().clone();
     let menu_tx = tx.clone();
@@ -648,6 +667,8 @@ fn windows_tray_attach() -> Option<TrayHost> {
         while let Ok(ev) = MenuEvent::receiver().recv() {
             let cmd = if ev.id == show_id {
                 TrayCmd::Show
+            } else if ev.id == nyx_id {
+                TrayCmd::DesktopNyx
             } else if ev.id == halt_id {
                 TrayCmd::Halt
             } else if ev.id == quit_id {
