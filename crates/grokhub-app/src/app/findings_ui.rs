@@ -20,10 +20,12 @@ pub(super) enum FindingsAct {
 pub(super) const DISMISS: &str = "Dismiss";
 
 /// The newest findings bubble among the painted rows, with its card, unless
-/// it was dismissed or has no fixes.
+/// it was dismissed or has no fixes. After Do all ran on it, only the fixes
+/// Do all left for their own tap stay.
 pub(super) fn newest_findings_row(
     views: &[grokhub_core::ChatView],
     dismissed: &[String],
+    batched: &[String],
 ) -> Option<(usize, Findings)> {
     let i = views.iter().rposition(|v| {
         v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(FINDINGS_HEAD)
@@ -32,9 +34,11 @@ pub(super) fn newest_findings_row(
     if dismissed.iter().any(|d| d == body) {
         return None;
     }
-    Findings::parse(body)
-        .filter(|f| !f.fixes.is_empty())
-        .map(|f| (i, f))
+    let mut card = Findings::parse(body)?;
+    if batched.iter().any(|b| b == body) {
+        card.fixes = card.do_all().map(|b| b.skipped).unwrap_or_default();
+    }
+    (!card.fixes.is_empty()).then_some((i, card))
 }
 
 /// Hover text for Do all: the order it runs in, and what it leaves out.
@@ -112,11 +116,19 @@ impl Cabin {
                 let Some(batch) = Findings::parse(body).and_then(|c| c.do_all()) else {
                     return;
                 };
-                self.harness.findings_dismissed.push(body.to_string());
+                // Only from idle: then a run that is live after the send can
+                // only be the first fix's, so the rest are safe to queue.
+                if self.running || self.pending_kick.is_some() {
+                    self.status = format!("{DO_ALL} waits for this run to finish");
+                    return;
+                }
                 let mut steps = batch.prompts().into_iter();
-                if let Some(first) = steps.next() {
-                    self.send_from_composer(first);
-                    self.queue_do_all_rest(steps.collect(), batch.run.len());
+                let Some(first) = steps.next() else {
+                    return;
+                };
+                self.send_from_composer(first);
+                if self.queue_do_all_rest(steps.collect(), batch.run.len()) {
+                    self.harness.findings_batched.push(body.to_string());
                 }
             }
             FindingsAct::Dismiss => self.harness.findings_dismissed.push(body.to_string()),
@@ -126,11 +138,14 @@ impl Cabin {
     /// After Do all's first fix: the rest wait in the queue, so each shows
     /// as its own row until its turn. A send that never started a run (no
     /// sign-in, a refused gate) drops them instead of firing them later.
-    fn queue_do_all_rest(&mut self, rest: Vec<String>, fixes: usize) {
-        if self.running || self.pending_kick.is_some() {
-            self.followup_queue.extend(rest);
-            self.status = format!("{DO_ALL}: 1 of {fixes} running");
+    /// True when the batch is under way.
+    fn queue_do_all_rest(&mut self, rest: Vec<String>, fixes: usize) -> bool {
+        if !self.running && self.pending_kick.is_none() {
+            return false;
         }
+        self.followup_queue.extend(rest);
+        self.status = format!("{DO_ALL}: 1 of {fixes} running");
+        true
     }
 }
 
@@ -171,11 +186,17 @@ mod tests {
             view(ChatKind::Result, &old.to_body()),
         ];
         // The newest card has no fixes, so nothing to tap.
-        assert_eq!(newest_findings_row(&views, &[]), None);
-        assert_eq!(newest_findings_row(&views[..3], &[]), Some((1, card())));
+        assert_eq!(newest_findings_row(&views, &[], &[]), None);
+        assert_eq!(
+            newest_findings_row(&views[..3], &[], &[]),
+            Some((1, card()))
+        );
         // An assistant reply that quotes the head is not a card.
-        assert_eq!(newest_findings_row(&views[2..3], &[]), None);
-        assert_eq!(newest_findings_row(&views[..3], &[card().to_body()]), None);
+        assert_eq!(newest_findings_row(&views[2..3], &[], &[]), None);
+        assert_eq!(
+            newest_findings_row(&views[..3], &[card().to_body()], &[]),
+            None
+        );
     }
 
     #[test]
@@ -303,7 +324,7 @@ needs its own tap."
         cabin.thread_idx = cabin.threads.len() - 1;
         let body = batch_card().to_body();
         // No engine: the first fix stops at the sign-in line, so nothing waits
-        // in the queue to fire later.
+        // in the queue to fire later, and the card keeps its pills to retry.
         cabin.findings_clicked(FindingsAct::DoAll, &body);
         assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
         assert!(
@@ -311,14 +332,19 @@ needs its own tap."
             "{:?}",
             cabin.followup_queue
         );
-        assert_eq!(
-            cabin.harness.findings_dismissed,
-            std::slice::from_ref(&body)
-        );
+        assert!(cabin.harness.findings_dismissed.is_empty());
+        assert!(cabin.harness.findings_batched.is_empty());
+        // A run already live (an idea talk, say): the send could be refused
+        // while `running` stays true, so Do all doesn't start at all rather
+        // than queue 2/3 onward without 1/3.
+        cabin.running = true;
+        cabin.findings_clicked(FindingsAct::DoAll, &body);
+        assert_eq!(cabin.status, "Do all waits for this run to finish");
+        assert!(cabin.followup_queue.is_empty());
+        assert!(cabin.harness.findings_batched.is_empty());
         // A run that did start: the rest queue in order, summary last.
         let steps = batch_card().do_all().unwrap().prompts();
-        cabin.running = true;
-        cabin.queue_do_all_rest(steps[1..].to_vec(), 3);
+        assert!(cabin.queue_do_all_rest(steps[1..].to_vec(), 3));
         assert_eq!(
             cabin.followup_queue,
             [
@@ -345,5 +371,25 @@ delete, overwrite or send something: Delete old journal logs.",
         cabin.drain_followup_queue();
         assert_eq!(cabin.followup_queue.len(), 2);
         assert!(cabin.followup_queue[0].starts_with("Do all 3/3"));
+    }
+
+    #[test]
+    fn after_do_all_only_the_fixes_it_left_out_keep_a_pill() {
+        let body = batch_card().to_body();
+        let views = vec![view(ChatKind::Result, &body)];
+        let batched = [body.clone()];
+        let (i, left) = newest_findings_row(&views, &[], &batched).expect("the risky fix stays");
+        assert_eq!(i, 0);
+        assert_eq!(pill_texts(&left), ["Delete old journal logs", "Dismiss"]);
+        // A batch with nothing left out leaves no pills at all.
+        let all_safe = card().to_body();
+        assert_eq!(
+            newest_findings_row(
+                &[view(ChatKind::Result, &all_safe)],
+                &[],
+                std::slice::from_ref(&all_safe)
+            ),
+            None
+        );
     }
 }

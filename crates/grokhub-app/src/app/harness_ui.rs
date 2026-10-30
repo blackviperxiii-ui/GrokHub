@@ -261,6 +261,8 @@ pub(super) struct HarnessState {
     pub pending_findings: Option<String>,
     /// Findings bubbles whose pills were tapped or dismissed (by body).
     pub findings_dismissed: Vec<String>,
+    /// Findings bubbles whose Do all ran: only the fixes it left out keep a pill.
+    pub findings_batched: Vec<String>,
     /// Undo rows under the newest `/connections changes` or `/automations
     /// changes` bubble, for that kind. `None` means read it again.
     pub change_rows: Option<(hx::ChangeKind, Vec<super::change_undo::ChangeRow>)>,
