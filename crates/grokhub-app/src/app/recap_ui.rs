@@ -349,5 +349,17 @@ mod tests {
         for c in "✓!×→↺·".chars() {
             assert!(ctx.fonts_mut(|f| f.has_glyph(&font, c)), "{c}");
         }
+        // A fix that didn't run gets the red cross.
+        let (_, recap) = split_recap("Finished\n- Not done: Reinstall, mirror timed out").unwrap();
+        let (texts, _) = painted(&recap, &steps);
+        assert_eq!(
+            texts[..4],
+            [
+                "FINISHED",
+                "0 of 1 done",
+                "×",
+                "Reinstall, mirror timed out"
+            ]
+        );
     }
 }
