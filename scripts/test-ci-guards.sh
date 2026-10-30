@@ -141,6 +141,26 @@ commit_pr
 run_guard fail "a trailing comment can't make an unpinned action look pinned"
 
 fresh_pr
+printf '      - {uses: actions/cache@v4}\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action in a flow-style step fails"
+
+fresh_pr
+printf '  b:\n    steps: [{name: x, uses: actions/cache@v4}]\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action in a flow-style list fails"
+
+fresh_pr
+printf '      - {uses: actions/cache@%s}\n' "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard pass "pinned action in a flow-style step passes"
+
+fresh_pr
+printf '      - uses: docker://alpine@%s\n' "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "docker action with a 40-hex tag instead of a sha256 digest fails"
+
+fresh_pr
 printf 'jobs:\n  a:\n    steps:\n      - uses: actions/cache@main\n' >"$W/.github/workflows/other.yaml"
 commit_pr
 run_guard fail "unpinned action in a .yaml workflow fails"
