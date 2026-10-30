@@ -2335,8 +2335,7 @@ fn quiet_cabin() -> Cabin {
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),
         activity: Default::default(),
-        diagnostics_last_zip: None,
-        diagnostics_notice: false,
+        diagnostics: Default::default(),
         home_layout: grokhub_core::home::HomeLayout::default(),
         home_edit: None,
     }

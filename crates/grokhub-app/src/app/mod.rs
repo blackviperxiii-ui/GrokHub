@@ -905,10 +905,8 @@ pub struct Cabin {
     status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
-    /// Last Labs Diagnostics zip on the Desktop (Open folder).
-    diagnostics_last_zip: Option<std::path::PathBuf>,
-    /// The chat shows "Saved … / Open folder" for the last bundle until dismissed.
-    diagnostics_notice: bool,
+    /// Labs Diagnostics: the preview waiting for Save, and the last zip.
+    diagnostics: diagnostics_ui::DiagnosticsState,
     /// Modular Home slot layout (`home_layout.json` v2).
     home_layout: grokhub_core::home::HomeLayout,
     /// Edit Home modules dialog draft (`None` = closed).
@@ -1486,8 +1484,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
-            diagnostics_last_zip: None,
-            diagnostics_notice: false,
+            diagnostics: Default::default(),
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
             home_edit: None,
         };
@@ -1959,8 +1956,7 @@ impl Cabin {
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
             activity: Default::default(),
-            diagnostics_last_zip: None,
-            diagnostics_notice: false,
+            diagnostics: Default::default(),
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
         }
@@ -5419,6 +5415,7 @@ impl eframe::App for Cabin {
             }
             self.ui_settings_menu(&ctx);
             self.ui_personality_sheet(&ctx);
+            self.ui_diagnostics_preview(&ctx);
 
             if self.cfg.dock_panels && self.dock_covers_page() {
                 self.ui_docked_main(ui);
