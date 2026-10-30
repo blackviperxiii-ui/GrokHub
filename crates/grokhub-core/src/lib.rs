@@ -61,6 +61,7 @@ pub mod home;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
+pub mod recap;
 pub use grokhub_proto::hub_sync;
 pub mod hygiene;
 pub mod ideas;
