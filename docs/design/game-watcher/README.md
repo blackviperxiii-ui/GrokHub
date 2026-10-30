@@ -40,18 +40,18 @@ game feed ──> adapter ──> events ──> timeline (in memory, then disk 
 - **Service:** a background thread in the cabin, started only while `game_companion` sees a supported game running and the watcher is turned on in Settings. For GSI it's a `127.0.0.1`-only HTTP listener on one fixed port. The `.cfg` file Loadout writes includes an `auth` token, and the listener drops posts without it.
 - **Budget:** idle when no game runs. During a match, under 1% of one core and under 10 MB RAM. GSI posts arrive about every 0.1–1 s, and each one is a small JSON parse and diff. Rules run per event, not per frame, and never block the game.
 - **Event schema:** `WatchEvent { at_ms, kind }`, with `kind` from a small closed set per family (the PoC has `RoundStart`, `RoundEnd { won }`, `Kill`, `Death`, `MatchEnd { won, lost }`). New games map onto the same kinds where they fit, plus game-specific kinds where they don't.
-- **Rules engine:** pure functions over the timeline (`fn(&[WatchEvent]) -> Vec<Pointer>`), one per rule, each with fixture tests. No scripting language. Each pointer has a cooldown so it doesn't repeat every round.
+- **Rules engine:** pure functions over the timeline (`fn(&[WatchEvent]) -> Vec<Pointer>`), one per rule, each with fixture tests. No scripting language. A rule fires once when its condition turns true and re-arms only after it turns false, so a pointer doesn't repeat every round.
 - **Timeline storage:** in memory during the match, then one JSON file per match under the config dir (`game-watch/<game>/<match-start>.json`). Matches older than 30 days or beyond 200 per game get pruned.
 - **Recap card:** one Pulse card with the score, K/D, longest win streak and the pointers that fired, plus an "Ask about this match" chip. The chip sends the timeline summary (not the raw feed) to the model the user picked, the local model first.
-- **Privacy:** everything stays on the machine. The listener binds to loopback only. Nothing is uploaded, and the model sees a match only when the user asks. Turning the watcher off stops the listener and removes the `.cfg` file Loadout wrote.
+- **Privacy:** the feed, timeline and rules stay on the machine. The listener binds to loopback only, and nothing is uploaded on its own. The model sees a match summary only when the user asks; with a local model that stays on the machine too, and with a cloud model the summary goes to that provider, which the chip says. Turning the watcher off stops the listener and removes the `.cfg` file Loadout wrote.
 
 ## Proof of concept
 
 `crates/grokhub-core/src/game_watch.rs`:
 
 - `parse_cs2(body)` reads the GSI fields the watcher needs: map phase, round, round phase, winning team, the player's team, team scores, and kills and deaths.
-- `cs2_events(prev, next)` diffs two snapshots into events. A repeat snapshot adds nothing.
-- `pointers(timeline)` has two rules: three rounds lost in a row, and dying in the first 20 seconds in at least 3 of the last 5 rounds.
+- `cs2_events(prev, next)` diffs two snapshots into events. A repeat snapshot adds nothing, the first snapshot is only a baseline, and a match end needs a real map phase before it and the player's side.
+- `pointers(timeline)` has two rules: three rounds lost in a row, and dying in the first 20 seconds in at least 3 of the last 5 rounds. Each fires once per time its condition turns true, with the event time it fired at.
 - `recap(timeline)` gives the score (from `MatchEnd` when present), K/D and longest win streak.
 
 Run: `cargo test -p grokhub-core --lib game_watch`.

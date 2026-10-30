@@ -70,10 +70,13 @@ pub fn parse_cs2(body: &str) -> Option<Cs2State> {
 
 /// The events between two payloads. GSI sends whole snapshots, so events
 /// come from what changed: a new round number, a round phase turning `over`,
-/// a stats counter going up, the map phase turning `gameover`.
+/// a stats counter going up, the map phase turning `gameover`. The first
+/// payload (`prev` is `None`) is only a baseline: the watcher may start mid
+/// round or on the post-match screen, so nothing it shows was seen happen.
 pub fn cs2_events(prev: Option<&Cs2State>, next: &Cs2State) -> Vec<EventKind> {
-    let blank = Cs2State::default();
-    let prev = prev.unwrap_or(&blank);
+    let Some(prev) = prev else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     if next.round_phase.as_deref() == Some("live") && prev.round_phase.as_deref() != Some("live") {
         if let Some(round) = next.round {
@@ -94,16 +97,17 @@ pub fn cs2_events(prev: Option<&Cs2State>, next: &Cs2State) -> Vec<EventKind> {
             });
         }
     }
-    if next.map_phase.as_deref() == Some("gameover")
-        && prev.map_phase.as_deref() != Some("gameover")
-    {
+    // A match end needs a real phase before it, and the player's side to
+    // know which score is theirs. Without the side (spectating) there is no
+    // `MatchEnd`, and the recap falls back to the round results.
+    let was_playing = prev.map_phase.as_deref().is_some_and(|p| p != "gameover");
+    if next.map_phase.as_deref() == Some("gameover") && was_playing {
         let (ct, t) = (next.score_ct.unwrap_or(0), next.score_t.unwrap_or(0));
-        let (won, lost) = if next.team.as_deref() == Some("CT") {
-            (ct, t)
-        } else {
-            (t, ct)
-        };
-        out.push(EventKind::MatchEnd { won, lost });
+        match next.team.as_deref() {
+            Some("CT") => out.push(EventKind::MatchEnd { won: ct, lost: t }),
+            Some("T") => out.push(EventKind::MatchEnd { won: t, lost: ct }),
+            _ => {}
+        }
     }
     out
 }
@@ -111,26 +115,38 @@ pub fn cs2_events(prev: Option<&Cs2State>, next: &Cs2State) -> Vec<EventKind> {
 /// A death this soon after the round goes live counts as an early death.
 pub const EARLY_DEATH_MS: u64 = 20_000;
 
-/// Rule-based pointers for the timeline so far, newest rule state only.
-pub fn pointers(timeline: &[WatchEvent]) -> Vec<String> {
+/// A pointer and the event time it fired at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pointer {
+    pub at_ms: u64,
+    pub text: String,
+}
+
+const LOSS_STREAK: &str =
+    "Three rounds lost in a row. A save round or a timeout might reset things.";
+
+/// Every pointer the timeline has fired so far, oldest first. A rule fires
+/// once when its condition turns true and re-arms only after it turns false
+/// again, so a watcher that reruns this per event shows only pointers newer
+/// than the last one it showed, and the recap lists each one once.
+pub fn pointers(timeline: &[WatchEvent]) -> Vec<Pointer> {
     let mut out = Vec::new();
-    let results: Vec<bool> = timeline
-        .iter()
-        .filter_map(|e| match e.kind {
-            EventKind::RoundEnd { won, .. } => Some(won),
-            _ => None,
-        })
-        .collect();
-    if results.len() >= 3 && results[results.len() - 3..].iter().all(|w| !w) {
-        out.push(
-            "Three rounds lost in a row. A save round or a timeout might reset things.".into(),
-        );
-    }
-    // Early deaths across the last five rounds that went live.
-    let mut early = Vec::new();
+    let mut losses = 0;
+    // Per round that went live: did the player die early in it.
+    let mut early: Vec<bool> = Vec::new();
     let mut live_at = None;
+    let mut early_on = false;
     for e in timeline {
         match e.kind {
+            EventKind::RoundEnd { won, .. } => {
+                losses = if won { 0 } else { losses + 1 };
+                if losses == 3 {
+                    out.push(Pointer {
+                        at_ms: e.at_ms,
+                        text: LOSS_STREAK.into(),
+                    });
+                }
+            }
             EventKind::RoundStart { .. } => {
                 live_at = Some(e.at_ms);
                 early.push(false);
@@ -142,14 +158,19 @@ pub fn pointers(timeline: &[WatchEvent]) -> Vec<String> {
             }
             _ => {}
         }
-    }
-    let recent = &early[early.len().saturating_sub(5)..];
-    let n = recent.iter().filter(|e| **e).count();
-    if n >= 3 {
-        out.push(format!(
-            "You died in the first 20 seconds in {n} of the last {} rounds. Try a slower opening.",
-            recent.len()
-        ));
+        // Early deaths across the last five rounds that went live.
+        let recent = &early[early.len().saturating_sub(5)..];
+        let n = recent.iter().filter(|e| **e).count();
+        if n >= 3 && !early_on {
+            out.push(Pointer {
+                at_ms: e.at_ms,
+                text: format!(
+                    "You died in the first 20 seconds in {n} of the last {} rounds. Try a slower opening.",
+                    recent.len()
+                ),
+            });
+        }
+        early_on = n >= 3;
     }
     out
 }
@@ -250,8 +271,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_first_payload_is_a_baseline_and_fires_nothing() {
+        let mut end = parse_cs2(&payload(30, "over", "CT", 20, 15)).unwrap();
+        end.map_phase = Some("gameover".into());
+        assert_eq!(cs2_events(None, &end), vec![]);
+        // A payload with no map phase before it (menu, loading) is not a
+        // match the player was seen in, so game over there is no match end.
+        let no_map = Cs2State {
+            round_phase: Some("over".into()),
+            ..Cs2State::default()
+        };
+        assert_eq!(cs2_events(Some(&no_map), &end), vec![]);
+    }
+
+    #[test]
+    fn a_match_end_needs_the_players_side() {
+        let over = parse_cs2(&payload(30, "over", "T", 20, 15)).unwrap();
+        let mut end = over.clone();
+        end.map_phase = Some("gameover".into());
+        end.team = Some("T".into());
+        assert_eq!(
+            cs2_events(Some(&over), &end),
+            vec![EventKind::MatchEnd { won: 5, lost: 3 }]
+        );
+        end.team = None;
+        assert_eq!(cs2_events(Some(&over), &end), vec![]);
+        end.team = Some("SPECTATOR".into());
+        assert_eq!(cs2_events(Some(&over), &end), vec![]);
+    }
+
     fn ev(at_ms: u64, kind: EventKind) -> WatchEvent {
         WatchEvent { at_ms, kind }
+    }
+
+    fn lost(at_ms: u64, round: u32) -> WatchEvent {
+        ev(at_ms, EventKind::RoundEnd { round, won: false })
+    }
+
+    fn texts(p: &[Pointer]) -> Vec<(u64, &str)> {
+        p.iter().map(|p| (p.at_ms, p.text.as_str())).collect()
     }
 
     #[test]
@@ -264,48 +323,34 @@ mod tests {
                     won: true,
                 },
             ),
-            ev(
-                2,
-                EventKind::RoundEnd {
-                    round: 2,
-                    won: false,
-                },
-            ),
-            ev(
-                3,
-                EventKind::RoundEnd {
-                    round: 3,
-                    won: false,
-                },
-            ),
+            lost(2, 2),
+            lost(3, 3),
         ];
-        assert_eq!(pointers(&t), Vec::<String>::new());
+        assert_eq!(pointers(&t), vec![]);
+        t.push(lost(4, 4));
+        assert_eq!(texts(&pointers(&t)), vec![(4, LOSS_STREAK)]);
+        // A fourth loss keeps the condition true but fires nothing new.
+        t.push(lost(5, 5));
+        assert_eq!(texts(&pointers(&t)), vec![(4, LOSS_STREAK)]);
+        // A win re-arms it, and three more losses fire it again.
         t.push(ev(
-            4,
+            6,
             EventKind::RoundEnd {
-                round: 4,
-                won: false,
-            },
-        ));
-        assert_eq!(
-            pointers(&t),
-            vec![
-                "Three rounds lost in a row. A save round or a timeout might reset things."
-                    .to_string()
-            ]
-        );
-        t.push(ev(
-            5,
-            EventKind::RoundEnd {
-                round: 5,
+                round: 6,
                 won: true,
             },
         ));
-        assert_eq!(pointers(&t), Vec::<String>::new());
+        t.extend([lost(7, 7), lost(8, 8), lost(9, 9)]);
+        assert_eq!(
+            texts(&pointers(&t)),
+            vec![(4, LOSS_STREAK), (9, LOSS_STREAK)]
+        );
     }
 
     #[test]
     fn early_deaths_in_three_of_five_rounds_fire_one_pointer() {
+        let early =
+            "You died in the first 20 seconds in 3 of the last 5 rounds. Try a slower opening.";
         let mut t = Vec::new();
         // Rounds start every 100 s; deaths at +10 s (early) or +60 s (late).
         for (i, after) in [10_000u64, 60_000, 10_000, 60_000, 10_000]
@@ -321,16 +366,16 @@ mod tests {
             ));
             t.push(ev(start + after, EventKind::Death));
         }
-        assert_eq!(
-            pointers(&t),
-            vec![
-                "You died in the first 20 seconds in 3 of the last 5 rounds. Try a slower opening."
-                    .to_string()
-            ]
-        );
+        assert_eq!(texts(&pointers(&t)), vec![(410_000, early)]);
+        // A sixth round still holds three early deaths in the last five
+        // (rounds 2-6) and fires nothing new.
+        t.push(ev(500_000, EventKind::RoundStart { round: 6 }));
+        t.push(ev(560_000, EventKind::Death));
+        assert_eq!(texts(&pointers(&t)), vec![(410_000, early)]);
         // Two early deaths out of five stays quiet.
+        t.truncate(10);
         t[9].at_ms = 4 * 100_000 + 60_000;
-        assert_eq!(pointers(&t), Vec::<String>::new());
+        assert_eq!(pointers(&t), vec![]);
     }
 
     #[test]
