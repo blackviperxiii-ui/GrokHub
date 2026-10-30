@@ -23,9 +23,9 @@ import {
 import { Toggle } from "./Toggle";
 import { PRODUCT_NAME } from "./brand";
 
-/** Shown once per file before a third-party or abliterated model is picked. */
+/** Shown once per file before a model from outside the catalog is picked. */
 export const MODEL_NOTICE =
-  `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party and abliterated models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads these models.`;
+  `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads models from outside its catalog.`;
 
 const BACKENDS: [string, string][] = [
   ["auto", "Auto"],

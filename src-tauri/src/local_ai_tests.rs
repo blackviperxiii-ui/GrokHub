@@ -70,12 +70,11 @@ fn a_t1_laptop_preselects_e2b_and_hides_what_cant_run() {
             ("Gemma 4 E2B", "recommended"),
             ("Gemma 4 E4B", "maySlow"),
             ("Gemma 4 31B", "hidden"),
-            ("Muse Glimmer 30B", "hidden"),
             ("Gemma 4 26B-A4B", "hidden"),
             ("Gemma 4 12B", "hidden"),
         ]
     );
-    assert_eq!(selected, "gemma-4-e2b-it-q4_k_m");
+    assert_eq!(selected, "gemma-4-e2b-it-abliterated-q4_k");
     assert_eq!(
         why(&picker, "Gemma 4 E4B"),
         "Needs 6 GB of spare RAM; this PC has 4 GB, so it may be slow."
@@ -87,7 +86,7 @@ fn a_t1_laptop_preselects_e2b_and_hides_what_cant_run() {
     let e2b = &picker.models[0];
     assert_eq!(
         (e2b.size.as_str(), e2b.quant.as_str(), e2b.tok_s.as_str()),
-        ("3.2 GB", "Q4_K_M", "about 7 tok/s")
+        ("3.2 GB", "Q4_K", "about 7 tok/s")
     );
 }
 
@@ -100,12 +99,11 @@ fn an_8_gb_gpu_preselects_e4b() {
             ("Gemma 4 E4B", "recommended"),
             ("Gemma 4 E2B", "recommended"),
             ("Gemma 4 31B", "maySlow"),
-            ("Muse Glimmer 30B", "maySlow"),
             ("Gemma 4 26B-A4B", "maySlow"),
             ("Gemma 4 12B", "maySlow"),
         ]
     );
-    assert_eq!(selected, "gemma-4-e4b-it-q4_k_m");
+    assert_eq!(selected, "gemma-4-e4b-it-abliterated-q4_k");
     assert_eq!(
         why(&picker, "Gemma 4 12B"),
         "Needs 10 GB of GPU memory; this PC has 8 GB, so part of it runs on the CPU and it may be slow."
@@ -113,7 +111,7 @@ fn an_8_gb_gpu_preselects_e4b() {
 }
 
 #[test]
-fn a_16_gb_gpu_shows_muse_glimmer_as_slow_with_partial_offload() {
+fn a_16_gb_gpu_shows_the_31b_as_slow_with_partial_offload() {
     let (order, selected, picker) = page(&machine(vec![gpu("RX 9070 XT", 16_304)], 59_392));
     assert_eq!(
         named(&order),
@@ -123,31 +121,34 @@ fn a_16_gb_gpu_shows_muse_glimmer_as_slow_with_partial_offload() {
             ("Gemma 4 E4B", "recommended"),
             ("Gemma 4 E2B", "recommended"),
             ("Gemma 4 31B", "maySlow"),
-            ("Muse Glimmer 30B", "maySlow"),
         ]
     );
-    assert_eq!(selected, "gemma-4-26b-a4b-it-q4_k_m");
+    assert_eq!(selected, "gemma-4-26b-a4b-it-abliterated-q4_k");
     assert_eq!(
-        why(&picker, "Muse Glimmer 30B"),
-        "Needs 22 GB of GPU memory; this PC has 15.9 GB, so part of it runs on the CPU and it may be slow."
+        why(&picker, "Gemma 4 31B"),
+        "Needs 20 GB of GPU memory; this PC has 15.9 GB, so part of it runs on the CPU and it may be slow."
     );
 }
 
 #[test]
-fn a_24_gb_gpu_recommends_muse_glimmer_but_preselects_31b() {
+fn a_24_gb_gpu_recommends_every_model_and_preselects_31b() {
     let (order, selected, picker) = page(&machine(vec![gpu("RTX 4090", 24_576)], 65_536));
     assert!(order.iter().all(|(_, b)| *b == "recommended"), "{order:?}");
-    assert_eq!(selected, "gemma-4-31b-it-q4_k_m");
-    let muse = picker
-        .models
-        .iter()
-        .find(|r| r.name == "Muse Glimmer 30B")
-        .cloned()
-        .unwrap_or_else(|| panic!("no Muse Glimmer row"));
-    assert!(muse.optional && !muse.preselected);
+    assert_eq!(selected, "gemma-4-31b-it-abliterated-q4_k");
     assert_eq!(
-        muse.reason,
-        "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: Loadout never picks it for you."
+        named(&order),
+        [
+            ("Gemma 4 31B", "recommended"),
+            ("Gemma 4 26B-A4B", "recommended"),
+            ("Gemma 4 12B", "recommended"),
+            ("Gemma 4 E4B", "recommended"),
+            ("Gemma 4 E2B", "recommended"),
+        ]
+    );
+    assert!(picker.models.iter().all(|r| !r.optional));
+    assert_eq!(
+        why(&picker, "Gemma 4 31B"),
+        "Fits in 24 GB of GPU memory, about 35 tok/s."
     );
 }
 
@@ -162,11 +163,10 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
             ("Gemma 4 E2B", "recommended"),
             ("Gemma 4 12B", "maySlow"),
             ("Gemma 4 31B", "hidden"),
-            ("Muse Glimmer 30B", "hidden"),
             ("Gemma 4 26B-A4B", "hidden"),
         ]
     );
-    assert_eq!(selected, "gemma-4-e4b-it-q4_k_m");
+    assert_eq!(selected, "gemma-4-e4b-it-abliterated-q4_k");
     assert_eq!(
         why(&picker, "Gemma 4 12B"),
         "Needs 14 GB of unified memory; this PC has 11.2 GB, so it may be slow."
@@ -198,21 +198,39 @@ fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
     let m = machine(vec![gpu("RTX 4090", 24_576)], 65_536);
     let config = LocalAiConfig {
         local_model: Selected {
-            selected: "muse-glimmer-30b-q4_k_m".into(),
+            selected: "gemma-4-12b-it-abliterated-q4_k".into(),
         },
         ..LocalAiConfig::default()
     };
     let p = m.profile();
     let picker = picker(&p, &BenchCache::new(), &[], &config);
-    assert_eq!(picker.selected, "muse-glimmer-30b-q4_k_m");
+    assert_eq!(picker.selected, "gemma-4-12b-it-abliterated-q4_k");
     let s = status(&p, &picker, &BenchCache::new(), false, Level::Normal, "x");
     assert_eq!(
         (s.model.as_str(), s.state.as_str(), s.reason.as_str()),
         (
-            "Muse Glimmer 30B",
+            "Gemma 4 12B",
             "Not set up",
             "No local engine or model is installed yet."
         )
+    );
+    // A stock Gemma 4 id saved by an older catalog is no catalog model now:
+    // it shows as saved, with no speed estimate.
+    let stale = super::picker(
+        &p,
+        &BenchCache::new(),
+        &[],
+        &LocalAiConfig {
+            local_model: Selected {
+                selected: "gemma-4-12b-it-q4_k_m".into(),
+            },
+            ..LocalAiConfig::default()
+        },
+    );
+    let s = status(&p, &stale, &BenchCache::new(), true, Level::Normal, "x");
+    assert_eq!(
+        (s.model.as_str(), s.tok_s.as_str()),
+        ("gemma-4-12b-it-q4_k_m", "")
     );
     let paused = status(
         &p,
@@ -327,12 +345,13 @@ fn saving_writes_the_pick_and_the_governors_rules() {
 }
 
 #[test]
-fn a_third_party_or_abliterated_file_needs_the_notice_once() {
+fn a_third_party_file_needs_the_notice_once() {
     let seen = vec!["/m/Llama-3-8B-abliterated.Q4_K_M.gguf".to_string()];
+    // The catalog's own abliterated builds carry the badge but no notice.
     let catalog = file_row(
-        Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf"),
+        Path::new("/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"),
         5 * 1_024 * 1_024 * 1_024,
-        "LM Studio",
+        "GrokHub models",
         &[],
     );
     assert_eq!(
@@ -341,9 +360,20 @@ fn a_third_party_or_abliterated_file_needs_the_notice_once() {
             catalog.abliterated,
             catalog.needs_notice
         ),
-        (false, false, false)
+        (false, true, false)
     );
     assert_eq!(catalog.size, "5 GB");
+    // A stock Gemma 4 file from the older catalog is a third-party file now.
+    let stock = file_row(
+        Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf"),
+        0,
+        "LM Studio",
+        &[],
+    );
+    assert_eq!(
+        (stock.third_party, stock.abliterated, stock.needs_notice),
+        (true, false, true)
+    );
     let other = file_row(Path::new("/m/qwen3-8b-q4.gguf"), 0, "Ollama", &[]);
     assert_eq!(
         (other.third_party, other.abliterated, other.needs_notice),
@@ -381,7 +411,7 @@ fn files_on_this_pc_are_listed_but_never_preselected() {
         &found,
         &LocalAiConfig::default(),
     );
-    assert_eq!(picker.selected, "gemma-4-e2b-it-q4_k_m");
+    assert_eq!(picker.selected, "gemma-4-e2b-it-abliterated-q4_k");
     assert_eq!(picker.on_this_pc.len(), 1);
     let f = &picker.on_this_pc[0];
     assert_eq!(

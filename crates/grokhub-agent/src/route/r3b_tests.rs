@@ -1297,42 +1297,67 @@ fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
 }
 
 #[test]
-fn openrouter_keeps_its_pick_for_explicit_turns_and_banned_asks_never_leave() {
+fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
     let (dir, wire) = setup("adult-openrouter");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
     add_provider(&dir, OR_URL, KEY, NOW).unwrap();
     grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
     live::set_pin(OR_MODEL);
-    let send = |lines: &[&str]| {
-        let mut req = chat("adult-or-1", lines);
+    let xai = XaiRec::default();
+    let send = |input: Vec<InputItem>| {
+        let mut req = chat("adult-or-1", &[]);
         req.model = OR_MODEL.into();
-        live::stream_routed(
-            &Never,
-            &req,
-            &CancelToken::new(),
-            &mut |_| {},
-            "chat:default",
-        )
+        req.input = input;
+        live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default")
     };
-    let explicit = send(&["talk dirty to me, I'm horny"]);
-    let banned = send(&["nsfw schoolgirl roleplay", "and now?"]);
-    let clean = send(&["fix my wifi"]);
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+    let voice = format!(
+        "Personality: Viper. {}",
+        grokhub_core::adult_guard::ADULT_VOICE
+    );
+    let explicit = send(vec![say("user", "talk dirty to me, I'm horny")]);
+    // A clean follow-up still carries the explicit history.
+    let history = send(vec![
+        say("user", "write me smut about two adults"),
+        say("assistant", "Here you go."),
+        say("user", "continue"),
+    ]);
+    // An 18+ voice makes a clean ask explicit too.
+    let persona = send(vec![say("system", &voice), say("user", "my build broke")]);
+    let banned = send(vec![
+        say("user", "nsfw schoolgirl roleplay"),
+        say("user", "and now?"),
+    ]);
+    let clean = send(vec![say("user", "fix my wifi")]);
     live::set_pin("");
-    explicit.unwrap();
-    banned.unwrap();
-    clean.unwrap();
+    for out in [explicit, history, persona, banned, clean] {
+        out.unwrap();
+    }
+    assert_eq!(
+        xai.0.lock().unwrap().len(),
+        3,
+        "the three explicit chats went to xAI"
+    );
     let bodies: Vec<serde_json::Value> = wire
         .bodies()
         .iter()
         .map(|b| serde_json::from_str(b).unwrap())
         .collect();
-    assert_eq!(bodies.len(), 3);
-    assert_eq!(bodies[0]["provider"], json!({ "allow_fallbacks": false }));
-    let held = bodies[1].to_string();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "only the held and the clean chat reached OpenRouter"
+    );
+    let held = bodies[0].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
     assert!(held.contains("Loadout held this message back"), "{held}");
-    assert_eq!(bodies[2]["provider"], serde_json::Value::Null);
+    for body in &bodies {
+        assert_eq!(body["provider"], serde_json::Value::Null);
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1400,4 +1425,108 @@ fn a_provider_call_keeps_its_time_limit_and_a_cancel_on_the_wire_drops_the_reply
             Some(std::time::Duration::from_secs(45)),
         ]
     );
+}
+
+/// xAI turned the call away (signed out).
+struct XaiSignedOut;
+
+impl ModelClient for XaiSignedOut {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Auth {
+            status: 401,
+            message: "signed out".into(),
+        })
+    }
+}
+
+/// A local model that answers chat.
+struct LocalChat;
+
+impl super::local::LocalRuntime for LocalChat {
+    fn classify(&self, _: &str, labels: &[&str]) -> Result<serde_json::Value, String> {
+        Ok(json!({ "label": labels[0], "score": 0.9 }))
+    }
+    fn summarize(&self, _: &str, _: u32) -> Result<serde_json::Value, String> {
+        Ok(json!({ "summary": "" }))
+    }
+    fn difficulty(&self, _: &str) -> Result<serde_json::Value, String> {
+        Ok(json!({ "d": 0.3 }))
+    }
+    fn chat_stream(
+        &self,
+        _: &[super::local::ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        on_delta("local here");
+        Ok("local here".into())
+    }
+}
+
+#[test]
+fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_does_not() {
+    let (dir, wire) = setup("adult-local-fallback");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let send = |lines: &[&str]| {
+        live::stream_routed(
+            &XaiSignedOut,
+            &chat("adult-local-1", lines),
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+    };
+    let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
+    assert_eq!(explicit.text, "local here");
+    // A banned ask is still held before the local model sees it.
+    let banned = send(&["nsfw schoolgirl roleplay"]);
+    assert!(
+        banned.is_err(),
+        "the held note is clean, so no local fallback"
+    );
+    let clean = send(&["fix my wifi"]);
+    assert!(
+        matches!(clean, Err(ClientError::Auth { .. })),
+        "only 18+ chats fall back here: {clean:?}"
+    );
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
+    let (dir, wire) = setup("adult-direct-call");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let call = |lines: &[&str]| {
+        let mut req = chat("adult-direct-1", lines);
+        req.model = OR_MODEL.into();
+        providers::call_model(
+            &dir,
+            OR_MODEL,
+            None,
+            &req,
+            CALL_DATA,
+            "span-1",
+            &CancelToken::new(),
+        )
+    };
+    let explicit = call(&["talk dirty to me, I'm horny"]);
+    assert!(
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chat goes only to xAI")),
+        "{explicit:?}"
+    );
+    assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
+    call(&["nsfw schoolgirl roleplay"]).unwrap();
+    let body = wire.bodies().concat();
+    assert!(!body.contains("schoolgirl"), "{body}");
+    let _ = std::fs::remove_dir_all(dir);
 }

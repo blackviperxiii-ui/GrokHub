@@ -264,13 +264,13 @@ impl Drop for Rig {
     }
 }
 
-const E2B_FILE: &str = "gemma-4-E2B-it-Q4_K_M.gguf";
-const G12B_FILE: &str = "gemma-4-12B-it-Q4_K_M.gguf";
+const E2B_FILE: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 
 #[test]
 fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     let rig = Rig::new("pair", G12B_FILE, Some((E2B_FILE, VOCAB)));
-    let key = "NVIDIA GeForce RTX|gemma-4-12B-it-Q4_K_M.gguf|gemma-4-E2B-it-Q4_K_M.gguf";
+    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
     let first = rig.plan(GovState::Normal);
     assert_eq!(first.decision, Decision::NeedsTest);
     assert_eq!(first.draft, None);
@@ -388,7 +388,7 @@ fn mtp_heads_draft_without_a_second_file() {
     assert_eq!(p.name.as_deref(), Some("the model's own prediction heads"));
     assert_eq!(
         p.key.as_deref(),
-        Some("NVIDIA GeForce RTX|gemma-4-12B-it-Q4_K_M.gguf|mtp")
+        Some("NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|mtp")
     );
     // An engine without draft-mtp can't use them.
     rig.flags.kinds.retain(|k| k != "draft-mtp");

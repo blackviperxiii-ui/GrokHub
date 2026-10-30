@@ -34,6 +34,25 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
 ) -> RpcOutcome {
     let mut call = parse_call(line);
     let live = gate.enabled && !gate.halted;
+    // The game guard answers first: a held call reads no window, parks no
+    // card and reaches no backend.
+    if let Some(c) = call.as_ref().filter(|_| live) {
+        if let Some(msg) = server.guard_refusal(&c.tool) {
+            write_span(
+                dir,
+                c,
+                false,
+                &msg,
+                access_now(dir, gate.enabled),
+                None,
+                None,
+            );
+            return RpcOutcome {
+                reply: Some(refusal_reply(&c.id, &msg)),
+                exit: false,
+            };
+        }
+    }
     let mut parked = None;
     if let Some(c) = call.as_mut() {
         if live {
@@ -475,6 +494,7 @@ mod tests {
         controls: Vec<(i32, i32, i32, i32, &'static str, &'static str)>,
         clicks: usize,
         slow: bool,
+        guard: grokhub_core::game_guard::GameGuard,
     }
 
     impl DesktopBackend for Screen {
@@ -565,6 +585,9 @@ mod tests {
         }
         fn list_windows(&mut self) -> Result<DesktopWindows, String> {
             Ok(self.windows.clone())
+        }
+        fn game_guard(&mut self) -> grokhub_core::game_guard::GameGuard {
+            self.guard
         }
     }
 
@@ -744,6 +767,48 @@ mod tests {
                 ),
             ]
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn while_gaming_every_input_call_is_refused_before_hints_or_a_park() {
+        let dir = crate::test_root("desk-gaming");
+        turn(&dir, "supervised");
+        let mut s = desk();
+        s.backend_mut().guard = grokhub_core::game_guard::GameGuard {
+            anticheat: Some("BattlEye"),
+            gaming: true,
+        };
+        // A click on Send would park for approval; the guard answers first.
+        s.backend_mut().controls = vec![(0, 0, 100, 50, "Send", "push button")];
+        let held =
+            "Desktop control is blocked while BattlEye is running so it doesn't flag this PC.";
+        for (tool, args) in [
+            ("click", json!({ "x": 5, "y": 5 })),
+            ("type", json!({ "text": "hello" })),
+            ("key", json!({ "keys": "Return" })),
+            ("open_app", json!({ "app": "firefox" })),
+            ("focus_window", json!({ "title": "dolphin" })),
+        ] {
+            let out = handle_desk_line(&mut s, &rpc(tool, args), ON, &dir, &mut || false);
+            assert_eq!(reply_text(&out), held, "{tool}");
+            assert!(!out.exit);
+        }
+        let shot = handle_desk_line(&mut s, &rpc("screenshot", json!({})), ON, &dir, &mut || {
+            false
+        });
+        assert_eq!(
+            reply_text(&shot),
+            "Screen capture is blocked while BattlEye is running so it doesn't flag this PC."
+        );
+        assert!(hx::pending_parks(&dir).is_empty(), "nothing parked");
+        let b = s.backend_mut();
+        assert_eq!((b.clicks, b.keys), (0, 0));
+        assert!(b.typed.is_empty() && b.opened.is_empty());
+        assert_eq!(b.windows.active, "grokhub GrokHub", "nothing was focused");
+        // Each held step is on the record; a look (screenshot) writes no span.
+        let tools: Vec<String> = spans(&dir).iter().map(|s| s.tool.clone()).collect();
+        assert_eq!(tools, ["click", "type", "key", "open_app", "focus_window"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

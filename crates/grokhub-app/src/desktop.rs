@@ -14,6 +14,7 @@ use grokhub_core::{
     DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
     IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
 };
+use grokhub_desktop::game_guard::{GameGuard, Guarded};
 use image::GenericImageView;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -971,10 +972,19 @@ fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<St
 }
 
 pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
+    run_computer_op_under(op, cancel, crate::desktop_mcp::game_guard())
+}
+
+/// [`run_computer_op_cancel`] with the game guard the caller read. A held
+/// op reads no window titles and drives nothing.
+fn run_computer_op_under(op: &ComputerOp, cancel: Option<&AtomicBool>, guard: GameGuard) -> String {
     let started = Instant::now();
     let line = computer_cmd_line(op);
     if cancelled(cancel) {
         return hands_receipt(&line, started, false, "halted");
+    }
+    if let Some(msg) = guard.blocks(Guarded::DesktopControl) {
+        return hands_receipt(&line, started, false, &format!("blocked: {msg}"));
     }
     let titles = lock_titles();
     let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
@@ -1284,6 +1294,15 @@ fn rgba_frame_to_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    capture_jpeg_under(path, crate::desktop_mcp::game_guard())
+}
+
+/// [`capture_jpeg`] with the game guard the caller read. A held capture
+/// grabs no frame and writes no file.
+fn capture_jpeg_under(path: &Path, guard: GameGuard) -> Result<Vec<u8>, String> {
+    if let Some(msg) = guard.blocks(Guarded::ScreenCapture) {
+        return Err(msg);
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -2281,6 +2300,62 @@ mod tests {
             &ComputerOp::Click { x: 10, y: 20 },
             &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         ));
+    }
+
+    #[test]
+    fn the_game_guard_holds_every_computer_cmd_and_the_eyes_capture() {
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+        };
+        let ops = [
+            ComputerOp::Click { x: 10, y: 20 },
+            ComputerOp::Type { text: "hi".into() },
+            ComputerOp::Key {
+                name: "ctrl+l".into(),
+            },
+            ComputerOp::Act {
+                name: "Save".into(),
+            },
+            ComputerOp::Tab {
+                action: TabAction::List,
+                query: String::new(),
+            },
+            ComputerOp::Cursor,
+        ];
+        for op in &ops {
+            let started = Instant::now();
+            let out = run_computer_op_under(op, None, gaming);
+            assert!(out.contains("exit 1"), "{out}");
+            assert!(
+                out.ends_with("\nblocked: Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC."),
+                "{out}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{op:?} did work"
+            );
+        }
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+        };
+        let out = run_computer_op_under(&ComputerOp::Click { x: 1, y: 2 }, None, eac);
+        assert!(
+            out.ends_with("\nblocked: Desktop control is blocked while Easy Anti-Cheat is running so it doesn't flag this PC."),
+            "{out}"
+        );
+        let dir = std::env::temp_dir().join(format!("grokhub-guard-shot-{}", std::process::id()));
+        let path = dir.join("desk.jpg");
+        assert_eq!(
+            capture_jpeg_under(&path, eac),
+            Err("Screen capture is blocked while Easy Anti-Cheat is running so it doesn't flag this PC.".to_string())
+        );
+        assert_eq!(
+            capture_jpeg_under(&path, gaming),
+            Err("Screen capture is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())
+        );
+        assert!(!dir.exists(), "a held capture writes nothing");
     }
 
     #[test]

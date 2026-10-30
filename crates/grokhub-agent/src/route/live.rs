@@ -1127,7 +1127,7 @@ pub fn stream_routed(
         return Err(ClientError::Protocol(decision.pause_text()));
     }
     let effort = decision.send_effort(req.effort.as_deref());
-    let on_device = decision.on_device();
+    let mut on_device = decision.on_device();
     let dest = if on_device {
         grokhub_core::adult_guard::Dest::Local
     } else if decision.on_provider() {
@@ -1136,7 +1136,7 @@ pub fn stream_routed(
         grokhub_core::adult_guard::Dest::Xai
     };
     // Explicit turns go only to xAI or this computer's model.
-    let screen = super::adult::screen(&req.conversation_id, &text, dest);
+    let screen = super::adult::screen(&req.conversation_id, &sent.input, dest);
     let on_provider = decision.on_provider() && !screen.to_xai;
     let model = if screen.to_xai {
         super::adult::xai_model(&req.model)
@@ -1188,7 +1188,19 @@ pub fn stream_routed(
         }
         out
     } else {
-        client.stream(&sent, cancel, sink)
+        match client.stream(&sent, cancel, sink) {
+            // An 18+ chat xAI couldn't take (signed out, down) falls back to this
+            // computer's model, never to a provider that bans adult chat.
+            Err(err)
+                if !matches!(err, ClientError::Cancelled)
+                    && super::local::available()
+                    && super::adult::explicit(&sent.input) =>
+            {
+                on_device = true;
+                super::local::serve_request(class, &sent, cancel)
+            }
+            out => out,
+        }
     };
     let out = match (out, &screen.heads_up) {
         (Ok(mut turn), Some(note)) => {

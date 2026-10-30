@@ -5,9 +5,12 @@
 //!   content of real people. Those asks never leave the computer, not even to a
 //!   local model: the turn goes out as a [`hold`] note instead, and the voice
 //!   steers the chat elsewhere in character.
-//! - Explicit adult turns go only to xAI or this computer's model. Anthropic,
-//!   Gemini and OpenAI turns reroute to xAI; OpenRouter keeps its pick with
-//!   fallbacks off ([`route`]).
+//! - Explicit adult turns go only to xAI or this computer's model. Every other
+//!   provider's turn reroutes to xAI ([`route`]), OpenRouter included, since its
+//!   pick can land on a model whose maker bans adult chat.
+//! - A turn is explicit when the conversation is ([`explicit_conversation`]): an
+//!   adults-only voice in the system prompt, or any explicit user or assistant
+//!   turn, not just the newest ask.
 //! - Age-ambiguous asks ("teen", "barely legal") count as minors: stricter than
 //!   any provider's own wording.
 //!
@@ -47,11 +50,14 @@ pub enum Dest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Send,
-    /// OpenRouter: its pick only, so no fallback lands on a stricter model.
-    SendNoFallbacks,
     /// The provider bans adult chat: xAI takes the turn instead.
     ToXai,
 }
+
+/// The line an adults-only voice adds to the system prompt
+/// ([`crate::personality::Personality::prompt_block`]), so the check sees the
+/// persona even when every turn in the chat is clean.
+pub const ADULT_VOICE: &str = "This is an 18+ voice.";
 
 /// The note that goes out in place of a banned ask. It never repeats the ask.
 pub static HELD: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
@@ -270,6 +276,9 @@ fn host_of(base_url: &str) -> String {
     let rest = base_url
         .split_once("://")
         .map_or(base_url, |(_, rest)| rest);
+    if let Some(v6) = rest.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or("").to_ascii_lowercase();
+    }
     rest.split(['/', ':', '?'])
         .next()
         .unwrap_or("")
@@ -296,7 +305,11 @@ pub fn dest_of(base_url: &str) -> Dest {
         Dest::Gemini
     } else if host_is(&host, "openai.com") {
         Dest::OpenAi
-    } else if host == "localhost" || host.starts_with("127.") || host == "[::1]" {
+    } else if host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    {
         Dest::Local
     } else {
         Dest::Other
@@ -306,12 +319,22 @@ pub fn dest_of(base_url: &str) -> Dest {
 /// The per-provider table for one turn.
 pub fn route(risk: Risk, dest: Dest) -> Route {
     match (risk, dest) {
-        (Risk::Explicit, Dest::OpenRouter) => Route::SendNoFallbacks,
-        (Risk::Explicit, Dest::Anthropic | Dest::Gemini | Dest::OpenAi | Dest::Other) => {
-            Route::ToXai
-        }
+        (Risk::Explicit, Dest::Xai | Dest::Local) => Route::Send,
+        (Risk::Explicit, _) => Route::ToXai,
         _ => Route::Send,
     }
+}
+
+/// Whether a call is explicit as a whole. `turns` are (role, text) pairs: a
+/// system or developer turn counts when it carries [`ADULT_VOICE`]; a user or
+/// assistant turn counts when it isn't clean, so a clean follow-up never takes
+/// an explicit history to a provider that bans it.
+pub fn explicit_conversation<'a>(turns: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
+    turns.into_iter().any(|(role, text)| match role {
+        "system" | "developer" => text.contains(ADULT_VOICE),
+        "user" | "assistant" => check(text) != Risk::Clean,
+        _ => false,
+    })
 }
 
 /// The plain heads-up, once a session, after an explicit turn left a provider.
@@ -411,16 +434,22 @@ mod tests {
         );
         assert_eq!(dest_of("https://api.openai.com/v1"), Dest::OpenAi);
         assert_eq!(dest_of("http://127.0.0.1:11434/v1"), Dest::Local);
+        assert_eq!(dest_of("http://[::1]:8080/v1"), Dest::Local);
+        assert_eq!(dest_of("http://localhost:8080/v1"), Dest::Local);
+        // A name that only starts like a loopback address is someone's server.
+        assert_eq!(dest_of("https://127.example.com/v1"), Dest::Other);
         assert_eq!(dest_of("https://api.groq.com/openai/v1"), Dest::Other);
         assert_eq!(dest_of("https://notanthropic.com"), Dest::Other);
 
         assert_eq!(route(Risk::Explicit, Dest::Xai), Route::Send);
         assert_eq!(route(Risk::Explicit, Dest::Local), Route::Send);
-        assert_eq!(
-            route(Risk::Explicit, Dest::OpenRouter),
-            Route::SendNoFallbacks
-        );
-        for dest in [Dest::Anthropic, Dest::Gemini, Dest::OpenAi, Dest::Other] {
+        for dest in [
+            Dest::OpenRouter,
+            Dest::Anthropic,
+            Dest::Gemini,
+            Dest::OpenAi,
+            Dest::Other,
+        ] {
             assert_eq!(route(Risk::Explicit, dest), Route::ToXai, "{dest:?}");
             assert_eq!(route(Risk::Clean, dest), Route::Send, "{dest:?}");
         }
@@ -428,5 +457,31 @@ mod tests {
             heads_up_rerouted("Anthropic"),
             "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it."
         );
+    }
+
+    #[test]
+    fn a_chat_is_explicit_when_its_voice_or_any_turn_is() {
+        let clean = [("system", "You are the cabin."), ("user", "my build broke")];
+        assert!(!explicit_conversation(clean));
+        // An adults-only voice makes every turn explicit, clean asks included.
+        let voice = format!("Personality: Viper. {ADULT_VOICE}");
+        assert!(explicit_conversation([
+            ("system", voice.as_str()),
+            ("user", "my build broke"),
+        ]));
+        // A clean "continue" still carries the explicit history with it.
+        assert!(explicit_conversation([
+            ("user", "write me smut about two adults"),
+            ("assistant", "Here you go."),
+            ("user", "continue"),
+        ]));
+        assert!(explicit_conversation([
+            ("user", "keep going"),
+            ("assistant", "She moaned and pulled off her nude stockings"),
+            ("user", "continue"),
+        ]));
+        // The marker only counts in the system prompt, and tool output is skipped.
+        assert!(!explicit_conversation([("user", ADULT_VOICE)]));
+        assert!(!explicit_conversation([("tool", "nsfw porn")]));
     }
 }

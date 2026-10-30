@@ -142,7 +142,14 @@ impl Personality {
         {
             out.push_str(&format!(" Address the user as \"{address}\" now and then."));
         }
-        out.push_str(" This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.\n");
+        out.push_str(" This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.");
+        if self.explicit {
+            // The pre-send check reads this, so a clean ask in an 18+ chat still
+            // never reaches a provider that bans adult chat.
+            out.push(' ');
+            out.push_str(crate::adult_guard::ADULT_VOICE);
+        }
+        out.push('\n');
         out.push_str(SAFETY_LINE);
         out
     }
@@ -520,6 +527,12 @@ mod tests {
         let back = layer(&builtin(DEFAULT_ID), &rules);
         assert!(back.starts_with("Personality: Nyx. "));
         assert!(!back.contains("Whore mode"));
+        // The 18+ tag rides only with explicit voices, for the pre-send check.
+        assert!(on.contains(crate::adult_guard::ADULT_VOICE));
+        assert!(!back.contains(crate::adult_guard::ADULT_VOICE));
+        assert!(builtin("viper")
+            .prompt_block()
+            .contains(crate::adult_guard::ADULT_VOICE));
     }
 
     #[test]

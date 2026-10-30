@@ -2,12 +2,12 @@
 
 Bundled from [blackviperxiii-ui/vstack](https://github.com/blackviperxiii-ui/vstack) (`beta`, commit `7b190a35`).
 
-Method and several playbooks adapted from Lauren Tan's pstack
+The method and several playbooks are adapted from the pstack plugin
 (https://github.com/cursor/plugins/tree/main/pstack). Branding and naming in
 the upstream repo are Viper Stack / vstack.
 
-MIT License — Copyright (c) 2026 blackviperxiii-ui;
-portions copyright (c) 2026 Lauren Tan (pstack).
+License: MIT. The upstream copyright and permission notice ships unchanged in
+[LICENSE-upstream](LICENSE-upstream) in this folder and must stay with these files.
 
 Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
