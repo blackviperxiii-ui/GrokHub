@@ -48,6 +48,8 @@ pub mod frame;
 pub mod game_companion;
 pub mod game_guard;
 pub mod game_watch;
+pub mod game_watch_dota;
+pub mod game_watch_gsi;
 pub mod gguf;
 pub mod goal;
 pub mod governor;
