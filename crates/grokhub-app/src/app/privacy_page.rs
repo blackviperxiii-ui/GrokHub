@@ -70,9 +70,9 @@ pub(super) fn week_initials(now_ms: u64) -> [&'static str; 7] {
     std::array::from_fn(|i| INITIALS[((today + 5 + i as u64) % 7) as usize])
 }
 
-/// What can reach the cloud right now, from the real routing: chat always
-/// goes to Grok once signed in, and background work does too except the
-/// small jobs an installed on-device model takes.
+/// What can reach the cloud right now, from the real routing: once signed in,
+/// chat and background work go to Grok while any cloud model answers, and an
+/// installed on-device model takes over only when none does or offline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Cloud {
     /// GrokHub's own sign-in or an API key is there.
@@ -109,7 +109,7 @@ pub(super) fn cloud_line(cloud: Cloud) -> &'static str {
     if !cloud.signed_in {
         "Grok isn't signed in, so nothing can leave this PC."
     } else if cloud.local_jobs {
-        "Chat sends your messages to Grok. Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok too."
+        "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
     } else {
         "Chat and background tasks send their prompts to Grok in the cloud."
     }
@@ -133,7 +133,26 @@ pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
         (true, false) => {
             "On, but the on-device model isn't installed, so background tasks still use Grok"
         }
-        (true, true) => "Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok",
+        (true, true) => "Used only when no cloud model answers or you're offline",
+    }
+}
+
+/// How the on-device model is used, from `Router::choose` and the sidecar.
+/// PRIVACY.md and the installer's privacy.txt list the same lines.
+pub(super) const LOCAL_ROUTING: [&str; 5] = [
+    "Online, the cloud takes every step while any cloud model answers. This PC's model steps in only when none does.",
+    "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
+    "Sensitive data you haven't allowed to the cloud stays on this PC.",
+    "The model loads only when it's needed and unloads when it sits idle.",
+    "Explicit 18+ chats go only to xAI or this PC's model.",
+];
+
+/// The lines under the On-device model switch: only while it can run.
+pub(super) fn local_notes(on: bool, installed: bool) -> &'static [&'static str] {
+    if on && installed {
+        &LOCAL_ROUTING
+    } else {
+        &[]
     }
 }
 
@@ -485,6 +504,9 @@ impl Cabin {
         if crate::cards::settings_toggle(ui, "On-device model", hint, &mut local) {
             self.set_local_model(local);
         }
+        for line in local_notes(local, grokhub_agent::route::local::installed()) {
+            crate::cards::settings_note(ui, line);
+        }
         let mut asks = self.permission_mode == PermissionMode::Ask;
         if crate::cards::settings_toggle(
             ui,
@@ -632,7 +654,7 @@ mod tests {
                 signed_in: true,
                 local_jobs: true
             }),
-            "Chat sends your messages to Grok. Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok too."
+            "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
         );
         assert_eq!(
             cloud_line(SIGNED_OUT),
@@ -648,8 +670,20 @@ mod tests {
         );
         assert_eq!(
             local_hint(true, true),
-            "Small background jobs run on this PC when it has room; bigger ones, or any while it's busy, use Grok"
+            "Used only when no cloud model answers or you're offline"
         );
+        assert_eq!(
+            local_notes(true, true),
+            [
+                "Online, the cloud takes every step while any cloud model answers. This PC's model steps in only when none does.",
+                "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
+                "Sensitive data you haven't allowed to the cloud stays on this PC.",
+                "The model loads only when it's needed and unloads when it sits idle.",
+                "Explicit 18+ chats go only to xAI or this PC's model.",
+            ]
+        );
+        assert!(local_notes(true, false).is_empty());
+        assert!(local_notes(false, true).is_empty());
     }
 
     fn texts(week: &Week, cloud: Cloud) -> String {
