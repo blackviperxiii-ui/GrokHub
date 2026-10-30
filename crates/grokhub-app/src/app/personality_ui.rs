@@ -546,14 +546,22 @@ impl Cabin {
 
     /// Where a Try it goes now, in the order chats use: your provider model while its
     /// key and grant are there, then Grok, then the model on this computer.
-    pub(super) fn try_route(&mut self) -> Option<TryRoute> {
+    /// `explicit`: the preset is an 18+ voice, so a provider that bans adult chat
+    /// (or, like OpenRouter, may pass it to one that does) is skipped for Grok.
+    pub(super) fn try_route(&mut self, explicit: bool) -> Option<TryRoute> {
         let pick = self.cfg.provider_model.trim().to_string();
         if let Some((pid, _)) = grokhub_core::model_registry::split_provider_model(&pick) {
+            let dir = crate::config::config_dir();
             let usable = grokhub_agent::route::providers::usable(
-                &crate::config::config_dir(),
+                &dir,
                 grokhub_agent::route::providers::CALL_DATA,
             );
-            if usable.iter().any(|u| u == pid) {
+            let adult_ok = !explicit
+                || matches!(
+                    grokhub_agent::route::providers::dest(&dir, &pick),
+                    grokhub_core::adult_guard::Dest::Xai | grokhub_core::adult_guard::Dest::Local
+                );
+            if adult_ok && usable.iter().any(|u| u == pid) {
                 return Some(TryRoute::Provider(pick));
             }
         }
@@ -573,7 +581,8 @@ impl Cabin {
     }
 
     fn try_personality(&mut self, id: &str) {
-        let Some(route) = self.try_route() else {
+        let explicit = personality::lookup(&presets_dir(), id).explicit;
+        let Some(route) = self.try_route(explicit) else {
             // A Try it still running would land its reply over this line.
             self.cancel_try_it();
             self.picker.rx = None;
@@ -1816,7 +1825,7 @@ mod tests {
         cabin.cfg.provider_model.clear();
         cabin.cfg.local_model = false;
         assert!(!cabin.can_try());
-        assert_eq!(cabin.try_route(), None);
+        assert_eq!(cabin.try_route(false), None);
         // Nothing turns red: no failure is stored, and nothing runs.
         cabin.try_personality("pirate");
         assert_eq!(cabin.picker.shown, None);
@@ -1870,7 +1879,7 @@ mod tests {
         // A provider pick without its key or grant says what is missing.
         cabin.cfg.provider_model = "openrouter/vendor/model-x".into();
         assert!(cabin.can_try());
-        assert_eq!(cabin.try_route(), None);
+        assert_eq!(cabin.try_route(false), None);
         cabin.try_personality("pirate");
         assert_eq!(
             cabin.picker.shown,
@@ -1882,7 +1891,7 @@ mod tests {
         // With a console key, an unusable provider pick falls back to Grok.
         cabin.cfg.api_key = "sk-abcdefghijklmnopqrstuv".into();
         assert_eq!(
-            cabin.try_route(),
+            cabin.try_route(false),
             Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
         );
     }
@@ -1925,7 +1934,11 @@ mod tests {
         cabin.picker.cancel = Some(first.clone());
         let (_tx, rx) = mpsc::channel();
         cabin.picker.rx = Some(rx);
-        assert_eq!(cabin.try_route(), None, "no key or grant for that provider");
+        assert_eq!(
+            cabin.try_route(false),
+            None,
+            "no key or grant for that provider"
+        );
         cabin.try_personality("pirate");
         assert!(first.is_cancelled(), "the earlier call is stopped");
         assert!(cabin.picker.rx.is_none(), "its late reply can't land");

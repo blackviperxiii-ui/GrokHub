@@ -53,15 +53,16 @@ fn first_warning(session: &str) -> bool {
         .insert(session.to_string())
 }
 
-/// `text` is the last user message after [`scrub`]; `dest` is where the router sent it.
-pub fn screen(session: &str, text: &str, dest: Dest) -> Screen {
-    if adult_guard::is_held(text) {
+/// `input` is the call after [`scrub`]; `dest` is where the router sent it.
+pub fn screen(session: &str, input: &[InputItem], dest: Dest) -> Screen {
+    let (text, _) = super::live::last_user_text(input);
+    if adult_guard::is_held(&text) {
         return Screen {
             to_xai: false,
             heads_up: first_warning(session).then(|| adult_guard::HEADS_UP_HELD.to_string()),
         };
     }
-    let to_xai = to_xai(text, dest);
+    let to_xai = to_xai(input, dest);
     Screen {
         to_xai,
         heads_up: (to_xai && first_warning(session))
@@ -69,14 +70,38 @@ pub fn screen(session: &str, text: &str, dest: Dest) -> Screen {
     }
 }
 
-/// OpenRouter keeps its pick for an explicit turn: no fallback to a stricter model.
-pub fn no_fallbacks(dest: Dest, text: &str) -> bool {
-    adult_guard::route(adult_guard::check(text), dest) == Route::SendNoFallbacks
+/// The whole call is explicit: an 18+ voice in its system prompt, or any
+/// explicit user or assistant turn, not only the newest ask.
+pub fn explicit(input: &[InputItem]) -> bool {
+    let turns: Vec<(&str, String)> = input
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::Message { role, content } => Some((
+                role.as_str(),
+                content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::InputText(t) => Some(t.as_str()),
+                        ContentPart::InputImage(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )),
+            _ => None,
+        })
+        .collect();
+    adult_guard::explicit_conversation(turns.iter().map(|(r, t)| (*r, t.as_str())))
 }
 
-/// The provider bans adult chat and this turn is explicit: xAI takes it.
-pub fn to_xai(text: &str, dest: Dest) -> bool {
-    adult_guard::route(adult_guard::check(text), dest) == Route::ToXai
+/// The provider bans adult chat (or, like OpenRouter, may hand the turn to a
+/// model that does) and this call is explicit: xAI takes it.
+pub fn to_xai(input: &[InputItem], dest: Dest) -> bool {
+    let risk = if explicit(input) {
+        adult_guard::Risk::Explicit
+    } else {
+        adult_guard::Risk::Clean
+    };
+    adult_guard::route(risk, dest) == Route::ToXai
 }
 
 /// The xAI model a rerouted turn uses: the call's own, or the cabin's fast
@@ -125,36 +150,62 @@ mod tests {
     #[test]
     fn one_heads_up_a_session_and_explicit_turns_leave_anthropic() {
         let s = "adult-screen-1";
-        let first = screen(s, *adult_guard::HELD, Dest::Xai);
+        let first = screen(s, &[user(*adult_guard::HELD)], Dest::Xai);
         assert_eq!(first.heads_up.as_deref(), Some(adult_guard::HEADS_UP_HELD));
         assert!(!first.to_xai);
-        let again = screen(s, "talk dirty to me, I'm horny", Dest::Anthropic);
+        let horny = [user("talk dirty to me, I'm horny")];
+        let again = screen(s, &horny, Dest::Anthropic);
         assert!(again.to_xai, "explicit turns never go to Anthropic");
         assert_eq!(again.heads_up, None, "once a session");
 
-        let other = screen(
-            "adult-screen-2",
-            "talk dirty to me, I'm horny",
-            Dest::Anthropic,
-        );
+        let other = screen("adult-screen-2", &horny, Dest::Anthropic);
         assert_eq!(
             other.heads_up.as_deref(),
             Some("Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.")
         );
         assert_eq!(
-            screen("adult-screen-3", "talk dirty to me, I'm horny", Dest::Xai),
+            screen("adult-screen-3", &horny, Dest::Xai),
             Screen::default()
         );
         assert_eq!(
-            screen("adult-screen-4", "fix my wifi", Dest::Anthropic),
+            screen("adult-screen-4", &[user("fix my wifi")], Dest::Anthropic),
             Screen::default()
         );
-        assert!(no_fallbacks(Dest::OpenRouter, "send nudes lol"));
+        // OpenRouter can land on a model whose maker bans adult chat: xAI takes it.
+        assert!(to_xai(&horny, Dest::OpenRouter));
+        assert!(!to_xai(&[user("fix my wifi")], Dest::OpenRouter));
         assert_eq!(
             xai_model("anthropic/model-x"),
             grokhub_core::CABIN_FAST_MODEL
         );
         assert_eq!(xai_model("grok-4.3"), "grok-4.3");
-        assert!(!no_fallbacks(Dest::OpenRouter, "fix my wifi"));
+    }
+
+    fn msg(role: &str, text: &str) -> InputItem {
+        InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    #[test]
+    fn an_18_plus_voice_or_explicit_history_keeps_clean_asks_off_banning_providers() {
+        let voice = format!("Personality: Viper. {}", adult_guard::ADULT_VOICE);
+        let persona = [msg("system", &voice), user("my build broke")];
+        assert!(explicit(&persona));
+        assert!(screen("adult-screen-5", &persona, Dest::Anthropic).to_xai);
+        assert!(!screen("adult-screen-6", &persona, Dest::Local).to_xai);
+
+        let history = [
+            user("write me smut about two adults"),
+            msg("assistant", "Here you go."),
+            user("continue"),
+        ];
+        assert!(screen("adult-screen-7", &history, Dest::OpenAi).to_xai);
+        assert!(screen("adult-screen-8", &history, Dest::Gemini).to_xai);
+
+        let clean = [msg("system", "Personality: Nyx."), user("my build broke")];
+        assert!(!explicit(&clean));
+        assert!(!screen("adult-screen-9", &clean, Dest::Anthropic).to_xai);
     }
 }
