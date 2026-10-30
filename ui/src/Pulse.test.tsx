@@ -318,12 +318,12 @@ describe("Pulse", () => {
       .mockResolvedValueOnce(PAGE)
       .mockResolvedValueOnce(PAGE)
       .mockReturnValueOnce(new Promise<PulsePage>((resolve) => (land = resolve)));
-    api.pulseAct.mockRejectedValue("MEMORY.md is too large to add to. Nothing was changed.");
+    api.pulseAct.mockRejectedValue("The Pulse ledger is too large to add to. Nothing was changed.");
     render(<Pulse onRun={vi.fn()} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "For You" }));
     await userEvent.click(screen.getByRole("button", { name: /I can tidy the workboard/ }));
-    expect(await screen.findByRole("status")).toHaveTextContent("MEMORY.md is too large");
+    expect(await screen.findByRole("status")).toHaveTextContent("The Pulse ledger is too large");
     expect(screen.getByRole("button", { name: /I can tidy the workboard/ })).toBeDisabled();
     land(PAGE);
     await vi.waitFor(() =>

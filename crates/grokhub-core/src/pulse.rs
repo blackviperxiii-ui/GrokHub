@@ -701,7 +701,40 @@ pub struct LedgerEntry {
     pub reason: LedgerReason,
 }
 
-/// One MEMORY.md line: `- [2026-10-04] pulse: dismissed "summarize workboard" reason=not-this`.
+/// The ledger's own file in `memory/`, so MEMORY.md keeps only long-term notes.
+pub const LEDGER_FILE: &str = "pulse-ledger.md";
+
+/// Split MEMORY.md into the body it keeps and the ledger lines that move to
+/// [`LEDGER_FILE`], oldest first. Lines that are not ledger lines stay as written.
+pub fn split_ledger(memory_md: &str) -> (String, Vec<String>) {
+    let mut kept = String::with_capacity(memory_md.len());
+    let mut moved = Vec::new();
+    for line in memory_md.split_inclusive('\n') {
+        if parse_ledger_line(line).is_some() {
+            moved.push(line.trim().to_string());
+        } else {
+            kept.push_str(line);
+        }
+    }
+    (kept, moved)
+}
+
+/// The ledger file with `older` lines in front, skipping any it already holds.
+pub fn merge_ledger(ledger: &str, older: &[String]) -> String {
+    let have: std::collections::HashSet<&str> = ledger.lines().map(str::trim).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = String::new();
+    for line in older {
+        if !have.contains(line.as_str()) && seen.insert(line.as_str()) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.push_str(ledger);
+    out
+}
+
+/// One ledger line: `- [2026-10-04] pulse: dismissed "summarize workboard" reason=not-this`.
 pub fn ledger_line(date: &str, title: &str, reason: LedgerReason) -> String {
     let title: String = title
         .chars()
@@ -717,7 +750,7 @@ pub fn ledger_line(date: &str, title: &str, reason: LedgerReason) -> String {
     )
 }
 
-/// Every pulse ledger line in MEMORY.md, oldest first. Other lines are ignored.
+/// Every pulse ledger line in `text`, oldest first. Other lines are ignored.
 pub fn parse_ledger(memory_md: &str) -> Vec<LedgerEntry> {
     memory_md.lines().filter_map(parse_ledger_line).collect()
 }
@@ -1486,6 +1519,38 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn ledger_lines_leave_memory_md_and_merge_in_front_once() {
+        let memory = "# Memory\n\nLong-term notes.\n- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss\n- 2026-10-05: the spare key is under the planter\n  - [2026-10-06] pulse: liked \"Rust 1.92 ships\" reason=liked\nno newline at the end";
+        let (kept, moved) = split_ledger(memory);
+        assert_eq!(
+            kept,
+            "# Memory\n\nLong-term notes.\n- 2026-10-05: the spare key is under the planter\nno newline at the end"
+        );
+        assert_eq!(
+            moved,
+            vec![
+                "- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss".to_string(),
+                "- [2026-10-06] pulse: liked \"Rust 1.92 ships\" reason=liked".to_string(),
+            ]
+        );
+        let ledger = "- [2026-10-06] pulse: liked \"Rust 1.92 ships\" reason=liked\n- [2026-10-07] pulse: used \"NFL scores\" reason=used\n";
+        let merged = merge_ledger(ledger, &moved);
+        assert_eq!(
+            merged,
+            "- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss\n- [2026-10-06] pulse: liked \"Rust 1.92 ships\" reason=liked\n- [2026-10-07] pulse: used \"NFL scores\" reason=used\n"
+        );
+        assert_eq!(
+            merge_ledger(&merged, &moved),
+            merged,
+            "a second run adds nothing"
+        );
+        assert_eq!(
+            split_ledger("# Memory\n"),
+            ("# Memory\n".to_string(), Vec::new())
+        );
     }
 
     #[test]

@@ -394,7 +394,7 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// For You. Love on the post writes the ledger line to the global MEMORY.md.
+// For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
 // opens in the lightbox. Delete takes the first post away. After the post
@@ -438,9 +438,9 @@ async function pulse(s, config) {
     const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
     return (await wd("GET", `${s}/element/${el}/attribute/aria-pressed`)) === "true";
   });
-  const ledger = readFileSync(join(config, "memory", "MEMORY.md"), "utf8");
+  const ledger = readFileSync(join(config, "memory", "pulse-ledger.md"), "utf8");
   if (!ledger.includes('pulse: liked "Smoke board summary" reason=liked')) {
-    throw new Error(`MEMORY.md says ${JSON.stringify(ledger)}`);
+    throw new Error(`pulse-ledger.md says ${JSON.stringify(ledger)}`);
   }
   console.log(`ledger line: ${JSON.stringify(ledger.trim())}`);
 

@@ -1520,7 +1520,7 @@ impl Cabin {
             .ledger_at
             .is_none_or(|at| at.elapsed() >= LEDGER_TTL);
         if stale {
-            self.pulse_view.ledger = pc::parse_ledger(&crate::config::read_memory("MEMORY.md"));
+            self.pulse_view.ledger = pc::parse_ledger(&memory_tidy::read_pulse_ledger());
             self.pulse_view.ledger_at = Some(std::time::Instant::now());
         }
         self.pulse_view.ledger.clone()
@@ -2066,11 +2066,11 @@ impl Cabin {
         }
     }
 
-    /// One structured line in MEMORY.md. Likes and dislikes count toward the
-    /// next rewrite of the feed instructions.
+    /// One structured line in the Pulse ledger (`memory/pulse-ledger.md`).
+    /// Likes and dislikes count toward the next rewrite of the feed instructions.
     pub(super) fn pulse_note(&mut self, title: &str, reason: LedgerReason, day: &str) {
         let line = pc::ledger_line(day, title, reason);
-        if let Err(err) = crate::config::append_memory("MEMORY.md", &line) {
+        if let Err(err) = memory_tidy::append_pulse_ledger(&line) {
             self.status = err;
         }
         self.pulse_view.ledger_at = None;
@@ -2377,7 +2377,7 @@ impl Cabin {
         if self.pulse_view.rewrite_rx.is_some() {
             return;
         }
-        let ledger = pc::parse_ledger(&crate::config::read_memory("MEMORY.md"));
+        let ledger = pc::parse_ledger(&memory_tidy::read_pulse_ledger());
         let taste = pc::recent_taste(&ledger, pc::REWRITE_AFTER as usize);
         if taste.is_empty() {
             return;
