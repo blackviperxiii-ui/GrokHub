@@ -473,7 +473,7 @@ pub(super) fn pc_profile() -> Option<LocalProfile> {
 pub(super) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     use crate::ui_kit::recipe::{look, Part, State};
     let l = look(Part::Card, State::Default);
-    egui::Frame::NONE
+    let resp = egui::Frame::NONE
         .fill(l.fill)
         .stroke(l.stroke)
         .corner_radius(l.radius)
@@ -482,7 +482,10 @@ pub(super) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::
             ui.set_width(ui.available_width());
             add(ui);
         })
-        .response
+        .response;
+    // Its mark lifts while the card is hovered; the card stays still.
+    crate::motion::icon::note_card(ui, resp.rect);
+    resp
 }
 
 pub(super) fn caption(text: &str) -> egui::RichText {
@@ -492,16 +495,28 @@ pub(super) fn caption(text: &str) -> egui::RichText {
         .color(crate::theme::muted())
 }
 
-/// Amber diamond before a dock card title, as on the deck.
+/// Amber diamond: a checklist bullet, or (filled) a title mark.
 pub(super) fn diamond(ui: &mut egui::Ui, filled: bool) {
-    let (mark, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    paint_diamond(ui, filled, false);
+}
+
+/// The diamond before a card's title: the card's icon, so it lifts while the
+/// card is hovered.
+pub(super) fn card_mark(ui: &mut egui::Ui) {
+    paint_diamond(ui, true, true);
+}
+
+fn paint_diamond(ui: &mut egui::Ui, filled: bool, on_card: bool) {
+    let (mark, resp) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let pose = if on_card {
+        crate::motion::icon::card_icon_pose(ui, resp.id, mark)
+    } else {
+        crate::motion::icon::Pose::REST
+    };
     let c = mark.center();
-    let points = vec![
-        egui::pos2(c.x, c.y - 5.0),
-        egui::pos2(c.x + 5.0, c.y),
-        egui::pos2(c.x, c.y + 5.0),
-        egui::pos2(c.x - 5.0, c.y),
-    ];
+    let points = [(0.0, -5.0), (5.0, 0.0), (0.0, 5.0), (-5.0, 0.0)]
+        .map(|(x, y)| pose.map(c, egui::pos2(c.x + x, c.y + y)))
+        .to_vec();
     let (fill, stroke) = if filled {
         (crate::theme::amber(), egui::Stroke::NONE)
     } else {
@@ -526,7 +541,7 @@ pub(super) fn header(
     ui.horizontal(|ui| {
         if mark {
             ui.spacing_mut().item_spacing.x = 6.0;
-            diamond(ui, true);
+            card_mark(ui);
         }
         ui.label(caption(title));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1229,7 +1244,7 @@ impl Cabin {
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                diamond(ui, true);
+                card_mark(ui);
                 ui.label(caption(&dock_title(&shown.id, name)));
             });
             ui.add_space(crate::theme::SPACING_4);

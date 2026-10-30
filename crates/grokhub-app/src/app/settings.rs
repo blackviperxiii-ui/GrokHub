@@ -123,32 +123,222 @@ pub(super) fn settings_sheet_cover(screen: egui::Rect) -> egui::Rect {
     )
 }
 
-/// True when `sec` wasn't on screen last frame: a section switch or a fresh
-/// open, so its panel starts at the top instead of an old scroll position.
-fn settings_fresh_view(ctx: &egui::Context, sec: SettingsSec) -> bool {
+/// True when Settings wasn't on screen last frame: a fresh open, so the page
+/// lands on the asked-for section instead of an old scroll position.
+fn settings_fresh_view(ctx: &egui::Context) -> bool {
     let id = egui::Id::new("settings-last-view");
     let pass = ctx.cumulative_pass_nr();
     let last = ctx.data_mut(|d| {
-        let last = d.get_temp::<(SettingsSec, u64)>(id);
-        d.insert_temp(id, (sec, pass));
+        let last = d.get_temp::<u64>(id);
+        d.insert_temp(id, pass);
         last
     });
-    !matches!(last, Some((was, at)) if was == sec && at + 1 >= pass)
+    !matches!(last, Some(at) if at + 1 >= pass)
 }
 
-/// The section body's scroll: one per section, back at the top each time a
-/// section is newly shown, and kept while it stays open.
-fn settings_body_scroll(ctx: &egui::Context, sec: SettingsSec, max_h: f32) -> egui::ScrollArea {
+/// The one Settings scroll, every section on it. Back at the top on a fresh
+/// open and kept while open; `force` is where the scrollspy's jump puts it
+/// this frame.
+fn settings_body_scroll(max_h: f32, fresh: bool, force: Option<f32>) -> egui::ScrollArea {
     let body = egui::ScrollArea::vertical()
-        .id_salt(("settings-body", sec))
+        .id_salt("settings-body")
         .auto_shrink([false, false])
         .max_height(max_h);
-    if settings_fresh_view(ctx, sec) {
-        body.vertical_scroll_offset(0.0)
-    } else {
-        body
+    match force {
+        Some(y) => body.vertical_scroll_offset(y),
+        None if fresh => body.vertical_scroll_offset(0.0),
+        None => body,
     }
 }
+
+/// Room between one section's last row and the next section's title.
+const SETTINGS_SECTION_GAP: f32 = 28.0;
+/// A section becomes the marked one when its top crosses this share of the view.
+const SPY_LINE: f32 = 0.30;
+/// How far past the line a top must go before the mark moves, either way,
+/// so a top resting on the line doesn't flicker between two sections.
+const SPY_SLACK: f32 = 12.0;
+/// A jump leaves this much room above the section title.
+pub(super) const SPY_TOP_PAD: f32 = 8.0;
+
+/// Which section the Settings nav marks, as an index into `tops` (each
+/// section's top in scroll content, top to bottom). The last one whose top
+/// crossed [`SPY_LINE`] of the view, with [`SPY_SLACK`] of give around
+/// `current`. Scrolled to the end, the last one. Nothing laid out yet: the first.
+pub(super) fn spy_pick(
+    tops: &[f32],
+    offset: f32,
+    view_h: f32,
+    at_end: bool,
+    current: usize,
+) -> usize {
+    if tops.is_empty() {
+        return 0;
+    }
+    let last = tops.len() - 1;
+    if at_end {
+        return last;
+    }
+    let current = current.min(last);
+    let line = offset + view_h * SPY_LINE;
+    let crossed = |line: f32| tops.iter().rposition(|t| *t <= line).unwrap_or(0);
+    let ahead = crossed(line - SPY_SLACK);
+    if ahead > current {
+        return ahead;
+    }
+    let behind = crossed(line + SPY_SLACK);
+    if behind < current {
+        return behind;
+    }
+    current
+}
+
+/// A jump the scrollspy is landing: a nav click, a link from elsewhere, or a
+/// fresh open on a section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpyJump {
+    sec: SettingsSec,
+    instant: bool,
+    from: f32,
+    started: Option<f64>,
+}
+
+/// The Settings scrollspy's memory between frames.
+#[derive(Clone, Debug, Default)]
+struct Spy {
+    /// Each section's top in scroll content, last frame, top to bottom.
+    tops: Vec<(SettingsSec, f32)>,
+    offset: f32,
+    max_offset: f32,
+    /// The section last marked. `settings_sec` set to anything else means a
+    /// jump was asked for.
+    marked: Option<SettingsSec>,
+    jump: Option<SpyJump>,
+    /// A jumped-to section stays marked until the scroll leaves where it
+    /// landed: the last sections can't reach the line, and a click on them
+    /// must still mark them.
+    hold: Option<(SettingsSec, Option<f32>)>,
+}
+
+impl Spy {
+    fn id() -> egui::Id {
+        egui::Id::new("settings-scrollspy")
+    }
+
+    fn load(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp::<Spy>(Self::id()))
+            .unwrap_or_default()
+    }
+
+    fn store(self, ctx: &egui::Context) {
+        ctx.data_mut(|d| d.insert_temp(Self::id(), self));
+    }
+
+    /// Start of a frame: notice a fresh open or a section asked for from
+    /// outside, and return where the jump puts the scroll this frame. A jump
+    /// eases over [`crate::motion::SETTINGS_SCROLL_SECS`] and asks for frames
+    /// only until it lands; reduced motion and a fresh open land at once.
+    fn begin(
+        &mut self,
+        ctx: &egui::Context,
+        opened: bool,
+        asked: SettingsSec,
+        reduced: bool,
+    ) -> Option<f32> {
+        if opened {
+            *self = Spy::default();
+        }
+        if opened || self.marked != Some(asked) {
+            self.marked = Some(asked);
+            self.jump = Some(SpyJump {
+                sec: asked,
+                instant: opened || reduced,
+                from: self.offset,
+                started: None,
+            });
+        }
+        let jump = self.jump.as_mut()?;
+        self.hold = Some((jump.sec, None));
+        let Some(top) = self
+            .tops
+            .iter()
+            .find(|(s, _)| *s == jump.sec)
+            .map(|(_, t)| *t)
+        else {
+            // Nothing laid out yet: one frame from the top, then the jump.
+            return opened.then_some(0.0);
+        };
+        let target = (top - SPY_TOP_PAD).clamp(0.0, self.max_offset);
+        let y = if jump.instant {
+            target
+        } else {
+            let now = ctx.input(|i| i.time);
+            let started = *jump.started.get_or_insert(now);
+            let t = ((now - started) as f32 / crate::motion::SETTINGS_SCROLL_SECS).clamp(0.0, 1.0);
+            if t < 1.0 {
+                ctx.request_repaint();
+                jump.from + (target - jump.from) * egui::emath::easing::cubic_out(t)
+            } else {
+                target
+            }
+        };
+        if y == target {
+            self.hold = Some((jump.sec, Some(target)));
+            self.jump = None;
+        }
+        Some(y)
+    }
+
+    /// End of a frame: remember the layout and the scroll, and return the
+    /// section the nav marks.
+    fn end(
+        &mut self,
+        tops: Vec<(SettingsSec, f32)>,
+        offset: f32,
+        view_h: f32,
+        content_h: f32,
+    ) -> SettingsSec {
+        self.max_offset = (content_h - view_h).max(0.0);
+        self.offset = offset;
+        if let Some((_, Some(at))) = self.hold {
+            if (offset - at).abs() > 1.0 {
+                self.hold = None;
+            }
+        }
+        let marked = match self.hold {
+            Some((sec, _)) => sec,
+            None => {
+                let current = self
+                    .marked
+                    .and_then(|m| tops.iter().position(|(s, _)| *s == m))
+                    .unwrap_or(0);
+                let at_end = self.max_offset > 0.0 && offset >= self.max_offset - 1.0;
+                let ys: Vec<f32> = tops.iter().map(|(_, t)| *t).collect();
+                tops.get(spy_pick(&ys, offset, view_h, at_end, current))
+                    .map(|(s, _)| *s)
+                    .or(self.marked)
+                    .unwrap_or(SettingsSec::Account)
+            }
+        };
+        self.tops = tops;
+        self.marked = Some(marked);
+        marked
+    }
+}
+
+/// A section's title in the one Settings scroll. Returns its rect, for the spy.
+fn settings_section_title(ui: &mut egui::Ui, sec: SettingsSec) -> egui::Rect {
+    ui.label(
+        RichText::new(settings_sec_title(sec))
+            .font(crate::theme::title_font(18.0))
+            .color(crate::theme::fg()),
+    )
+    .rect
+}
+
+/// Settings → Appearance → Reduce motion.
+pub(super) const REDUCE_MOTION_HINT: &str =
+    "Icons and cards stay still under the pointer, and Settings jumps to a section instead of scrolling.";
 
 pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
     sec != SettingsSec::Appearance
@@ -377,6 +567,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_reduce_motion(&mut self, on: bool) {
+        if self.cfg.reduce_motion == on {
+            return;
+        }
+        self.cfg.reduce_motion = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_dock_panels(&mut self, on: bool) {
         if self.cfg.dock_panels == on {
             return;
@@ -506,6 +705,35 @@ impl Cabin {
             close = true;
         }
         let mut next_sec: Option<SettingsSec> = None;
+        // Every section on one scroll, in nav order; the nav marks the one in view.
+        let general = [
+            (SettingsSec::Account, "Account"),
+            (SettingsSec::Privacy, "Privacy & data"),
+            (SettingsSec::Appearance, "Appearance"),
+            (SettingsSec::Personality, "Personality"),
+            (SettingsSec::Playbooks, "Playbooks"),
+            (SettingsSec::Pulse, "Pulse"),
+            (SettingsSec::Background, "Background"),
+            (SettingsSec::Behavior, "Behavior"),
+            (SettingsSec::Permissions, "Permissions"),
+            (SettingsSec::Connectors, "Connectors"),
+            (SettingsSec::Defaults, "Defaults"),
+            (SettingsSec::Labs, "Labs"),
+        ];
+        let about = [
+            (SettingsSec::Update, "Update"),
+            (SettingsSec::About, "About"),
+        ];
+        let opened = settings_fresh_view(ctx);
+        let mut spy = Spy::load(ctx);
+        let force = spy.begin(
+            ctx,
+            opened,
+            self.settings_sec,
+            crate::motion::reduced_motion_ctx(ctx),
+        );
+        let mut tops: Vec<(SettingsSec, f32)> = Vec::new();
+        let mut spy_view: Option<(f32, f32, f32)> = None;
         let sec = self.settings_sec;
         let screen = ctx.content_rect();
         let page = crate::theme::is_loadout_paint();
@@ -552,20 +780,7 @@ impl Cabin {
                                                 if crate::cards::section_label(ui, "General") {
                                                     next_sec = Some(settings_group_home(SettingsGroup::General));
                                                 }
-                                                for (s, label) in [
-                                                    (SettingsSec::Account, "Account"),
-                                                    (SettingsSec::Privacy, "Privacy & data"),
-                                                    (SettingsSec::Appearance, "Appearance"),
-                                                    (SettingsSec::Personality, "Personality"),
-                                                    (SettingsSec::Playbooks, "Playbooks"),
-                                                    (SettingsSec::Pulse, "Pulse"),
-                                                    (SettingsSec::Background, "Background"),
-                                                    (SettingsSec::Behavior, "Behavior"),
-                                                    (SettingsSec::Permissions, "Permissions"),
-                                                    (SettingsSec::Connectors, "Connectors"),
-                                                    (SettingsSec::Defaults, "Defaults"),
-                                                    (SettingsSec::Labs, "Labs"),
-                                                ] {
+                                                for (s, label) in general {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
                                                     }
@@ -574,10 +789,7 @@ impl Cabin {
                                                 if crate::cards::section_label(ui, "About") {
                                                     next_sec = Some(settings_group_home(SettingsGroup::About));
                                                 }
-                                                for (s, label) in [
-                                                    (SettingsSec::Update, "Update"),
-                                                    (SettingsSec::About, "About"),
-                                                ] {
+                                                for (s, label) in about {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
                                                     }
@@ -595,7 +807,7 @@ impl Cabin {
                                         ui.horizontal(|ui| {
                                             ui.add_space(20.0);
                                             ui.label(
-                                                RichText::new(settings_sec_title(sec))
+                                                RichText::new("Settings")
                                                     .font(crate::theme::title_font(22.0))
                                                     .color(crate::theme::fg()),
                                             );
@@ -629,14 +841,21 @@ impl Cabin {
                                         // Personality owns its own grid scroll; keep the body
                                         // height capped so the panel never grows past the window.
                                         let body_h = (ui.available_height() - 8.0).max(120.0);
-                                        let body = settings_body_scroll(ctx, sec, body_h);
-                                        body.show(ui, |ui| {
+                                        let body = settings_body_scroll(body_h, opened, force);
+                                        let shown = body.show(ui, |ui| {
                                                 ui.set_width((body_w - 40.0).max(240.0));
                                                 ui.set_max_width((body_w - 40.0).max(240.0));
+                                                // The content's top, wherever the scroll has it.
+                                                let origin = ui.max_rect().top();
                                                 ui.add_space(8.0);
+                                                for s in general.iter().chain(about.iter()).map(|(s, _)| *s) {
+                                                ui.push_id(("settings-sec", s), |ui| {
                                                 ui.indent("settings-body", |ui| {
                                                     ui.set_max_width(ui.available_width());
-                                                    match sec {
+                                                    let title = settings_section_title(ui, s);
+                                                    tops.push((s, title.top() - origin));
+                                                    ui.add_space(8.0);
+                                                    match s {
                                                         SettingsSec::Account => {
                                                             let name_before = self.cfg.display_name.clone();
                                                             crate::cards::settings_field(
@@ -718,6 +937,10 @@ impl Cabin {
                                                                 crate::theme::paint_loadout_token_strip(ui);
                                                             }
                                                             self.ui_chat_layout_row(ui);
+                                                            let mut calm = self.cfg.reduce_motion;
+                                                            if settings_toggle(ui, "Reduce motion", REDUCE_MOTION_HINT, &mut calm) {
+                                                                self.set_reduce_motion(calm);
+                                                            }
                                                         }
                                                         SettingsSec::Behavior => {
                                                             // First, so small windows don't clip them.
@@ -1220,13 +1443,26 @@ impl Cabin {
                                                         SettingsSec::Privacy => self.ui_settings_privacy(ui),
                                                     }
                                                 });
+                                                });
+                                                ui.add_space(SETTINGS_SECTION_GAP);
+                                                }
                                             });
+                                        spy_view = Some((
+                                            shown.state.offset.y,
+                                            shown.inner_rect.height(),
+                                            shown.content_size.y,
+                                        ));
                                     },
                                 );
                             });
                         });
                 });
             });
+        if let Some((offset, view_h, content_h)) = spy_view {
+            self.settings_sec = spy.end(tops, offset, view_h, content_h);
+        }
+        spy.store(ctx);
+        // A nav click wins over the spy; next frame's spy scrolls to it.
         if let Some(s) = next_sec {
             self.settings_sec = s;
         }
@@ -1526,32 +1762,32 @@ mod tests {
     }
 
     #[test]
-    fn a_section_opens_at_the_top_once_then_keeps_its_scroll() {
+    fn settings_opens_fresh_once_then_keeps_its_scroll() {
         let ctx = egui::Context::default();
         let mut seen = Vec::new();
-        let mut pass = |sec: Option<SettingsSec>| {
+        let mut pass = |open: bool| {
             let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
-                if let Some(sec) = sec {
-                    seen.push(settings_fresh_view(ui.ctx(), sec));
+                if open {
+                    seen.push(settings_fresh_view(ui.ctx()));
                 }
             });
         };
-        pass(Some(SettingsSec::Labs));
-        pass(Some(SettingsSec::Labs));
-        pass(Some(SettingsSec::Behavior));
-        pass(Some(SettingsSec::Behavior));
-        // Closed for a frame, then opened again on the same section.
-        pass(None);
-        pass(Some(SettingsSec::Behavior));
-        assert_eq!(seen, [true, false, true, false, true]);
+        pass(true);
+        pass(true);
+        pass(true);
+        // Closed for a frame, then opened again.
+        pass(false);
+        pass(true);
+        // Every section shares one scroll now, so only a fresh open is fresh.
+        assert_eq!(seen, [true, false, false, true]);
     }
 
     #[test]
-    fn a_section_body_scrolls_back_to_the_top_only_when_reopened() {
+    fn the_body_scrolls_back_to_the_top_only_when_reopened() {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
-        // One frame of a tall section body, optionally wheeled down; its offset after.
-        let frame = |sec: Option<SettingsSec>, wheel: f32| -> Option<f32> {
+        // One frame of a tall body, optionally wheeled down or forced; its offset after.
+        let frame = |open: bool, wheel: f32, force: Option<f32>| -> Option<f32> {
             let mut raw = egui::RawInput {
                 screen_rect: Some(screen),
                 ..Default::default()
@@ -1572,28 +1808,231 @@ mod tests {
             }
             let mut offset = None;
             let _ = crate::theme::test_pass(&ctx, raw, |ui| {
-                let Some(sec) = sec else { return };
-                let out = settings_body_scroll(ui.ctx(), sec, 300.0).show(ui, |ui| {
+                if !open {
+                    return;
+                }
+                let fresh = settings_fresh_view(ui.ctx());
+                let out = settings_body_scroll(300.0, fresh, force).show(ui, |ui| {
                     ui.allocate_space(egui::vec2(200.0, 2000.0));
                 });
                 offset = Some(out.state.offset.y);
             });
             offset
         };
-        frame(Some(SettingsSec::Behavior), 0.0);
-        frame(Some(SettingsSec::Behavior), 400.0);
+        frame(true, 0.0, None);
+        frame(true, 400.0, None);
         // Still open: the scroll is kept.
-        let kept = frame(Some(SettingsSec::Behavior), 0.0).unwrap();
+        let kept = frame(true, 0.0, None).unwrap();
         assert!(kept > 100.0, "kept {kept}");
-        // Another section has its own scroll, from the top.
-        assert_eq!(frame(Some(SettingsSec::Labs), 0.0), Some(0.0));
-        // Back on Behavior, newly shown: the top again, not where it was left.
-        assert_eq!(frame(Some(SettingsSec::Behavior), 0.0), Some(0.0));
-        // Closed for a frame and reopened on the same section: the top as well.
-        frame(Some(SettingsSec::Behavior), 400.0);
-        assert!(frame(Some(SettingsSec::Behavior), 0.0).unwrap() > 100.0);
-        frame(None, 0.0);
-        assert_eq!(frame(Some(SettingsSec::Behavior), 0.0), Some(0.0));
+        // A jump puts it exactly where the spy says.
+        assert_eq!(frame(true, 0.0, Some(640.0)), Some(640.0));
+        assert_eq!(frame(true, 0.0, None), Some(640.0));
+        // Closed for a frame and reopened: the top.
+        frame(false, 0.0, None);
+        assert_eq!(frame(true, 0.0, None), Some(0.0));
+    }
+
+    #[test]
+    fn the_spy_marks_the_section_whose_top_crossed_thirty_percent() {
+        // Four sections, a 600 px view: the line sits 180 px under the scroll top.
+        let tops = [0.0, 400.0, 900.0, 1500.0];
+        // Load: the first section.
+        assert_eq!(spy_pick(&tops, 0.0, 600.0, false, 0), 0);
+        assert_eq!(spy_pick(&[], 0.0, 600.0, false, 3), 0);
+        // 400 is past the line (410) but not by the slack: still the first.
+        assert_eq!(spy_pick(&tops, 230.0, 600.0, false, 0), 0);
+        // 12 px past it: the second.
+        assert_eq!(spy_pick(&tops, 232.0, 600.0, false, 0), 1);
+        // Back up a little: 400 sits under the line by less than the slack.
+        assert_eq!(spy_pick(&tops, 220.0, 600.0, false, 1), 1);
+        // Back past it by the slack: the first again.
+        assert_eq!(spy_pick(&tops, 207.0, 600.0, false, 1), 0);
+        // A fast scroll skips straight to the section in view.
+        assert_eq!(spy_pick(&tops, 1400.0, 600.0, false, 0), 3);
+        assert_eq!(spy_pick(&tops, 0.0, 600.0, false, 3), 0);
+        // Scrolled to the end: the last, even with its top under the line.
+        assert_eq!(spy_pick(&tops, 1000.0, 600.0, true, 1), 3);
+        // A stale index from a longer list is clamped.
+        assert_eq!(spy_pick(&tops[..2], 0.0, 600.0, false, 9), 0);
+    }
+
+    #[test]
+    fn the_spy_does_not_flicker_at_a_boundary() {
+        let tops = [0.0, 400.0];
+        // Wobble one pixel either side of the exact crossing (offset 220).
+        let mut marked = 0;
+        let mut seen = Vec::new();
+        for offset in [218.0, 221.0, 219.0, 222.0, 220.0, 219.0] {
+            marked = spy_pick(&tops, offset, 600.0, false, marked);
+            seen.push(marked);
+        }
+        assert_eq!(seen, [0, 0, 0, 0, 0, 0]);
+    }
+
+    /// Runs the spy over a fake page: four sections 500 px apart, 1700 px in
+    /// all, in a 400 px view (so the scroll stops at 1300).
+    fn spy_frame(
+        ctx: &egui::Context,
+        spy: &mut Spy,
+        time: f64,
+        opened: bool,
+        asked: SettingsSec,
+        reduced: bool,
+        wheel_to: Option<f32>,
+    ) -> (Option<f32>, SettingsSec, std::time::Duration) {
+        let order = [
+            SettingsSec::Account,
+            SettingsSec::Privacy,
+            SettingsSec::Appearance,
+            SettingsSec::About,
+        ];
+        let raw = egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut got = (None, SettingsSec::Account);
+        let out = crate::theme::test_pass(ctx, raw, |ui| {
+            let force = spy.begin(ui.ctx(), opened, asked, reduced);
+            let offset = force.or(wheel_to).unwrap_or(spy.offset);
+            let tops = order
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (*s, 8.0 + i as f32 * 500.0));
+            got = (force, spy.end(tops.collect(), offset, 400.0, 1700.0));
+        });
+        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        (got.0, got.1, delay)
+    }
+
+    #[test]
+    fn a_nav_click_scrolls_smoothly_and_marks_the_section_at_once() {
+        let ctx = egui::Context::default();
+        let mut spy = Spy::default();
+        // A fresh open lays out from the top, then lands on the asked section at once.
+        let (y, marked, _) =
+            spy_frame(&ctx, &mut spy, 0.0, true, SettingsSec::Account, false, None);
+        assert_eq!((y, marked), (Some(0.0), SettingsSec::Account));
+        let (y, marked, idle) = spy_frame(
+            &ctx,
+            &mut spy,
+            1.0,
+            false,
+            SettingsSec::Account,
+            false,
+            None,
+        );
+        assert_eq!((y, marked), (Some(0.0), SettingsSec::Account));
+        let (_, _, idle2) = spy_frame(
+            &ctx,
+            &mut spy,
+            2.0,
+            false,
+            SettingsSec::Account,
+            false,
+            None,
+        );
+        assert_eq!(
+            idle2,
+            std::time::Duration::MAX,
+            "an idle Settings asks for no frame: {idle:?}"
+        );
+        // Click Appearance (top 1008, so the scroll goes to 1000): marked at once,
+        // the scroll starts from where it was and asks for frames while it moves.
+        let (y, marked, delay) = spy_frame(
+            &ctx,
+            &mut spy,
+            3.0,
+            false,
+            SettingsSec::Appearance,
+            false,
+            None,
+        );
+        assert_eq!((y, marked), (Some(0.0), SettingsSec::Appearance));
+        assert_eq!(delay, std::time::Duration::ZERO);
+        let half = 3.0 + f64::from(crate::motion::SETTINGS_SCROLL_SECS) * 0.5;
+        let (y, marked, _) = spy_frame(
+            &ctx,
+            &mut spy,
+            half,
+            false,
+            SettingsSec::Appearance,
+            false,
+            None,
+        );
+        let y = y.unwrap();
+        assert!(y > 500.0 && y < 1000.0, "half way, eased: {y}");
+        assert_eq!(
+            marked,
+            SettingsSec::Appearance,
+            "no flicker through Privacy"
+        );
+        let end = 3.0 + f64::from(crate::motion::SETTINGS_SCROLL_SECS) + 0.001;
+        let (y, marked, _) = spy_frame(
+            &ctx,
+            &mut spy,
+            end,
+            false,
+            SettingsSec::Appearance,
+            false,
+            None,
+        );
+        assert_eq!((y, marked), (Some(1000.0), SettingsSec::Appearance));
+        let (y, marked, delay) = spy_frame(
+            &ctx,
+            &mut spy,
+            end + 1.0,
+            false,
+            SettingsSec::Appearance,
+            false,
+            None,
+        );
+        assert_eq!((y, marked), (None, SettingsSec::Appearance));
+        assert_eq!(delay, std::time::Duration::MAX, "landed: no more frames");
+        // About's top can't reach the top of the view: the scroll goes as far as it can.
+        spy_frame(&ctx, &mut spy, 10.0, false, SettingsSec::About, false, None);
+        let (y, marked, _) =
+            spy_frame(&ctx, &mut spy, 11.0, false, SettingsSec::About, false, None);
+        assert_eq!((y, marked), (Some(1300.0), SettingsSec::About));
+        // The user scrolls away: the spy takes over again.
+        let (_, marked, _) = spy_frame(
+            &ctx,
+            &mut spy,
+            12.0,
+            false,
+            SettingsSec::About,
+            false,
+            Some(520.0),
+        );
+        assert_eq!(marked, SettingsSec::Privacy);
+    }
+
+    #[test]
+    fn reduced_motion_jumps_in_one_frame() {
+        let ctx = egui::Context::default();
+        let mut spy = Spy::default();
+        spy_frame(&ctx, &mut spy, 0.0, true, SettingsSec::Account, true, None);
+        spy_frame(&ctx, &mut spy, 1.0, false, SettingsSec::Account, true, None);
+        let (y, marked, delay) = spy_frame(
+            &ctx,
+            &mut spy,
+            2.0,
+            false,
+            SettingsSec::Appearance,
+            true,
+            None,
+        );
+        assert_eq!((y, marked), (Some(1000.0), SettingsSec::Appearance));
+        assert_eq!(
+            delay,
+            std::time::Duration::MAX,
+            "nothing eases, so no frame is asked for"
+        );
+        // Opening on a section lands there on the first laid-out frame either way.
+        let mut spy = Spy::default();
+        let (y, marked, _) = spy_frame(&ctx, &mut spy, 5.0, true, SettingsSec::About, false, None);
+        assert_eq!((y, marked), (Some(0.0), SettingsSec::About));
+        let (y, marked, _) = spy_frame(&ctx, &mut spy, 6.0, false, SettingsSec::About, false, None);
+        assert_eq!((y, marked), (Some(1300.0), SettingsSec::About));
     }
 
     #[test]
