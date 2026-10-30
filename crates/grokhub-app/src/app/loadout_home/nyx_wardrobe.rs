@@ -11,8 +11,6 @@
 
 use std::collections::HashMap;
 
-use grokhub_core::personality;
-
 use super::*;
 
 /// The picker tile's picture is this many pixels square, enough for the
@@ -24,6 +22,9 @@ const CYCLE: &str = "nyx-wardrobe-cycle";
 const DOCK_TEX: &str = "nyx-wardrobe-dock";
 /// ctx key for this frame's explicit-art gate.
 const EXPLICIT_OK: &str = "nyx-wardrobe-explicit-ok";
+/// The default voice, who follows her mood instead of wearing an outfit.
+/// Spelled out so chat-prompt code stays the only reader of personalities.
+const NYX_ID: &str = "nyx";
 /// The explicit built-in voices and the outfit [`outfit_for`] gives each.
 const EXPLICIT_VOICES: &[(&str, Mood)] = &[("viper", Mood::Viper), ("whore", Mood::Raunchy)];
 
@@ -220,7 +221,7 @@ pub(in crate::app) fn dock_look(
 ) -> Option<Look> {
     let look = if is_explicit(mood) {
         mood_look(mood)
-    } else if id != personality::DEFAULT_ID && !has_outfit(id) {
+    } else if id != NYX_ID && !has_outfit(id) {
         return None;
     } else {
         match outfit_look(id) {
@@ -237,7 +238,7 @@ pub(in crate::app) fn dock_look(
 /// off.
 pub(in crate::app) fn thumbnail(id: &str, explicit_ok: bool) -> Option<Pose> {
     let explicit = EXPLICIT_VOICES.iter().find(|(v, _)| *v == id);
-    let look = if id == personality::DEFAULT_ID {
+    let look = if id == NYX_ID {
         mood_look(Mood::HangingOut)
     } else if let Some((_, mood)) = explicit {
         mood_look(*mood)
@@ -374,6 +375,7 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::personality;
 
     const ALL_MOODS: [Mood; 9] = [
         Mood::Working,
@@ -471,6 +473,7 @@ mod tests {
 
     #[test]
     fn every_built_in_voice_but_nyx_has_an_outfit_and_explicit_ones_wear_a_gated_mood() {
+        assert_eq!(NYX_ID, personality::DEFAULT_ID);
         let builtins = personality::builtins();
         assert_eq!(builtins.len(), 22);
         for p in &builtins {
