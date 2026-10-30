@@ -363,6 +363,20 @@ pub fn local_verify_failed() -> bool {
     LOCAL_VERIFY_FAILED.load(Ordering::SeqCst)
 }
 
+static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// What the cabin shows while online calls fall back to the device.
+pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
+
+/// Live path: the last routed call went to the device because no cloud model could take it.
+pub fn note_fallback(active: bool) {
+    FALLBACK_ACTIVE.store(active, Ordering::SeqCst);
+}
+
+pub fn fallback_active() -> bool {
+    FALLBACK_ACTIVE.load(Ordering::SeqCst)
+}
+
 /// What a route may do with the local model for one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalGate {
@@ -434,20 +448,6 @@ pub fn eligible_if_running(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bo
         ..gate.clone()
     };
     eligible(&running, class, ctx_tokens)
-}
-
-/// Why online work that local could take goes to the cloud instead: the
-/// governor is throttling, or a heavy background step waits for RampUp.
-pub fn online_hold(gate: &LocalGate, class: &str, ctx_tokens: u64) -> Option<&'static str> {
-    if gate.offline || !eligible(gate, class, ctx_tokens) {
-        None
-    } else if !gate.capacity.background_ok() {
-        Some("local:throttled")
-    } else if heavy(class, ctx_tokens) && gate.capacity.level != Level::RampUp {
-        Some("local:heavy_waits")
-    } else {
-        None
-    }
 }
 
 /// Sensitive data with no cloud grant: the local route is the only route.

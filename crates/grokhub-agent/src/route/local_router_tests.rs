@@ -206,3 +206,49 @@ fn escalate_note_names_both_models() {
         "{n}"
     );
 }
+
+#[test]
+fn online_chat_uses_the_frontier_and_falls_back_to_local_only_when_no_cloud_model_can_answer() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let online = || {
+        let mut gate = LocalGate::now(false, false, false);
+        gate.offline = false;
+        gate
+    };
+    // The cloud answers: the frontier model takes chat and background work.
+    let up = fleet();
+    for class in ["chat:default", "background:summarize"] {
+        let r = Router::choose(&ask(class, online()), &up, &profiles, &table, 10);
+        assert_eq!(r.model, "grok-4.7", "{class}");
+    }
+    // Every cloud model down: the device takes chat too, and says so.
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let r = Router::choose(&ask("chat:default", online()), &down, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small");
+    assert!(
+        r.rule_ids.contains(&"local:cloud_down".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(r.reason.contains("using local"), "{}", r.reason);
+    // No sign-in or key: the device answers, and the note names why.
+    let mut no_keys = fleet();
+    no_keys.entitlement.credential = Credential::None;
+    for class in ["chat:default", "background:summarize"] {
+        let r = Router::choose(&ask(class, online()), &no_keys, &profiles, &table, 10);
+        assert_eq!(r.model, "local:small", "{class}");
+        assert!(
+            r.rule_ids.contains(&"local:no_keys".into()),
+            "{class}: {:?}",
+            r.rule_ids
+        );
+        assert!(r.reason.contains("sign-in or key"), "{}", r.reason);
+    }
+    // Hard work never falls back to the device.
+    let r = Router::choose(&ask("prepare:hard", online()), &down, &profiles, &table, 10);
+    assert_ne!(r.model, "local:small");
+}

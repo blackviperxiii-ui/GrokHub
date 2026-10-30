@@ -1,0 +1,3 @@
+- Routing: online, the cloud models always take the step while any of them answers; the local model is used only offline or when no cloud model can take it.
+- Routing: the on-device difficulty check runs only offline, so online turns no longer load the local model.
+- Cabin: a "Using local" chip shows while online steps fall back to the local model because no cloud model is answering.
