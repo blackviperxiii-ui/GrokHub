@@ -5,7 +5,7 @@ use grokhub_core::local_profile::Thermal;
 use grokhub_core::mission::MissionView;
 
 use super::super::loadout_home::{
-    caption, header, objective_progress, pc_profile, pc_score, pc_tile_grid, pc_tile_list,
+    caption, header, objective_progress, pc_profile, pc_reading, pc_tile_grid, pc_tile_list,
     pulse_lines,
 };
 use super::super::mission_page::{paint_streak, up_next, up_next_tile};
@@ -365,13 +365,12 @@ fn paint_pulse(
 fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let profile = pc_profile();
     card(ui, |ui| {
-        let score = profile
-            .as_ref()
-            .and_then(pc_score)
-            .map(|n| format!("{n}%"))
-            .unwrap_or_default();
+        let reading = profile.as_ref().and_then(pc_reading).unwrap_or_default();
         match size {
             ModuleSize::Small => {
+                let heat_read = profile
+                    .as_ref()
+                    .is_some_and(|p| p.thermal != Thermal::Unknown);
                 header(ui, false, "GPU temp", "", crate::theme::fg());
                 let temp: String = profile
                     .as_ref()
@@ -391,17 +390,17 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                         .color(crate::theme::fg()),
                 );
                 ui.label(
-                    RichText::new(if score.is_empty() {
-                        "Sensors unavailable"
-                    } else {
+                    RichText::new(if heat_read {
                         "Thermal"
+                    } else {
+                        "Sensors unavailable"
                     })
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
                 );
             }
             ModuleSize::Medium | ModuleSize::Large => {
-                header(ui, false, "PC loadout", &score, crate::theme::fg());
+                header(ui, false, "PC loadout", &reading, crate::theme::fg());
                 match profile {
                     None => {
                         ui.label(
