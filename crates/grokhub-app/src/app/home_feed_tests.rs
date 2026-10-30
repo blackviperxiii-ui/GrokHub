@@ -1555,6 +1555,19 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "note_watch_event",
+        grokhub_core::game_watch::recap_card(
+            "Dota 2",
+            &grokhub_core::game_watch::Recap {
+                won: 1,
+                ..Default::default()
+            },
+            &[],
+            now,
+        ),
+        "Dota 2",
+    ));
+    rows.push((
         "finish_local_models",
         grokhub_core::local_model_news::Suggestion::Release {
             repo: "ggml-org/Qwen3-14B-GGUF".into(),

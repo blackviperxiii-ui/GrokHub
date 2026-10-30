@@ -5,6 +5,8 @@
 //! played, a guides link and their note from last time; a quiet desktop
 //! notification follows when the user turned that on. When the game closes,
 //! a one-tap offers to leave a note for next time. Nothing touches the game.
+//! The same sample tells the game watcher (`game_watch_ui`) when a game it
+//! listens for runs, so the sampling also runs with only the watcher on.
 
 use std::path::PathBuf;
 
@@ -83,7 +85,7 @@ impl Cabin {
     /// Each frame: sample what is running every few seconds, and take the
     /// news for a launch when it is back.
     pub(super) fn tick_game_companion(&mut self) {
-        if !self.cfg.game_companion {
+        if !self.cfg.game_companion && !self.cfg.game_watch {
             return;
         }
         if let Some(rx) = self.focus.game.news_rx.take() {
@@ -113,10 +115,15 @@ impl Cabin {
         });
     }
 
+    /// The Steam app id the last sample saw running.
+    pub(super) fn game_running(&self) -> Option<u32> {
+        self.focus.game.watch.current
+    }
+
     /// One sample. A launch of a library game fetches its news off the UI thread.
-    fn note_running(&mut self, running: Option<u32>, now: u64) {
+    pub(super) fn note_running(&mut self, running: Option<u32>, now: u64) {
         let events = self.focus.game.watch.note(running);
-        if events.is_empty() {
+        if events.is_empty() || !self.cfg.game_companion {
             return;
         }
         let library = self.steam_library(now).1.to_vec();
@@ -306,7 +313,13 @@ impl Cabin {
             &mut on,
         ) {
             self.cfg.game_companion = on;
+            // The game watcher keeps what the last sample saw, so its
+            // listener doesn't drop mid-match.
+            let seen = std::mem::take(&mut self.focus.game.watch);
             self.focus.game = GameUi::default();
+            if self.cfg.game_watch {
+                self.focus.game.watch = seen;
+            }
             self.chip_paint_key.clear();
             self.persist_cfg();
             self.status = "Saved".into();
@@ -486,6 +499,24 @@ mod tests {
         cabin.focus.game.playing = Some(game(7, "Hades"));
         let labels: Vec<String> = cabin.game_chips().into_iter().map(|c| c.label).collect();
         assert_eq!(labels, vec!["Top guides for Hades", "Note for Hades"]);
+    }
+
+    #[test]
+    fn the_sampler_runs_for_the_game_watcher_alone_and_not_with_both_off() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.tick_game_companion();
+        assert!(cabin.focus.game.sample_rx.is_none(), "both off: no sample");
+        cabin.cfg.game_watch = true;
+        cabin.tick_game_companion();
+        assert!(cabin.focus.game.sample_rx.is_some());
+        // A sample with only the watcher on is kept for it, and starts no
+        // companion card.
+        cabin.note_running(Some(730), 1_000);
+        cabin.note_running(None, 2_000);
+        cabin.note_running(Some(730), 3_000);
+        assert_eq!(cabin.game_running(), Some(730));
+        assert!(cabin.focus.game.playing.is_none());
+        assert!(cabin.focus.game.news_rx.is_none());
     }
 
     #[test]
