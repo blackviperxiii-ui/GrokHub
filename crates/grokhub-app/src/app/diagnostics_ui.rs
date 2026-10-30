@@ -694,41 +694,68 @@ mod tests {
             pending.markdown
         );
         assert_eq!(zips(), 0, "nothing is written while the preview is open");
-        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
             match shape {
-                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Text(t) => out.push((
+                    t.galley.job.text.clone(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                )),
                 egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
                 _ => {}
             }
         }
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
-        let raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1100.0, 720.0),
-            )),
-            ..Default::default()
-        };
-        let mut texts = Vec::new();
-        for frame in 0..2 {
-            let mut raw = raw.clone();
-            raw.time = Some(frame as f64 / 10.0);
+        let mut clock = 0.0;
+        // One frame of the dialog with these input events; returns its texts.
+        let mut frame = |cabin: &mut Cabin, events: Vec<egui::Event>| {
+            clock += 0.1;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 720.0),
+                )),
+                time: Some(clock),
+                events,
+                ..Default::default()
+            };
             let out =
                 crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_diagnostics_preview(ui.ctx()));
-            texts.clear();
+            let mut texts = Vec::new();
             out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
-        }
+            texts
+        };
+        let click_at = |at: egui::Pos2| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            vec![egui::Event::PointerMoved(at), button(true), button(false)]
+        };
+        let center = |texts: &[(String, egui::Rect)], name: &str| {
+            texts
+                .iter()
+                .find(|(t, _)| t == name)
+                .map(|(_, r)| r.center())
+                .unwrap_or_else(|| panic!("{name} missing: {texts:?}"))
+        };
+
+        frame(&mut cabin, vec![]);
+        let texts = frame(&mut cabin, vec![]);
         for want in [
             "Diagnostics preview",
             "Redacted: 1 key, 0 emails, 0 phones, 0 home paths",
             "Save",
             "Cancel",
         ] {
-            assert!(texts.iter().any(|t| t == want), "{want} missing: {texts:?}");
+            center(&texts, want);
         }
         assert!(
-            texts.iter().any(|t| t.contains("my key is [redacted]")),
+            texts
+                .iter()
+                .any(|(t, _)| t.contains("my key is [redacted]")),
             "the redacted bundle is shown: {texts:?}"
         );
         assert!(
@@ -736,15 +763,47 @@ mod tests {
             "painting does not close it"
         );
 
-        cabin.cancel_diagnostics_save();
+        // Cancel, clicked: nothing written.
+        frame(&mut cabin, click_at(center(&texts, "Cancel")));
         assert!(cabin.diagnostics.pending.is_none());
         assert_eq!(cabin.status, "Diagnostics not saved");
         assert_eq!(zips(), 0, "Cancel writes no file");
         assert!(cabin.diagnostics.last_zip.is_none());
 
+        // Escape counts as Cancel.
+        cabin.save_chat_diagnostics(None);
+        frame(&mut cabin, vec![]);
+        cabin.status.clear();
+        frame(
+            &mut cabin,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(cabin.diagnostics.pending.is_none(), "Escape closes it");
+        assert_eq!(cabin.status, "Diagnostics not saved");
+        assert_eq!(zips(), 0, "Escape writes no file");
+
+        // A click outside counts as Cancel too.
+        cabin.save_chat_diagnostics(None);
+        frame(&mut cabin, vec![]);
+        frame(&mut cabin, click_at(egui::pos2(4.0, 4.0)));
+        assert!(
+            cabin.diagnostics.pending.is_none(),
+            "a click outside closes it"
+        );
+        assert_eq!(zips(), 0, "a click outside writes no file");
+
+        // Save, clicked: writes exactly what was shown.
         cabin.save_chat_diagnostics(None);
         let shown = cabin.diagnostics.pending.as_ref().unwrap().markdown.clone();
-        cabin.confirm_diagnostics_save();
+        frame(&mut cabin, vec![]);
+        let texts = frame(&mut cabin, vec![]);
+        frame(&mut cabin, click_at(center(&texts, "Save")));
         assert!(cabin.diagnostics.pending.is_none());
         let path = cabin
             .diagnostics
