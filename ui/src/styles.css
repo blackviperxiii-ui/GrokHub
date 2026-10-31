@@ -854,6 +854,10 @@ button.danger {
   overflow-wrap: anywhere;
 }
 
+.web-access .fingerprint {
+  overflow-wrap: anywhere;
+}
+
 .personality {
   display: flex;
   flex-direction: column;

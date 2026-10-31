@@ -1,7 +1,7 @@
 // Typed wrappers over the Tauri commands in src-tauri/src/lib.rs. In the web
 // app the same commands run on the paired desktop (./transport).
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { call as invoke, inShell, subscribe } from "./transport";
+import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
@@ -173,6 +173,11 @@ export function closeChat(conversationId: string): Promise<void> {
 
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
+}
+
+/** The web app's stream was down longer than the desktop keeps events for. */
+export function onEventGap(handler: () => void): Promise<UnlistenFn> {
+  return subscribe<null>(GAP_EVENT, () => handler());
 }
 
 export interface AutomationRow {
@@ -674,8 +679,10 @@ export interface WebAccess {
   on: boolean;
   /** The pairing code; empty while off. */
   code: string;
-  /** Pairing links, the LAN one first. */
+  /** Pairing links, the LAN one (HTTPS) first, then this computer's own (HTTP). */
   links: string[];
+  /** SHA-256 of the HTTPS certificate, `AB:CD:…`; empty while off. */
+  fingerprint: string;
 }
 
 export function getWebAccess(): Promise<WebAccess> {

@@ -141,4 +141,60 @@ describe("transport (web app)", () => {
     await new Promise((done) => setTimeout(done, 20));
     expect(got).toHaveLength(1);
   });
+
+  it("a call returns only after the events it caused have arrived", async () => {
+    const box = desktop({
+      "/remote/v1/call/send_chat": () => Response.json({ ok: true, value: "end_turn", seq: 2 }),
+    });
+    await pair(CODE, BASE);
+    const got: unknown[] = [];
+    await subscribe("chat://event", (payload) => got.push(payload));
+    box.push("id: 0\n\n");
+    let done = false;
+    const sent = call("send_chat", { conversationId: "c1", text: "hi" }).then(() => (done = true));
+    const frame = (id: number, text: string) =>
+      `id: ${id}\ndata: ${JSON.stringify({ event: "chat://event", payload: { conversationId: "c1", text } })}\n\n`;
+    box.push(frame(1, "Hel"));
+    await new Promise((wait) => setTimeout(wait, 20));
+    expect(done).toBe(false);
+    box.push(frame(2, "lo"));
+    await sent;
+    expect(got).toEqual([
+      { conversationId: "c1", text: "Hel" },
+      { conversationId: "c1", text: "lo" },
+    ]);
+  });
+
+  it("reopens a dropped stream from the last event it saw", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const opened: (string | null)[] = [];
+    let close: () => void = () => {};
+    let push: (text: string) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/hello")) return Response.json({ kind: "grokhub-remote", version: 1 });
+        opened.push(new Headers(init?.headers).get("Last-Event-ID"));
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            push = (text) => controller.enqueue(new TextEncoder().encode(text));
+            close = () => controller.close();
+          },
+        });
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      }),
+    );
+    try {
+      await pair(CODE, BASE);
+      push("id: 4\n\n");
+      push(`id: 5\ndata: ${JSON.stringify({ event: "chat://event", payload: {} })}\n\n`);
+      await vi.waitFor(() => expect(opened).toEqual([null]));
+      await new Promise((wait) => setTimeout(wait, 0));
+      close();
+      await vi.advanceTimersByTimeAsync(1100);
+      await vi.waitFor(() => expect(opened).toEqual([null, "5"]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -6,6 +6,7 @@ import {
   closeChat,
   getSettings,
   onChatEvent,
+  onEventGap,
   saveSettings,
   sendChat,
   type Answer,
@@ -112,6 +113,7 @@ function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void
   );
 }
 
+export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
 
 export function newConversationId(): string {
@@ -279,6 +281,7 @@ export function Chat({
   useEffect(() => {
     let stop: (() => void) | undefined;
     let dropped = false;
+    let stopGap: (() => void) | undefined;
     void onChatEvent(({ conversationId: id, event }) => {
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
@@ -289,9 +292,16 @@ export function Chat({
       if (dropped) unlisten();
       else stop = unlisten;
     });
+    void onEventGap(() => {
+      if (busyRef.current) setError(EVENTS_LOST);
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stopGap = unlisten;
+    });
     return () => {
       dropped = true;
       stop?.();
+      stopGap?.();
     };
   }, [conversationId]);
 

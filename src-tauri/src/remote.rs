@@ -13,9 +13,10 @@
 //!   tools. Pulse works the same as on the desktop; its images come from
 //!   this computer's cache, never from the source sites.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -35,6 +36,10 @@ const MAX_IN_FLIGHT: usize = 32;
 /// Open event streams; one per browser tab is plenty.
 const MAX_STREAMS: usize = 8;
 const PING: Duration = Duration::from_secs(15);
+/// Recent chat frames kept for a tab that reconnects; older ones are a gap.
+const REPLAY: usize = 4096;
+/// Sent instead of the missed frames when they are older than [`REPLAY`].
+pub const GAP_EVENT: &str = "remote://gap";
 /// How long the pairing code lasts with no paired browser calling, opening a
 /// stream or getting a chat event. Keep in step with `WEB_OFF_NOTE` in
 /// ui/src/WebAccess.tsx.
@@ -134,17 +139,18 @@ pub fn authorized(header: Option<&str>, code: &str) -> bool {
             == 0
 }
 
-/// One server-sent event frame.
-pub fn frame(event: &str, payload: &Value) -> String {
+/// One server-sent event frame, with its id so a reconnecting tab can ask
+/// for what came after it (`Last-Event-ID`).
+pub fn frame(id: u64, event: &str, payload: &Value) -> String {
     format!(
-        "data: {}\n\n",
+        "id: {id}\ndata: {}\n\n",
         json!({ "event": event, "payload": payload })
     )
 }
 
-/// The pairing link a browser on the LAN opens.
-pub fn link(ip: IpAddr, port: u16, code: &str) -> String {
-    format!("http://{}/#code={code}", SocketAddr::new(ip, port))
+/// The pairing link a browser opens: `https` on the LAN, `http` on loopback.
+pub fn link(scheme: &str, ip: IpAddr, port: u16, code: &str) -> String {
+    format!("{scheme}://{}/#code={code}", SocketAddr::new(ip, port))
 }
 
 /// This computer's LAN address: the one its default route leaves from.
@@ -164,6 +170,9 @@ pub struct WebAccessView {
     pub code: String,
     /// Pairing links, the LAN one first.
     pub links: Vec<String>,
+    /// SHA-256 of the HTTPS certificate, `AB:CD:…`, to compare with the
+    /// browser's. Empty while off.
+    pub fingerprint: String,
 }
 
 /// Runs a web command (one of [`WEB_COMMANDS`]) with its JSON arguments.
@@ -173,13 +182,65 @@ pub type Assets = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
 
 struct Running {
     pairing: Shared,
+    /// The plain server's port: on loopback only when `front` serves the LAN.
     port: u16,
     server: Arc<Server>,
+    /// The HTTPS front on the LAN, with its certificate's fingerprint.
+    front: Option<(crate::remote_tls::Front, String)>,
 }
 
-type Streams = Arc<Mutex<Vec<Sender<String>>>>;
+type Streams = Arc<Mutex<Hub>>;
 type Chats = Arc<Mutex<HashSet<String>>>;
 type Shared = Arc<Mutex<Pairing>>;
+
+/// The open event streams and the recent frames they were sent, numbered,
+/// so a tab whose stream dropped gets what it missed when it reopens.
+#[derive(Default)]
+struct Hub {
+    txs: Vec<Sender<String>>,
+    /// The last [`REPLAY`] frames, oldest first, by id.
+    log: VecDeque<(u64, String)>,
+    /// The id of the newest frame; 0 before the first.
+    last: u64,
+}
+
+impl Hub {
+    /// Ends every stream and forgets the frames; ids keep counting.
+    fn clear(&mut self) {
+        self.txs.clear();
+        self.log.clear();
+    }
+
+    /// Numbers a frame, keeps it for replay and sends it to every stream.
+    /// True when some stream took it.
+    fn send(&mut self, event: &str, payload: &Value) -> bool {
+        self.last += 1;
+        let text = frame(self.last, event, payload);
+        if self.log.len() == REPLAY {
+            self.log.pop_front();
+        }
+        self.log.push_back((self.last, text.clone()));
+        self.txs.retain(|tx| tx.send(text.clone()).is_ok());
+        !self.txs.is_empty()
+    }
+
+    /// What a tab that last saw `since` missed: the frames after it, or a
+    /// gap frame (carrying the newest id) when some are no longer kept.
+    fn missed(&self, since: u64) -> Vec<String> {
+        if since == self.last {
+            return Vec::new();
+        }
+        let kept_from = self.log.front().map_or(self.last + 1, |(id, _)| *id);
+        if since > self.last || since + 1 < kept_from {
+            return vec![frame(self.last, GAP_EVENT, &Value::Null)];
+        }
+        self.log
+            .iter()
+            .filter(|(id, _)| *id > since)
+            .map(|(_, text)| text.clone())
+            .collect()
+    }
+}
 
 /// The pairing code and when a paired browser last used it.
 struct Pairing {
@@ -247,43 +308,74 @@ impl WebAccess {
                 on: false,
                 code: String::new(),
                 links: Vec::new(),
+                fingerprint: String::new(),
             },
             Some(run) => {
                 let code = live(&run.pairing, &self.streams, &self.chats, Instant::now())
                     .code
                     .clone();
+                let lan = match &run.front {
+                    Some((front, _)) => ("https", front.port),
+                    None => ("http", run.port),
+                };
                 let mut links: Vec<String> = lan_ip()
-                    .map(|ip| link(ip, run.port, &code))
+                    .map(|ip| link(lan.0, ip, lan.1, &code))
                     .into_iter()
                     .collect();
-                links.push(link(IpAddr::V4(Ipv4Addr::LOCALHOST), run.port, &code));
+                links.push(link(
+                    "http",
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    run.port,
+                    &code,
+                ));
                 WebAccessView {
                     on: true,
                     code,
                     links,
+                    fingerprint: run
+                        .front
+                        .as_ref()
+                        .map(|(_, print)| print.clone())
+                        .unwrap_or_default(),
                 }
             }
         }
     }
 
     /// Serves on `bind:port` with a new pairing code. Already on: no change.
+    /// With `tls`, the certificate's folder, `bind:port` is HTTPS
+    /// (`remote_tls`) and the plain server listens on a loopback port only.
     pub fn start(
         &self,
         bind: IpAddr,
         port: u16,
+        tls: Option<&Path>,
         dispatch: Dispatch,
         assets: Assets,
     ) -> Result<WebAccessView, String> {
         {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             if running.is_none() {
-                let server = Server::http(SocketAddr::new(bind, port))
+                let plain = match tls {
+                    Some(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    None => SocketAddr::new(bind, port),
+                };
+                let server = Server::http(plain)
                     .map_err(|err| format!("Web access couldn't start on port {port}: {err}"))?;
-                let port = server
-                    .server_addr()
-                    .to_ip()
-                    .map(|addr| addr.port())
-                    .unwrap_or(port);
+                let inner = server.server_addr().to_ip().unwrap_or(plain);
+                let front = match tls {
+                    Some(dir) => {
+                        let mut hosts = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+                        hosts.extend(lan_ip().map(|ip| ip.to_string()));
+                        let cert = crate::remote_tls::Cert::load_or_make(dir, &hosts)?;
+                        let print = cert.fingerprint()?;
+                        let front =
+                            crate::remote_tls::serve(SocketAddr::new(bind, port), inner, &cert)?;
+                        Some((front, print))
+                    }
+                    None => None,
+                };
+                let port = inner.port();
                 let server = Arc::new(server);
                 let pairing = Arc::new(Mutex::new(Pairing::new(Instant::now())));
                 let job = Job {
@@ -299,6 +391,7 @@ impl WebAccess {
                     pairing,
                     port,
                     server,
+                    front,
                 });
             }
         }
@@ -322,12 +415,10 @@ impl WebAccess {
             .clear();
     }
 
-    /// Hands an event to every paired browser.
+    /// Hands an event to every paired browser, and keeps it for a tab that
+    /// is reconnecting.
     pub fn broadcast(&self, event: &str, payload: &str) {
         let mut streams = self.streams.lock().unwrap_or_else(|e| e.into_inner());
-        if streams.is_empty() {
-            return;
-        }
         let payload: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
         let chat = payload["conversationId"].as_str().unwrap_or_default();
         if !self
@@ -338,9 +429,7 @@ impl WebAccess {
         {
             return;
         }
-        let text = frame(event, &payload);
-        streams.retain(|tx| tx.send(text.clone()).is_ok());
-        let delivered = !streams.is_empty();
+        let delivered = streams.send(event, &payload);
         drop(streams);
         // A browser getting its chat's events is using the pairing.
         if delivered {
@@ -430,7 +519,12 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
         Route::Events => {
             // A stream lasts as long as the tab; it doesn't hold a call's place.
             drop(slot);
-            stream(req, &job.streams);
+            let since = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Last-Event-ID"))
+                .and_then(|h| h.value.as_str().trim().parse::<u64>().ok());
+            stream(req, &job.streams, since);
         }
         Route::Call(_) if !paired => refuse(req),
         Route::Call(command) => {
@@ -451,7 +545,7 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             } else {
                 serde_json::from_slice::<Value>(&body).map_err(|err| err.to_string())
             };
-            let reply = match args {
+            let mut reply = match args {
                 Err(err) => json!({ "ok": false, "error": format!("Bad arguments: {err}") }),
                 Ok(_) if !web_command(&command) => json!({ "ok": false, "error": refused() }),
                 Ok(args) => match (job.dispatch)(&command, args) {
@@ -459,6 +553,10 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
                     Err(error) => json!({ "ok": false, "error": error }),
                 },
             };
+            // The newest event id once the command ran: the page waits for
+            // its stream to reach it, so a chat's events land before the
+            // call that ran the chat returns.
+            reply["seq"] = json!(job.streams.lock().unwrap_or_else(|e| e.into_inner()).last);
             send_json(req, 200, &reply);
         }
         Route::Page(path) => page(req, &path, &job.assets),
@@ -535,20 +633,32 @@ fn page(req: Request, path: &str, assets: &Assets) {
     }
 }
 
-fn stream(req: Request, streams: &Streams) {
+/// An event stream. `since` is the `Last-Event-ID` of a tab reconnecting:
+/// what it missed goes out first, under the same lock as new frames, so
+/// nothing is skipped or sent twice.
+fn stream(req: Request, streams: &Streams, since: Option<u64>) {
     let (tx, rx) = mpsc::channel::<String>();
     {
-        let mut all = streams.lock().unwrap_or_else(|e| e.into_inner());
-        all.retain(|tx| tx.send(": ping\n\n".to_string()).is_ok());
-        if all.len() >= MAX_STREAMS {
-            drop(all);
+        let mut hub = streams.lock().unwrap_or_else(|e| e.into_inner());
+        hub.txs
+            .retain(|tx| tx.send(": ping\n\n".to_string()).is_ok());
+        if hub.txs.len() >= MAX_STREAMS {
+            drop(hub);
             return send_json(
                 req,
                 503,
                 &json!({ "ok": false, "error": "Too many open tabs." }),
             );
         }
-        all.push(tx);
+        // A new tab starts from the newest id; a returning one catches up.
+        let first = match since {
+            Some(id) => hub.missed(id),
+            None => vec![format!("id: {}\n\n", hub.last)],
+        };
+        for text in first {
+            let _ = tx.send(text);
+        }
+        hub.txs.push(tx);
     }
     // tiny_http's own chunked writer holds 8 KB before it sends, so the
     // stream writes its chunks itself and flushes each event.
@@ -648,7 +758,7 @@ mod tests {
         let streams: Streams = Arc::default();
         let chats: Chats = Arc::default();
         let (tx, rx) = mpsc::channel::<String>();
-        streams.lock().unwrap().push(tx);
+        streams.lock().unwrap().txs.push(tx);
         chats.lock().unwrap().insert("web-chat".into());
 
         let old = live(
@@ -659,12 +769,12 @@ mod tests {
         )
         .code
         .clone();
-        assert_eq!(streams.lock().unwrap().len(), 1);
+        assert_eq!(streams.lock().unwrap().txs.len(), 1);
         assert!(chats.lock().unwrap().contains("web-chat"));
 
         let new = live(&pairing, &streams, &chats, start + IDLE).code.clone();
         assert_ne!(new, old);
-        assert!(streams.lock().unwrap().is_empty());
+        assert!(streams.lock().unwrap().txs.is_empty());
         assert!(chats.lock().unwrap().is_empty());
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(1)),
@@ -743,24 +853,72 @@ mod tests {
     }
 
     #[test]
-    fn frames_carry_the_event_name_and_its_payload() {
+    fn frames_carry_their_id_the_event_name_and_its_payload() {
         assert_eq!(
             frame(
+                7,
                 "chat://event",
                 &json!({ "conversationId": "c1", "event": { "kind": "text", "text": "a\nb" } })
             ),
-            "data: {\"event\":\"chat://event\",\"payload\":{\"conversationId\":\"c1\",\"event\":{\"kind\":\"text\",\"text\":\"a\\nb\"}}}\n\n"
+            "id: 7\ndata: {\"event\":\"chat://event\",\"payload\":{\"conversationId\":\"c1\",\"event\":{\"kind\":\"text\",\"text\":\"a\\nb\"}}}\n\n"
+        );
+    }
+
+    fn text(n: u64) -> Value {
+        json!({ "conversationId": "c1", "event": { "kind": "text", "text": n.to_string() } })
+    }
+
+    #[test]
+    fn a_reconnecting_tab_gets_exactly_the_frames_it_missed() {
+        let mut hub = Hub::default();
+        for n in 1..=3 {
+            assert!(!hub.send("chat://event", &text(n)), "no stream open yet");
+        }
+        assert_eq!(hub.last, 3);
+        assert_eq!(
+            hub.missed(1),
+            vec![
+                frame(2, "chat://event", &text(2)),
+                frame(3, "chat://event", &text(3))
+            ]
+        );
+        assert_eq!(hub.missed(3), Vec::<String>::new());
+    }
+
+    #[test]
+    fn frames_older_than_the_replay_window_are_a_gap() {
+        let mut hub = Hub::default();
+        for n in 1..=(REPLAY as u64 + 2) {
+            hub.send("chat://event", &text(n));
+        }
+        let newest = REPLAY as u64 + 2;
+        assert_eq!(hub.log.len(), REPLAY);
+        // Frames 1 and 2 are gone, so a tab that saw only frame 1 missed one.
+        let gap = vec![frame(newest, GAP_EVENT, &Value::Null)];
+        assert_eq!(hub.missed(1), gap);
+        // A tab that saw frame 2 needs only what is still kept.
+        assert_eq!(hub.missed(2).len(), REPLAY);
+        assert_eq!(
+            hub.missed(newest - 1),
+            vec![frame(newest, "chat://event", &text(newest))]
+        );
+        // An id from before a restart (ahead of this run's count) is a gap too.
+        assert_eq!(hub.missed(newest + 5), gap);
+        hub.clear();
+        assert_eq!(
+            hub.missed(newest - 1),
+            vec![frame(newest, GAP_EVENT, &Value::Null)]
         );
     }
 
     #[test]
     fn links_carry_the_code_in_the_fragment() {
         assert_eq!(
-            link("192.168.1.20".parse().expect("ip"), 4620, "abc"),
-            "http://192.168.1.20:4620/#code=abc"
+            link("https", "192.168.1.20".parse().expect("ip"), 4620, "abc"),
+            "https://192.168.1.20:4620/#code=abc"
         );
         assert_eq!(
-            link("fe80::1".parse().expect("ip"), 4620, "abc"),
+            link("http", "fe80::1".parse().expect("ip"), 4620, "abc"),
             "http://[fe80::1]:4620/#code=abc"
         );
     }
@@ -813,7 +971,7 @@ mod tests {
             _ => None,
         });
         let view = access
-            .start(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, dispatch, assets)
+            .start(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, None, dispatch, assets)
             .expect("starts");
         let port: u16 = view
             .links
@@ -858,7 +1016,7 @@ mod tests {
         let (status, _, body) = http(port, "POST", call, Some(&code), args);
         assert_eq!(
             (status, parse(&body)),
-            (200, json!({ "ok": true, "value": "got hi" }))
+            (200, json!({ "ok": true, "value": "got hi", "seq": 0 }))
         );
         let (_, _, body) = http(
             port,
@@ -869,7 +1027,7 @@ mod tests {
         );
         assert_eq!(
             parse(&body),
-            json!({ "ok": false, "error": "run_automation failed" })
+            json!({ "ok": false, "error": "run_automation failed", "seq": 0 })
         );
         let key = r#"{"key":"sk-abcdefghijklmnopqrstuv"}"#;
         let (_, _, body) = http(
@@ -879,7 +1037,10 @@ mod tests {
             Some(&code),
             key,
         );
-        assert_eq!(parse(&body), json!({ "ok": false, "error": refused() }));
+        assert_eq!(
+            parse(&body),
+            json!({ "ok": false, "error": refused(), "seq": 0 })
+        );
         let (_, _, body) = http(port, "POST", call, Some(&code), "{not json");
         let error = parse(&body)["error"]
             .as_str()
@@ -944,5 +1105,51 @@ mod tests {
         // The last chunk: a zero length, then the blank line.
         while next(&mut line) != "0\r\n" {}
         assert_eq!(next(&mut line), "\r\n");
+    }
+
+    #[test]
+    fn a_stream_reopened_with_last_event_id_gets_what_it_missed_first() {
+        let access = WebAccess::default();
+        let (port, code) = serve(&access);
+        access.adopt("c1");
+        // The tab saw event 1, then its stream dropped while 2 and 3 went out.
+        for n in 1..=3 {
+            access.broadcast("chat://event", &text(n).to_string());
+        }
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(10)));
+        write!(
+            sock,
+            "GET /remote/v1/events HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {code}\r\nLast-Event-ID: 1\r\n\r\n"
+        )
+        .expect("send");
+        let mut lines = BufReader::new(sock);
+        let mut seen = Vec::new();
+        while seen.len() < 4 {
+            let mut line = String::new();
+            lines.read_line(&mut line).expect("a line");
+            if line.starts_with("id:") || line.starts_with("data:") {
+                seen.push(line);
+            }
+        }
+        let want: Vec<String> = [2, 3]
+            .into_iter()
+            .flat_map(|n| {
+                let f = frame(n, "chat://event", &text(n));
+                let (id, data) = f.trim_end().split_once('\n').unwrap();
+                [format!("{id}\n"), format!("{data}\n")]
+            })
+            .collect();
+        assert_eq!(seen, want);
+        // A call's reply names the newest id, so the page can wait for it.
+        let (_, _, body) = http(
+            port,
+            "POST",
+            "/remote/v1/call/get_settings",
+            Some(&code),
+            "",
+        );
+        assert_eq!(parse(&body)["seq"], json!(3));
+        access.stop();
     }
 }

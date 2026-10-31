@@ -5,6 +5,7 @@ import type { Answer, Approvals, ChatEnvelope, ChatEvent, ElicitAction, SessionM
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
+  gap: null as (() => void) | null,
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
   answerElicit:
     vi.fn<
@@ -32,9 +33,13 @@ vi.mock("./api", () => ({
     api.handler = handler;
     return Promise.resolve(() => {});
   },
+  onEventGap: (handler: () => void) => {
+    api.gap = handler;
+    return Promise.resolve(() => {});
+  },
 }));
 
-import { applyEvent, Chat, MISSION_BUSY, type Item } from "./Chat";
+import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
 
 const SETTINGS: Settings = {
   model: "grok-4.7",
@@ -81,6 +86,18 @@ describe("Chat", () => {
     }
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.handler = null;
+    api.gap = null;
+  });
+
+  it("says part of the reply may be missing after a gap in the web app's events", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    act(() => api.gap?.());
+    expect(screen.queryByText(EVENTS_LOST)).toBeNull();
+    await startTurn("hello");
+    act(() => api.gap?.());
+    expect(screen.getByText(EVENTS_LOST)).toBeVisible();
+    finish();
   });
 
   it("puts a prefill in the box without sending it, and a new one replaces it", async () => {
