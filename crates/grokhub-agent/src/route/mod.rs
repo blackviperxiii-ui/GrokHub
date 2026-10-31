@@ -1241,6 +1241,19 @@ mod tests {
     use crate::client::{ContentPart, StreamEvent};
     use std::sync::Mutex;
 
+    #[test]
+    fn routing_reads_what_was_typed_not_the_cabin_notes() {
+        let stored = crate::prefix_cache::user_message_text(
+            "Playbook for this turn: Code changes. Reproduce first, run the tests.",
+            "hi",
+        );
+        let input = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(stored)],
+        }];
+        assert_eq!(live::last_user_text(&input), ("hi".to_string(), false));
+    }
+
     struct Echo(Mutex<Vec<ResponsesRequest>>);
 
     impl ModelClient for Echo {
