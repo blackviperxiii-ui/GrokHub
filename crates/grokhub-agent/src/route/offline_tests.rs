@@ -308,3 +308,141 @@ fn offline_with_no_local_runtime_waits_and_says_why_instead_of_trying_the_cloud(
     local::set_enabled(false);
     assert_eq!(local::unavailable_reason(), "Local AI is off in Settings");
 }
+
+#[test]
+fn offline_only_reads_offline_and_the_gate_carries_the_switch() {
+    connectivity::set_state(connectivity::NetState::Online);
+    let _on = grokhub_core::offline::force_for_thread(true);
+    assert_eq!(connectivity::state(), connectivity::NetState::Offline);
+    assert_eq!(
+        grokhub_core::connectivity::state(),
+        grokhub_core::connectivity::ConnectivityState::Offline
+    );
+    let gate = LocalGate::now(false, false, false);
+    assert_eq!((gate.offline, gate.offline_switch), (true, true));
+    assert_eq!(
+        connectivity::cloud_queue_note("web:search"),
+        "Offline only is on: web search needs the internet."
+    );
+}
+
+fn switched(gate: LocalGate) -> LocalGate {
+    LocalGate {
+        offline: true,
+        offline_switch: true,
+        ..gate
+    }
+}
+
+#[test]
+fn offline_only_sends_chat_local_queues_cloud_work_and_never_picks_the_cloud() {
+    let reg = fleet();
+    let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let gate = switched(LocalGate::now(false, false, false));
+    assert!(gate.enabled);
+
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str(), r.no_route),
+        ("local", "local:small", false)
+    );
+    assert!(
+        r.rule_ids.contains(&"offline:local".into()),
+        "{:?}",
+        r.rule_ids
+    );
+
+    let r = Router::choose(
+        &ask("media:image", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.no_route, "{r:?}");
+    assert!(
+        r.rule_ids.contains(&"offline:cloud_queued".into()),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // A failed on-device check never escalates to the cloud with the switch on.
+    let failed = LocalGate {
+        local_verify_failed: true,
+        ..gate.clone()
+    };
+    assert!(!local::escalate_after_verify(&failed));
+    let r = Router::choose(&ask("chat:default", failed), &reg, &profiles, &table, 10);
+    assert_eq!((r.model.as_str(), r.no_route), ("local:small", false));
+    assert!(!r.rule_ids.iter().any(|x| x == "local:escalate_verify"));
+
+    // Too long for the device: the cloud would take it, the switch holds it.
+    let mut long = ask("chat:default", gate);
+    long.ctx_tokens = 50_000;
+    let r = Router::choose(&long, &reg, &profiles, &table, 10);
+    assert!(r.no_route, "{r:?}");
+    assert_eq!((r.model.as_str(), r.provider.as_str()), ("grok-4.7", "xai"));
+    assert!(
+        r.rule_ids.contains(&"offline:switch".into()),
+        "{:?}",
+        r.rule_ids
+    );
+}
+
+#[test]
+fn offline_only_with_no_local_runtime_waits_and_never_falls_to_the_cloud() {
+    let reg = fleet();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let gate = switched(LocalGate::default());
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.no_route, "{r:?}");
+    assert!(
+        r.rule_ids.contains(&"offline:local_unavailable".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    for class in ["background:summarize", "prepare:hard", "web:fetch"] {
+        let r = Router::choose(&ask(class, gate.clone()), &reg, &profiles, &table, 10);
+        assert!(r.no_route, "{class}: {r:?}");
+        assert!(
+            r.rule_ids.iter().any(|x| x.starts_with("offline:")),
+            "{class}: {:?}",
+            r.rule_ids
+        );
+    }
+}
+
+#[test]
+fn ready_for_offline_needs_local_ai_on_and_a_runtime() {
+    let dir = crate::harness::test_dir("ready-for-offline");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    local::set_enabled(false);
+    assert!(
+        !local::ready_for_offline(),
+        "Local AI off, nothing installed"
+    );
+    local::set_enabled(true);
+    assert!(
+        !local::ready_for_offline(),
+        "on, but no engine or model in this config dir"
+    );
+    local::set_enabled(false);
+    let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
+    assert!(local::ready_for_offline());
+    let _ = std::fs::remove_dir_all(dir);
+}

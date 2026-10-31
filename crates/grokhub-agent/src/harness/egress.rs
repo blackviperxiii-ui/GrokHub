@@ -355,6 +355,9 @@ pub fn model_text_classes(text: &str) -> &'static [DataClass] {
 /// [`decide`]: crate::harness::decide
 pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:egress_guard");
+    if let Err(reason) = offline_refusal(req.target) {
+        return GateOutcome::Refuse { reason };
+    }
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
     let outcome = decide(Step::Egress {
@@ -377,6 +380,15 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
         }
     }
     outcome
+}
+
+/// Offline only (LU-13): a refused host sends nothing, with no card and no
+/// log line. Loopback and the LAN hub (`/sync`) still go.
+fn offline_refusal(target: &str) -> Result<(), String> {
+    if target == HUB_DEST {
+        return Ok(());
+    }
+    grokhub_core::offline::check_url(target).map_err(String::from)
 }
 
 /// Log a send the user approved once on a hard card (no standing grant).
@@ -437,6 +449,9 @@ pub(crate) fn guard_or_park_within(
 /// Otherwise hard class `send`, even under Always.
 pub fn guard_provider(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:provider_guard");
+    if let Err(reason) = offline_refusal(req.target) {
+        return GateOutcome::Refuse { reason };
+    }
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
     let outcome = decide(Step::Provider {
@@ -735,6 +750,39 @@ mod tests {
                 ledger: &none
             }),
             GateOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn offline_only_refuses_the_internet_with_no_card_and_no_line() {
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        let (d, _g) = dir("offline-only");
+        let _on = grokhub_core::offline::force_for_thread(true);
+        let refuse = GateOutcome::Refuse { reason: MSG.into() };
+        let model = EgressReq::new("https://api.x.ai/v1/responses", &[DataClass::Chat]);
+        assert_eq!(guard_egress(&d, &model), refuse);
+        assert_eq!(guard_provider(&d, &model), refuse);
+        assert_eq!(
+            guard_quiet(&d, &EgressReq::new("https://example.org/feed", &[])),
+            Err(MSG.to_string())
+        );
+        // A send that would wait on a card refuses at once: no park file.
+        let upload = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
+        assert_eq!(
+            guard_or_park(&d, &upload, "web_fetch", &mut || false),
+            Err(MSG.to_string())
+        );
+        assert!(!crate::harness::park_dir(&d).exists());
+        assert!(read_egress(&d).is_empty(), "nothing left, nothing logged");
+        // This computer and the LAN still go.
+        let local = EgressReq::new("http://127.0.0.1:4711/v1/responses", &[DataClass::Chat]);
+        assert_eq!(guard_egress(&d, &local), GateOutcome::Allow);
+        let printer = EgressReq::new("http://192.168.1.40/api/printer", &[]);
+        assert_eq!(guard_egress(&d, &printer), GateOutcome::Allow);
+        assert_eq!(
+            guard_egress(&d, &EgressReq::new(HUB_DEST, HUB_SYNC_DATA)),
+            send_park("hub", "chat, personal"),
+            "the LAN hub keeps its own card"
         );
     }
 

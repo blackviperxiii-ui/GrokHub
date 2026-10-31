@@ -1004,6 +1004,19 @@ impl Router {
             }
             pick
         };
+        // Offline only (LU-13): whatever branch picked a cloud model (verify
+        // escalate, no keys, cloud down, hard work), nothing goes to the cloud.
+        let chosen =
+            if input.local.offline_switch && !chosen.no_route && !local::is_local(&chosen.model) {
+                rules.push("offline:switch".into());
+                ModelPick {
+                    model: input.current_model.trim().to_string(),
+                    no_route: true,
+                    replaced: None,
+                }
+            } else {
+                chosen
+            };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
             Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,

@@ -1876,6 +1876,7 @@ fn place_symlink(src: &Path, dest: &Path) -> Result<(), String> {
 }
 
 fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
+    grokhub_core::offline::check_url(url)?;
     let parent = dest
         .parent()
         .ok_or_else(|| "staging path has no parent".to_string())?;

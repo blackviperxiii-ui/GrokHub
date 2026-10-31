@@ -410,6 +410,8 @@ pub struct LocalGate {
     pub hard_tool: bool,
     /// Connectivity is offline (PR B): chat may go local too.
     pub offline: bool,
+    /// Offline only is on (LU-13): no step may go to the cloud at all.
+    pub offline_switch: bool,
     /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
@@ -428,6 +430,7 @@ impl LocalGate {
             cloud_grant,
             hard_tool,
             offline: super::connectivity::state().prefer_local(),
+            offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
         }
     }
@@ -481,7 +484,14 @@ pub fn offline_only(gate: &LocalGate) -> bool {
 
 /// Online after a failed on-device verify: leave local and pick a cloud model.
 pub fn escalate_after_verify(gate: &LocalGate) -> bool {
-    gate.enabled && !gate.offline && gate.local_verify_failed
+    gate.enabled && !gate.offline && !gate.offline_switch && gate.local_verify_failed
+}
+
+/// The on-device model could take chat with Offline only on: Local AI is on
+/// and an engine and model are installed. `false` ⇒ the toggle should warn
+/// (with [`unavailable_reason`]) before it turns the switch on.
+pub fn ready_for_offline() -> bool {
+    LocalCapacity::now().ready
 }
 
 /// Hard or long work should stay on the cloud when online (PR E).

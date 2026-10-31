@@ -10,7 +10,7 @@
 - `crates/grokhub-core/src/lib.rs`: the `pub mod` list and the flat `pub use` re-exports that other crates import.
 - `crates/grokhub-core/src/state.rs` (`HubState`, `state_for_disk`) and `crates/grokhub-core/src/pair.rs`.
 - `crates/grokhub-core/src/host_safety.rs`: `forbidden_reason` (leaf match plus assignment/`+`/`$(echo)`/`chr()` deobfuscation and `base64|sh` rebuild refuse) and `recall_hits`. `crates/grokhub-core/src/ssrf.rs`: `ip_blocked` / `host_name_blocked`; `public_http_url` uses them (dialers add `public_only_resolve`, never env proxy).
-- Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2).
+- Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2). `crates/grokhub-core/src/offline.rs`: Offline only switch (`{config}/offline.toml`, `GROKHUB_OFFLINE_ONLY=1`). `enabled`, `set`, `check_url` / `check_host` (loopback and LAN pass), `refuse`, `OFFLINE_MSG`. `connectivity::state` reads Offline while on. Every network exit is listed in `crates/grokhub-core/tests/offline_guard.rs` (`GUARDED`); a new one fails until it is listed with its check.
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
 - `crates/grokhub-core/src/appearance.rs`: Settings theme ids (`ops-dark`, `oled-black`, `soft-charcoal`, classic `dark` / `light` / `system`) and `resolve_palette`.
 - `crates/grokhub-core/src/paths.rs`: `user_home`. `diagnostics.rs`: About clipboard + Labs Desktop zip (`DiagnosticsExport`, `write_diagnostics_zip`).
