@@ -42,6 +42,10 @@ fn scratch(label: &str) -> (PathBuf, Clean, ConfigGuard) {
 }
 
 fn import_bin(bin: &str, env: &[(&str, &str)]) {
+    import_bin_for(bin, env, 8);
+}
+
+fn import_bin_for(bin: &str, env: &[(&str, &str)], startup_secs: u64) {
     let mut env_map = serde_json::Map::new();
     for (key, value) in env {
         env_map.insert((*key).to_string(), json!(value));
@@ -51,7 +55,7 @@ fn import_bin(bin: &str, env: &[(&str, &str)]) {
             "box": {
                 "command": bin,
                 "env": env_map,
-                "startup_timeout_sec": 8,
+                "startup_timeout_sec": startup_secs,
                 "tool_timeout_sec": 8
             }
         }
@@ -229,6 +233,136 @@ fn a_server_answering_an_unknown_version_is_an_error_row() {
             0
         ),
         "{rows:?}"
+    );
+}
+
+#[test]
+fn a_2026_07_28_stdio_server_works_without_initialize_and_keeps_the_fence() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("stateless");
+    // The fake refuses any request without `_meta` and answers `ping` and
+    // `initialize` with Method not found, so a connected row (doctor pings)
+    // means the probe, `tools/list` and the health check all went stateless.
+    import_bin(bin, &[("FAKE_MCP_STATELESS", "1")]);
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 1),
+        "{rows:?}"
+    );
+    let output = run_call(&dir, true, &mut |_| {});
+    assert!(
+        output.starts_with("<<<UNTRUSTED source=mcp nonce="),
+        "{output}"
+    );
+    assert!(output.contains(">>>\nversion=2026-07-28 pid="), "{output}");
+    mcp::shutdown_all();
+
+    let (dir, _clean, _guard) = scratch("stateless-rich");
+    import_bin(bin, &[("FAKE_MCP_STATELESS", "1"), ("FAKE_MCP_RICH", "1")]);
+    let listed = mcp::tool_list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].display_name(), "Echo Weather");
+    assert_eq!(listed[0].hints.open_world, Some(false));
+    let output = run_call(&dir, true, &mut |_| {});
+    let body = "weather ok\n\
+                [resource_link] Forecast (forecast.json) <file:///tmp/forecast.json> (application/json): Five-day forecast\n\
+                structuredContent: {\"temperature\":22.5}";
+    assert!(
+        output.contains(&format!(">>>\n{body}\n<<<END_UNTRUSTED nonce=")),
+        "{output}"
+    );
+}
+
+#[test]
+fn a_late_discover_answer_still_picks_the_stateless_era() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("stateless-late");
+    // The probe gives up after 2 s and sends `initialize`; the discover
+    // answer that lands at 2.5 s still decides.
+    import_bin(
+        bin,
+        &[
+            ("FAKE_MCP_STATELESS", "1"),
+            ("FAKE_MCP_DISCOVER_DELAY_MS", "2500"),
+        ],
+    );
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 1),
+        "{rows:?}"
+    );
+    let output = run_call(&dir, true, &mut |_| {});
+    assert!(output.contains(">>>\nversion=2026-07-28 pid="), "{output}");
+}
+
+#[test]
+fn a_stdio_server_that_answers_neither_probe_nor_initialize_times_out() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (_dir, _clean, _guard) = scratch("silent");
+    import_bin_for(bin, &[("FAKE_MCP_SILENT", "1")], 3);
+    let rows = mcp::doctor();
+    assert_eq!(
+        (
+            rows[0].status.as_str(),
+            rows[0].last_error.as_str(),
+            rows[0].tool_count
+        ),
+        ("error", "MCP server `box` timed out", 0),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn stateless_elicitation_comes_back_as_input_responses_with_the_request_state() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("stateless-elicit");
+    import_bin(
+        bin,
+        &[("FAKE_MCP_STATELESS", "1"), ("FAKE_MCP_ELICIT", "1")],
+    );
+    let (tx, inbox) = mcp::ElicitInbox::pair();
+    mcp::attach_elicit("s", inbox);
+    let seen = Mutex::new(Vec::new());
+    let output = run_call(&dir, true, &mut |ev| {
+        if let LoopEvent::Elicit(view) = ev {
+            let _ = tx.send(ElicitNote {
+                id: view.id.clone(),
+                action: "accept".into(),
+                content: Some(json!({"note": "hi"})),
+            });
+            seen.lock().unwrap().push((view.message, view.server_name));
+        }
+    });
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![("Need a value".to_string(), "box".to_string())],
+        "{output}"
+    );
+    assert!(
+        output
+            .contains(">>>\naction=accept content={\"note\":\"hi\"} state=rs-1\n<<<END_UNTRUSTED"),
+        "{output}"
+    );
+    mcp::detach_elicit("s");
+    mcp::shutdown_all();
+
+    let (dir, _clean, _guard) = scratch("stateless-elicit-away");
+    import_bin(
+        bin,
+        &[("FAKE_MCP_STATELESS", "1"), ("FAKE_MCP_ELICIT", "1")],
+    );
+    let mut cards = 0;
+    let output = run_call(&dir, false, &mut |ev| {
+        if matches!(ev, LoopEvent::Elicit(_)) {
+            cards += 1;
+        }
+    });
+    assert_eq!(cards, 0, "{output}");
+    assert!(
+        output.contains(">>>\naction=decline content=null state=rs-1\n<<<END_UNTRUSTED"),
+        "{output}"
     );
 }
 
