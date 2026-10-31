@@ -580,12 +580,8 @@ impl Cabin {
                             } else {
                                 let name = self.mem_name.clone();
                                 let body = self.mem_body.clone();
-                                std::thread::spawn(move || {
-                                    if config::read_memory(&name) != body {
-                                        let _ = config::write_memory(&name, &body);
-                                    }
-                                });
-                                self.status = format!("Wrote {}", self.mem_name);
+                                self.status = format!("Saving {name}…");
+                                self.save_memory_file(name, body, false);
                             }
                         }
                     });
@@ -735,13 +731,56 @@ impl Cabin {
         true
     }
 
+    /// History title with "Delete all". It wipes every chat and its sessions
+    /// on disk, so it takes two clicks: the first arms a red
+    /// "Delete all N chats?" with Cancel beside it.
+    fn history_header(&mut self, ui: &mut egui::Ui) {
+        let now = Instant::now();
+        let armed = self.history_delete_armed(now);
+        let chats = self
+            .threads
+            .iter()
+            .filter(|t| !crate::threads::is_deleted(t))
+            .count();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("History")
+                    .font(crate::theme::title_font(28.0))
+                    .color(crate::theme::fg()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if !armed {
+                    "Delete all".to_string()
+                } else if chats == 1 {
+                    "Delete 1 chat?".to_string()
+                } else {
+                    format!("Delete all {chats} chats?")
+                };
+                if crate::cards::danger_pill(ui, &label) {
+                    self.click_delete_all_history(Instant::now());
+                }
+                if armed && crate::cards::ghost_pill(ui, "Cancel") {
+                    self.history_delete_armed_at = None;
+                }
+            });
+        });
+        if armed {
+            crate::cards::settings_note(
+                ui,
+                "Click again to delete every chat and its saved sessions. This can't be undone.",
+            );
+            // Repaint so the button disarms on its own when the window lapses.
+            ui.ctx().request_repaint_after(DELETE_ALL_ARM);
+        }
+        ui.add_space(14.0);
+    }
+
     pub(super) fn ui_history(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
-            if crate::cards::page_header(ui, "History", "Delete all") {
-                self.delete_all_history();
-            }
+            self.history_header(ui);
             ui.add_space(8.0);
             // Projects + History list (moved off the Chat rail drawer).
             self.ui_projects_and_history(ui, ui.available_width().min(320.0));
@@ -1567,13 +1606,8 @@ impl Cabin {
 
     pub(super) fn kick_history_search(&mut self) {
         if !self.scratch() {
-            let name = self.mem_name.clone();
-            let body = self.mem_body.clone();
-            std::thread::spawn(move || {
-                if config::read_memory(&name) != body {
-                    let _ = config::write_memory(&name, &body);
-                }
-            });
+            // Quiet autosave before searching; only a failure speaks up.
+            self.save_memory_file(self.mem_name.clone(), self.mem_body.clone(), true);
         }
         let q = self.history_q.clone();
         let mem_name = self.mem_name.clone();
@@ -1703,12 +1737,18 @@ impl Cabin {
             // Capture the config directory now, like the other scheduled saves:
             // looking it up when the thread runs can land in another directory.
             let dir = config::config_dir();
+            // Quiet on success; a failed save names the file on the status line.
+            let (tx, rx) = mpsc::channel();
+            self.file_writes.push(rx);
             self.mem_leave_saves.retain(|s| !s.is_finished());
             self.mem_leave_saves.push(std::thread::spawn(move || {
                 let _pin = pin_scheduled_dir(dir);
-                if config::read_memory(&leaving) != body {
-                    let _ = config::write_memory(&leaving, &body);
-                }
+                let result = if config::read_memory(&leaving) != body {
+                    config::write_memory(&leaving, &body).map(|()| leaving.clone())
+                } else {
+                    Ok(leaving.clone())
+                };
+                let _ = tx.send(file_writes::FileWriteDone::quiet(leaving, result));
             }));
         }
         self.mem_name = name.into();

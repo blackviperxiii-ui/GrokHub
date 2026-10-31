@@ -24,7 +24,7 @@ fn empty_home_paints_faint_greeting() {
     );
     assert!(
         slice.contains("theme::mark"),
-        "empty home paints a quiet Grok mark above the greeting: {slice}"
+        "empty home paints the quiet Loadout mark above the greeting: {slice}"
     );
     assert!(
         !slice.contains("italics"),

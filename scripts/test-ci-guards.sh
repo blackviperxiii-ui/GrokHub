@@ -34,6 +34,8 @@ printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"
 printf 'name = "grokhub-app"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf 'assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");\n' >"$W/crates/grokhub-app/src/cli.rs"
 printf '1.0.0\n' >"$W/VERSION"
+mkdir -p "$W/packaging/windows"
+printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
 printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v4\n      - uses: ./.github/actions/local\n' "$SHA" \
@@ -93,6 +95,22 @@ fresh_pr
 printf '// no version assert here\n' >"$W/crates/grokhub-app/src/cli.rs"
 commit_pr
 run_guard fail "cli.rs missing cabin_reports_version line fails"
+
+fresh_pr
+sed -i 's/"Old"/"New"/' "$W/packaging/windows/grokhub.iss"
+commit_pr
+run_guard pass "grokhub.iss name edit without a version change passes"
+
+fresh_pr
+sed -i 's/"1.0.0"/"1.0.1"/' "$W/packaging/windows/grokhub.iss"
+commit_pr
+run_guard fail "grokhub.iss MyAppVersion bump without release fails"
+LABELS=release run_guard pass "grokhub.iss MyAppVersion bump with release passes"
+
+fresh_pr
+sed -i '/MyAppVersion "/d' "$W/packaging/windows/grokhub.iss"
+commit_pr
+run_guard fail "grokhub.iss missing MyAppVersion define fails"
 
 fresh_pr
 printf 'name = "other"\nversion = "1.0.0"\n' >"$W/Cargo.lock"

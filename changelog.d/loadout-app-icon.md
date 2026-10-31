@@ -1,0 +1,1 @@
+- The taskbar, window, exe, tray, installer, Linux app menu and shell bundle icons are now the Loadout slot-grid icon instead of the old Grok mark. `scripts/render-brand-icons.py` renders every size from `brand/app-icon.svg`; file names stay `grokhub.*` so installs and updates don't move.

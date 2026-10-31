@@ -710,7 +710,7 @@ pub(super) fn paint_companion_face(ui: &mut egui::Ui, size: f32) {
             mark.id(),
             rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            crate::theme::muted(),
+            egui::Color32::WHITE,
         );
     }
 }
