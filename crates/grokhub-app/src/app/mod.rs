@@ -525,9 +525,6 @@ pub struct Cabin {
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
-    /// Minimize or tray hide. The next show opens a fresh empty chat.
-    resume_fresh: bool,
-    saw_minimized: bool,
     /// Useful setup ideas were offered once this launch. Refresh clears it.
     ideas_filled: bool,
     /// Model call for Ideas: the reply, and what it is checked against.
@@ -1185,8 +1182,6 @@ impl Cabin {
                 None
             },
             window_visible: !hidden,
-            resume_fresh: false,
-            saw_minimized: false,
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -1664,8 +1659,6 @@ impl Cabin {
             tray: None,
             tray_rx: None,
             window_visible: true,
-            resume_fresh: false,
-            saw_minimized: false,
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -4928,7 +4921,11 @@ impl Cabin {
         self.tray_rx = Some(crate::tray::begin_tray_spawn());
     }
 
+    /// Bring the window back. From the tray (hidden) it opens on Home like a
+    /// fresh launch; a raise of a window that was only minimized or behind
+    /// others keeps the page the user was on.
     fn show_from_tray(&mut self, ctx: &egui::Context) {
+        let was_hidden = !self.window_visible;
         self.window_visible = true;
         self.tray_saw_unfocused = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -4951,9 +4948,9 @@ impl Cabin {
         }
         self.apply_saved_geom(ctx);
         self.ensure_tray_spawn();
-        self.resume_fresh = false;
-        self.saw_minimized = false;
-        self.open_fresh_home();
+        if was_hidden {
+            self.open_launch_page();
+        }
         ctx.request_repaint();
     }
 
@@ -5018,18 +5015,6 @@ impl Cabin {
         }) && self.nav == Nav::Chat
         {
             self.toggle_archive_current();
-        }
-    }
-
-    fn note_window_resume(&mut self, ctx: &egui::Context) {
-        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
-        if minimized {
-            self.saw_minimized = true;
-            self.resume_fresh = true;
-        } else if self.resume_fresh && self.saw_minimized && self.window_visible {
-            self.resume_fresh = false;
-            self.saw_minimized = false;
-            self.open_fresh_home();
         }
     }
 
@@ -5270,7 +5255,6 @@ impl eframe::App for Cabin {
         self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
-        self.note_window_resume(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
         match crate::tray::cabin_close_action(
