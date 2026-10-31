@@ -103,11 +103,6 @@ pub(super) fn pulse_steam(
     let games = root.as_deref().map(steam::read_library).unwrap_or_default();
     let mut prefs = steam::load_prefs(ctx.config_dir);
     let on = args.get("on").and_then(Value::as_bool);
-    if on == Some(true) && root.is_none() {
-        return Err(
-            "Steam is not installed on this computer, so there is no library to use.".into(),
-        );
-    }
     let names = |key: &str| -> Vec<String> {
         args.get(key)
             .and_then(Value::as_array)
@@ -119,9 +114,17 @@ pub(super) fn pulse_steam(
             })
             .unwrap_or_default()
     };
+    let flips = [("mute", true), ("unmute", false)].map(|(key, mute)| (names(key), mute));
+    // Turning on or muting a game without Steam names the real cause, not
+    // "`X` is not in the Steam library".
+    if root.is_none() && (on == Some(true) || flips.iter().any(|(n, _)| !n.is_empty())) {
+        return Err(
+            "Steam is not installed on this computer, so there is no library to use.".into(),
+        );
+    }
     let mut changed = on.is_some();
-    for (key, mute) in [("mute", true), ("unmute", false)] {
-        for name in names(key) {
+    for (names, mute) in flips {
+        for name in names {
             let game = steam::find_game(&games, &name)
                 .ok_or_else(|| format!("`{}` is not in the Steam library.", line(&name)))?;
             prefs.set_muted(game.app_id, mute);

@@ -5,6 +5,7 @@ import {
   chatActivity,
   dockItems,
   dockSummary,
+  pruneActivity,
   routineFinished,
   routineStarted,
   stepsLine,
@@ -74,6 +75,16 @@ describe("chatActivity", () => {
     });
   });
 
+  it("an error right after a finished turn starts from zero steps", () => {
+    const done = fold([tool("completed"), tool("completed"), { kind: "done", stop: "end_turn" }]);
+    expect(done).toMatchObject({ status: "done", steps: 2 });
+    expect(fold([{ kind: "error", message: "The key was rejected." }], done)).toMatchObject({
+      status: "failed",
+      detail: "The key was rejected.",
+      steps: 0,
+    });
+  });
+
   it("a stray done with no turn adds nothing, and suggestions change nothing", () => {
     expect(fold([{ kind: "done", stop: "end_turn" }])).toBeUndefined();
     const running = fold([{ kind: "text", text: "Hi" }]);
@@ -114,5 +125,9 @@ describe("routines and the dock list", () => {
     const shown = dockItems(items, now);
     expect(shown.map((i) => i.key)).toEqual(["wait", "run-b", "run-a", "fail", "done"]);
     expect(dockSummary(shown)).toBe("1 waiting · 2 running · 1 failed · 1 done");
+    const map = Object.fromEntries(items.map((i) => [i.key, i]));
+    expect(Object.keys(pruneActivity(map, now))).toEqual(["done", "run-a", "run-b", "wait", "fail"]);
+    const fresh = Object.fromEntries(shown.map((i) => [i.key, i]));
+    expect(pruneActivity(fresh, now)).toBe(fresh);
   });
 });

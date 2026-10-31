@@ -79,7 +79,7 @@ export function chatActivity(
     case "done":
       return prev ? { ...base, status: "done", detail: "Reply finished", at: now } : undefined;
     case "error":
-      return { ...base, status: "failed", detail: clip(event.message), at: now };
+      return { ...restart, status: "failed", detail: clip(event.message), at: now };
     case "suggestions":
       return prev;
   }
@@ -110,12 +110,23 @@ export function routineFinished(
 
 const RANK: Record<ActivityStatus, number> = { waiting: 0, running: 1, failed: 2, done: 3 };
 
+/** Still worth showing: unfinished, or finished less than `DONE_TTL_MS` ago. */
+function current(item: ActivityItem, now: number): boolean {
+  return (item.status !== "done" && item.status !== "failed") || now - item.at < DONE_TTL_MS;
+}
+
 /** What the dock shows: waiting first, then running, then recent results,
  * newest first within each; finished items older than `DONE_TTL_MS` drop. */
 export function dockItems(items: ActivityItem[], now: number): ActivityItem[] {
-  return items
-    .filter((i) => (i.status !== "done" && i.status !== "failed") || now - i.at < DONE_TTL_MS)
-    .sort((a, b) => RANK[a.status] - RANK[b.status] || b.at - a.at);
+  return items.filter((i) => current(i, now)).sort((a, b) => RANK[a.status] - RANK[b.status] || b.at - a.at);
+}
+
+/** The same map without the finished items the dock no longer shows, so a
+ * long session doesn't keep every past turn. The same object when nothing
+ * drops, so React sees no change. */
+export function pruneActivity(items: Record<string, ActivityItem>, now: number): Record<string, ActivityItem> {
+  const kept = Object.entries(items).filter(([, item]) => current(item, now));
+  return kept.length === Object.keys(items).length ? items : Object.fromEntries(kept);
 }
 
 /** The collapsed dock's line, e.g. "1 waiting · 2 running". */

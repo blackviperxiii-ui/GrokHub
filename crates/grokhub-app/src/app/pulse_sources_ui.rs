@@ -230,16 +230,26 @@ impl Cabin {
     /// Housekeeping: run the sources on the system cadence (every two hours) and once
     /// when the app opens, never in quiet hours.
     pub(super) fn follow_source_fetch(&mut self) {
-        let just_opened = !std::mem::replace(&mut self.sources.opened, true);
+        let just_opened = !self.sources.opened;
         if self.sources_busy() || !self.cfg.feed_pulse.digest_on || self.quiet_now() {
+            self.sources.opened = true;
             return;
         }
         // The system cadence (base 120 minutes); the cabin keeps no
         // engagement clock, so it never speeds up or slows down.
-        let every = u64::from(grokhub_core::pulse_writer::cadence_mins(0, now_ms())) * 60_000;
-        if !ps::check_due(self.sources_last_run(), now_ms(), every, just_opened) {
+        let now = now_ms();
+        let every = u64::from(grokhub_core::pulse_writer::cadence_mins(0, now)) * 60_000;
+        if !ps::check_due(self.sources_last_run(), now, every, just_opened) {
+            self.sources.opened = true;
             return;
         }
+        // The first Steam library read runs on its own thread; wait for it so
+        // the check on open carries the games too, not the one two hours on.
+        self.steam_refresh_library(now);
+        if self.sources.steam.reading() {
+            return;
+        }
+        self.sources.opened = true;
         self.kick_source_fetch();
     }
 
