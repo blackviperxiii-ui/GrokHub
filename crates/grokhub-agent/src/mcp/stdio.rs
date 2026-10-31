@@ -42,7 +42,8 @@ pub(crate) fn connect(
 ) -> Result<(StdioConn, Vec<RawTool>), String> {
     let mut conn = spawn(server, command, args, env, cwd)?;
     let init = conn.roundtrip("initialize", rpc::initialize_params(), timeout)?;
-    let _ = init;
+    // Stdio has no version header; an unknown answer still ends the session.
+    rpc::negotiate(server, &init)?;
     conn.write_value(&rpc::notification(
         "notifications/initialized",
         serde_json::json!({}),

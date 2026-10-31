@@ -35,27 +35,11 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - name: Cap at 2 open Claude PRs
-        id: cap
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
-        run: |
-          n=$(gh pr list --state open --limit 100 --json headRefName,labels \
-            --jq '[.[] | select((.headRefName|startswith("claude/")) or ([.labels[].name]|index("claude")))] | length')
-          if [ "$n" -ge 2 ]; then
-            gh issue comment "$ISSUE" --body "Skipped: 2 Claude PRs are already open. Re-add the claude label (or let cards-sync retry) once one merges."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.cap.outputs.skip != 'true'
         with:
           ref: beta
           fetch-depth: 0
       - uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1
-        if: steps.cap.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           base_branch: beta
@@ -68,4 +52,4 @@ jobs:
           prompt: "${{ github.event_name == 'workflow_dispatch' && format('Implement GitHub issue #{0} in {1}. Read it with gh issue view {0}. Follow the repo rules below, then open one PR with gh pr create --base beta whose body says Fixes #{0}.', inputs.issue_number, github.repository) || '' }}"
           claude_args: |
             --allowedTools "Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git:*),Bash(cargo:*),Bash(bash scripts/ci-guards.sh),Bash(python3 scripts/pii-guard/pii_guard.py:*)"
-            --append-system-prompt "Load the vstack:viper-mode skill first and follow it; use vstack:follow-through from start to PR, vstack:blast-radius before shared code and vstack:tdd for bugs. Repo rules: base branch beta, never main; branch from origin/beta. One PR per issue. Small, in-card-only diff. Before pushing run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo nextest run --workspace, bash scripts/ci-guards.sh and python3 scripts/pii-guard/pii_guard.py origin/beta; then push once. Never force-push or rebase; merge origin/beta normally to catch up. No personal info (names, emails, home paths); use user and /home/user. New UI registers through beta's single GROKHUB_DECK_NAV handler, never a separate deck_nav() handler. If 2 Claude PRs (claude/ branches) are already open, do not start: comment on the issue and stop."
+            --append-system-prompt "Load the vstack:viper-mode skill first and follow it; use vstack:follow-through from start to PR, vstack:blast-radius before shared code and vstack:tdd for bugs. Repo rules: base branch beta, never main; branch from origin/beta. One PR per issue. Small, in-card-only diff. Before pushing run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo nextest run --workspace, bash scripts/ci-guards.sh and python3 scripts/pii-guard/pii_guard.py origin/beta; then push once. Never force-push or rebase; merge origin/beta normally to catch up. No personal info (names, emails, home paths); use user and /home/user. New UI registers through beta's single GROKHUB_DECK_NAV handler, never a separate deck_nav() handler."
