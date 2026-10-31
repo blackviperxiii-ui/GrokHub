@@ -161,7 +161,13 @@ pub(crate) fn swap_in(dest: &Path, files: &[(PathBuf, &str)]) -> Result<(), Stri
 /// `Err` is the one named line the update card shows.
 pub(crate) fn install_release(channel: Channel, windows: bool) -> Result<String, String> {
     let dest = install_dir(windows).map_err(|e| refusal_note("", &Refusal::Download(e)))?;
-    let work = std::env::temp_dir().join("grokhub-release-update");
+    // A fresh random name: under a fixed one, another account on this
+    // computer could make the folder first and swap the binary after it
+    // verifies.
+    let work = std::env::temp_dir().join(format!(
+        "grokhub-release-update-{}",
+        grokhub_core::new_token()
+    ));
     let mut get = |url: &str, cap: u64, secs: u64| fetch(url, cap, Duration::from_secs(secs));
     install_release_with(RELEASE_PUBKEY, channel, windows, &mut get, &dest, &work)
 }
@@ -186,6 +192,8 @@ fn install_release_with(
     work: &Path,
 ) -> Result<String, String> {
     let mut version = String::new();
+    // Only a folder this run made is cleaned up, on success or failure.
+    let mut made = false;
     let run = (|| -> Result<String, Refusal> {
         let releases = parse_releases(&fetch_text(&mut *get, releases_api(channel))?);
         let rel = pick_release(&releases, channel).ok_or(Refusal::NoRelease)?;
@@ -205,8 +213,9 @@ fn install_release_with(
         };
         let bytes = get(&asset.url, ASSET_CAP, 600).map_err(Refusal::Download)?;
         verify_asset(pubkey, &sums_text, sig_text.as_deref(), &asset.name, &bytes)?;
-        let _ = std::fs::remove_dir_all(work);
-        std::fs::create_dir_all(work).map_err(|e| Refusal::Download(e.to_string()))?;
+        crate::desktop::create_private_dir(work)
+            .map_err(|e| Refusal::Download(format!("scratch folder: {e}")))?;
+        made = true;
         let archive = work.join(&asset.name);
         std::fs::write(&archive, &bytes).map_err(|e| Refusal::Download(e.to_string()))?;
         let stage = work.join("stage");
@@ -218,7 +227,6 @@ fn install_release_with(
             files.push((found, name));
         }
         swap_in(dest, &files).map_err(Refusal::Download)?;
-        let _ = std::fs::remove_dir_all(work);
         Ok(format!(
             "Installed {} {} into {} (checked against SHA256SUMS).",
             grokhub_core::brand::product_name(),
@@ -226,6 +234,9 @@ fn install_release_with(
             dest.display()
         ))
     })();
+    if made {
+        let _ = std::fs::remove_dir_all(work);
+    }
     run.map_err(|why| refusal_note(&version, &why))
 }
 
@@ -439,6 +450,29 @@ mod tests {
             "running build"
         );
         assert!(!dest.join("grokhub.old").exists());
+
+        // A scratch folder someone else made first: refused before the
+        // verified download is written anywhere they could swap it.
+        let taken = d.join("taken");
+        std::fs::create_dir_all(&taken).unwrap();
+        let mut early = server(vec![
+            (api.clone(), list.clone().into_bytes()),
+            (sums_url.clone(), sums.clone().into_bytes()),
+            (new_url.clone(), good.clone()),
+        ]);
+        let refused = install_release_with(None, Channel::Beta, false, &mut early, &dest, &taken)
+            .unwrap_err();
+        assert!(
+            refused.starts_with(
+                "Update 2.13.1-beta (29e8ac5) not installed: download failed (scratch folder: "
+            ),
+            "{refused}"
+        );
+        assert_eq!(std::fs::read_dir(&taken).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub")).unwrap(),
+            "running build"
+        );
 
         // Good: the newest build (not the one GitHub listed first) swaps in, old kept.
         let mut ok = server(vec![
