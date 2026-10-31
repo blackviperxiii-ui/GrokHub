@@ -32,7 +32,7 @@ const BUILDERS: &[&str] = &[
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
 const WRAPPED: &[(&str, usize, &str)] = &[
-    ("grokhub-agent/src/client.rs", 1, "XaiClient::once: guard_egress (chat, personal) to api.x.ai"),
+    ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns and /v1/responses/compact): XAI_MODEL_ENDPOINTS + guard_egress (chat, personal) to api.x.ai"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
     ("grokhub-agent/src/route/local_http.rs", 1, "HttpLocalRuntime: loopback-only chat/completions; no egress line (on-device)"),
@@ -205,4 +205,43 @@ fn an_unwrapped_fetch_fails_the_coverage_check() {
         vec!["grokhub-demo/src/feed.rs: 2 outbound builder(s), 1 listed as wrapped".to_string()]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// The model client posts only from `post_guarded`, after the endpoint allowlist and
+/// the guard, and every xAI URL it names is on [`XAI_MODEL_ENDPOINTS`] (compaction too).
+///
+/// [`XAI_MODEL_ENDPOINTS`]: crate::harness::XAI_MODEL_ENDPOINTS
+#[test]
+fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
+    let raw = fs::read_to_string(crates_dir().join("grokhub-agent/src/client.rs")).unwrap();
+    let text = production_text(&raw);
+    assert_eq!(text.matches(".post(").count(), 1, "one POST site");
+    let body = text
+        .split("fn post_guarded(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ").next())
+        .expect("post_guarded");
+    let allow = body
+        .find("XAI_MODEL_ENDPOINTS.contains(")
+        .expect("allowlist check");
+    let guard = body.find("guard_egress(").expect("guard");
+    let post = body.find(".post(url)").expect("post");
+    assert!(allow < guard && guard < post, "{body}");
+    let urls: Vec<&str> = text
+        .match_indices("\"https://api.x.ai/")
+        .map(|(at, _)| {
+            let rest = &text[at + 1..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    assert_eq!(
+        urls,
+        vec![
+            "https://api.x.ai/v1/responses",
+            "https://api.x.ai/v1/responses/compact"
+        ]
+    );
+    for url in &urls {
+        assert!(crate::harness::XAI_MODEL_ENDPOINTS.contains(url), "{url}");
+    }
 }

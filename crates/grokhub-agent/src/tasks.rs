@@ -469,7 +469,7 @@ fn format_output(slot: &TaskSlot, phase: Phase) -> String {
     let (truncated, bytes) = ring.slice_from(cursor);
     slot.read_at.store(end, Ordering::SeqCst);
     drop(ring);
-    let mut body = String::from_utf8_lossy(&bytes).into_owned();
+    let mut body = crate::tools::shell::cap_output(&String::from_utf8_lossy(&bytes));
     if truncated {
         body = format!("(earlier output dropped)\n{body}");
     }
@@ -840,6 +840,26 @@ mod tests {
         assert!(truncated);
         assert_eq!(bytes.len(), RING_CAP);
         assert_eq!(&bytes[bytes.len() - 3..], b"XYZ");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chatty_background_task_reads_back_head_and_tail_not_a_megabyte() {
+        let dir = scratch("chatty");
+        let hub = TaskHub::new("chatty");
+        remember(&hub);
+        let id = hub
+            .spawn(&dir, "echo FIRST; seq 1 60000; echo LAST")
+            .expect("spawn");
+        let text = hub.read_output(&id, 5_000).expect("output");
+        assert!(text.contains("status: exited"), "{}", &text[..80]);
+        assert!(text.len() < 25_000, "{}", text.len());
+        assert!(
+            text.contains("FIRST") && text.contains("LAST"),
+            "head and tail kept"
+        );
+        assert!(text.contains("output truncated"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
