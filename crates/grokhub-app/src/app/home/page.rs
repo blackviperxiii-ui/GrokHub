@@ -121,6 +121,10 @@ impl Cabin {
             match act {
                 ModuleAction::OpenChat(text) => self.send_home_to_chat(text),
                 ModuleAction::Nav(id) => self.set_nav_id(id),
+                ModuleAction::Settings(sec) => {
+                    self.set_nav_id("settings");
+                    self.settings_sec = sec;
+                }
             }
         }
     }

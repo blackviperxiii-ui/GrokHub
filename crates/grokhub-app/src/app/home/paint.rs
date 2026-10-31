@@ -16,6 +16,8 @@ use super::super::*;
 pub(super) enum ModuleAction {
     OpenChat(String),
     Nav(&'static str),
+    /// Settings, opened on this section (a bare `Nav("settings")` lands on Account).
+    Settings(SettingsSec),
 }
 
 pub(super) fn paint_module(
@@ -41,9 +43,9 @@ pub(super) fn paint_module(
         "pulse" => paint_pulse(cabin, ui, size, &mut actions),
         "pc_loadout" => paint_pc_loadout(ui, size, &mut actions),
         "streak" => paint_streak_mod(cabin, ui, size),
-        "usage" => paint_usage(ui, size, &mut actions),
+        "usage" => paint_usage(cabin, ui, size, &mut actions),
         "storage" => paint_storage(ui, size, &mut actions),
-        "game_mode" => paint_game_mode(ui),
+        "game_mode" => paint_game_mode(cabin, ui, size, &mut actions),
         "connection" => paint_connection(ui, size, &mut actions),
         "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
@@ -55,11 +57,70 @@ pub(super) fn paint_module(
 
 /// A module card that fills its slot, so stacked slots read as one packed grid
 /// instead of a short card with empty space under it.
-fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     super::super::loadout_home::card(ui, |ui| {
         ui.set_min_height(ui.available_height());
         add(ui);
-    });
+    })
+}
+
+/// The whole card is a button too, so a Small tile with no room for a pill
+/// still goes somewhere. Pills inside keep their own clicks.
+fn card_clicked(ui: &mut egui::Ui, resp: &egui::Response, salt: &str, tip: &str) -> bool {
+    ui.interact(resp.rect, ui.id().with(salt), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tip)
+        .clicked()
+}
+
+/// Big number, its caption, and an optional second line for one tile.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TileText {
+    pub big: String,
+    pub caption: String,
+    pub detail: Option<String>,
+    pub tone: Tone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tone {
+    Normal,
+    Warn,
+    Alert,
+    Quiet,
+}
+
+fn tone_color(t: Tone) -> egui::Color32 {
+    match t {
+        Tone::Normal => crate::theme::fg(),
+        Tone::Warn => crate::theme::amber(),
+        Tone::Alert => crate::theme::signal_red(),
+        Tone::Quiet => crate::theme::muted(),
+    }
+}
+
+fn paint_tile_text(ui: &mut egui::Ui, t: &TileText, size: ModuleSize) {
+    ui.label(
+        RichText::new(&t.big)
+            .size(crate::theme::TYPE_TITLE)
+            .strong()
+            .color(tone_color(t.tone)),
+    );
+    ui.label(
+        RichText::new(&t.caption)
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
+    );
+    if size != ModuleSize::Small {
+        if let Some(d) = &t.detail {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(d)
+                    .size(crate::theme::TYPE_BODY)
+                    .color(crate::theme::fg()),
+            );
+        }
+    }
 }
 
 /// Shown under empty streak tiles so seven grey boxes explain themselves.
@@ -460,24 +521,63 @@ fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
     });
 }
 
-fn paint_usage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
-    card(ui, |ui| {
+fn paint_usage(
+    cabin: &Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    actions: &mut Vec<ModuleAction>,
+) {
+    let t = usage_text(
+        grokhub_core::tokens_today(&cabin.usage),
+        cabin.cfg.daily_token_budget,
+        cabin.harness.router.budget.week,
+        cabin.cfg.weekly_spend_cap_usd,
+    );
+    let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
-        ui.label(
-            RichText::new("—")
-                .size(crate::theme::TYPE_TITLE)
-                .strong()
-                .color(crate::theme::fg()),
-        );
-        ui.label(
-            RichText::new("No usage yet today")
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
-        );
+        paint_tile_text(ui, &t, size);
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Budget") {
-            actions.push(ModuleAction::Nav("settings"));
+            actions.push(ModuleAction::Settings(SettingsSec::Behavior));
         }
     });
+    if card_clicked(ui, &resp, "home-usage", "Daily token budget") {
+        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+    }
+}
+
+/// Today's tokens against the daily cap, plus this week's spend when known.
+pub(super) fn usage_text(
+    used: u64,
+    cap: u64,
+    week: Option<crate::app::budget_ui::WeekSpend>,
+    week_cap_usd: u32,
+) -> TileText {
+    use grokhub_core::{budget_level, compact_tokens, BudgetLevel};
+    let caption = if cap == 0 {
+        "Tokens today · no daily cap".to_string()
+    } else {
+        let pct = used.saturating_mul(100) / cap.max(1);
+        format!("Tokens today · {pct}% of {}", compact_tokens(cap))
+    };
+    let tone = match budget_level(used, cap) {
+        Some(BudgetLevel::Over) => Tone::Alert,
+        Some(BudgetLevel::Near) => Tone::Warn,
+        _ if used == 0 => Tone::Quiet,
+        _ => Tone::Normal,
+    };
+    let detail = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
+        if week_cap_usd > 0 {
+            format!("${:.2} of ${week_cap_usd} this week", w.usd)
+        } else {
+            format!("${:.2} this week", w.usd)
+        }
+    });
+    TileText {
+        big: compact_tokens(used),
+        caption,
+        detail,
+        tone,
+    }
 }
 
 fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
@@ -505,33 +605,131 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
     });
 }
 
-fn paint_game_mode(ui: &mut egui::Ui) {
-    card(ui, |ui| {
-        header(ui, false, "Game Mode", "OFF", crate::theme::muted());
-        ui.label(
-            RichText::new("No game running")
-                .size(crate::theme::TYPE_BODY)
-                .color(crate::theme::muted()),
-        );
+fn paint_game_mode(
+    cabin: &mut Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    actions: &mut Vec<ModuleAction>,
+) {
+    // Process names only (game_guard): no handle to, or read of, any game.
+    let guard = grokhub_desktop::game_guard::peek();
+    let game = cabin.game_running().and_then(|id| {
+        let (_, games) = cabin.steam_library(now_ms());
+        games
+            .iter()
+            .find(|g| g.app_id == id)
+            .map(|g| g.name.clone())
     });
+    let local_on = grokhub_agent::route::local::switched_on();
+    let paused = local_on
+        .then(grokhub_agent::route::local_gov::paused)
+        .unwrap_or(false);
+    let t = game_mode_text(guard, game.as_deref(), paused);
+    let on = guard.gaming || guard.anticheat.is_some();
+    let resp = card(ui, |ui| {
+        header(
+            ui,
+            false,
+            "Game Mode",
+            if on { "ON" } else { "OFF" },
+            if on {
+                crate::theme::amber()
+            } else {
+                crate::theme::muted()
+            },
+        );
+        paint_tile_text(ui, &t, size);
+        if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Library") {
+            actions.push(ModuleAction::Nav("library"));
+        }
+    });
+    if card_clicked(ui, &resp, "home-game-mode", "Open Library") {
+        actions.push(ModuleAction::Nav("library"));
+    }
+}
+
+/// What the game guard sees, in words. Never reads game data itself.
+pub(super) fn game_mode_text(
+    guard: grokhub_core::game_guard::GameGuard,
+    game: Option<&str>,
+    local_paused: bool,
+) -> TileText {
+    let playing = guard.gaming || guard.anticheat.is_some();
+    let big = match (playing, game) {
+        (true, Some(name)) => name.to_string(),
+        (true, None) => "Game running".to_string(),
+        (false, _) => "No game running".to_string(),
+    };
+    let caption = match (guard.anticheat, guard.idle_anticheat) {
+        (Some(ac), _) => format!("{ac} active · Loadout stays hands-off"),
+        (None, Some(ac)) => format!("{ac} installed · idle"),
+        (None, None) if playing => "Desktop control paused while you play".to_string(),
+        (None, None) => "Watching for games by process name only".to_string(),
+    };
+    let detail = local_paused.then(|| "Local AI paused to keep the GPU free".to_string());
+    TileText {
+        big,
+        caption,
+        detail,
+        tone: if playing { Tone::Warn } else { Tone::Quiet },
+    }
 }
 
 fn paint_connection(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
-    card(ui, |ui| {
+    let facts = super::live::live_facts();
+    let t = connection_text(
+        grokhub_agent::route::connectivity::state(),
+        grokhub_agent::route::local::switched_on(),
+        &facts,
+    );
+    let resp = card(ui, |ui| {
         header(ui, false, "Connection", "", crate::theme::fg());
-        ui.label(
-            RichText::new("0 B")
-                .size(crate::theme::TYPE_TITLE)
-                .strong()
-                .color(crate::theme::fg()),
-        );
-        ui.label(
-            RichText::new("SENT TO CLOUD · LOCAL ONLY")
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
-        );
+        paint_tile_text(ui, &t, size);
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Privacy") {
-            actions.push(ModuleAction::Nav("settings"));
+            actions.push(ModuleAction::Settings(SettingsSec::Privacy));
         }
     });
+    if card_clicked(ui, &resp, "home-connection", "What left this PC") {
+        actions.push(ModuleAction::Settings(SettingsSec::Privacy));
+    }
+}
+
+/// Online state, local model, and how many sends left this PC in a day.
+/// The log counts sends, not bytes, so the tile says sends.
+pub(super) fn connection_text(
+    net: grokhub_agent::route::connectivity::NetState,
+    local_on: bool,
+    facts: &super::live::LiveFacts,
+) -> TileText {
+    use grokhub_agent::route::connectivity::NetState;
+    let net_word = match net {
+        NetState::Online => "Online",
+        NetState::Degraded => "Spotty",
+        NetState::Offline => "Offline",
+    };
+    let local = match (local_on, facts.local_ready) {
+        (true, true) => "local AI ready",
+        (true, false) => "local AI not ready",
+        (false, _) => "local AI off",
+    };
+    let big = match facts.sends_24h {
+        Some(1) => "1 send".to_string(),
+        Some(n) => format!("{n} sends"),
+        None => "—".to_string(),
+    };
+    let detail = facts
+        .top_dest
+        .as_ref()
+        .filter(|_| facts.sends_24h.unwrap_or(0) > 0)
+        .map(|d| format!("Mostly to {d} · last 24 h"));
+    TileText {
+        big,
+        caption: format!("{net_word} · {local}"),
+        detail,
+        tone: match net {
+            NetState::Online => Tone::Normal,
+            NetState::Degraded => Tone::Warn,
+            NetState::Offline => Tone::Alert,
+        },
+    }
 }
