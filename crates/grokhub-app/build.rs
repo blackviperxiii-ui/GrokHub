@@ -182,7 +182,7 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon(ico.to_str().expect("grokhub.ico path"));
-    res.set("ProductName", "GrokHub");
-    res.set("FileDescription", "GrokHub");
+    res.set("ProductName", "Loadout");
+    res.set("FileDescription", "Loadout");
     res.compile().expect("embed grokhub.ico into grokhub.exe");
 }

@@ -51,8 +51,12 @@ impl SessionLock {
             .open(path)
             .map_err(|err| format!("desktop lock: {err}"))?;
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        let busy = format!(
+            "Another {} process holds the desktop session.",
+            grokhub_core::brand::product_name()
+        );
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-            .map_err(|_| "Another GrokHub process holds the desktop session.".to_string())?;
+            .map_err(|_| busy)?;
         Ok(Self { file })
     }
 }

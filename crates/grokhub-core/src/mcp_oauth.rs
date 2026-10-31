@@ -192,7 +192,7 @@ pub fn parse_auth_server(v: &Value, server_url: &str) -> Result<AuthServer, Stri
 /// RFC 7591 registration for a public native client on the loopback redirect.
 pub fn registration_request(redirect_uri: &str) -> Value {
     json!({
-        "client_name": "GrokHub",
+        "client_name": crate::brand::product_name(),
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(
             registration_request("http://127.0.0.1:5000/callback"),
             json!({
-                "client_name": "GrokHub",
+                "client_name": "Loadout",
                 "redirect_uris": ["http://127.0.0.1:5000/callback"],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],

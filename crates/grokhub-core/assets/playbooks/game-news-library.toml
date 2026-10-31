@@ -1,4 +1,4 @@
-# GrokHub playbook: Steam library, sales, and patch news (read-only).
+# Loadout playbook: Steam library, sales, and patch news (read-only).
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id

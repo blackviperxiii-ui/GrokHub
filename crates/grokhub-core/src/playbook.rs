@@ -663,7 +663,9 @@ mod tests {
             ("task-general-copy", "Any task (copy)")
         );
         assert_eq!(p.phases, parse(BUILTIN[0]).unwrap().phases);
-        assert!(copy.starts_with("# GrokHub playbook"));
+        assert!(copy.starts_with(
+            "# Loadout playbook: slim fallback for tasks and repairs when no specialist fits.\n"
+        ));
         // A step named "name" inside a phase is left alone.
         assert_eq!(copy.matches("name = \"Look\"").count(), 1);
     }
