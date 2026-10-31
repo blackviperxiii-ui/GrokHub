@@ -109,6 +109,45 @@ impl HttpLocalRuntime {
     }
 }
 
+/// How long a `/props` answer (or its absence) is trusted before asking again.
+const PROPS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+type PropsCache =
+    std::sync::Mutex<std::collections::HashMap<String, (Option<u64>, std::time::Instant)>>;
+
+fn props_cache() -> &'static PropsCache {
+    static CACHE: std::sync::OnceLock<PropsCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// `n_ctx` from a llama-server `/props` body: the per-slot window.
+fn n_ctx_from_props(v: &Value) -> Option<u64> {
+    v.pointer("/default_generation_settings/n_ctx")
+        .or_else(|| v.get("n_ctx"))
+        .and_then(Value::as_u64)
+        .filter(|&n| n >= 256)
+}
+
+impl HttpLocalRuntime {
+    fn fetch_n_ctx(&self) -> Option<u64> {
+        if !self.loopback_ok() {
+            return None;
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(2))
+            .timeout_read(std::time::Duration::from_secs(2))
+            .build();
+        let v: Value = agent
+            .get(&format!("{}/props", self.base_url))
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .ok()?
+            .into_json()
+            .ok()?;
+        n_ctx_from_props(&v)
+    }
+}
+
 impl LocalRuntime for HttpLocalRuntime {
     fn classify(&self, text: &str, labels: &[&str]) -> Result<Value, String> {
         let labels_csv = labels.join(", ");
@@ -157,6 +196,25 @@ impl LocalRuntime for HttpLocalRuntime {
             on_delta(&text);
         }
         Ok(text)
+    }
+
+    fn context_tokens(&self) -> Option<u64> {
+        let now = std::time::Instant::now();
+        if let Some((n, at)) = props_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.base_url)
+        {
+            if now.duration_since(*at) < PROPS_TTL {
+                return *n;
+            }
+        }
+        let n = self.fetch_n_ctx();
+        props_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(self.base_url.clone(), (n, now));
+        n
     }
 
     fn chat_tools(
@@ -284,6 +342,27 @@ mod tests {
         let rt = HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
         let d = rt.difficulty("hard bug").expect("d");
         assert_eq!(d["d"], 0.5);
+    }
+
+    #[test]
+    fn the_device_window_comes_from_props() {
+        let fake = FakeServer::start(None);
+        let rt = HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
+        assert_eq!(rt.context_tokens(), Some(8_192));
+        let wrong = HttpLocalRuntime::new(fake.base_url(), "not-the-token");
+        assert_eq!(wrong.fetch_n_ctx(), None);
+    }
+
+    #[test]
+    fn n_ctx_reads_both_props_shapes_and_ignores_nonsense() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        assert_eq!(
+            n_ctx_from_props(&v(r#"{"default_generation_settings":{"n_ctx":4096}}"#)),
+            Some(4_096)
+        );
+        assert_eq!(n_ctx_from_props(&v(r#"{"n_ctx":16384}"#)), Some(16_384));
+        assert_eq!(n_ctx_from_props(&v(r#"{"n_ctx":0}"#)), None);
+        assert_eq!(n_ctx_from_props(&v(r#"{"model":"x"}"#)), None);
     }
 
     #[test]

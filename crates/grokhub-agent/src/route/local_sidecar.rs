@@ -1086,6 +1086,18 @@ pub mod fake_server {
             write_resp(stream, code, body);
             return Ok(());
         }
+        if first.starts_with("GET /props") {
+            if !auth_ok {
+                write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
+            } else {
+                write_resp(
+                    stream,
+                    "200 OK",
+                    r#"{"default_generation_settings":{"n_ctx":8192},"total_slots":1}"#,
+                );
+            }
+            return Ok(());
+        }
         if first.starts_with("POST /v1/chat/completions") {
             if !auth_ok {
                 write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
