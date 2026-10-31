@@ -1,11 +1,13 @@
 name: Release
 
 # A stable `vX.Y.Z` tag publishes Latest. A `vX.Y.Z-beta.N` tag publishes a
-# GitHub pre-release (never Latest) with the same assets. The nightly
-# schedule (~3 AM America/Chicago) and a manual run on `beta` publish
-# `vX.Y.Z-beta.N` from beta (N = commits since the newest stable tag); the
-# nightly skips when that tag already exists. Pushes to `beta` no longer
-# publish (they used to, on every squash-merge).
+# GitHub pre-release (never Latest) with the same assets. Every push to
+# `beta` (each merge), a manual run on `beta` and the nightly schedule
+# (~3 AM America/Chicago) publish `vX.Y.Z-beta.N` from beta (N = commits since
+# the newest stable tag), so the beta updater sees each merge. A newer beta
+# push cancels a build still running; the nightly skips when that tag already
+# exists. Merges made with github.token start no push runs, so auto-merge needs
+# AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
 # Each release carries Linux and Windows builds, the Tauri shell's bundles
 # (Linux, Windows, macOS), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
@@ -15,6 +17,9 @@ on:
   push:
     tags:
       - "v*"
+    # Runs from beta's own copy of this file, so it works before main has it.
+    branches:
+      - beta
   # Schedules fire from the default branch (main); SOURCE_REF makes them build beta.
   schedule:
     - cron: "0 8 * * *"
@@ -35,9 +40,10 @@ env:
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 jobs:
-  # Decides whether to build. Tags always build. Beta pre-releases come from the
-  # nightly or a manual run on beta, and skip when vX.Y.Z-beta.N already exists
-  # (no new beta commits since the last one). Manual runs on other branches skip.
+  # Decides whether to build. Tags always build. Beta pre-releases come from a
+  # push to beta, the nightly or a manual run on beta; the nightly skips when
+  # vX.Y.Z-beta.N already exists (no new beta commits since the last one).
+  # Manual runs on other branches skip.
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -46,7 +52,7 @@ jobs:
     outputs:
       build: ${{ steps.plan.outputs.build }}
       sha: ${{ steps.plan.outputs.sha }}
-      # true for the nightly, manual beta runs and vX.Y.Z-beta.N tags.
+      # true for beta pushes, the nightly, manual beta runs and vX.Y.Z-beta.N tags.
       beta: ${{ github.ref_type != 'tag' || contains(github.ref_name, '-beta.') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
