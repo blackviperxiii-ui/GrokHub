@@ -1,1 +1,0 @@
-- Every merge into `beta` publishes a new beta pre-release again, so the beta updater can take it right away; the nightly build stays as a backup.

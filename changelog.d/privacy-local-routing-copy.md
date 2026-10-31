@@ -1,1 +1,0 @@
-- Privacy: the on-device model copy now says how it's really used: the cloud first while it answers, this PC when it doesn't or you're offline, sensitive data kept here, loaded only when needed, and 18+ chats only to xAI or this PC.

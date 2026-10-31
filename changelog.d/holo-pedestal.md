@@ -1,1 +1,0 @@
-- Desktop companion: the holo pedestal she will stand on, drawn in the theme's colours with slow counter-turning rings, a fading light cone and drifting scanlines; still under reduced motion. Deck shots can preview it in the corner box (`GROKHUB_DECK_PEDESTAL=1`).

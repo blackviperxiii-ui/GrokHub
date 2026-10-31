@@ -1,1 +1,0 @@
-- Revert premature vstack AGENTS.md and Claude settings wiring; maintainer will ship agent setup as its own card.

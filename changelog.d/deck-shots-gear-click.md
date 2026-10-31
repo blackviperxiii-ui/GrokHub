@@ -1,1 +1,0 @@
-- Deck shots open Settings with the rail's gear instead of Ctrl+, so the 1100x720 Settings and Privacy shots land, and add the Windows proof pairs for slides 09–12.

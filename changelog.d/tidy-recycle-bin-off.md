@@ -1,1 +1,0 @@
-- Downloads tidy and desktop trash moves: refuse on a fixed drive whose Recycle Bin is turned off (policy or per-drive "delete right away"), and ask before deleting a file too big for the bin, so nothing is ever deleted for good.
