@@ -10,16 +10,19 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { REFRESH_MS, WEB_NOTE, WebAccess } from "./WebAccess";
+import { CERT_NOTE, REFRESH_MS, WEB_NOTE, WebAccess } from "./WebAccess";
 
-const OFF: Shape = { on: false, code: "", links: [] };
+const PRINT =
+  "3A:1F:00:9C:42:7E:D1:08:BB:65:2C:F4:90:1D:E7:53:6A:0B:C8:24:71:9E:F3:5D:86:2A:E0:47:1C:B9:D5:6F";
+const OFF: Shape = { on: false, code: "", links: [], fingerprint: "" };
 const ON: Shape = {
   on: true,
   code: "0123456789abcdef0123456789abcdef0123456789abcdef",
   links: [
-    "http://192.168.1.20:4620/#code=0123456789abcdef0123456789abcdef0123456789abcdef",
-    "http://127.0.0.1:4620/#code=0123456789abcdef0123456789abcdef0123456789abcdef",
+    "https://192.168.1.20:4620/#code=0123456789abcdef0123456789abcdef0123456789abcdef",
+    "http://127.0.0.1:41873/#code=0123456789abcdef0123456789abcdef0123456789abcdef",
   ],
+  fingerprint: PRINT,
 };
 
 describe("WebAccess", () => {
@@ -36,7 +39,7 @@ describe("WebAccess", () => {
     expect(screen.getByRole("heading", { name: "Web access Preview" })).toBeInTheDocument();
     expect(screen.getByText("Preview")).toHaveAttribute(
       "title",
-      "A preview: it works, but it runs over plain HTTP and has no sign-in beyond the pairing code.",
+      "A preview: it works over HTTPS with a certificate made on this computer, and has no sign-in beyond the pairing code.",
     );
 
     await userEvent.click(await screen.findByRole("button", { name: "Turn on web access" }));
@@ -44,6 +47,8 @@ describe("WebAccess", () => {
     expect(await screen.findByText(ON.links[0])).toBeInTheDocument();
     expect(screen.getByText(ON.links[1])).toBeInTheDocument();
     expect(screen.getByLabelText("Pairing code")).toHaveTextContent(ON.code);
+    expect(screen.getByText(CERT_NOTE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Certificate fingerprint")).toHaveTextContent(PRINT);
     expect(
       screen.getByText(
         "Web access ends when you turn it off or quit Loadout. After 30 minutes with no browser using it, the code changes and browsers pair again.",
@@ -72,6 +77,7 @@ describe("WebAccess", () => {
         on: true,
         code: "fedcba9876543210fedcba9876543210fedcba9876543210",
         links: ["http://127.0.0.1:4620/#code=fedcba9876543210fedcba9876543210fedcba9876543210"],
+        fingerprint: PRINT,
       };
       api.getWebAccess.mockResolvedValueOnce(ON).mockResolvedValue(renewed);
       render(<WebAccess />);

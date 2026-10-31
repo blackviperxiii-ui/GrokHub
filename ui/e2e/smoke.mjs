@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1304,6 +1305,7 @@ async function web(s) {
   const link = texts.find((t) => t.startsWith("http://127.0.0.1:"));
   if (!link || !link.endsWith(`#code=${code}`)) throw new Error(`no localhost pairing link: ${texts}`);
   console.log(`web access on: ${texts.length} link(s), a ${code.length}-character code`);
+  await shot(s, "settings-web-access");
   const origin = new URL(link).origin;
 
   const browser = await chromium.launch();
@@ -1342,6 +1344,23 @@ async function web(s) {
       throw new Error(`set_api_key from the web: ${JSON.stringify(refused)}`);
     }
     console.log(`the web can't set the key: ${JSON.stringify(refused.paired.error)}`);
+
+    // Port 4620 is HTTPS with the certificate whose fingerprint Settings shows.
+    const shown = await textOf(s, "[aria-label='Certificate fingerprint']");
+    const served = await new Promise((done, fail) => {
+      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, rejectUnauthorized: false }, () => {
+        done(sock.getPeerCertificate().fingerprint256);
+        sock.end();
+      });
+      sock.on("error", fail);
+    });
+    if (served !== shown) throw new Error(`HTTPS certificate ${served}, Settings shows ${shown}`);
+    // A browser that accepted the certificate pairs and loads the app over HTTPS.
+    const secure = await browser.newContext({ ignoreHTTPSErrors: true });
+    const tlsPage = await secure.newPage();
+    await tlsPage.goto(`https://127.0.0.1:4620/#code=${code}`);
+    await tlsPage.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
+    console.log(`web access over HTTPS: paired, certificate ${shown.slice(0, 11)}… matches Settings`);
   } finally {
     await browser.close();
   }

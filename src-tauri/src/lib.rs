@@ -23,6 +23,7 @@ pub mod plugins;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_tls;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -940,6 +941,7 @@ fn set_web_access(
         web.stop();
         return Ok(web.view());
     }
+    let config_dir = app.state::<ShellState>().config_dir.clone();
     let dispatch_app = app.clone();
     let dispatch: remote::Dispatch =
         Arc::new(move |command, args| remote_call(&dispatch_app, command, &args));
@@ -951,6 +953,7 @@ fn set_web_access(
     web.start(
         std::net::Ipv4Addr::UNSPECIFIED.into(),
         remote::PORT,
+        Some(&config_dir),
         dispatch,
         assets,
     )
