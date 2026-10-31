@@ -1,1 +1,0 @@
-- New Game watcher setting for Counter-Strike 2 and Dota 2 (off by default): it writes one small Game State Integration file, the feed Valve supports for this, into the game's own config folder and listens for the match on this computer only. Turning it off removes the file.

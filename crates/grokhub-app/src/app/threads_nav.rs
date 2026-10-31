@@ -554,7 +554,7 @@ impl Cabin {
         self.remember_last_chat_tab();
     }
 
-    /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
+    /// Launch and tray restore leave an empty chat draft ready behind Home.
     /// The previous transcript and pin stay on that thread in History.
     /// A reply that is still running stays on the thread that started it.
     pub(super) fn open_fresh_home(&mut self) {

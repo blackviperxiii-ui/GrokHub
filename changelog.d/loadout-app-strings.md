@@ -1,1 +1,0 @@
-- Status lines, Settings notes, confirm sheets and change reports in the cabin now say "Loadout" instead of "GrokHub". Folder, keychain and update paths keep their old names, so nothing moves.

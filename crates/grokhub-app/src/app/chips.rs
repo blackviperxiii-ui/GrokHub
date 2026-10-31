@@ -527,7 +527,11 @@ impl Cabin {
     /// (habit / static / stage pool when the LLM row is not ready). A thread
     /// with messages must not clear that pool.
     pub(super) fn composer_chips(&self) -> Vec<QuickChip> {
-        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
+        // The fixed slide-02 four are for deck screenshots only. Real chats get
+        // the ranked pool (those four live on as seeds inside it).
+        if super::loadout_home::deck_shot_requested()
+            && super::loadout_home::hangout_composer_layout(self.messages.is_empty())
+        {
             return super::loadout_home::hangout_quick_chips();
         }
         let mut chips = self.visible_chips.clone();

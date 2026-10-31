@@ -29,6 +29,12 @@ struct Header {
     renamed: bool,
 }
 
+/// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
+const SERVER_COMPACTION_RECORD: &str = "server_compaction";
+
+/// What a transcript shows where xAI folded the earlier turns.
+pub const COMPACTED_NOTE: &str = "Earlier conversation compacted";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Record {
     Item(InputItem),
@@ -555,6 +561,9 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
             Record::Item(InputItem::FunctionCallOutput { output, .. }) => {
                 out.push_str(&format!("\n## Tool result\n\n{output}\n"));
             }
+            Record::Item(InputItem::ServerCompaction { .. }) => {
+                out.push_str(&format!("\n_{COMPACTED_NOTE}_\n"));
+            }
             Record::Usage { usage, meter } => {
                 let line = usage_label(
                     usage.input_tokens,
@@ -906,6 +915,11 @@ fn parse_record(value: &Value) -> Option<Record> {
             call_id: string_field(value, "call_id"),
             output: string_field(value, "output"),
         })),
+        SERVER_COMPACTION_RECORD => value
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(InputItem::server_compaction)
+            .map(Record::Item),
         "usage" => Some(Record::Usage {
             usage: Usage {
                 input_tokens: u64_field(value, "input_tokens"),
@@ -1000,6 +1014,12 @@ fn item_json(item: &InputItem) -> Value {
             "type": "function_call_output",
             "call_id": call_id,
             "output": output,
+        }),
+        // Its own type: `compaction` is this file's marker line. The item stays
+        // the exact text xAI sent, as a string.
+        InputItem::ServerCompaction { raw } => json!({
+            "type": SERVER_COMPACTION_RECORD,
+            "raw": raw,
         }),
     }
 }
@@ -1474,5 +1494,61 @@ mod tests {
         assert!(md.contains("hi there"));
         assert!(!md.contains("Talk style for this turn"));
         assert!(!md.contains("cabin-volatile"));
+    }
+
+    /// An xAI compaction item is opaque: saved, loaded, rewritten (rename) and
+    /// loaded again, it is the exact text that came in, spacing and escapes too.
+    #[test]
+    fn a_server_compaction_item_round_trips_byte_for_byte() {
+        let (_dir, _guard) = isolated("server-compact");
+        let id = "native-server-compact";
+        let raw =
+            r#"{ "id":"cmp_7", "type":"compaction","encrypted_content":"gAAAAB+x/y==\u00e9" }"#;
+        let item = InputItem::server_compaction(raw).unwrap();
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("OLD_TOPIC"), assistant("old reply")],
+            &Usage::default(),
+            "API credits",
+            "OLD_TOPIC",
+        )
+        .unwrap();
+        record_compaction(
+            id,
+            "/work",
+            "grok-4.7",
+            &[item.clone(), assistant("keep me")],
+            &Usage::default(),
+            "API credits",
+        )
+        .unwrap();
+        let want = vec![
+            InputItem::ServerCompaction {
+                raw: raw.to_string(),
+            },
+            assistant("keep me"),
+        ];
+        assert_eq!(resume_input(id).unwrap(), want);
+        rename_session(id, "Renamed").unwrap();
+        let loaded = load_session(id).unwrap();
+        assert_eq!(loaded.title, "Renamed");
+        assert_eq!(loaded.input(), want);
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(
+            file.contains(r#"{"raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
+            "{file}"
+        );
+        assert_eq!(
+            export_markdown(id).unwrap(),
+            "# Renamed\n\n## Usage\n\n0 in · 0 out · API credits\n\n\
+             _Earlier conversation compacted_\n\n## Assistant\n\nkeep me\n\n\
+             ## Usage\n\n0 in · 0 out · API credits\n"
+        );
+        assert_eq!(
+            transcript_pairs(&loaded),
+            vec![("assistant".to_string(), "keep me".to_string())]
+        );
     }
 }

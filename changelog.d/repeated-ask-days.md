@@ -1,1 +1,0 @@
-- Repeated-ask offers now count the same ask at the same hour on different days as separate times, so asking for the same thing every evening triggers the offer instead of overwriting one entry.

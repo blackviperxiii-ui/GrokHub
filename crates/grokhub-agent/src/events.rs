@@ -402,11 +402,13 @@ impl Engine for NativeEngine {
                 started,
                 usage,
                 error,
+                server,
             } => {
                 emit(AcpEvent::Compact {
                     started,
                     usage: grok_usage(&usage, kind, meter_used, meter_limit),
                     error,
+                    server,
                 });
             }
             LoopEvent::Usage(total) => {
@@ -612,6 +614,7 @@ impl NativeEngine {
             started: true,
             usage: grok_usage(&self.usage, kind, used, limit),
             error: None,
+            server: None,
         });
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
         let compact_result = crate::compact::compact_after_flush(
@@ -633,8 +636,8 @@ impl NativeEngine {
             ));
         }
         match compact_result {
-            Ok(extra) => {
-                self.usage.add(&extra);
+            Ok(done) => {
+                self.usage.add(&done.usage);
                 let delta = self.usage.saturating_delta(&before);
                 let _ = crate::session::record_compaction(
                     &session,
@@ -650,6 +653,7 @@ impl NativeEngine {
                     started: false,
                     usage: usage.clone(),
                     error: None,
+                    server: done.server,
                 });
                 emit(AcpEvent::Usage(usage));
                 emit(AcpEvent::Done {
@@ -661,6 +665,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some("cancelled".into()),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "cancelled".into(),
@@ -671,6 +676,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some(message),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "end_turn".into(),
@@ -1345,7 +1351,7 @@ mod tests {
         )));
         assert!(events.iter().any(|ev| matches!(
             ev,
-            AcpEvent::Compact { started: false, error: None, usage }
+            AcpEvent::Compact { started: false, error: None, usage, server: None }
                 if usage.cost_in_usd_ticks == 4
                     && usage.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
                     && usage.context_tokens_used > 0

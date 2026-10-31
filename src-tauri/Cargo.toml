@@ -3,7 +3,7 @@
 # webview system libraries. See docs/cross-platform/README.md.
 [package]
 name = "grokhub-shell"
-version = "3.4.0"
+version = "3.5.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
