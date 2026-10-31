@@ -116,6 +116,20 @@ fn append_signal_inner(dir: &Path, signal: &CardSignal) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Every signal in the rotated and active logs, oldest first. Unreadable
+/// lines are skipped.
+pub fn read_signals(dir: &Path) -> Vec<CardSignal> {
+    ["card_signals.jsonl.1", "card_signals.jsonl"]
+        .iter()
+        .filter_map(|name| fs::read_to_string(dir.join(name)).ok())
+        .flat_map(|text| {
+            text.lines()
+                .filter_map(|l| serde_json::from_str::<CardSignal>(l).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn count_lines(path: &Path) -> std::io::Result<usize> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text.lines().filter(|line| !line.trim().is_empty()).count()),

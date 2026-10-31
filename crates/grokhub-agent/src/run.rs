@@ -2993,6 +2993,8 @@ mod tests {
 
     #[test]
     fn desktop_tools_follow_the_switch_halt_and_lock() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = workspace("desk");
         let shot = |id: &str| ScriptTurn {
             text: String::new(),
@@ -3714,7 +3716,9 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 InputItem::Message { role, content } if role == "user" => match content.first() {
-                    Some(ContentPart::InputText(t)) => Some(t.clone()),
+                    Some(ContentPart::InputText(t)) => {
+                        Some(crate::prefix_cache::visible_user_text(t).to_string())
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -4259,6 +4263,8 @@ mod tests {
 
     #[test]
     fn casual_chat_gets_the_short_style_and_a_later_repair_swaps_it_in_place() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         use grokhub_core::talk::{TalkStyle, VOLATILE_SAFETY_CLOSER};
         let dir = workspace("talk-short");
         let conv = format!("talk-short-{}", std::process::id());
@@ -4317,6 +4323,71 @@ mod tests {
         let repair = short.replace(&TalkStyle::Short.block(), &TalkStyle::Findings.block());
         assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
         crate::checkpoint::set_turn_style(&conv, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The default stable prompt: the style rides in the turn's own user message,
+    /// the system message never changes, and earlier turns stay as sent.
+    #[test]
+    fn with_the_stable_prompt_the_style_rides_in_the_user_turn() {
+        use grokhub_core::talk::{TalkStyle, VOLATILE_SAFETY_CLOSER};
+        crate::prefix_cache::set_enabled_for_tests(Some(true));
+        let dir = workspace("talk-stable");
+        let conv = format!("talk-stable-{}", std::process::id());
+        let voice = grokhub_core::personality::builtin("pirate").prompt_block();
+        let system = format!("CABIN RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}");
+        let script = scripted(vec![turn("Ahoy!", Vec::new()), turn("Fixed.", Vec::new())]);
+        let mut history = Vec::new();
+        for (text, style) in [
+            ("hi there", TalkStyle::Short),
+            ("wifi broke", TalkStyle::Findings),
+        ] {
+            crate::checkpoint::set_turn_style(&conv, Some(style));
+            let (out, _) = talk_turn(
+                &script,
+                &dir,
+                &conv,
+                &system,
+                Gate::phase_readonly(),
+                &gate::ClosedPermits,
+                &mut history,
+                text,
+            );
+            assert_eq!(out.stop, StopReason::EndTurn);
+        }
+        let seen = script.seen.lock().unwrap().clone();
+        assert_eq!(system_text(&seen[0]), system_text(&seen[1]));
+        assert!(!system_text(&seen[0]).contains("Talk style for this turn"));
+        let users = |req: &[InputItem]| -> Vec<String> {
+            req.iter()
+                .filter_map(|item| match item {
+                    InputItem::Message { role, content } if role == "user" => {
+                        match content.first() {
+                            Some(ContentPart::InputText(t)) => Some(t.clone()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let first = users(&seen[0]);
+        let second = users(&seen[1]);
+        assert!(first[0].contains(&TalkStyle::Short.block()));
+        assert_eq!(
+            crate::prefix_cache::visible_user_text(&first[0]),
+            "hi there"
+        );
+        // Turn one goes out again byte for byte; turn two carries the new style.
+        assert_eq!(second[0], first[0]);
+        assert!(second[1].contains(&TalkStyle::Findings.block()));
+        assert!(!second[1].contains(&TalkStyle::Short.block()));
+        assert_eq!(
+            crate::prefix_cache::visible_user_text(&second[1]),
+            "wifi broke"
+        );
+        crate::checkpoint::set_turn_style(&conv, None);
+        crate::prefix_cache::set_enabled_for_tests(None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4443,6 +4514,8 @@ mod tests {
 
     #[test]
     fn the_picked_playbook_reaches_the_prompt_and_a_later_turn_swaps_or_drops_it() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         use grokhub_core::playbook::{parse, with_playbook, BUILTIN};
         let dir = workspace("playbook-prompt");
         let conv = format!("playbook-prompt-{}", std::process::id());
@@ -4501,6 +4574,8 @@ mod tests {
 
     #[test]
     fn the_approval_card_is_identical_in_every_style_and_personality() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         use grokhub_core::talk::{restyle, TalkStyle};
         let styles = [
             TalkStyle::Short,
