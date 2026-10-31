@@ -325,6 +325,8 @@ const HIDDEN_HEARTBEAT_MS: u64 = 400;
 /// How long a History query sits still before it runs. Every keystroke walks every
 /// thread, so the cabin waits for the typing to settle.
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
+/// How long History's armed "Delete all" waits for the confirming click.
+const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -559,6 +561,9 @@ pub struct Cabin {
     /// Last query the debounce saw, so typing kicks a search without a button.
     history_q_seen: String,
     history_q_at: Option<Instant>,
+    /// When History's "Delete all" was armed; a second click inside
+    /// [`DELETE_ALL_ARM`] deletes, anything later re-arms.
+    history_delete_armed_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
     /// Thread id for the quiet archive/unarchive Undo toast.
     archive_undo: Option<String>,
@@ -1203,6 +1208,7 @@ impl Cabin {
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
+            history_delete_armed_at: None,
             history_hits: vec![],
             archive_undo: None,
             chat_archive_day: None,
@@ -1680,6 +1686,7 @@ impl Cabin {
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
+            history_delete_armed_at: None,
             history_hits: Vec::new(),
             archive_undo: None,
             chat_archive_day: None,

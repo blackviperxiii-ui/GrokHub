@@ -901,6 +901,33 @@ impl Cabin {
         self.persist();
     }
 
+    /// History's "Delete all" button. The first click only arms it; a second
+    /// click within [`DELETE_ALL_ARM`] wipes every chat. Returns true when it
+    /// deleted.
+    pub(super) fn click_delete_all_history(&mut self, now: Instant) -> bool {
+        match self.history_delete_armed_at.take() {
+            Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => {
+                self.delete_all_history();
+                true
+            }
+            _ => {
+                self.history_delete_armed_at = Some(now);
+                false
+            }
+        }
+    }
+
+    /// True while "Delete all" waits for its confirming click; clears a stale arm.
+    pub(super) fn history_delete_armed(&mut self, now: Instant) -> bool {
+        let armed = self
+            .history_delete_armed_at
+            .is_some_and(|at| now.saturating_duration_since(at) <= DELETE_ALL_ARM);
+        if !armed {
+            self.history_delete_armed_at = None;
+        }
+        armed
+    }
+
     pub(super) fn nav_from_id(id: &str) -> Nav {
         match id {
             "settings" => Nav::Settings,
