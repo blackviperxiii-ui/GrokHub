@@ -1,1 +1,0 @@
-- Ask / Auto / Always on the composer stick until you change them; Always asks for confirm once, then stays on across new chats and restarts.

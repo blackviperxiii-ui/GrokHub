@@ -1,1 +1,0 @@
-- Pulse: opt-in LAN 3D printer alerts (Moonraker/Klipper and OctoPrint) notify on finish, fail, pause, or filament runout with progress and an optional camera snapshot; pause/cancel stay behind the approval card.

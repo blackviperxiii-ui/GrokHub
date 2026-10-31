@@ -1,1 +1,0 @@
-- Local AI: turning it off mid-answer now frees the model as soon as that answer ends, a keep-warm load or a request already on its way can't restart it after it's off, and the "Using local" chip clears when Local AI is off or nothing can answer.

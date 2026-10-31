@@ -1,2 +1,0 @@
-- Late-night wind-down: a switch that can't be saved now stays as it was, so Pulse and Settings never act on a change that isn't on disk.
-- Privacy: the on-device line now says small jobs run on this PC only when it has room, and use Grok while it's busy.
