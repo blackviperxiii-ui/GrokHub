@@ -172,6 +172,7 @@ pub mod windshield;
 pub mod wire;
 pub mod workboard;
 pub mod xai_signin;
+pub mod xp;
 
 pub use amr::{
     AmrError, AmrStore, Edge, EdgeRel, LegacyMemory, MemoryBackend, MemoryEngine, Node, NodeDraft,
