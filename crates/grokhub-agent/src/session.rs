@@ -542,7 +542,10 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
                 } else {
                     "User"
                 };
-                out.push_str(&format!("\n## {heading}\n\n{}\n", message_text(content)));
+                out.push_str(&format!(
+                    "\n## {heading}\n\n{}\n",
+                    visible_text(role, content)
+                ));
             }
             Record::Item(InputItem::FunctionCall {
                 name, arguments, ..
@@ -575,7 +578,7 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
     for record in &visible_records(&info.records) {
         match record {
             Record::Item(InputItem::Message { role, content }) if role != "system" => {
-                let text = message_text(content);
+                let text = visible_text(role, content);
                 if text.trim().is_empty() {
                     continue;
                 }
@@ -598,6 +601,17 @@ pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
         }
     }
     pairs
+}
+
+/// A message as the person saw it: a user turn loses the `<cabin-volatile>`
+/// notes the cabin put in front of it for the model.
+fn visible_text(role: &str, content: &[ContentPart]) -> String {
+    let text = message_text(content);
+    if role == "user" {
+        crate::prefix_cache::visible_user_text(&text).to_string()
+    } else {
+        text
+    }
 }
 
 fn message_text(content: &[ContentPart]) -> String {
@@ -1427,5 +1441,38 @@ mod tests {
         assert!(!pairs.iter().any(|(_, text)| text.contains("OLD_TOPIC")));
         let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
         assert!(raw.contains("\"type\":\"compaction\""), "{raw}");
+    }
+
+    #[test]
+    fn a_reopened_chat_shows_what_was_typed_not_the_cabin_notes() {
+        let (_dir, _guard) = isolated("volatile");
+        let id = "native-volatile";
+        let stored = crate::prefix_cache::user_message_text(
+            "Talk style for this turn: casual chat.",
+            "hi there",
+        );
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user(&stored), assistant("hey")],
+            &Usage::default(),
+            "SuperGrok pool",
+            "hi there",
+        )
+        .unwrap();
+        let loaded = load_session(id).unwrap();
+        // The model keeps getting the turn exactly as sent, so the cache holds.
+        assert_eq!(loaded.input()[0], user(&stored));
+        let pairs = transcript_pairs(&loaded);
+        // The helper's turn also carries a picture, shown as its marker.
+        assert_eq!(
+            pairs[0],
+            ("user".to_string(), "hi there\n[image]".to_string())
+        );
+        let md = export_markdown(id).unwrap();
+        assert!(md.contains("hi there"));
+        assert!(!md.contains("Talk style for this turn"));
+        assert!(!md.contains("cabin-volatile"));
     }
 }

@@ -1088,7 +1088,8 @@ pub fn current_class() -> &'static str {
     CLASS.with(std::cell::Cell::get)
 }
 
-/// The newest user text in a request (difficulty only; never stored).
+/// The newest user text in a request (difficulty only; never stored), without
+/// the `<cabin-volatile>` notes, so style or playbook words never steer routing.
 pub(crate) fn last_user_text(input: &[InputItem]) -> (String, bool) {
     let mut image = false;
     let mut text = String::new();
@@ -1105,6 +1106,7 @@ pub(crate) fn last_user_text(input: &[InputItem]) -> (String, bool) {
             }
         }
     }
+    let text = crate::prefix_cache::visible_user_text(&text).to_string();
     (text, image)
 }
 

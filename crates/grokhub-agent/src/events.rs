@@ -185,7 +185,10 @@ impl NativeEngine {
             .history
             .iter()
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
-            .map(crate::compact::message_text)
+            .map(|item| {
+                let text = crate::compact::message_text(item);
+                crate::prefix_cache::visible_user_text(&text).to_string()
+            })
             .rev()
             .take(2)
             .collect::<Vec<_>>()
@@ -969,6 +972,8 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1359,7 +1364,10 @@ mod tests {
                 .contains("This session is being continued")));
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "remember the harbor"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "remember the harbor"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item).contains("/compact")));
@@ -1397,7 +1405,10 @@ mod tests {
         let input = loaded.input();
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "keep this"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "keep this"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item)

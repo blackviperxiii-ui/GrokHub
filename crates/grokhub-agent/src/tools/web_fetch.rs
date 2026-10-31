@@ -877,6 +877,8 @@ mod tests {
 
     #[test]
     fn web_fetch_rules_deny_ask_allow_and_unattended() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let url = r#"{"url":"https://example.com/a"}"#;
         let ws = Path::new(".");
         let deny = parse_rule("WebFetch(domain:example.com)", Action::Deny).unwrap();

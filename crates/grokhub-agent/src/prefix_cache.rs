@@ -1,13 +1,12 @@
 //! Provider prompt prefix cache: keep the start of each model `input` byte-identical
 //! across turns when only per-turn state (talk style, playbook, memory snippets) changes.
 //!
-//! Off by default (`{config_dir}/prefix_cache.toml`). When enabled, the first system
+//! On by default; `enabled = false` in `{config_dir}/prefix_cache.toml` turns it off. When enabled, the first system
 //! message stays the published cabin prompt for the session; volatile blocks ride on
 //! the user turn inside `<cabin-volatile>` instead of mutating that system message or
 //! inserting extra system rows mid-history.
 
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::client::{ContentPart, InputItem};
 
@@ -21,12 +20,15 @@ pub struct Settings {
     pub enabled: bool,
 }
 
-static TEST_OVERRIDE: Mutex<Option<bool>> = Mutex::new(None);
+thread_local! {
+    static TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
 
-/// Test hook: `Some(true|false)` overrides the file; `None` reads the file again.
+/// Test hook for this thread: `Some(true|false)` overrides the file; `None` reads the file again.
+/// Per thread, so parallel tests that pin a mode never flip each other.
 #[cfg(test)]
 pub fn set_enabled_for_tests(on: Option<bool>) {
-    *TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = on;
+    TEST_OVERRIDE.with(|cell| cell.set(on));
 }
 
 pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
@@ -34,17 +36,17 @@ pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
 }
 
 pub fn settings(config_dir: &Path) -> Settings {
-    if let Some(on) = *TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+    if let Some(on) = TEST_OVERRIDE.with(|cell| cell.get()) {
         return Settings { enabled: on };
     }
     let Ok(text) = std::fs::read_to_string(config_path(config_dir)) else {
-        return Settings::default();
+        return Settings { enabled: true };
     };
     parse_file(&text)
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = false;
+    let mut enabled = true;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -53,8 +55,8 @@ fn parse_file(text: &str) -> Settings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            enabled = true;
+        if key.trim().eq_ignore_ascii_case("enabled") {
+            enabled = !value.trim().eq_ignore_ascii_case("false");
         }
     }
     Settings { enabled }
@@ -159,8 +161,13 @@ pub fn user_message_text(volatile: &str, user_text: &str) -> String {
     format!("{WRAPPER_START}{volatile}{WRAPPER_END}\n\n{user_text}")
 }
 
+/// What the person typed in a stored user turn, without the `<cabin-volatile>`
+/// block the cabin put in front of it. Text with no block comes back as is.
+pub fn visible_user_text(text: &str) -> &str {
+    split_user_turn(text).map_or(text, |(_, user)| user)
+}
+
 /// Split a stored user turn into volatile block and visible user text.
-#[cfg(test)]
 fn split_user_turn(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.strip_prefix(WRAPPER_START)?;
     let (volatile, rest) = trimmed.split_once(WRAPPER_END)?;
@@ -213,17 +220,33 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_off_and_file_enables() {
+    fn settings_default_on_and_file_disables() {
         set_enabled_for_tests(None);
         let dir = crate::harness::test_dir("prefix-cache-default");
         let path = config_path(&dir);
         let _ = std::fs::remove_file(&path);
-        assert!(!enabled(&dir));
+        assert!(enabled(&dir));
+        assert!(parse_file("").enabled);
+        let (_dir, off) = temp_config(false);
+        assert!(!off.enabled);
         let (_dir, on) = temp_config(true);
         assert!(on.enabled);
         set_enabled_for_tests(Some(false));
         assert!(!enabled(&_dir));
         set_enabled_for_tests(None);
+    }
+
+    #[test]
+    fn visible_user_text_drops_only_the_cabin_notes() {
+        let stored = user_message_text("Talk style for this turn: short.", "hi there");
+        assert_ne!(stored, "hi there");
+        assert_eq!(visible_user_text(&stored), "hi there");
+        assert_eq!(visible_user_text("plain words"), "plain words");
+        // A person who types the tag themselves keeps their words.
+        assert_eq!(
+            visible_user_text("<cabin-volatile>\nno closing tag"),
+            "<cabin-volatile>\nno closing tag"
+        );
     }
 
     #[test]
