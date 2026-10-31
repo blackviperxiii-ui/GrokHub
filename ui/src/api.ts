@@ -552,10 +552,13 @@ export interface LocalFileRow {
   needsNotice: boolean;
 }
 
+/** `state_word` and the not-set-up line in `local_ai.rs`. */
+export type LocalStatusState = "Normal" | "Throttled" | "Ramping up" | "Paused" | "Not set up";
+
 export interface LocalStatus {
   tier: string;
   model: string;
-  state: string;
+  state: LocalStatusState;
   reason: string;
   tokS: string;
   memory: string;
@@ -568,9 +571,15 @@ export interface LocalEngineProgress {
   line: string;
 }
 
+/** `EngineInfo.state` in `local_engine.rs`. */
+export type LocalEngineState = "ready" | "missing" | "downloading" | "noBuild";
+/** What the engine download emits: it never reports `noBuild`. */
+export type LocalEngineEventState = "downloading" | "ready" | "missing";
+/** What the draft model download emits. */
+export type LocalDrafterState = "downloading" | "done" | "error" | "paused" | "cancelled";
+
 export interface LocalEngineInfo {
-  /** ready | missing | downloading | noBuild */
-  state: string;
+  state: LocalEngineState;
   version: string;
   sizeLabel: string;
   hint: string;
@@ -612,14 +621,14 @@ export interface LocalAiView {
 }
 
 export type LocalEngineEvent = {
-  state: string;
+  state: LocalEngineEventState;
   progress: LocalEngineProgress | null;
   error: string | null;
   message: string | null;
 };
 
 export type LocalDrafterEvent = {
-  state: string;
+  state: LocalDrafterState;
   progress: LocalDraftProgress | null;
   error: string | null;
   message: string | null;

@@ -399,23 +399,84 @@ impl rd::Fetch for HttpEngineFetch {
 
 struct HfFetch;
 
+/// Hosts a draft model download may touch: the Hub and its LFS CDN, which the
+/// Hub redirects to (`cdn-lfs.hf.co`, `cdn-lfs-us-1.hf.co`, …).
+const MODEL_DOWNLOAD_HOSTS: &[&str] = &["huggingface.co", "hf.co"];
+
+/// Refuse non-HTTPS model downloads, loopback names, and hosts outside the
+/// Hugging Face Hub. Checked again on every redirect hop.
+fn model_download_url_ok(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "model download must use HTTPS".to_string())?;
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "model download URL is missing a host".to_string())?;
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    let name = host.trim_end_matches('.').to_ascii_lowercase();
+    if grokhub_core::ssrf::host_name_blocked(&name) {
+        return Err(format!("model download host {host} is not allowed"));
+    }
+    let allowed = MODEL_DOWNLOAD_HOSTS
+        .iter()
+        .any(|h| name == *h || name.ends_with(&format!(".{h}")));
+    if !allowed {
+        return Err(format!(
+            "model download host {host} is not on the allowlist"
+        ));
+    }
+    Ok(())
+}
+
+/// Like [`runtime_agent`], plus the proxy from the environment (the cabin's
+/// Hub fetch honours it too): no automatic redirects, public addresses only.
 fn hf_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
+        .redirects(0)
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(60))
+        .resolver(public_only_resolve)
         .build()
+}
+
+/// GET `url`, following redirects by hand so every hop passes
+/// [`model_download_url_ok`]. The Range header only goes to the first hop.
+fn hf_get(url: &str, range: Option<&str>) -> Result<ureq::Response, String> {
+    let mut url = url.to_string();
+    for hop in 0..=REDIRECTS_MAX {
+        model_download_url_ok(&url)?;
+        let mut req = hf_agent()
+            .get(&url)
+            .set("user-agent", grokhub_agent::USER_AGENT);
+        if let (0, Some(range)) = (hop, range) {
+            req = req.set("range", range);
+        }
+        let resp = match req.call() {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(status, resp)) if is_redirect(status) => resp,
+            Err(e) => return Err(e.to_string()),
+        };
+        let status = resp.status();
+        if !is_redirect(status) {
+            return Ok(resp);
+        }
+        let loc = resp
+            .header("location")
+            .ok_or_else(|| format!("model download redirect missing Location (HTTP {status})"))?;
+        url = redirect_target(&url, loc);
+    }
+    Err("too many redirects while downloading the model".into())
 }
 
 impl md::Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-        let mut req = hf_agent()
-            .get(url)
-            .set("user-agent", grokhub_agent::USER_AGENT);
-        if offset > 0 {
-            req = req.set("range", &format!("bytes={offset}-"));
-        }
-        let resp = req.call().map_err(|e| e.to_string())?;
+        let range = (offset > 0).then(|| format!("bytes={offset}-"));
+        let resp = hf_get(url, range.as_deref())?;
         let (start, total) = if resp.status() == 206 {
             (
                 offset,
@@ -433,12 +494,7 @@ impl md::Fetch for HfFetch {
     }
 
     fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
-        let url = md::tree_url(repo);
-        let resp = hf_agent()
-            .get(&url)
-            .set("user-agent", grokhub_agent::USER_AGENT)
-            .call()
-            .map_err(|e| e.to_string())?;
+        let resp = hf_get(&md::tree_url(repo), None)?;
         let mut body = String::new();
         resp.into_reader()
             .read_to_string(&mut body)
@@ -471,6 +527,65 @@ fn outcome_message(manifest: &Manifest, out: &EngineOutcome) -> String {
 static ENGINE_BUSY: AtomicBool = AtomicBool::new(false);
 static DRAFTER_BUSY: AtomicBool = AtomicBool::new(false);
 
+/// One download at a time. The flag clears when the guard drops, so an early
+/// error before the worker thread starts (a poisoned lock, say) never leaves
+/// the button wedged on a job that isn't running.
+struct Busy(&'static AtomicBool);
+
+impl Busy {
+    /// `None` when a download already holds the flag.
+    fn claim(flag: &'static AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            .then_some(Busy(flag))
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Records the engine job in `st` while `busy` is held.
+fn claim_engine_job(
+    st: &Mutex<State>,
+    manifest: &Manifest,
+    ctl: &Arc<Control>,
+    done: u64,
+) -> Result<(), String> {
+    let mut s = st.lock().map_err(|e| e.to_string())?;
+    s.engine_error = None;
+    s.engine = Some(EngineJob {
+        ctl: ctl.clone(),
+        done,
+        total: Some(manifest.asset.size),
+        verifying: false,
+        version: manifest.version.clone(),
+    });
+    Ok(())
+}
+
+/// Records the drafter job in `st` while `busy` is held.
+fn claim_drafter_job(
+    st: &Mutex<State>,
+    d: &LocalModel,
+    ctl: &Arc<Control>,
+    done: u64,
+) -> Result<(), String> {
+    let mut s = st.lock().map_err(|e| e.to_string())?;
+    s.drafter_error = None;
+    s.drafter = Some(DrafterJob {
+        ctl: ctl.clone(),
+        id: d.id.into(),
+        name: d.name.into(),
+        done,
+        total: Some(d.download_mb * MIB),
+        verifying: false,
+    });
+    Ok(())
+}
+
 pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, String> {
     if rd::engine_binary_available(&config_dir) {
         return Ok(engine_info(&config_dir));
@@ -478,25 +593,12 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
     let manifest = rd::manifest_for_host().ok_or_else(|| {
         "There's no llama.cpp build for this computer. Install llama-server and put it on PATH, or set GROKHUB_LLAMA_SERVER to its path.".to_string()
     })?;
-    if !ENGINE_BUSY
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
+    let Some(busy) = Busy::claim(&ENGINE_BUSY) else {
         return Ok(engine_info(&config_dir));
-    }
+    };
     let ctl = Arc::new(Control::default());
     let done = rd::partial_bytes(&rd::bin_dir(&config_dir), &manifest.asset).unwrap_or(0);
-    {
-        let mut s = state().lock().map_err(|e| e.to_string())?;
-        s.engine_error = None;
-        s.engine = Some(EngineJob {
-            ctl: ctl.clone(),
-            done,
-            total: Some(manifest.asset.size),
-            verifying: false,
-            version: manifest.version.clone(),
-        });
-    }
+    claim_engine_job(state(), &manifest, &ctl, done)?;
     let _ = app.emit(
         ENGINE_EVENT,
         EngineEvent {
@@ -578,7 +680,7 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
             s.engine = None;
             s.engine_error = error.clone();
         }
-        ENGINE_BUSY.store(false, Ordering::SeqCst);
+        drop(busy);
         let _ = app2.emit(
             ENGINE_EVENT,
             EngineEvent {
@@ -611,27 +713,13 @@ pub fn start_drafter(
         .ok_or_else(|| {
             "That draft model is already installed, or this model has no draft pair.".to_string()
         })?;
-    if !DRAFTER_BUSY
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
+    let Some(busy) = Busy::claim(&DRAFTER_BUSY) else {
         return Ok(draft_offer(&config_dir, &target_id));
-    }
+    };
     let dir = drafters_dir(&config_dir);
     let ctl = Arc::new(Control::default());
     let done = md::partial_bytes(&dir, d).unwrap_or(0);
-    {
-        let mut s = state().lock().map_err(|e| e.to_string())?;
-        s.drafter_error = None;
-        s.drafter = Some(DrafterJob {
-            ctl: ctl.clone(),
-            id: d.id.into(),
-            name: d.name.into(),
-            done,
-            total: Some(d.download_mb * MIB),
-            verifying: false,
-        });
-    }
+    claim_drafter_job(state(), d, &ctl, done)?;
     let _ = app.emit(
         DRAFTER_EVENT,
         DrafterEvent {
@@ -709,7 +797,7 @@ pub fn start_drafter(
             s.drafter = None;
             s.drafter_error = error.clone();
         }
-        DRAFTER_BUSY.store(false, Ordering::SeqCst);
+        drop(busy);
         let _ = app2.emit(
             DRAFTER_EVENT,
             DrafterEvent {
@@ -754,6 +842,88 @@ mod tests {
         std::fs::write(dest.join(e2b.file), b"x").unwrap();
         assert!(draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_draft_download_stays_on_the_hub_over_https() {
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co/acme/test-GGUF/resolve/main/test.gguf"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("https://cdn-lfs-us-1.hf.co/repos/ab/cd/ef?X-Amz=1"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("https://HF.co./api/models/acme/x/tree/main"),
+            Ok(())
+        );
+        assert_eq!(
+            model_download_url_ok("http://huggingface.co/acme/x/resolve/main/x.gguf"),
+            Err("model download must use HTTPS".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co.evil.example/x.gguf"),
+            Err("model download host huggingface.co.evil.example is not on the allowlist".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://huggingface.co@evil.example/x.gguf"),
+            Err("model download host evil.example is not on the allowlist".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https://localhost:8443/x.gguf"),
+            Err("model download host localhost is not allowed".into())
+        );
+        assert_eq!(
+            model_download_url_ok("https:///x.gguf"),
+            Err("model download URL is missing a host".into())
+        );
+        assert_eq!(
+            redirect_target(
+                "https://huggingface.co/acme/x/resolve/main/x.gguf",
+                "/acme/x/resolve/abc/x.gguf"
+            ),
+            "https://huggingface.co/acme/x/resolve/abc/x.gguf"
+        );
+    }
+
+    #[test]
+    fn the_busy_flag_clears_when_a_download_fails_to_start() {
+        static FLAG: AtomicBool = AtomicBool::new(false);
+        let first = Busy::claim(&FLAG).expect("free");
+        assert!(Busy::claim(&FLAG).is_none(), "one download at a time");
+        drop(first);
+        assert!(!FLAG.load(Ordering::SeqCst));
+
+        // A poisoned state lock fails the start; the flag must not stay set.
+        let poisoned = Mutex::new(State {
+            engine: None,
+            engine_error: None,
+            drafter: None,
+            drafter_error: None,
+        });
+        std::thread::scope(|s| {
+            let _ = s
+                .spawn(|| {
+                    let _held = poisoned.lock().unwrap();
+                    panic!("poison the lock");
+                })
+                .join();
+        });
+        let d = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("catalog drafter");
+        let started = (|| -> Result<(), String> {
+            let _busy = Busy::claim(&FLAG).ok_or("busy")?;
+            claim_drafter_job(&poisoned, d, &Arc::new(Control::default()), 0)
+        })();
+        assert_eq!(
+            started,
+            Err("poisoned lock: another task failed inside".into())
+        );
+        assert!(
+            !FLAG.load(Ordering::SeqCst),
+            "busy flag wedged after a failed start"
+        );
+        assert!(Busy::claim(&FLAG).is_some());
     }
 
     #[test]

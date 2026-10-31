@@ -761,55 +761,45 @@ async function localAi(s, config) {
       await shot(s, "settings-local-ai-engine-progress");
       console.log(`shot engine progress: ${JSON.stringify(progress)}`);
 
-      // 3) Installed + ready after the checksum lands the binary. If the live
-      // download stalls or errors, cancel, plant a stub exe, and re-open the
-      // panel so the ready UI still ships as Windows proof.
+      // 3) Installed + ready after the checksum lands the binary. A download
+      // error or a 120 s stall fails this step: the ready shot is only ever a
+      // real install, never a planted stub.
       let ready = null;
+      let failure = null;
       const readyDeadline = Date.now() + 120000;
-      while (Date.now() < readyDeadline && !ready) {
-        try {
-          const errEls = await wd("POST", `${s}/elements`, {
-            using: "css selector",
-            value: ".local-ai .local-engine-error",
-          });
-          if (errEls.length > 0) {
-            const err = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
-            if (err) throw new Error(err);
-          }
-          const t = await textOf(s, ".local-ai .local-engine .note");
-          if (/llama-server is ready/i.test(t)) ready = t;
-        } catch (err) {
-          console.log(`live engine install did not finish: ${err.message}`);
+      while (Date.now() < readyDeadline && !ready && !failure) {
+        const errEls = await wd("POST", `${s}/elements`, {
+          using: "css selector",
+          value: ".local-ai .local-engine-error",
+        });
+        if (errEls.length > 0) {
+          failure = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
           break;
         }
-        if (!ready) await sleep(250);
+        const t = await textOf(s, ".local-ai .local-engine .note");
+        if (/llama-server is ready/i.test(t)) ready = t;
+        else await sleep(250);
       }
       if (!ready) {
         const cancel = await wd("POST", `${s}/elements`, {
           using: "xpath",
           value: "//div[contains(@class,'local-engine')]//button[normalize-space()='Cancel']",
         });
-        if (cancel.length > 0) {
-          await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
-          await sleep(500);
-        }
-        const bin = join(config, "bin");
-        mkdirSync(bin, { recursive: true });
-        writeFileSync(join(bin, "llama-server.exe"), "MZ smoke stub\n");
-        await section(s, "Appearance");
-        await section(s, "Local AI");
-        ready = await waitFor("llama-server ready after stub", async () => {
-          const t = await textOf(s, ".local-ai .local-engine .note");
-          return /llama-server is ready/i.test(t) ? t : null;
-        });
+        if (cancel.length > 0) await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
+        throw new Error(
+          failure
+            ? `the live engine download failed: ${failure}`
+            : "the live engine download made no progress to ready in 120 s",
+        );
       }
       await scrollIntoView(s, ".local-ai .local-engine");
       await shot(s, "settings-local-ai-engine-ready");
       console.log(`shot engine ready: ${JSON.stringify(ready)}`);
     } else {
-      // Binary already on PATH / GROKHUB_LLAMA_SERVER — still prove ready.
-      await shot(s, "settings-local-ai-engine-ready");
-      console.log("Get engine absent; shot ready state only");
+      // A binary on PATH or GROKHUB_LLAMA_SERVER: no download ran, so the shot
+      // says so and can't pass for an install.
+      await shot(s, "settings-local-ai-engine-skipped");
+      console.log("Get engine absent; download skipped, shot the state as found");
     }
 
     // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).

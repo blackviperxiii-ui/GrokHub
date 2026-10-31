@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelLocalDrafterDownload,
   cancelLocalEngineDownload,
@@ -15,6 +15,8 @@ import {
   type LocalAiView,
   type LocalDraftOffer,
   type LocalDraftProgress,
+  type LocalDrafterState,
+  type LocalEngineEventState,
   type LocalEngineInfo,
   type LocalFileRow,
   type LocalManual,
@@ -26,6 +28,24 @@ import { PRODUCT_NAME } from "./brand";
 /** Shown once per file before a model from outside the catalog is picked. */
 export const MODEL_NOTICE =
   `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads models from outside its catalog.`;
+
+/** Shown once per file before a catalog build with its safety training removed is picked. */
+export const ABLITERATED_NOTICE =
+  "This build's safety training was removed, so it answers what a stock model would refuse. Check its license before you use it. You are responsible for what you do with it.";
+
+/** A line under the panel: what just happened, or what went wrong. */
+interface Note {
+  text: string;
+  error: boolean;
+}
+
+/** The engine button for `state`: Cancel while downloading, nothing once ready,
+ * else the Get or Resume label the backend gave before the download. */
+function engineButton(state: LocalEngineEventState, idle: string): string {
+  if (state === "downloading") return "Cancel";
+  if (state === "ready") return "";
+  return idle;
+}
 
 const BACKENDS: [string, string][] = [
   ["auto", "Auto"],
@@ -125,28 +145,36 @@ export function LocalAi() {
   const [engine, setEngine] = useState<LocalEngineInfo>(READY_ENGINE);
   const [draftOffer, setDraftOffer] = useState<LocalDraftOffer | null>(null);
   const [draftProgress, setDraftProgress] = useState<LocalDraftProgress | null>(null);
+  const [draftState, setDraftState] = useState<LocalDrafterState | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [filePath, setFilePath] = useState("");
   const [extraFiles, setExtraFiles] = useState<LocalFileRow[]>([]);
   const [notice, setNotice] = useState<LocalFileRow | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
   const [testing, setTesting] = useState(false);
   const [allow, setAllow] = useState("");
   const [deny, setDeny] = useState("");
+  /** The Get or Resume label to show again once a download stops. */
+  const idleButton = useRef("");
 
-  function show(next: LocalAiView) {
+  const show = useCallback((next: LocalAiView) => {
     setView(next);
     setDraft(next.config);
     setEngine(next.engine);
+    if (next.engine.state !== "downloading") idleButton.current = next.engine.button;
     setDraftOffer(next.draftOffer);
     setDraftProgress(next.draftProgress);
+    setDraftState(null);
     setAllow(next.config.manual.allowApps.join("\n"));
     setDeny(next.config.manual.denyApps.join("\n"));
-  }
+  }, []);
+
+  const tell = (text: string) => setNote({ text, error: false });
+  const fail = (err: unknown) => setNote({ text: String(err), error: true });
 
   useEffect(() => {
-    getLocalAi().then(show, (err) => setNote(String(err)));
-  }, []);
+    getLocalAi().then(show, (err: unknown) => setNote({ text: String(err), error: true }));
+  }, [show]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -157,9 +185,9 @@ export function LocalAi() {
         state: event.state,
         progress: event.progress,
         error: event.error,
-        button: event.state === "downloading" ? "Cancel" : now.button,
+        button: engineButton(event.state, idleButton.current),
       }));
-      if (event.message) setNote(event.message);
+      if (event.message) setNote({ text: event.message, error: event.error !== null });
       if (event.state === "ready" || event.state === "missing") {
         void getLocalAi().then(show).catch(() => undefined);
       }
@@ -171,15 +199,16 @@ export function LocalAi() {
       dropped = true;
       stop?.();
     };
-  }, []);
+  }, [show]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
     let dropped = false;
     void onLocalDrafterEvent((event) => {
       setDraftProgress(event.progress);
-      if (event.message) setNote(event.message);
-      if (event.state === "done" || event.state === "error" || event.state === "cancelled") {
+      setDraftState(event.state);
+      if (event.message) setNote({ text: event.message, error: event.error !== null });
+      if (event.state !== "downloading") {
         void getLocalAi().then(show).catch(() => undefined);
       }
     }).then((unlisten) => {
@@ -190,13 +219,17 @@ export function LocalAi() {
       dropped = true;
       stop?.();
     };
-  }, []);
+  }, [show]);
+
+  const noteClass = `note local-note${note?.error ? " error" : ""}`;
 
   if (!view || !draft) {
     return (
       <section className="local-ai" aria-label="Local AI">
         <h2>Local AI</h2>
-        <p className="note">{note ?? "Reading this PC's hardware…"}</p>
+        <p className={noteClass} role="status">
+          {note?.text ?? "Reading this PC's hardware…"}
+        </p>
       </section>
     );
   }
@@ -234,7 +267,7 @@ export function LocalAi() {
       setNote(null);
       pickFile(row);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -246,9 +279,9 @@ export function LocalAi() {
           manual: { ...manual, allowApps: lines(allow), denyApps: lines(deny) },
         }),
       );
-      setNote("Local AI saved.");
+      tell("Local AI saved.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -256,18 +289,18 @@ export function LocalAi() {
     try {
       show(await resetLocalAi());
       setExtraFiles([]);
-      setNote("Back to Auto.");
+      tell("Back to Auto.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
   async function speedTest() {
     setTesting(true);
     try {
-      setNote(await runLocalSpeedTest());
+      tell(await runLocalSpeedTest());
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     } finally {
       setTesting(false);
     }
@@ -277,12 +310,14 @@ export function LocalAi() {
     try {
       if (engine.state === "downloading") {
         await cancelLocalEngineDownload();
-        setNote("Cancelled the engine download.");
+        tell("Cancelled the engine download.");
         return;
       }
-      setEngine(await startLocalEngineDownload());
+      const started = await startLocalEngineDownload();
+      if (started.state !== "downloading") idleButton.current = started.button;
+      setEngine(started);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -290,12 +325,12 @@ export function LocalAi() {
     try {
       if (draftProgress) {
         await cancelLocalDrafterDownload();
-        setNote("Cancelled the draft model download.");
+        tell("Cancelled the draft model download.");
         return;
       }
       await startLocalDrafterDownload(targetId);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -336,7 +371,11 @@ export function LocalAi() {
         <h3>Local engine</h3>
         <p className="note">{engine.hint || "Checking the local engine…"}</p>
         {engine.progress && <p className="note local-engine-progress">{engine.progress.line}</p>}
-        {engine.error && <p className="note local-engine-error">{engine.error}</p>}
+        {engine.error && (
+          <p className="note error local-engine-error" role="status">
+            {engine.error}
+          </p>
+        )}
         {engine.button && (
           <button type="button" className="quiet get-engine" onClick={() => void getEngine()}>
             {engine.button}
@@ -431,7 +470,7 @@ export function LocalAi() {
               <p>
                 <strong>{notice.name}</strong>
               </p>
-              <p>{MODEL_NOTICE}</p>
+              <p>{notice.thirdParty ? MODEL_NOTICE : ABLITERATED_NOTICE}</p>
               <div className="card-buttons">
                 <button type="button" className="accept" onClick={acceptNotice}>
                   I understand
@@ -440,24 +479,6 @@ export function LocalAi() {
                   Cancel
                 </button>
               </div>
-            </div>
-          )}
-          {(selectedOffer || draftProgress) && (
-            <div className="local-draft-offer" aria-label="Draft model offer">
-              <h3>Draft model</h3>
-              {selectedOffer && <p className="note">{selectedOffer.line}</p>}
-              {draftProgress && <p className="note">{draftProgress.line}</p>}
-              <button
-                type="button"
-                className="quiet install-draft"
-                onClick={() =>
-                  void installDraft(selectedOffer?.targetId ?? draftOffer?.targetId ?? selected)
-                }
-              >
-                {draftProgress
-                  ? "Cancel draft download"
-                  : (selectedOffer?.button ?? "Install and run draft model")}
-              </button>
             </div>
           )}
           <h3>Engine</h3>
@@ -568,6 +589,27 @@ export function LocalAi() {
           </button>
         </div>
       )}
+      {/* A running download keeps its progress and Cancel in Auto too. */}
+      {(draftProgress || (config.mode === "manual" && selectedOffer)) && (
+        <div className="local-draft-offer" aria-label="Draft model offer">
+          <h3>Draft model</h3>
+          {selectedOffer && <p className="note">{selectedOffer.line}</p>}
+          {draftProgress && <p className="note local-draft-progress">{draftProgress.line}</p>}
+          <button
+            type="button"
+            className="quiet install-draft"
+            onClick={() =>
+              void installDraft(selectedOffer?.targetId ?? draftOffer?.targetId ?? selected)
+            }
+          >
+            {draftProgress
+              ? "Cancel draft download"
+              : draftState === "paused"
+                ? "Resume…"
+                : (selectedOffer?.button ?? "Install and run draft model")}
+          </button>
+        </div>
+      )}
       <div className="card-buttons">
         <button type="button" className="save-local" onClick={save}>
           Save local AI
@@ -576,7 +618,11 @@ export function LocalAi() {
           Reset to Auto
         </button>
       </div>
-      {note && <p className="note local-note">{note}</p>}
+      {note && (
+        <p className={noteClass} role="status">
+          {note.text}
+        </p>
+      )}
     </section>
   );
 }

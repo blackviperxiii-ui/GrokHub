@@ -345,11 +345,12 @@ fn saving_writes_the_pick_and_the_governors_rules() {
 }
 
 #[test]
-fn a_third_party_file_needs_the_notice_once() {
+fn a_third_party_or_abliterated_file_needs_the_notice_once() {
     let seen = vec!["/m/Llama-3-8B-abliterated.Q4_K_M.gguf".to_string()];
-    // The catalog's own abliterated builds carry the badge but no notice.
+    // The catalog's own abliterated builds carry the badge and ask once too.
+    let catalog_path = "/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
     let catalog = file_row(
-        Path::new("/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"),
+        Path::new(catalog_path),
         5 * 1_024 * 1_024 * 1_024,
         "GrokHub models",
         &[],
@@ -360,9 +361,19 @@ fn a_third_party_file_needs_the_notice_once() {
             catalog.abliterated,
             catalog.needs_notice
         ),
-        (false, true, false)
+        (false, true, true)
     );
     assert_eq!(catalog.size, "5 GB");
+    let catalog_read = file_row(
+        Path::new(catalog_path),
+        0,
+        "GrokHub models",
+        &[catalog_path.to_string()],
+    );
+    assert_eq!(
+        (catalog_read.abliterated, catalog_read.needs_notice),
+        (true, false)
+    );
     // A stock Gemma 4 file from the older catalog is a third-party file now.
     let stock = file_row(
         Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf"),

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { inShell, onPairChange, pair, paired } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
@@ -24,24 +24,27 @@ export function Pair({ onPaired }: { onPaired: () => void }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  async function connect(value: string) {
-    setBusy(true);
-    setNote(null);
-    try {
-      await pair(value);
-      onPaired();
-    } catch (err) {
-      setNote(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const connect = useCallback(
+    async (value: string) => {
+      setBusy(true);
+      setNote(null);
+      try {
+        await pair(value);
+        onPaired();
+      } catch (err) {
+        setNote(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onPaired],
+  );
 
   useEffect(() => {
+    // The link's code is taken off the address, so a re-run finds nothing.
     const fromLink = takeCodeFromLink();
     if (fromLink) void connect(fromLink);
-    // Only once, on the first render.
-  }, []);
+  }, [connect]);
 
   function submit(event: FormEvent) {
     event.preventDefault();

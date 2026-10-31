@@ -413,6 +413,8 @@ describe("applyEvent", () => {
   it("sends with the picked chip, and the chips wait while a reply runs", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
+    // The composer names the product, not the model.
+    expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Message Loadout");
     await userEvent.click(screen.getByRole("button", { name: "btw" }));
     expect(screen.getByRole("button", { name: "btw" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Ask on the side");
