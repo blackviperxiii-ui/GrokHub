@@ -1215,12 +1215,24 @@ async function main() {
   }
 }
 
+// A tool counts as offered when the model gets its schema or, with deferred
+// tools on, its line in load_tool_schema's index ("name — blurb").
+function offeredTools(body) {
+  const tools = JSON.parse(body).tools ?? [];
+  const index = tools.find((t) => t.name === "load_tool_schema")?.description ?? "";
+  const deferred = (index.split("Deferred tools (index):\n")[1] ?? "")
+    .split("\n")
+    .map((line) => line.split(" — ")[0].trim())
+    .filter(Boolean);
+  return [...tools.map((t) => t.name), ...deferred];
+}
+
 // Computer-use: desktop tools are off until Settings turns them on. With the
 // switch on and approvals at Always, the model types a delete into the
 // desktop: the card must wait with nothing typed and no further model call,
 // and Deny must reach the model as a refusal.
 async function desktop(s, config) {
-  const offered = (call) => (JSON.parse(call.body).tools ?? []).map((t) => t.name);
+  const offered = (call) => offeredTools(call.body);
   const before = mockSeen.find((c) => c.path === "/v1/responses");
   if (offered(before).includes("type")) throw new Error("desktop tools were offered while off");
 
@@ -1323,7 +1335,7 @@ async function web(s) {
     console.log(`the browser got the reply: ${JSON.stringify(WEB_REPLY)}`);
 
     const asked = mockSeen.find((c) => c.body.includes(WEB_PROMPT));
-    const tools = (JSON.parse(asked.body).tools ?? []).map((t) => t.name);
+    const tools = offeredTools(asked.body);
     if (tools.includes("type") || tools.includes("click")) {
       throw new Error(`a web chat was offered desktop tools: ${tools}`);
     }
