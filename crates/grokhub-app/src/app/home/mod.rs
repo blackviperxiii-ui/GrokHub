@@ -4,8 +4,11 @@
 //! This module loads/saves `{config}/home_layout.json` and paints Home.
 
 mod edit;
+mod live;
 mod page;
 mod paint;
+#[cfg(test)]
+mod tile_tests;
 
 use std::path::{Path, PathBuf};
 

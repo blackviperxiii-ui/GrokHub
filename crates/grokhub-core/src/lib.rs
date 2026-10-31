@@ -648,9 +648,9 @@ pub use update_feed::{
     RECOVERED_SOURCE_PREFIX, SCREEN_RECORDING_SOURCE_PREFIX, TAKEAWAY_MAX,
 };
 pub use usage::{
-    add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,
-    take_budget_note, token_budget_label, token_delta, tokens_today, usage_line, BudgetLevel,
-    UsageDay, BUDGET_NEAR_PCT, TOKEN_BUDGETS,
+    add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, compact_tokens,
+    roll_usage_day, take_budget_note, token_budget_label, token_delta, tokens_today, usage_line,
+    BudgetLevel, UsageDay, BUDGET_NEAR_PCT, TOKEN_BUDGETS,
 };
 pub use verify::{
     can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
