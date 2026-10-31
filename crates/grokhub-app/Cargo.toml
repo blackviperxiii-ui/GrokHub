@@ -31,7 +31,7 @@ egui_plot = "0.37"
 egui_dock = { version = "0.21", features = ["serde"] }
 ureq = { workspace = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
-global-hotkey = "0.6"
+global-hotkey = "0.9"
 image = { workspace = true, features = ["webp", "ico", "bmp"] }
 keyring = { workspace = true }
 # SB-04: native folder picker. On Linux only the xdg-desktop-portal backend
