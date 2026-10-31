@@ -87,7 +87,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/app/local_ai_ui.rs", 1, "engine download: runtime_download_url_ok + download_engine refuse while on"),
     ("src-tauri/src/local_engine.rs", 2, "engine and HF downloads: runtime_download_url_ok, download_engine and model_download::download refuse while on"),
     // On-device model (loopback only).
-    ("crates/grokhub-agent/src/route/local_http.rs", 1, "llama-server chat on loopback"),
+    ("crates/grokhub-agent/src/route/local_http.rs", 2, "llama-server chat and the /props context-window read, both loopback only"),
     ("crates/grokhub-agent/src/route/local_sidecar.rs", 1, "llama-server /health on loopback"),
     ("crates/grokhub-agent/src/route/local_effort.rs", 1, "llama-server /props on loopback (refuses any other host)"),
     ("crates/grokhub-agent/src/route/local_spec.rs", 1, "speed test against the loopback sidecar"),
