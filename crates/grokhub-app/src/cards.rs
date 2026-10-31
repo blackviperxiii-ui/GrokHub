@@ -2862,7 +2862,7 @@ mod tests {
     fn settings_toggle_hint_wraps_before_the_switch() {
         assert_eq!(settings_toggle_text_width(600.0), 544.0);
         assert_eq!(settings_toggle_text_width(30.0), 0.0);
-        let hint = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+        let hint = "Grok can see the screen and use the mouse and keyboard through Loadout. Ask still asks first. Deletes, sends, money and credentials always ask.";
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {

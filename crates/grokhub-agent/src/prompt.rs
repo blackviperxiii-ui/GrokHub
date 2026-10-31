@@ -403,7 +403,7 @@ pub(crate) fn template_body() -> String {
         .and_then(|rest| rest.split_once("-->"))
         .map(|(_, body)| body.trim_start())
         .unwrap_or(text);
-    text.to_string()
+    text.replace("{product}", grokhub_core::brand::product_name())
 }
 
 fn agents_paths(workspace: &Path, home: Option<&Path>) -> Vec<PathBuf> {
@@ -584,6 +584,10 @@ mod tests {
         );
         assert!(text.contains("intelligent adult"));
         assert!(text.contains("real goal"));
+        assert!(
+            text.starts_with("You are Grok inside Loadout. Help with the user's real goal."),
+            "the prompt names the brand, not a placeholder"
+        );
         assert!(
             template_body().len() >= TEMPLATE_BYTES_BEFORE,
             "template shrank below the charter baseline"

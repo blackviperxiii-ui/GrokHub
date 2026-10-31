@@ -1,0 +1,1 @@
+- The model's opening line, the secret prompt for the app's own tools, screenshot and desktop-session errors, the hub's phone pairing refusal, the MCP sign-in app name, the recording delete note and the shell window title now name the product "Loadout". Key and folder recovery steps name Loadout and still give the stable "GrokHub" entry and folder name to look for.
