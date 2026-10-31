@@ -171,6 +171,7 @@ mod downloads_tidy_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
+mod file_writes;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
@@ -750,6 +751,8 @@ pub struct Cabin {
     imagine_pending: bool,
     imagine_native: imagine::ImagineNative,
     imagine_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// Background writes (/export, /remember, Memory Save) not yet reported.
+    file_writes: Vec<mpsc::Receiver<file_writes::FileWriteDone>>,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
     goal_stale: bool,
@@ -1366,6 +1369,7 @@ impl Cabin {
             imagine_pending: false,
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
+            file_writes: Vec::new(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -1843,6 +1847,7 @@ impl Cabin {
             imagine_pending: false,
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
+            file_writes: Vec::new(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -5186,6 +5191,7 @@ impl eframe::App for Cabin {
         self.poll_persist_err();
         self.poll_recovered_stores();
         self.poll_imagine_save();
+        self.poll_file_writes();
         self.poll_host_diff();
         self.poll_acp();
         self.poll_chips();

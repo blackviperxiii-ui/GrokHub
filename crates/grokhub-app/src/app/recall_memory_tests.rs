@@ -616,6 +616,7 @@ fn legacy_reflect_and_note_never_create_amr() {
     cabin.run_slash(grokhub_core::Slash::MemoryNote(
         "the quay lantern is green".into(),
     ));
+    wait_file_writes(&mut cabin);
     assert_eq!(cabin.status, "Wrote MEMORY.md");
     cabin.run_slash(grokhub_core::Slash::Forget(Some("quay".into())));
     assert_eq!(cabin.status, "Forgot quay");
