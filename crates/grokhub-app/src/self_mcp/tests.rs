@@ -135,7 +135,11 @@ fn server_discover_is_method_not_found_so_new_clients_fall_back_to_initialize() 
     let reply = server.handle_line(&line.to_string(), &mut io).unwrap();
     let v: Value = serde_json::from_str(&reply).unwrap();
     assert_eq!(
-        (v["id"].clone(), v["error"]["code"].clone(), v["error"]["message"].clone()),
+        (
+            v["id"].clone(),
+            v["error"]["code"].clone(),
+            v["error"]["message"].clone()
+        ),
         (json!(1), json!(-32601), json!("Method not found"))
     );
     let _ = std::fs::remove_dir_all(root);
