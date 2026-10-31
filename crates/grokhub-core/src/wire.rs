@@ -1584,6 +1584,11 @@ pub enum StreamErrorKind {
 }
 
 pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
+    // An Offline only refusal is final and shows as is ("unavailable" in its
+    // reason must not read as a transient retry).
+    if crate::offline::is_refusal(msg) {
+        return StreamErrorKind::Fatal;
+    }
     let l = msg.to_ascii_lowercase();
     if l.contains("credit")
         || l.contains("quota")
@@ -2249,5 +2254,20 @@ mod tests {
             "Email",
             &json!({ "type": "string" })
         ));
+    }
+
+    #[test]
+    fn an_offline_only_refusal_is_final_and_keeps_its_words() {
+        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        let no_local = format!("Offline, local model unavailable: runtime missing. {msg}");
+        assert_eq!(classify_stream_error(&no_local), StreamErrorKind::Fatal);
+        assert_eq!(rewrite_truncation_error(&no_local), no_local);
+        assert_eq!(classify_stream_error(msg), StreamErrorKind::Fatal);
+        assert_eq!(rewrite_truncation_error(msg), msg);
+        // Without the refusal the same reason is still a transient retry.
+        assert_eq!(
+            classify_stream_error("Offline, local model unavailable: runtime missing"),
+            StreamErrorKind::Transient
+        );
     }
 }
