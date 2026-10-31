@@ -1,0 +1,1 @@
+- Home: your level and XP now grow from what you actually do. Finished tasks count right away (and drop back out if you undo or correct them), Home cards you run or see through earn XP, and each active day adds a little. Card and day XP stop at 150 a day so it can't be farmed. Hover the XP bar to see today's XP and how it's earned.

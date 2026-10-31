@@ -267,3 +267,17 @@ fn halt_shortcut_is_ctrl_alt_h_not_the_task_manager_key() {
         "Ctrl+Shift+Esc opens Task Manager on Windows and never reaches the app"
     );
 }
+
+/// global-hotkey 0.9 renamed SUPER to META. The cabin's chords must still be
+/// the same Super+G and Super+Shift+Esc the user learned.
+#[test]
+fn cabin_hotkeys_keep_super_bindings_after_meta_rename() {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    let hey = HotKey::new(Some(Modifiers::META), Code::KeyG);
+    let halt = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Escape);
+    let hey_text: HotKey = "super+KeyG".parse().expect("parses");
+    let halt_text: HotKey = "super+shift+Escape".parse().expect("parses");
+    assert_eq!(hey.id(), hey_text.id());
+    assert_eq!(halt.id(), halt_text.id());
+    assert_ne!(hey.id(), halt.id());
+}

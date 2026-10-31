@@ -1,0 +1,1 @@
+- Home's Storage tile reads every local drive (internal disks and mounted game drives, not network shares or system partitions) and shows free of total for each, fullest first, amber under 15% free and red under 5%. The small tile shows the fullest drive and how many drives there are.

@@ -2,7 +2,9 @@
 
 use grokhub_core::home::{place_slots, GAP};
 
-use super::super::loadout_home::{caption, grouped, level_xp, objective_progress, XP_PER_LEVEL};
+use super::super::loadout_home::{
+    caption, grouped, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
+};
 use super::super::mission_page::{day_caption, greeting};
 use super::super::*;
 use super::edit::HomeEditDraft;
@@ -155,7 +157,8 @@ impl Cabin {
                 );
             });
             if show_xp {
-                let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
+                let xp_tally = self.dock_xp(ui.ctx());
+                let (level, xp, frac) = level_xp(xp_tally, done);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(280.0_f32.min(ui.available_width()), 48.0),
@@ -181,10 +184,11 @@ impl Cabin {
                                     },
                                 );
                             });
-                            let (bar, _) = ui.allocate_exact_size(
+                            let (bar, bar_resp) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 6.0),
                                 egui::Sense::hover(),
                             );
+                            bar_resp.on_hover_text(xp_hover(xp_tally));
                             ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
                             let mut fill = bar;
                             fill.set_width(bar.width() * frac);

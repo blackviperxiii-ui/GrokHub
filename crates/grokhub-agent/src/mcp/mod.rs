@@ -4,6 +4,7 @@
 mod browser;
 mod config;
 mod elicit;
+mod headers;
 mod http;
 mod names;
 mod oauth;
@@ -239,6 +240,9 @@ struct State {
     mtime: Option<SystemTime>,
     /// Hash of enabled plugins. A disable or content change drops plugin servers.
     server_stamp: String,
+    /// Offline only when the slots were built: a flip drops every connection,
+    /// so a third-party stdio server stops and the rest reconnect.
+    offline: bool,
     loaded: bool,
     workspace: PathBuf,
     slots: BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>,
@@ -251,6 +255,7 @@ impl State {
             gen: 0,
             mtime: None,
             server_stamp: String::new(),
+            offline: false,
             loaded: false,
             workspace: PathBuf::new(),
             slots: BTreeMap::new(),
@@ -333,6 +338,12 @@ pub fn doctor() -> Vec<DoctorRow> {
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
             "connected"
+        } else if inner
+            .last_error
+            .as_deref()
+            .is_some_and(grokhub_core::offline::is_refusal)
+        {
+            "paused"
         } else if inner.last_error.is_some() {
             "error"
         } else {
@@ -919,7 +930,9 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
     let stamp = crate::plugins::listing_stamp(&workspace);
     let path = config::config_file();
     let (gen, mtime) = fingerprint(&path);
+    let offline = grokhub_core::offline::enabled();
     if !held.loaded
+        || held.offline != offline
         || held.path != path
         || held.gen != gen
         || held.mtime != mtime
@@ -944,6 +957,7 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
         held.gen = gen;
         held.mtime = mtime;
         held.server_stamp = stamp;
+        held.offline = offline;
     }
     (held.slots.clone(), workspace)
 }
@@ -986,6 +1000,16 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             env,
             cwd,
         } => {
+            let exe = std::env::current_exe().ok();
+            if let Some(why) = offline_paused(
+                name,
+                command,
+                args,
+                exe.as_deref(),
+                grokhub_core::offline::enabled(),
+            ) {
+                return Err(why);
+            }
             let dir = stdio::workspace_or(cwd.clone(), workspace);
             let mut env = env.clone();
             if let (Some(token_name), Some(var)) = (&def.token_ref, &def.token_env) {
@@ -1037,6 +1061,28 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             Ok((Conn::Http(conn), tools))
         }
     }
+}
+
+/// The app's own stdio servers (`<this exe> --mcp-cua`, `--mcp-self`). They
+/// never reach the internet, so Offline only leaves them running.
+fn own_server(name: &str, command: &str, args: &[String], exe: Option<&Path>) -> bool {
+    [grokhub_core::CUA_MCP_SERVER, grokhub_core::SELF_MCP_SERVER].contains(&name)
+        && args.first().is_some_and(|a| a.starts_with("--mcp-"))
+        && exe.is_some_and(|exe| Path::new(command) == exe)
+}
+
+/// Offline only pauses a third-party stdio server: it can reach the internet
+/// on its own, so it doesn't start while the switch is on. Its row reads
+/// `paused` with [`grokhub_core::offline::OFFLINE_MSG`].
+fn offline_paused(
+    name: &str,
+    command: &str,
+    args: &[String],
+    exe: Option<&Path>,
+    on: bool,
+) -> Option<String> {
+    (on && !own_server(name, command, args, exe))
+        .then(|| grokhub_core::offline::OFFLINE_MSG.to_string())
 }
 
 fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
@@ -1743,6 +1789,8 @@ mod tests {
     /// and a deferred hard tool still parks through `harness::decide`.
     #[test]
     fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let desk_on = Gate {
             desktop: true,
             ..gate(PermMode::Always, false, true)
@@ -1968,6 +2016,55 @@ mod tests {
         assert!(restart("linear")
             .unwrap_err()
             .ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
+        use super::{doctor, invalidate, offline_paused, shutdown_all};
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        let exe = Path::new("/opt/loadout/grokhub");
+        let cua = vec!["--mcp-cua".to_string()];
+        let npx = vec!["-y".to_string(), "weather-mcp".to_string()];
+        assert_eq!(
+            offline_paused("grokhub-cua", "/opt/loadout/grokhub", &cua, Some(exe), true),
+            None
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), true),
+            Some(MSG.to_string())
+        );
+        assert_eq!(
+            offline_paused("grokhub-cua", "/tmp/other", &cua, Some(exe), true),
+            Some(MSG.to_string()),
+            "the name alone doesn't make a server the app's own"
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), false),
+            None
+        );
+
+        let dir = crate::harness::test_dir("mcp-offline-only");
+        let _guard = ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers": {
+            "weather": {"command": "definitely-not-a-real-mcp-binary", "args": ["--stdio"]},
+            "remote": {"url": "https://mcp.example.com/mcp", "type": "http"}
+        }}"#;
+        std::fs::write(dir.join("mcp.json"), doc).unwrap();
+        invalidate();
+        let _on = grokhub_core::offline::force_for_thread(true);
+        let rows: Vec<(String, String, String)> = doctor()
+            .into_iter()
+            .map(|r| (r.name, r.status, r.last_error))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("remote".to_string(), "paused".to_string(), MSG.to_string()),
+                ("weather".to_string(), "paused".to_string(), MSG.to_string()),
+            ]
+        );
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

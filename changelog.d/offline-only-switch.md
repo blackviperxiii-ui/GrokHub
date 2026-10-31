@@ -1,0 +1,1 @@
+- New Offline only setting: while it's on, Loadout stays off the internet, answers with your local model, and pauses third-party MCP servers, downloads and updates. This computer and your home network still work. The Settings toggle arrives next; for now set `offline_only = true` in `offline.toml` in the config folder, or run with `GROKHUB_OFFLINE_ONLY=1`.

@@ -615,6 +615,67 @@ fn composer_go_disc_stays_inside_the_pill_beside_the_mic() {
     }
 }
 
+#[test]
+fn composer_pill_height_steps_per_line_and_stops_at_the_cap() {
+    let min = crate::theme::QUERY_MIN_H;
+    assert_eq!(super::composer_pill_h(0, 240.0), min);
+    assert_eq!(super::composer_pill_h(1, 240.0), min);
+    assert_eq!(super::composer_pill_h(3, 240.0), 3.0 * 22.0 + 28.0);
+    assert_eq!(super::composer_pill_h(40, 240.0), 240.0);
+    assert_eq!(super::composer_max_h(1080.0), 240.0);
+    assert_eq!(super::composer_max_h(400.0), 160.0);
+    assert_eq!(
+        super::composer_max_h(50.0),
+        min,
+        "never shorter than one line"
+    );
+}
+
+/// Pasting one long line used to keep the one-line pill (only Enter counted
+/// as a row), so the wrapped text drew past the pill's bottom edge.
+#[test]
+fn long_wrapped_draft_grows_the_pill_then_caps_it() {
+    let _paint = crate::theme::hold_paint_test();
+    let pill_for = |text: String| {
+        let mut cabin = quiet_cabin();
+        let thread = crate::threads::ChatThread::new("Chat", false);
+        cabin.threads = vec![thread];
+        cabin.thread_idx = 0;
+        cabin.composer = text;
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 760.0),
+            )),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    cabin.ui_composer_stack(ui);
+                });
+            });
+        }
+        cabin.composer_geom.expect("composer geom").0
+    };
+    let one = pill_for("hello".into());
+    assert_eq!(one.height(), crate::theme::QUERY_MIN_H);
+    let wrapped = pill_for("word ".repeat(80));
+    assert!(
+        !"word ".repeat(80).contains('\n') && wrapped.height() > one.height() + 40.0,
+        "one long line must wrap into a taller pill: {} vs {}",
+        wrapped.height(),
+        one.height()
+    );
+    let huge = pill_for("word ".repeat(2000));
+    assert_eq!(
+        huge.height(),
+        super::composer_max_h(760.0),
+        "a giant draft stops at the cap and scrolls inside"
+    );
+}
+
 // Landed from PR #89.
 #[test]
 fn queue_rows_label_done_failed_and_running() {

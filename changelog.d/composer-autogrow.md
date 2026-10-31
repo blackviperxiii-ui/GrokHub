@@ -1,0 +1,1 @@
+- The chat box grows as you type. Long messages that wrap now make the box taller, line by line, instead of spilling out of it; past about ten lines the box stops growing and scrolls inside. The chat above makes room for it.
