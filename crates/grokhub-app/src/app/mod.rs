@@ -1557,8 +1557,8 @@ impl Cabin {
         let Ok(mgr) = GlobalHotKeyManager::new() else {
             return;
         };
-        let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-        let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+        let hey = HotKey::new(Some(Modifiers::META), Code::KeyG);
+        let halt = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Escape);
         let hey_id = hey.id();
         let halt_id = halt.id();
         if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
