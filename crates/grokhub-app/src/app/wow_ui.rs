@@ -5,15 +5,19 @@
 //! `product.db` in every prefix it finds (and on Windows the system one),
 //! lists the games in the Library, and while the game watcher is on and WoW
 //! runs, follows the combat log WoW itself writes after `/combatlog` into
-//! that flavor's `Logs` folder. Every read is a file on disk, off the UI
-//! thread for the folder scan; nothing opens a handle to the game, reads its
-//! memory or sends it input.
+//! that flavor's `Logs` folder. It also installs Loadout's own WoW addon
+//! (`grokhub_core::wow_addon`) into a flavor when asked, and shows what that
+//! addon saved (`grokhub_core::wow_saved`). Every read is a file on disk,
+//! off the UI thread for the folder scan; nothing opens a handle to the
+//! game, reads its memory or sends it input.
 
 use std::path::PathBuf;
 
 use super::*;
 use grokhub_core::battlenet::{self as bnet, BnetGame, WowFlavor};
 use grokhub_core::game_watch_wow::WowWatcher;
+use grokhub_core::wow_addon::{self, AddonState};
+use grokhub_core::wow_saved::{self, WowSaved};
 
 /// How often the prefixes are scanned again for new installs.
 const SCAN_EVERY_MS: u64 = 5 * 60_000;
@@ -24,12 +28,26 @@ const POLL_EVERY_MS: u64 = 1_000;
 /// The name the game watcher's toasts and recap use.
 pub(super) const WOW_NAME: &str = "World of Warcraft";
 
+/// One installed WoW flavor: its addon and what the addon saved.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct WowFlavorInfo {
+    install: PathBuf,
+    flavor: WowFlavor,
+    dir: PathBuf,
+    addon: AddonState,
+    saved: WowSaved,
+}
+
+/// What a scan found: the games, and each WoW flavor's addon and data.
+type Scan = (Vec<BnetGame>, Vec<WowFlavorInfo>);
+
 #[derive(Default)]
 pub(super) struct WowState {
     games: Vec<BnetGame>,
+    flavors: Vec<WowFlavorInfo>,
     scanned: bool,
     scanned_ms: u64,
-    scan_rx: Option<mpsc::Receiver<Vec<BnetGame>>>,
+    scan_rx: Option<mpsc::Receiver<Scan>>,
     sampled_ms: u64,
     sample_rx: Option<mpsc::Receiver<Option<WowFlavor>>>,
     /// The flavor running now and its game folder.
@@ -85,6 +103,57 @@ pub(super) fn flavor_line(game: &BnetGame) -> String {
         .join(", ")
 }
 
+/// Each installed WoW flavor's addon state and saved data. A copy of the
+/// addon this app installed is brought up to the built-in version here;
+/// flavors without it, or with someone else's `Loadout` folder, are left
+/// as they are.
+pub(super) fn flavor_infos(games: &[BnetGame]) -> Vec<WowFlavorInfo> {
+    let mut out = Vec::new();
+    for game in library_rows(games).into_iter().filter(|g| g.is_wow()) {
+        for flavor in bnet::wow_flavors(&game.install) {
+            let dir = flavor.dir(&game.install);
+            let _ = wow_addon::sync(&game.install, &dir);
+            out.push(WowFlavorInfo {
+                install: game.install.clone(),
+                flavor,
+                addon: wow_addon::state(&dir),
+                saved: wow_saved::read_flavor(&dir),
+                dir,
+            });
+        }
+    }
+    out
+}
+
+/// The addon's state in a few words.
+fn addon_line(addon: &AddonState) -> String {
+    match addon {
+        AddonState::NotInstalled => "Loadout addon not installed".into(),
+        AddonState::Current { version } => format!("Loadout addon {version}"),
+        AddonState::Outdated { version } => format!("Loadout addon {version}, update ready"),
+        AddonState::Foreign => "Another addon named Loadout is installed".into(),
+    }
+}
+
+/// The newest few kills, level-ups and achievements, newest first.
+fn recent_lines(saved: &WowSaved, max: usize) -> Vec<String> {
+    saved
+        .events
+        .iter()
+        .rev()
+        .filter_map(|e| {
+            let who = e.character.split('-').next().unwrap_or("");
+            match e.kind.as_str() {
+                "kill" => Some(format!("Killed {} ({who})", e.name)),
+                "level" => e.level.map(|l| format!("{who} reached level {l}")),
+                "achievement" if !e.name.is_empty() => Some(format!("{who} earned {}", e.name)),
+                _ => None,
+            }
+        })
+        .take(max)
+        .collect()
+}
+
 /// One entry per install folder for the Library: WoW Retail and Classic
 /// share a folder, and listing it twice reads as two games.
 pub(super) fn library_rows(games: &[BnetGame]) -> Vec<&BnetGame> {
@@ -116,8 +185,9 @@ impl Cabin {
         let w = &mut self.focus.wow;
         if let Some(rx) = w.scan_rx.take() {
             match rx.try_recv() {
-                Ok(games) => {
+                Ok((games, flavors)) => {
                     w.games = games;
+                    w.flavors = flavors;
                     w.scanned = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => w.scan_rx = Some(rx),
@@ -146,7 +216,9 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         w.scan_rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(scan());
+            let games = scan();
+            let flavors = flavor_infos(&games);
+            let _ = tx.send((games, flavors));
         });
     }
 
@@ -178,6 +250,10 @@ impl Cabin {
         if found.as_ref().map(|(f, _)| f) == w.running.as_ref().map(|(f, _)| f) {
             return;
         }
+        // WoW writes saved variables as it closes: read them again.
+        if found.is_none() && w.running.is_some() {
+            w.scanned_ms = 0;
+        }
         w.watcher = found
             .as_ref()
             .map(|(_, dir)| WowWatcher::new(dir.join("Logs")));
@@ -204,9 +280,7 @@ impl Cabin {
     /// The Battle.net games found so far; starts a scan the first time.
     pub(super) fn bnet_games(&mut self) -> Vec<BnetGame> {
         self.take_wow_results();
-        if !self.focus.wow.scanned {
-            self.refresh_bnet(now_ms());
-        }
+        self.refresh_bnet(now_ms());
         self.focus.wow.games.clone()
     }
 
@@ -254,6 +328,10 @@ impl Cabin {
                                 self.status = err;
                             }
                         }
+                        if game.is_wow() && crate::cards::ghost_pill(ui, "Refresh") {
+                            self.focus.wow.scanned_ms = 0;
+                            self.refresh_bnet(now_ms());
+                        }
                     });
                 });
                 let flavors = flavor_line(game);
@@ -272,6 +350,9 @@ impl Cabin {
                         .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
                 );
+                if game.is_wow() {
+                    self.ui_wow_flavors(ui, &game.install);
+                }
                 if game.is_wow() && !self.cfg.game_watch {
                     ui.label(
                         egui::RichText::new(
@@ -286,6 +367,103 @@ impl Cabin {
         }
         ui.add_space(8.0);
     }
+
+    /// Per flavor: the addon with its Install, Update or Remove button, and
+    /// the characters and recent kills it saved.
+    fn ui_wow_flavors(&mut self, ui: &mut egui::Ui, install: &std::path::Path) {
+        let flavors: Vec<WowFlavorInfo> = self
+            .focus
+            .wow
+            .flavors
+            .iter()
+            .filter(|f| f.install == install)
+            .cloned()
+            .collect();
+        for info in flavors {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        info.flavor.label(),
+                        addon_line(&info.addon)
+                    ))
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::fg()),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let action = match info.addon {
+                        AddonState::NotInstalled => crate::cards::white_pill(ui, "Install addon")
+                            .then_some(AddonAction::Install),
+                        AddonState::Outdated { .. } => crate::cards::white_pill(ui, "Update addon")
+                            .then_some(AddonAction::Install),
+                        AddonState::Current { .. } => crate::cards::ghost_pill(ui, "Remove addon")
+                            .then_some(AddonAction::Remove),
+                        AddonState::Foreign => None,
+                    };
+                    if let Some(action) = action {
+                        self.run_addon_action(&info, action);
+                    }
+                });
+            });
+            let muted = |ui: &mut egui::Ui, text: String| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+            };
+            for c in info.saved.characters.iter().take(3) {
+                muted(ui, wow_saved::character_line(c));
+            }
+            for line in recent_lines(&info.saved, 3) {
+                muted(ui, line);
+            }
+            if info.addon.installed() && info.saved.characters.is_empty() {
+                muted(
+                    ui,
+                    "Log in, then /reload or log out: WoW saves addon data then, and it shows here."
+                        .into(),
+                );
+            }
+        }
+    }
+
+    /// Install, update or remove the addon in one flavor, on the user's
+    /// click, and show the new state.
+    fn run_addon_action(&mut self, info: &WowFlavorInfo, action: AddonAction) {
+        let result = match action {
+            AddonAction::Install => wow_addon::install(&info.install, &info.dir).map(|()| {
+                format!(
+                    "Installed the Loadout addon for WoW {}. Type /reload in game or restart WoW to load it.",
+                    info.flavor.label()
+                )
+            }),
+            AddonAction::Remove => wow_addon::remove(&info.dir).map(|()| {
+                format!(
+                    "Removed the Loadout addon from WoW {}. What it saved stays in WoW's WTF folder.",
+                    info.flavor.label()
+                )
+            }),
+        };
+        self.status = result.unwrap_or_else(|e| e);
+        let state = wow_addon::state(&info.dir);
+        if let Some(f) = self
+            .focus
+            .wow
+            .flavors
+            .iter_mut()
+            .find(|f| f.dir == info.dir)
+        {
+            f.addon = state;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddonAction {
+    Install,
+    Remove,
 }
 
 #[cfg(test)]
@@ -390,6 +568,86 @@ mod tests {
         cabin.note_wow_running(Some(WowFlavor::Classic));
         assert_eq!(cabin.focus.wow.running, None);
         assert!(cabin.focus.wow.watcher.is_none());
+    }
+
+    #[test]
+    fn the_install_button_adds_the_addon_and_remove_takes_it_back_out() {
+        let root = tmp("addon");
+        std::fs::create_dir_all(root.join("_retail_/Interface")).unwrap();
+        let (mut cabin, _dir) = cabin("wow-addon");
+        let games = vec![wow_at(&root)];
+        cabin.focus.wow.flavors = flavor_infos(&games);
+        cabin.focus.wow.games = games;
+        let info = cabin.focus.wow.flavors[0].clone();
+        assert_eq!(info.addon, AddonState::NotInstalled);
+        cabin.run_addon_action(&info, AddonAction::Install);
+        assert!(cabin
+            .status
+            .starts_with("Installed the Loadout addon for WoW Retail"));
+        assert!(root
+            .join("_retail_/Interface/AddOns/Loadout/Loadout.toc")
+            .is_file());
+        assert!(cabin.focus.wow.flavors[0].addon.installed());
+        let info = cabin.focus.wow.flavors[0].clone();
+        cabin.run_addon_action(&info, AddonAction::Remove);
+        assert_eq!(cabin.focus.wow.flavors[0].addon, AddonState::NotInstalled);
+        assert!(!root.join("_retail_/Interface/AddOns/Loadout").exists());
+    }
+
+    #[test]
+    fn a_scan_updates_an_old_copy_and_reads_what_the_addon_saved() {
+        let root = tmp("saved");
+        let retail = root.join("_retail_");
+        std::fs::create_dir_all(retail.join("Interface")).unwrap();
+        wow_addon::install(&root, &retail).unwrap();
+        let toc = retail.join("Interface/AddOns/Loadout/Loadout.toc");
+        let old = std::fs::read_to_string(&toc).unwrap().replace(
+            &format!("## Version: {}", wow_addon::bundled_version()),
+            "## Version: 0.1.0",
+        );
+        std::fs::write(&toc, old).unwrap();
+        let sv = retail.join("WTF/Account/ACCOUNT1/SavedVariables");
+        std::fs::create_dir_all(&sv).unwrap();
+        std::fs::write(
+            sv.join("Loadout.lua"),
+            "LoadoutDB = { [\"characters\"] = { [\"Testchar-Area 52\"] = { [\"name\"] = \"Testchar\", [\"level\"] = 80, [\"className\"] = \"Paladin\", [\"lastSeen\"] = 5 } }, [\"events\"] = { { [\"kind\"] = \"kill\", [\"name\"] = \"Ulgrax\", [\"character\"] = \"Testchar-Area 52\", [\"at\"] = 4 }, { [\"kind\"] = \"wipe\", [\"name\"] = \"Bloodbound Horror\", [\"at\"] = 5 } } }\n",
+        )
+        .unwrap();
+        let infos = flavor_infos(&[wow_at(&root)]);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(
+            infos[0].addon,
+            AddonState::Current {
+                version: wow_addon::bundled_version().to_string()
+            }
+        );
+        assert_eq!(infos[0].saved.characters[0].name, "Testchar");
+        assert_eq!(
+            recent_lines(&infos[0].saved, 3),
+            vec!["Killed Ulgrax (Testchar)"]
+        );
+        assert_eq!(
+            addon_line(&infos[0].addon),
+            format!("Loadout addon {}", wow_addon::bundled_version())
+        );
+    }
+
+    #[test]
+    fn someone_elses_loadout_folder_gets_no_button_and_is_not_touched() {
+        let root = tmp("foreign");
+        let dir = root.join("_retail_/Interface/AddOns/Loadout");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Loadout.toc"), "## Title: Something else\n").unwrap();
+        let infos = flavor_infos(&[wow_at(&root)]);
+        assert_eq!(infos[0].addon, AddonState::Foreign);
+        assert_eq!(
+            addon_line(&infos[0].addon),
+            "Another addon named Loadout is installed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("Loadout.toc")).unwrap(),
+            "## Title: Something else\n"
+        );
     }
 
     #[test]
