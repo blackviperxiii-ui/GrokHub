@@ -28,6 +28,7 @@ mod scan;
 pub mod ab;
 pub mod care_first;
 pub mod close_check;
+pub mod efficiency;
 pub mod longmem;
 pub mod metrics;
 pub mod sycophancy;
