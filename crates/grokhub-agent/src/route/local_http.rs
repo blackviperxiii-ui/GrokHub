@@ -19,6 +19,8 @@ pub struct HttpLocalRuntime {
     base_url: String,
     token: String,
     model: String,
+    /// The `reasoning_effort` levels the server's `/props` listed.
+    effort_levels: Vec<String>,
     /// Keeps the global sidecar's request count up while this runtime lives.
     busy: Option<Arc<super::local_sidecar::Busy>>,
 }
@@ -29,6 +31,7 @@ impl std::fmt::Debug for HttpLocalRuntime {
             .field("base_url", &self.base_url)
             .field("token", &"[redacted]")
             .field("model", &self.model)
+            .field("effort_levels", &self.effort_levels)
             .finish()
     }
 }
@@ -40,8 +43,20 @@ impl HttpLocalRuntime {
             base_url,
             token: token.into(),
             model: "local".into(),
+            effort_levels: Vec::new(),
             busy: None,
         }
+    }
+
+    /// The levels `/props` listed (see [`super::local_effort`]).
+    pub fn with_effort_levels(mut self, levels: Vec<String>) -> Self {
+        self.effort_levels = levels;
+        self
+    }
+
+    /// The level to send for the turn's effort, if the model renders one.
+    fn effort(&self, want: Option<&str>) -> Option<String> {
+        super::local_effort::nearest(want?, &self.effort_levels)
     }
 
     /// Reject non-loopback bases so a mis-set URL never leaves the device.
@@ -61,16 +76,22 @@ impl HttpLocalRuntime {
             .build()
     }
 
-    fn post_chat(&self, messages: &[ChatMessage], stream: bool) -> Result<ureq::Response, String> {
+    fn post_chat(
+        &self,
+        messages: &[ChatMessage],
+        stream: bool,
+        effort: Option<&str>,
+    ) -> Result<ureq::Response, String> {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
         super::local_sidecar::touch_global();
-        let body = json!({
-            "model": self.model,
-            "stream": stream,
-            "messages": messages.iter().map(|m| json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
-        });
+        let body = chat_body(
+            &self.model,
+            messages,
+            stream,
+            self.effort(effort).as_deref(),
+        );
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .set("Authorization", &format!("Bearer {}", self.token))
@@ -81,7 +102,7 @@ impl HttpLocalRuntime {
 
     fn chat_once(&self, messages: &[ChatMessage]) -> Result<String, String> {
         let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, false)?;
+        let resp = self.post_chat(messages, false, None)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -106,6 +127,45 @@ impl HttpLocalRuntime {
         ];
         let text = self.chat_once(&messages)?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
+    }
+}
+
+/// How long a `/props` answer (or its absence) is trusted before asking again.
+const PROPS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+type PropsCache =
+    std::sync::Mutex<std::collections::HashMap<String, (Option<u64>, std::time::Instant)>>;
+
+fn props_cache() -> &'static PropsCache {
+    static CACHE: std::sync::OnceLock<PropsCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// `n_ctx` from a llama-server `/props` body: the per-slot window.
+fn n_ctx_from_props(v: &Value) -> Option<u64> {
+    v.pointer("/default_generation_settings/n_ctx")
+        .or_else(|| v.get("n_ctx"))
+        .and_then(Value::as_u64)
+        .filter(|&n| n >= 256)
+}
+
+impl HttpLocalRuntime {
+    fn fetch_n_ctx(&self) -> Option<u64> {
+        if !self.loopback_ok() {
+            return None;
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(2))
+            .timeout_read(std::time::Duration::from_secs(2))
+            .build();
+        let v: Value = agent
+            .get(&format!("{}/props", self.base_url))
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .ok()?
+            .into_json()
+            .ok()?;
+        n_ctx_from_props(&v)
     }
 }
 
@@ -136,8 +196,17 @@ impl LocalRuntime for HttpLocalRuntime {
         messages: &[ChatMessage],
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
+        self.chat_stream_at(messages, None, on_delta)
+    }
+
+    fn chat_stream_at(
+        &self,
+        messages: &[ChatMessage],
+        effort: Option<&str>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
         let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, true)?;
+        let resp = self.post_chat(messages, true, effort)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -159,6 +228,25 @@ impl LocalRuntime for HttpLocalRuntime {
         Ok(text)
     }
 
+    fn context_tokens(&self) -> Option<u64> {
+        let now = std::time::Instant::now();
+        if let Some((n, at)) = props_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.base_url)
+        {
+            if now.duration_since(*at) < PROPS_TTL {
+                return *n;
+            }
+        }
+        let n = self.fetch_n_ctx();
+        props_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(self.base_url.clone(), (n, now));
+        n
+    }
+
     fn chat_tools(
         &self,
         req: &ResponsesRequest,
@@ -175,6 +263,9 @@ impl LocalRuntime for HttpLocalRuntime {
         // Non-streaming: tool_calls are unreliable on SSE for llama-server.
         let mut body = openai_body(&self.model, None, req);
         body["stream"] = json!(false);
+        if let Some(e) = self.effort(req.effort.as_deref()) {
+            body["reasoning_effort"] = json!(e);
+        }
         let resp = Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .set("Authorization", &format!("Bearer {}", self.token))
@@ -191,6 +282,20 @@ impl LocalRuntime for HttpLocalRuntime {
             .map_err(|e| format!("local model read: {e}"))?;
         parse_openai_reply(&text).map_err(|e| e.to_string())
     }
+}
+
+/// A `/v1/chat/completions` body. `effort` is a level the model's template
+/// renders (llama-server's `reasoning_effort`); `None` leaves it out.
+fn chat_body(model: &str, messages: &[ChatMessage], stream: bool, effort: Option<&str>) -> Value {
+    let mut body = json!({
+        "model": model,
+        "stream": stream,
+        "messages": messages.iter().map(|m| json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
+    });
+    if let Some(e) = effort {
+        body["reasoning_effort"] = json!(e);
+    }
+    body
 }
 
 fn loopback_base(base: &str) -> bool {
@@ -267,8 +372,9 @@ fn read_sse(resp: ureq::Response, on_delta: &mut dyn FnMut(&str)) -> Result<Stri
 
 /// Build a runtime from a running sidecar endpoint, if any.
 pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn LocalRuntime>> {
-    let (base, token) = super::local_sidecar::global_endpoint()?;
-    let mut rt = HttpLocalRuntime::new(base, token);
+    let end = super::local_sidecar::global_endpoint()?;
+    let mut rt =
+        HttpLocalRuntime::new(end.base_url, end.token).with_effort_levels(end.effort_levels);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }
@@ -284,6 +390,76 @@ mod tests {
         let rt = HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
         let d = rt.difficulty("hard bug").expect("d");
         assert_eq!(d["d"], 0.5);
+    }
+
+    #[test]
+    fn the_device_window_comes_from_props() {
+        let fake = FakeServer::start(None);
+        let rt = HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
+        assert_eq!(rt.context_tokens(), Some(8_192));
+        let wrong = HttpLocalRuntime::new(fake.base_url(), "not-the-token");
+        assert_eq!(wrong.fetch_n_ctx(), None);
+    }
+
+    #[test]
+    fn n_ctx_reads_both_props_shapes_and_ignores_nonsense() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        assert_eq!(
+            n_ctx_from_props(&v(r#"{"default_generation_settings":{"n_ctx":4096}}"#)),
+            Some(4_096)
+        );
+        assert_eq!(n_ctx_from_props(&v(r#"{"n_ctx":16384}"#)), Some(16_384));
+        assert_eq!(n_ctx_from_props(&v(r#"{"n_ctx":0}"#)), None);
+        assert_eq!(n_ctx_from_props(&v(r#"{"model":"x"}"#)), None);
+    }
+
+    #[test]
+    fn the_turns_effort_goes_out_only_as_a_level_the_model_renders() {
+        let user = [ChatMessage {
+            role: "user".into(),
+            content: "hi".into(),
+        }];
+        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t")
+            .with_effort_levels(vec!["low".into(), "high".into()]);
+        let sent = |want| chat_body("local", &user, true, rt.effort(want).as_deref());
+        assert_eq!(
+            sent(Some("xhigh")),
+            json!({
+                "model": "local",
+                "stream": true,
+                "messages": [{"role": "user", "content": "hi"}],
+                "reasoning_effort": "high"
+            })
+        );
+        // The template's own default (between low and high), and no effort.
+        assert_eq!(sent(Some("medium")).get("reasoning_effort"), None);
+        assert_eq!(sent(None).get("reasoning_effort"), None);
+        // A model whose template renders no level never gets one.
+        let plain = HttpLocalRuntime::new("http://127.0.0.1:9", "t");
+        assert_eq!(plain.effort(Some("high")), None);
+    }
+
+    #[test]
+    fn effort_levels_are_read_from_props_with_the_api_key() {
+        let fake = FakeServer::start(None);
+        assert_eq!(
+            super::super::local_effort::fetch_levels(
+                &fake.host,
+                fake.port,
+                &fake.token,
+                super::super::local_effort::PROPS_TIMEOUT
+            ),
+            ["low", "high"]
+        );
+        assert_eq!(
+            super::super::local_effort::fetch_levels(
+                &fake.host,
+                fake.port,
+                "sk-abcdefghijklmnopqrstuv",
+                super::super::local_effort::PROPS_TIMEOUT
+            ),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

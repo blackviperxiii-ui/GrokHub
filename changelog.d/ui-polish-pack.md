@@ -1,1 +1,0 @@
-- Settings now scrolls as one page with the side menu following the section you're reading, icons across the app answer hover, press and selection with a short motion, card icons lift a little when you point at the card, and a new "Reduce motion" switch in Settings → Appearance keeps everything still.

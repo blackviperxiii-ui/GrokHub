@@ -102,6 +102,7 @@ pub mod models;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
+pub mod offline;
 pub mod openclaw;
 pub mod organs;
 pub mod outcome;
@@ -172,6 +173,7 @@ pub mod windshield;
 pub mod wire;
 pub mod workboard;
 pub mod xai_signin;
+pub mod xp;
 
 pub use amr::{
     AmrError, AmrStore, Edge, EdgeRel, LegacyMemory, MemoryBackend, MemoryEngine, Node, NodeDraft,

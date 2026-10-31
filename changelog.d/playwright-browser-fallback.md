@@ -1,1 +1,0 @@
-- Playwright browser tools now detect cached Chromium or installed browsers when Chrome is missing, and explain how to install a browser when none is available.

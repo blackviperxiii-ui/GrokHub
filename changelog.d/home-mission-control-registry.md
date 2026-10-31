@@ -1,1 +1,0 @@
-- Home Mission Control: module registry (36), slot grid layout engine, and `home_layout.json` v2 persist.

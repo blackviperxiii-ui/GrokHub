@@ -137,6 +137,7 @@ fn reply_of(v: &Value) -> (String, Vec<(String, String)>) {
 
 impl ProbeTransport for XaiProbeTransport {
     fn send(&mut self, call: &ProbeCall) -> Result<ProbeReply, String> {
+        grokhub_core::offline::check_url(RESPONSES_URL)?;
         let started = Instant::now();
         let resp = agent(Duration::from_secs(call.timeout_secs))
             .post(RESPONSES_URL)

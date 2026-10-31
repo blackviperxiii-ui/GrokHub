@@ -1,1 +1,0 @@
-- Loadout ships built-in vstack skills (qa-walkthrough, av-qa-walkthrough, create-/maintain-verification-skill, follow-through) with plan-to-skill wiring for ship gates, verify-before-done, and multi-step follow-through.

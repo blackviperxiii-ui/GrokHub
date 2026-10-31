@@ -1,1 +1,0 @@
-- Web search polish: natural citation wording (no tool/provider names), drop off-topic hits like the Rust game for programming queries, and say Loadout instead of GrokHub in Cabin defaults local-model hint.
