@@ -1,0 +1,1 @@
+- CI: release.yml beta-push builds cache Rust (`Swatinem/rust-cache`) and skip the macOS shell bundle; tags, the nightly and manual runs still build all three bundles, uncached.

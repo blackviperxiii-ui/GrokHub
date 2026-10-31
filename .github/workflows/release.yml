@@ -9,7 +9,8 @@ name: Release
 # exists. Merges made with github.token start no push runs, so auto-merge needs
 # AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
 # Each release carries Linux and Windows builds, the Tauri shell's bundles
-# (Linux, Windows, macOS), `SHA256SUMS`, and
+# (Linux and Windows; macOS on tags, the nightly and manual runs, not on beta
+# pushes), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
 # `packaging/minisign.pub`; the updater refuses unverified assets.
 
@@ -54,6 +55,9 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       # true for beta pushes, the nightly, manual beta runs and vX.Y.Z-beta.N tags.
       beta: ${{ github.ref_type != 'tag' || contains(github.ref_name, '-beta.') }}
+      # Shell bundle OSes. A beta push skips macOS (10x runner minutes for an
+      # unsigned .dmg); tags, the nightly and manual runs build all three.
+      shell_os: ${{ (github.ref_type == 'tag' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,6 +112,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+      # Build caches only on beta pushes (and manual runs on beta). Tags and
+      # the nightly build cold, as before, so a release never starts from a
+      # cache a beta build wrote.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: github.ref == 'refs/heads/beta'
+        with:
+          shared-key: linux-release
       - name: Native GUI build deps
         run: |
           sudo apt-get update
@@ -146,6 +157,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: github.ref == 'refs/heads/beta'
+        with:
+          shared-key: windows-release
       - name: Inno Setup
         run: choco install innosetup --no-progress
       - name: Package
@@ -261,7 +276,7 @@ jobs:
     if: needs.plan.outputs.build == 'true'
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.shell_os) }}
     name: shell bundles (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -279,6 +294,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: github.ref == 'refs/heads/beta'
+        with:
+          workspaces: src-tauri
+          shared-key: shell-${{ matrix.os }}
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
@@ -389,7 +409,8 @@ jobs:
 
             **GrokHub Shell (preview, Tauri):** `grokhub-shell-v*-linux-amd64.deb` or
             `.AppImage` on Linux, `GrokHub-Shell-Setup-*.exe` on Windows, and
-            `grokhub-shell-v*-macos-arm64.dmg` on Apple silicon Macs. The .dmg isn't
+            `grokhub-shell-v*-macos-arm64.dmg` on Apple silicon Macs (tagged and
+            nightly releases; per-merge beta builds skip it). The .dmg isn't
             signed yet, so right-click the app and choose Open the first time.
 
             ## Verify
