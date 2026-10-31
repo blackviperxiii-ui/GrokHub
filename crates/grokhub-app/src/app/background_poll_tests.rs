@@ -962,3 +962,34 @@ fn chips_poll_clears_busy_on_drop() {
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
 }
+
+// LO-07: background writes report what actually happened.
+#[test]
+fn poll_reports_success_and_failure() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.spawn_file_write("/x/export.md".into(), false, || Ok("/x/export-1.md".into()));
+    wait_for("write result", || {
+        cabin.poll_file_writes();
+        cabin.file_writes.is_empty()
+    });
+    assert_eq!(cabin.status, "Wrote /x/export-1.md");
+
+    cabin.spawn_file_write("SOUL.md".into(), true, || Err("disk full".into()));
+    wait_for("write error", || {
+        cabin.poll_file_writes();
+        cabin.file_writes.is_empty()
+    });
+    assert_eq!(cabin.status, "Couldn't write SOUL.md: disk full");
+
+    cabin.status = "Harbor".into();
+    cabin.spawn_file_write("MEMORY.md".into(), true, || Ok("MEMORY.md".into()));
+    wait_for("quiet autosave", || {
+        cabin.poll_file_writes();
+        cabin.file_writes.is_empty()
+    });
+    assert_eq!(
+        cabin.status, "Harbor",
+        "a quiet autosave says nothing on success"
+    );
+}

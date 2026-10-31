@@ -1478,9 +1478,9 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
     );
     let export_spawn = export
-        .find("thread::spawn")
+        .find("spawn_file_write")
         .expect("export write must leave the UI thread");
-    let export_write = export.find("fs::write").expect("export.md");
+    let export_write = export.find("write_new_file").expect("export.md");
     assert!(
         export_spawn < export_write && export_spawn < wrote,
         "/export must not freeze the cabin formatting an 8MB thread into markdown: {export}"

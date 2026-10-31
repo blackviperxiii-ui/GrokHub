@@ -69,21 +69,58 @@ fn run_slash_help_export_and_clear() {
     cabin.messages = std::sync::Arc::new(vec![("user".into(), "harbor export line".into())]);
     cabin.cfg.project_dir.clear();
     cabin.run_slash(grokhub_core::Slash::Export);
+    assert!(
+        cabin.status.starts_with("Exporting to "),
+        " /export must not claim Wrote before the file exists, got {}",
+        cabin.status
+    );
+    wait_file_writes(cabin);
     let path = cabin
         .status
         .strip_prefix("Wrote ")
         .unwrap_or("")
         .to_string();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     assert!(
-        path.ends_with("export.md"),
-        " /export must name export.md, got {}",
+        name.starts_with("export-") && name.ends_with(".md"),
+        " /export must name a stamped export-*.md, got {}",
         cabin.status
     );
-    wait_for("export.md must contain the chat line", || {
+    assert!(
         std::fs::read_to_string(&path)
             .unwrap_or_default()
-            .contains("harbor export line")
-    });
+            .contains("harbor export line"),
+        "the exported file holds the chat line once Wrote shows"
+    );
+
+    // A second export never clobbers the first.
+    cabin.run_slash(grokhub_core::Slash::Export);
+    wait_file_writes(cabin);
+    let second = cabin
+        .status
+        .strip_prefix("Wrote ")
+        .unwrap_or("")
+        .to_string();
+    assert_ne!(second, path, "second export must get its own file");
+    assert!(std::path::Path::new(&path).exists() && std::path::Path::new(&second).exists());
+
+    // A folder that isn't there: the status says so instead of "Wrote".
+    cabin.cfg.project_dir = std::env::temp_dir()
+        .join(format!("gh-export-missing-{}", std::process::id()))
+        .join("nope")
+        .display()
+        .to_string();
+    cabin.run_slash(grokhub_core::Slash::Export);
+    wait_file_writes(cabin);
+    assert!(
+        cabin.status.starts_with("Couldn't write ") && cabin.status.contains("nope"),
+        "a failed export must say so, got {}",
+        cabin.status
+    );
+    cabin.cfg.project_dir.clear();
 
     cabin.run_slash(grokhub_core::Slash::Clear);
     assert!(
@@ -337,6 +374,8 @@ fn remember_appends_memory_and_refuses_a_secret() {
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body.clear();
     cabin.run_slash_line("/remember harbor light");
+    assert_eq!(cabin.status, "Saving MEMORY.md…");
+    wait_file_writes(&mut cabin);
     assert_eq!(cabin.status, "Wrote MEMORY.md");
     assert!(
         cabin.mem_body.contains("harbor light"),
@@ -464,8 +503,9 @@ fn export_writes_a_chat_and_empty_video_does_not_send() {
     cabin.run_slash_line("/scratch");
     cabin.cfg.project_dir.clear();
     cabin.run_slash_line("/export");
+    wait_file_writes(&mut cabin);
     assert!(
-        cabin.status.starts_with("Wrote ") && cabin.status.ends_with("export.md"),
+        cabin.status.starts_with("Wrote ") && cabin.status.ends_with(".md"),
         "export status was {}",
         cabin.status
     );

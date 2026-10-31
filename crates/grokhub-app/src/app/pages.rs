@@ -580,12 +580,8 @@ impl Cabin {
                             } else {
                                 let name = self.mem_name.clone();
                                 let body = self.mem_body.clone();
-                                std::thread::spawn(move || {
-                                    if config::read_memory(&name) != body {
-                                        let _ = config::write_memory(&name, &body);
-                                    }
-                                });
-                                self.status = format!("Wrote {}", self.mem_name);
+                                self.status = format!("Saving {name}…");
+                                self.save_memory_file(name, body, false);
                             }
                         }
                     });
@@ -1610,13 +1606,8 @@ impl Cabin {
 
     pub(super) fn kick_history_search(&mut self) {
         if !self.scratch() {
-            let name = self.mem_name.clone();
-            let body = self.mem_body.clone();
-            std::thread::spawn(move || {
-                if config::read_memory(&name) != body {
-                    let _ = config::write_memory(&name, &body);
-                }
-            });
+            // Quiet autosave before searching; only a failure speaks up.
+            self.save_memory_file(self.mem_name.clone(), self.mem_body.clone(), true);
         }
         let q = self.history_q.clone();
         let mem_name = self.mem_name.clone();
@@ -1746,12 +1737,18 @@ impl Cabin {
             // Capture the config directory now, like the other scheduled saves:
             // looking it up when the thread runs can land in another directory.
             let dir = config::config_dir();
+            // Quiet on success; a failed save names the file on the status line.
+            let (tx, rx) = mpsc::channel();
+            self.file_writes.push(rx);
             self.mem_leave_saves.retain(|s| !s.is_finished());
             self.mem_leave_saves.push(std::thread::spawn(move || {
                 let _pin = pin_scheduled_dir(dir);
-                if config::read_memory(&leaving) != body {
-                    let _ = config::write_memory(&leaving, &body);
-                }
+                let result = if config::read_memory(&leaving) != body {
+                    config::write_memory(&leaving, &body).map(|()| leaving.clone())
+                } else {
+                    Ok(leaving.clone())
+                };
+                let _ = tx.send(file_writes::FileWriteDone::quiet(leaving, result));
             }));
         }
         self.mem_name = name.into();
