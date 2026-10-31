@@ -1164,7 +1164,13 @@ pub fn stream_routed(
     } else {
         decision.send_model(&req.model)
     };
-    sent.effort = effort.clone();
+    // A local tier has no effort menu, so the router picks none for it; the
+    // sidecar maps the turn's own effort onto what the model's template renders.
+    sent.effort = if on_device {
+        effort.clone().or_else(|| req.effort.clone())
+    } else {
+        effort.clone()
+    };
     sent.model = model.clone();
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));

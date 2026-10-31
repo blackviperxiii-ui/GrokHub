@@ -46,6 +46,9 @@ pub struct Sidecar {
     idle_unload_secs: u64,
     /// The auto-configured flags; `None` runs the one-shot `local_perf` defaults.
     launch: Option<LaunchArgs>,
+    /// The `reasoning_effort` levels the model's chat template renders, read
+    /// from `/props` once the server is up; empty sends no effort.
+    pub effort_levels: Vec<String>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -58,6 +61,7 @@ impl std::fmt::Debug for Sidecar {
             .field("model", &self.model)
             .field("restarts", &self.restart_count())
             .field("idle_unload_secs", &self.idle_unload_secs)
+            .field("effort_levels", &self.effort_levels)
             .finish()
     }
 }
@@ -355,7 +359,7 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             &token,
             launch.as_ref(),
         )?;
-        let side = Sidecar {
+        let mut side = Sidecar {
             child: Mutex::new(child),
             host: host.clone(),
             port,
@@ -366,9 +370,16 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             last_used_secs: AtomicU64::new(unix_secs()),
             idle_unload_secs: idle,
             launch: launch.clone(),
+            effort_levels: Vec::new(),
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
+                side.effort_levels = super::local_effort::fetch_levels(
+                    &side.host,
+                    side.port,
+                    &side.token,
+                    super::local_effort::PROPS_TIMEOUT,
+                );
                 if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
                     if attempt > 0 {
                         let tuned = autoconfig::Tuned {
@@ -739,11 +750,24 @@ pub fn global_pid() -> Option<u32> {
     slot.as_ref().map(Sidecar::pid)
 }
 
-/// Base URL + token for the global sidecar, when running.
-pub fn global_endpoint() -> Option<(String, String)> {
+/// Where a request reaches the global sidecar.
+#[derive(Clone)]
+pub struct Endpoint {
+    pub base_url: String,
+    pub token: String,
+    /// [`Sidecar::effort_levels`].
+    pub effort_levels: Vec<String>,
+}
+
+/// Base URL, token and effort levels of the global sidecar, when running.
+pub fn global_endpoint() -> Option<Endpoint> {
     tick_idle_unload();
     let slot = global_slot().lock().expect("sidecar global");
-    slot.as_ref().map(|s| (s.base_url(), s.token.clone()))
+    slot.as_ref().map(|s| Endpoint {
+        base_url: s.base_url(),
+        token: s.token.clone(),
+        effort_levels: s.effort_levels.clone(),
+    })
 }
 
 /// Mark the global sidecar as just used (keeps it warm).
@@ -907,7 +931,7 @@ mod rand_token {
     }
 }
 
-/// Minimal HTTP peer for contract tests: answers `/health` and
+/// Minimal HTTP peer for contract tests: answers `/health`, `/props` and
 /// `/v1/chat/completions` on 127.0.0.1, optional exit after N completions.
 #[cfg(test)]
 pub mod fake_server {
@@ -1089,13 +1113,10 @@ pub mod fake_server {
         if first.starts_with("GET /props") {
             if !auth_ok {
                 write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
-            } else {
-                write_resp(
-                    stream,
-                    "200 OK",
-                    r#"{"default_generation_settings":{"n_ctx":8192},"total_slots":1}"#,
-                );
+                return Ok(());
             }
+            let body = r#"{"default_generation_settings":{"n_ctx":8192},"total_slots":1,"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","high"]}}"#;
+            write_resp(stream, "200 OK", body);
             return Ok(());
         }
         if first.starts_with("POST /v1/chat/completions") {
@@ -1168,6 +1189,7 @@ mod tests {
             last_used_secs: AtomicU64::new(last_used_secs),
             idle_unload_secs,
             launch: None,
+            effort_levels: Vec::new(),
         }
     }
 

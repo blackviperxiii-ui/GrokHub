@@ -332,6 +332,8 @@ const HIDDEN_HEARTBEAT_MS: u64 = 400;
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 /// How long History's armed "Delete all" waits for the confirming click.
 const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
+/// Closing line on a reply cut off by Stop, so it reads as stopped, not finished.
+const STOPPED_TURN_SEAM: &str = "\n\n*Stopped*";
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -2271,6 +2273,8 @@ impl Cabin {
         self.host_diff_rx = None;
         self.host_diff_kick = false;
         self.verify_rx = None;
+        // Stop ends the run; it must not erase what the run already said and did.
+        let kept = self.stopped_turn_transcript();
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -2287,7 +2291,13 @@ impl Cabin {
         self.elicit_draft.clear();
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
-        if job.as_deref().is_none_or(|id| id == vis) {
+        if let Some(text) = kept {
+            // Lands on the tab that owns the turn, like a finished reply.
+            self.apply_assistant_snapshot(text);
+            if job.as_deref().is_none_or(|id| id == vis) {
+                self.stamp_current_access();
+            }
+        } else if job.as_deref().is_none_or(|id| id == vis) {
             if self.messages.last().is_some_and(|m| m.0 == "assistant") {
                 self.live_mut().pop();
             }
@@ -2301,6 +2311,30 @@ impl Cabin {
         self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
+    }
+
+    /// What a stopped run already streamed (thinking, reply, tool calls), with a
+    /// closing "Stopped" line, or None when nothing came in before the Stop.
+    /// Takes the stream buffers, so call it before they are cleared.
+    fn stopped_turn_transcript(&mut self) -> Option<String> {
+        let thought = std::mem::take(&mut self.thought_buf);
+        let stream = std::mem::take(&mut self.stream_buf);
+        let tools = turn_needs_timeline(&self.turn_log);
+        if thought.trim().is_empty() && stream.trim().is_empty() && !tools {
+            return None;
+        }
+        let merged = if thought.is_empty() {
+            stream
+        } else {
+            merge_thinking_capped(&thought, &strip_thinking(&stream), IMAGE_FILE_CAP as usize)
+        };
+        append_say(&mut self.turn_log, STOPPED_TURN_SEAM);
+        let text = self.turn_transcript(
+            format!("{}{STOPPED_TURN_SEAM}", merged.trim_end()),
+            IMAGE_FILE_CAP,
+        );
+        self.turn_log.clear();
+        Some(text)
     }
 
     fn scrub_transcript(&self, content: String) -> String {

@@ -25,8 +25,8 @@ pub const CUA_MCP_RULE: &str = "MCPTool(grokhub-cua__*)";
 /// The cabin's own computer-use MCP servers. Both gate every call in the cabin.
 pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
 
-const PREFERRED_PROTOCOL: &str = "2025-06-18";
-const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+const PREFERRED_PROTOCOL: &str = PROTOCOLS[0];
+const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 pub const OFF_MSG: &str =
     "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
@@ -2234,8 +2234,14 @@ mod tests {
         );
         assert_eq!(
             reply_of(&unknown)["result"]["protocolVersion"],
-            "2025-06-18"
+            "2025-11-25"
         );
+        let newest = s.handle_line(
+            r#"{"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"t","version":"0"}}}"#,
+            on(),
+        );
+        assert_eq!(reply_of(&newest)["id"], 6);
+        assert_eq!(reply_of(&newest)["result"]["protocolVersion"], "2025-11-25");
         let bad = s.handle_line(
             r#"{"jsonrpc":"2.0","id":4,"method":"initialize","params":{}}"#,
             on(),
