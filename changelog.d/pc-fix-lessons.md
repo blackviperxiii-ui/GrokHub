@@ -1,4 +1,0 @@
-- The Linux package check no longer calls a file it can't read "missing". Files a user can't read without admin rights are listed as "couldn't check", so they never turn into a reinstall (kernels included). Only files that are really gone get the reinstall offer.
-- The assistant never says it's doing something "with your approval" before you said yes or accepted the approval card, and it keeps its planning notes to itself.
-- Long-run progress notes read as plain sentences ("Finished check failed services. Now on verify packages.") instead of "Done: … and 2 more."
-- The Linux and Windows repair playbooks check the fix again after a restart they started, and the Linux one fixes the real setting (keeping a .bak) instead of linking around it.

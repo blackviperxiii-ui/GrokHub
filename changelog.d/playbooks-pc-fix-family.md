@@ -1,3 +1,0 @@
-- One "Fix this PC" playbook replaces Repair Linux and Repair Windows. It covers Linux (Arch, Debian or Ubuntu, Fedora), Windows and macOS, and each turn only sees this computer's steps.
-- The PC-fix lessons are built in: back up first, a permission-denied answer isn't something missing, fix the real setting rather than linking around it, say "approved" or "done" only once it's true, and check again after a restart.
-- System repair on a Mac now gets the PC-fix playbook instead of the general one. Settings → Playbooks counts only this computer's steps.
