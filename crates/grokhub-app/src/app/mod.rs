@@ -163,6 +163,7 @@ mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
 mod day_brief_ui;
+mod desktop_anim;
 mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
