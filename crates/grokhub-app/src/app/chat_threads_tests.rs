@@ -120,8 +120,19 @@ fn history_rail_uses_session_names_and_can_delete() {
         .and_then(|s| s.split("fn ui_board(").next())
         .expect("ui_history");
     assert!(
-        hist.contains("Delete all") && hist.contains("delete_all_history"),
-        "History See all must offer Delete all: {hist}"
+        hist.contains("self.history_header(ui)"),
+        "History See all must draw the header with Delete all: {hist}"
+    );
+    let header = src
+        .split("fn history_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_history(").next())
+        .expect("history_header");
+    assert!(
+        header.contains("Delete all")
+            && header.contains("click_delete_all_history")
+            && header.contains("danger_pill"),
+        "Delete all is a red two-click button, never a one-click primary: {header}"
     );
     let poll = src
         .split("fn poll_single(")
@@ -941,6 +952,52 @@ fn history_hit_opens_memory_or_chat() {
 }
 
 // Landed from PR #172.
+#[test]
+fn delete_all_history_needs_a_second_click() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("delete-all-confirm");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut pier = crate::threads::ChatThread::new("Pier light", false);
+    pier.messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    cabin.threads = vec![pier];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let t0 = std::time::Instant::now();
+
+    assert!(!cabin.click_delete_all_history(t0), "first click only arms");
+    assert!(cabin.history_delete_armed(t0));
+    assert!(
+        cabin.threads.iter().any(|t| t.title == "Pier light"),
+        "one click must leave every chat in place"
+    );
+
+    // A click after the window lapsed re-arms instead of deleting.
+    let late = t0 + super::DELETE_ALL_ARM + std::time::Duration::from_secs(1);
+    assert!(
+        !cabin.history_delete_armed(late),
+        "the arm lapses on its own"
+    );
+    assert!(
+        !cabin.click_delete_all_history(late),
+        "a stale arm never deletes"
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == "Pier light"));
+
+    // Confirming inside the window deletes.
+    let confirm = late + std::time::Duration::from_secs(2);
+    assert!(
+        cabin.click_delete_all_history(confirm),
+        "second click deletes"
+    );
+    assert!(
+        !cabin.threads.iter().any(|t| t.title == "Pier light"),
+        "confirmed Delete all wipes the chats"
+    );
+    assert!(!cabin.history_delete_armed(confirm), "deleting disarms");
+    join_persist(&cabin.persist_svc);
+}
+
 #[test]
 fn delete_all_history_leaves_one_empty_chat() {
     let _hold = crate::config::hold_test_config();
