@@ -600,6 +600,11 @@ pub trait LocalRuntime: Send + Sync {
         self.chat_stream(messages, on_delta)
     }
 
+    /// The model's context window in tokens, when the runtime can tell.
+    fn context_tokens(&self) -> Option<u64> {
+        None
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -771,7 +776,13 @@ pub fn serve_request(
     if req.tools.is_empty() {
         return serve_within_at(class, &text, req.effort.as_deref(), HEAVY_WAIT, cancel);
     }
-    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
+    // The device window is often 4k to 16k: send only what fits, with room to answer.
+    let n_ctx = rt
+        .context_tokens()
+        .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    let (fitted, _) = super::local_fit::fit(req, n_ctx);
+    rt.chat_tools(&fitted, cancel)
+        .map_err(ClientError::Protocol)
 }
 
 pub(crate) fn serve_within(

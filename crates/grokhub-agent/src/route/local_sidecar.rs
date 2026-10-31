@@ -1115,7 +1115,7 @@ pub mod fake_server {
                 write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
                 return Ok(());
             }
-            let body = r#"{"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","high"]}}"#;
+            let body = r#"{"default_generation_settings":{"n_ctx":8192},"total_slots":1,"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","high"]}}"#;
             write_resp(stream, "200 OK", body);
             return Ok(());
         }
