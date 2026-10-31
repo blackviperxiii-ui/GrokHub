@@ -1,0 +1,8 @@
+- Pulse: a card only counts as ignored a day after Pulse first showed it; cards you never saw no longer quiet their category.
+- Week recap: games you played this week are listed by name; the library's lifetime hours are no longer shown as this week's.
+- Wind-down: the late-night sleep offer ends six hours past your wind-down hour or at your usual wake hour, so a 11 PM wind-down no longer offers sleep the next morning.
+- Local AI: the fallback badge says "needs a sign-in or key" when that is why the device is answering, instead of "no cloud model is answering".
+- 18+ chats: with no xAI sign-in and no local model the turn pauses for a sign-in before anything is sent, and the once-a-session heads-up is kept for the turn that goes through.
+- Release radar: "Out today" reminders post on the release day where you are, not at UTC midnight.
+- Local AI: a llama-server that answers without the API key is stopped at startup with a clear error instead of being used.
+- Ledgers for Pulse ignores, release radar posts, achievement nudges, model drops and repeated-ask offers stay bounded on disk; the net log closes an outage that ended while the app was closed at its last failed probe.

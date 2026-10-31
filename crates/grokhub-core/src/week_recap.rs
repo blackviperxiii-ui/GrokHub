@@ -24,12 +24,13 @@ pub const PROJECTS_CAP: usize = 5;
 /// Top tasks listed on the card.
 pub const TOP_TASKS_CAP: usize = 5;
 
-/// One game the user opened this week, with library playtime minutes.
+/// One game the user opened this week. The library only counts lifetime
+/// playtime, so the recap names the game and never prints hours for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GamePlayed {
     pub name: String,
-    /// Lifetime minutes from the library counter (not a new scan).
-    pub minutes: u64,
+    /// Lifetime minutes from the library counter: ranks games, never shown.
+    pub lifetime_minutes: u64,
 }
 
 /// One code project touched this week. Name only — never a path.
@@ -243,12 +244,13 @@ pub fn project_name(raw: &str) -> String {
 
 /// Build the recap. Empty / off signals produce no section.
 pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
+    // Lifetime hours are not this week's hours: the line is the name only.
     let games: Vec<String> = input
         .games
         .iter()
-        .filter(|g| !g.name.trim().is_empty() && g.minutes > 0)
+        .filter(|g| !g.name.trim().is_empty() && g.lifetime_minutes > 0)
         .take(GAMES_CAP)
-        .map(|g| format!("{} · {}", g.name.trim(), hours_label(g.minutes)))
+        .map(|g| g.name.trim().to_string())
         .collect();
     let projects: Vec<String> = input
         .projects
@@ -357,20 +359,6 @@ fn closing_line(tone: &RecapTone) -> String {
     }
 }
 
-fn hours_label(minutes: u64) -> String {
-    if minutes < 60 {
-        format!("{minutes}m")
-    } else {
-        let h = minutes / 60;
-        let m = minutes % 60;
-        if m == 0 {
-            format!("{h}h")
-        } else {
-            format!("{h}h {m}m")
-        }
-    }
-}
-
 fn bytes_label(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
@@ -473,9 +461,10 @@ fn days_to_civil(mut z: i64) -> (i32, u32, u32) {
     (y, m as u32, d as u32)
 }
 
-/// Games with `last_played` inside the week window, ranked by playtime.
+/// Games with `last_played` inside the week window, ranked by lifetime
+/// playtime (the only counter the library keeps).
 pub fn games_from_library(games: &[(String, u64, u64)], now_ms: u64) -> Vec<GamePlayed> {
-    // (name, last_played_unix_s, playtime_min)
+    // (name, last_played_unix_s, lifetime_playtime_min)
     let now_s = now_ms / 1000;
     let week_s = WEEK_MS / 1000;
     let mut out: Vec<GamePlayed> = games
@@ -483,11 +472,15 @@ pub fn games_from_library(games: &[(String, u64, u64)], now_ms: u64) -> Vec<Game
         .filter(|(_, last, mins)| *last > 0 && *mins > 0 && now_s.saturating_sub(*last) <= week_s)
         .map(|(name, _, mins)| GamePlayed {
             name: name.trim().to_string(),
-            minutes: *mins,
+            lifetime_minutes: *mins,
         })
         .filter(|g| !g.name.is_empty())
         .collect();
-    out.sort_by(|a, b| b.minutes.cmp(&a.minutes).then(a.name.cmp(&b.name)));
+    out.sort_by(|a, b| {
+        b.lifetime_minutes
+            .cmp(&a.lifetime_minutes)
+            .then(a.name.cmp(&b.name))
+    });
     out.truncate(GAMES_CAP);
     out
 }
@@ -789,11 +782,11 @@ mod tests {
             games: vec![
                 GamePlayed {
                     name: "Hades".into(),
-                    minutes: 150,
+                    lifetime_minutes: 150,
                 },
                 GamePlayed {
                     name: "Celeste".into(),
-                    minutes: 45,
+                    lifetime_minutes: 45,
                 },
             ],
             projects: vec![
@@ -827,12 +820,7 @@ mod tests {
     fn recap_from_fixture_counters() {
         let recap = build_recap(&fixture_full());
         assert_eq!(recap.week_key, "2026-10-27");
-        assert_eq!(recap.games.len(), 2);
-        assert!(
-            recap.games[0].starts_with("Hades · 2h 30m"),
-            "{}",
-            recap.games[0]
-        );
+        assert_eq!(recap.games, vec!["Hades", "Celeste"]);
         assert_eq!(recap.projects[0], "grokhub · 12 commits");
         assert!(
             !recap.projects[0].contains("/home/"),
@@ -976,6 +964,25 @@ mod tests {
         assert_eq!(week_key_from_day("2026-10-28", 3), "2026-10-26");
         // Sunday → previous Monday.
         assert_eq!(week_key_from_day("2026-10-25", 0), "2026-10-19");
+    }
+
+    #[test]
+    fn lifetime_playtime_is_never_printed_as_this_weeks_hours() {
+        let mut input = fixture_full();
+        input.games = vec![GamePlayed {
+            name: "Factorio".into(),
+            lifetime_minutes: 500 * 60,
+        }];
+        let recap = build_recap(&input);
+        assert_eq!(recap.games, vec!["Factorio"]);
+        let body = recap.card_body();
+        assert!(body.contains("Games · Factorio"), "{body}");
+        assert!(!body.contains("500h"), "{body}");
+        assert!(
+            !recap.share_text().contains("500h"),
+            "{}",
+            recap.share_text()
+        );
     }
 
     #[test]

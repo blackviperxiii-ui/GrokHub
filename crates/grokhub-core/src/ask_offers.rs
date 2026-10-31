@@ -29,6 +29,8 @@ pub const HOUR_TOLERANCE: u32 = 1;
 pub const LOG_CAP: usize = 400;
 /// Cap on permanently dismissed cluster keys.
 pub const DISMISS_CAP: usize = 128;
+/// Cap on remembered offers; past it the oldest offer is forgotten.
+pub const LAST_OFFERED_CAP: usize = 128;
 /// How often the cabin should call [`tick`] at most.
 pub const TICK_EVERY_MS: u64 = 15 * 60 * 1000;
 /// Default cap on new offers per local day.
@@ -41,17 +43,13 @@ fn yes() -> bool {
     true
 }
 
-fn default_daily_max() -> u32 {
-    DEFAULT_DAILY_MAX
-}
-
 /// Settings in `app.json`. On by default; Settings → Behavior can turn it off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskOfferSettings {
     #[serde(default = "yes")]
     pub enabled: bool,
-    #[serde(default = "default_daily_max")]
+    #[serde(default = "crate::daily_cap::daily_max::<DEFAULT_DAILY_MAX>")]
     pub daily_max: u32,
 }
 
@@ -397,10 +395,20 @@ pub fn build_offer_card(cluster: &AskCluster, now_ms: u64) -> UpdateCard {
     }
 }
 
-fn ledger_day_reset(ledger: &mut AskOfferLedger, today: &str) {
-    if ledger.day != today {
-        ledger.day = today.to_string();
-        ledger.posted_today = 0;
+/// Note that `key` was offered now, forgetting the oldest offer past
+/// [`LAST_OFFERED_CAP`].
+fn remember_offer(ledger: &mut AskOfferLedger, key: &str, now_ms: u64) {
+    ledger.last_offered.insert(key.to_string(), now_ms);
+    while ledger.last_offered.len() > LAST_OFFERED_CAP {
+        let Some(oldest) = ledger
+            .last_offered
+            .iter()
+            .min_by_key(|(k, t)| (**t, (*k).clone()))
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        ledger.last_offered.remove(&oldest);
     }
 }
 
@@ -456,7 +464,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
             posted: 0,
         };
     }
-    ledger_day_reset(ledger, today);
+    crate::daily_cap::day_reset(&mut ledger.day, &mut ledger.posted_today, today);
     let daily_max = settings.daily_max.max(1);
     if ledger.posted_today >= daily_max {
         return TickOutput {
@@ -487,7 +495,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
             continue;
         }
         let card = build_offer_card(&cluster, now_ms);
-        ledger.last_offered.insert(cluster.key.clone(), now_ms);
+        remember_offer(ledger, &cluster.key, now_ms);
         ledger.posted_today += 1;
         cards.push(card);
     }
@@ -713,5 +721,22 @@ mod tests {
             );
         }
         assert!(ledger.entries.len() <= LOG_CAP);
+    }
+
+    #[test]
+    fn remembered_offers_stay_under_the_cap_oldest_first() {
+        let mut ledger = AskOfferLedger::default();
+        for i in 0..LAST_OFFERED_CAP as u64 {
+            remember_offer(&mut ledger, &format!("topic-{i:03}@h19"), 1_000 + i);
+        }
+        assert_eq!(ledger.last_offered.len(), LAST_OFFERED_CAP);
+        remember_offer(&mut ledger, "newest@h20", 5_000);
+        assert_eq!(ledger.last_offered.len(), LAST_OFFERED_CAP);
+        assert!(
+            !ledger.last_offered.contains_key("topic-000@h19"),
+            "the oldest went"
+        );
+        assert_eq!(ledger.last_offered.get("topic-001@h19"), Some(&1_001));
+        assert_eq!(ledger.last_offered.get("newest@h20"), Some(&5_000));
     }
 }

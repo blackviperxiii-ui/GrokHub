@@ -29,7 +29,8 @@ pub const IGNORE_FLOOR: i32 = -3;
 pub const QUIET_AFTER_IGNORES: u32 = 3;
 /// Pulse rank points per score point.
 pub const RANK_PER_POINT: i64 = 20;
-/// A card shown this long without a tap counts as ignored.
+/// A card shown this long (from `pulse.first_shown_ms`) without a tap counts
+/// as ignored. A card Pulse never painted is never ignored.
 pub const IGNORED_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
 /// Outcome rows kept for Settings.
 pub const LOG_MAX: usize = 200;
@@ -173,8 +174,8 @@ impl Reactions {
         *self = Self::default();
     }
 
-    /// Cards shown at least [`IGNORED_AFTER_MS`] and never opened or acted
-    /// on, each counted once. Returns the categories this quieted.
+    /// Cards Pulse painted at least [`IGNORED_AFTER_MS`] ago and never opened
+    /// or acted on, each counted once. Returns the categories this quieted.
     pub fn sweep_ignored(&mut self, cards: &[UpdateCard], now_ms: u64) -> Vec<String> {
         let mut quieted = Vec::new();
         for card in cards {
@@ -182,8 +183,10 @@ impl Reactions {
                 && card.reaction.is_none()
                 && card.pulse.snoozed_until == 0
                 && !card.held;
+            let shown = card.pulse.first_shown_ms;
             if !untouched
-                || now_ms.saturating_sub(card.created_at) < IGNORED_AFTER_MS
+                || shown == 0
+                || now_ms.saturating_sub(shown) < IGNORED_AFTER_MS
                 || self.ignored_ids.contains(&card.id)
             {
                 continue;
@@ -440,29 +443,67 @@ mod tests {
         );
     }
 
+    fn shown_post(id: &str, url: &str, created: u64, shown: u64) -> UpdateCard {
+        let mut c = feed_post(id, &format!("source:hn:{url}"), "Hacker News", created);
+        c.pulse.first_shown_ms = shown;
+        c
+    }
+
     #[test]
-    fn an_untouched_card_counts_as_ignored_once_after_a_day() {
+    fn an_untouched_card_counts_as_ignored_once_a_day_after_it_was_shown() {
         let mut r = Reactions::default();
+        // Posted at T0, first painted 6 hours later.
+        let shown_at = T0 + 6 * 60 * 60 * 1000;
         let cards = vec![
-            feed_post("old", "source:hn:https://example.com/1", "Hacker News", T0),
-            feed_post(
+            shown_post("old", "https://example.com/1", T0, shown_at),
+            shown_post(
                 "new",
-                "source:hn:https://example.com/2",
-                "Hacker News",
-                T0 + IGNORED_AFTER_MS,
+                "https://example.com/2",
+                T0,
+                shown_at + IGNORED_AFTER_MS,
             ),
         ];
+        // A day after it was posted it has only been on screen 18 hours.
         assert!(r.sweep_ignored(&cards, T0 + IGNORED_AFTER_MS).is_empty());
+        assert_eq!(r.score("hn posts"), 0);
+        assert_eq!(r.log.len(), 0);
+        // A day after it was first shown: ignored, once.
+        assert!(r
+            .sweep_ignored(&cards, shown_at + IGNORED_AFTER_MS)
+            .is_empty());
         assert_eq!(r.score("hn posts"), -1);
         assert_eq!(r.log.len(), 1);
+        assert_eq!(r.log[0].outcome, Outcome::Ignored);
         // Swept again: the same card is not counted twice.
-        r.sweep_ignored(&cards, T0 + IGNORED_AFTER_MS + 1);
+        r.sweep_ignored(&cards, shown_at + IGNORED_AFTER_MS + 1);
         assert_eq!(r.score("hn posts"), -1);
         // An opened card is never ignored.
-        let mut opened = feed_post("seen", "source:hn:https://example.com/3", "Hacker News", T0);
+        let mut opened = shown_post("seen", "https://example.com/3", T0, T0);
         opened.status = UpdateStatus::Opened;
         r.sweep_ignored(&[opened], T0 + 2 * IGNORED_AFTER_MS);
         assert_eq!(r.score("hn posts"), -1);
+    }
+
+    #[test]
+    fn a_card_pulse_never_showed_is_never_ignored() {
+        let mut r = Reactions::default();
+        let unseen = feed_post(
+            "unseen",
+            "source:hn:https://example.com/9",
+            "Hacker News",
+            T0,
+        );
+        assert_eq!(unseen.pulse.first_shown_ms, 0);
+        assert!(r
+            .sweep_ignored(std::slice::from_ref(&unseen), T0 + 30 * IGNORED_AFTER_MS)
+            .is_empty());
+        assert_eq!(r.score("hn posts"), 0);
+        assert_eq!(r.log.len(), 0);
+        // An old file without the stamp loads as never shown.
+        let json = serde_json::to_string(&unseen).unwrap();
+        assert!(!json.contains("firstShownMs"), "{json}");
+        let back: UpdateCard = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pulse.first_shown_ms, 0);
     }
 
     #[test]

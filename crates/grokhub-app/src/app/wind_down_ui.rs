@@ -113,15 +113,17 @@ impl Cabin {
         }
     }
 
-    /// The hour the user usually stops: their quiet hours, else the learned window.
-    fn wind_down_hour(&mut self) -> Option<u32> {
+    /// The hours the user usually stops and starts again: their quiet
+    /// hours, else the learned window.
+    fn wind_down_night(&mut self) -> Option<(u32, u32)> {
         let (start, end) = (self.cfg.quiet_start.trim(), self.cfg.quiet_end.trim());
         if !start.is_empty() && start != end {
-            if let Some(min) = grokhub_core::organs::hm_min(start) {
-                return Some(min / 60);
+            if let Some(from) = grokhub_core::organs::hm_min(start) {
+                let to = grokhub_core::organs::hm_min(end).unwrap_or(from);
+                return Some((from / 60, to / 60));
             }
         }
-        self.rhythm_now().suggested_quiet().map(|(start, _)| start)
+        self.rhythm_now().suggested_quiet()
     }
 
     /// Cabin work a sleep would cut off.
@@ -175,17 +177,17 @@ impl Cabin {
     }
 
     fn finish_wind_down(&mut self, machine: Machine, clock: &LocalClock) {
-        // The deck runner has no quiet hours or rhythm: wind down at 11 PM.
-        let wind_down = if deck_check() {
-            Some(23)
+        // The deck runner has no quiet hours or rhythm: wind down at 11 PM, up at 7.
+        let night = if deck_check() {
+            Some((23, 7))
         } else {
-            self.wind_down_hour()
+            self.wind_down_night()
         };
         self.focus.wind.unknown = machine.busy() == Some(Busy::Unknown);
         let busy = self.wind_down_busy().or(machine.busy());
         let Some(offer) = self
             .wind_now()
-            .decide(clock, wind_down, machine.idle_secs, busy)
+            .decide(clock, night, machine.idle_secs, busy)
         else {
             return;
         };
@@ -314,7 +316,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         armed(&mut cabin);
-        assert_eq!(cabin.wind_down_hour(), Some(23));
+        assert_eq!(cabin.wind_down_night(), Some((23, 7)));
         let before = cabin.updates.len();
         cabin.finish_wind_down(deck_machine(), &late());
         assert_eq!(cabin.updates.len(), before + 1);

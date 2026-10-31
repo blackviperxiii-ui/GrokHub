@@ -26,6 +26,8 @@ pub const GAMES_PER_CHECK: usize = 8;
 pub const NUDGES_PER_CHECK: i32 = 2;
 /// Most nudges one check can post however much the user likes them.
 pub const NUDGES_MAX: i32 = 4;
+/// Games remembered as nudged at most; past that the lowest app ids go.
+pub const NUDGED_MAX: usize = 500;
 /// "Close to complete": at most this many left.
 pub const CLOSE_LEFT: usize = 3;
 /// Games with fewer achievements than this are never "close"; one of two
@@ -428,6 +430,12 @@ impl Tracker {
         for n in &out {
             self.nudged.insert(n.app_id, n.done);
         }
+        while self.nudged.len() > NUDGED_MAX {
+            let Some(first) = self.nudged.keys().next().copied() else {
+                break;
+            };
+            self.nudged.remove(&first);
+        }
         out
     }
 
@@ -623,5 +631,30 @@ mod tests {
         assert_eq!(nudges_allowed(0), 2);
         assert_eq!(nudges_allowed(-5), 0);
         assert_eq!(nudges_allowed(9), 4);
+    }
+
+    #[test]
+    fn nudged_games_stay_under_the_cap() {
+        let mut t = Tracker {
+            nudged: (1..=NUDGED_MAX as u32).map(|id| (id, 1)).collect(),
+            ..Tracker::default()
+        };
+        let out = t.check(
+            vec![Nudge {
+                app_id: 9_999,
+                game: "Star Forge".into(),
+                kind: Kind::Close,
+                done: 7,
+                total: 10,
+                left: Vec::new(),
+            }],
+            false,
+            2,
+            1_000,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(t.nudged.len(), NUDGED_MAX);
+        assert_eq!(t.nudged.get(&1), None, "the lowest id went");
+        assert_eq!(t.nudged.get(&9_999), Some(&7));
     }
 }

@@ -1431,6 +1431,10 @@ fn a_provider_call_keeps_its_time_limit_and_a_cancel_on_the_wire_drops_the_reply
 struct XaiSignedOut;
 
 impl ModelClient for XaiSignedOut {
+    fn signed_in(&self) -> bool {
+        false
+    }
+
     fn stream(
         &self,
         _r: &ResponsesRequest,
@@ -1510,6 +1514,108 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
         "only 18+ chats fall back here: {clean:?}"
     );
     assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Signed in as far as the client knows (a stale token), refused on send.
+struct XaiExpired;
+
+impl ModelClient for XaiExpired {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Auth {
+            status: 401,
+            message: "token expired".into(),
+        })
+    }
+}
+
+fn pin_anthropic(dir: &Path) {
+    save_registry(dir, &fleet()).unwrap();
+    add_provider(dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(dir, "api.anthropic.com", CALL_DATA, UserClick::from_click()).unwrap();
+    live::set_pin(AN_MODEL);
+}
+
+const HEADS_UP_XAI: &str = "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
+
+#[test]
+fn an_explicit_turn_with_no_sign_in_and_no_local_model_pauses_and_keeps_the_heads_up() {
+    let (dir, wire) = setup("adult-no-signin");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    pin_anthropic(&dir);
+    let req = ResponsesRequest {
+        model: AN_MODEL.into(),
+        ..chat("adult-no-signin-1", &["talk dirty to me, I'm horny"])
+    };
+    let mut shown = String::new();
+    let paused = live::stream_routed(
+        &XaiSignedOut,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert!(
+        matches!(&paused, Err(ClientError::Protocol(m)) if m == grokhub_core::XAI_NEED_SIGNIN),
+        "{paused:?}"
+    );
+    assert_eq!(shown, "", "nothing streams for a turn that never went");
+    // Signed in now: the heads-up was not spent by the paused turn.
+    let xai = XaiRec::default();
+    let out = live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default");
+    live::set_pin("");
+    assert_eq!(out.unwrap().text, format!("{HEADS_UP_XAI}\n\nhey you"));
+    assert_eq!(xai.0.lock().unwrap().len(), 1, "one send reached xAI");
+    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_rerouted_send_xai_refuses_keeps_the_heads_up_for_the_turn_that_goes() {
+    let (dir, wire) = setup("adult-expired");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    pin_anthropic(&dir);
+    let req = ResponsesRequest {
+        model: AN_MODEL.into(),
+        ..chat("adult-expired-1", &["talk dirty to me, I'm horny"])
+    };
+    let mut shown = String::new();
+    let failed = live::stream_routed(
+        &XaiExpired,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert!(
+        matches!(failed, Err(ClientError::Auth { status: 401, .. })),
+        "{failed:?}"
+    );
+    assert_eq!(shown, "", "a failed send shows no heads-up");
+    let xai = XaiRec::default();
+    let out = live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default");
+    let second = live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default");
+    live::set_pin("");
+    assert_eq!(out.unwrap().text, format!("{HEADS_UP_XAI}\n\nhey you"));
+    assert_eq!(
+        second.unwrap().text,
+        "hey you",
+        "spent once a reply started"
+    );
+    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
     let _ = std::fs::remove_dir_all(dir);
 }
 

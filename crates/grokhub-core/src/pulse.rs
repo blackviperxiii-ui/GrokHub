@@ -23,6 +23,10 @@ pub struct PulseMeta {
     /// Snoozed: hidden until this unix ms.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub snoozed_until: u64,
+    /// When Pulse first painted this card (unix ms). Zero: never shown, so
+    /// it can never count as ignored.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub first_shown_ms: u64,
     /// A real due time the source gave (a bill, a renewal). Never guessed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due_at: Option<u64>,

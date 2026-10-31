@@ -67,7 +67,24 @@ impl Cabin {
         Some(reactions::why_line(self.reactions_now(), &category, &tag))
     }
 
-    /// Cards left untouched for a day count as ignored, once each.
+    /// Pulse painted these cards: the first time is stamped, so a day on
+    /// screen without a tap counts as ignored (`sweep_reactions`). A card
+    /// the page never painted keeps a zero stamp and is never ignored.
+    pub(super) fn note_pulse_shown<'a>(&mut self, ids: impl Iterator<Item = &'a str>, now: u64) {
+        let ids: std::collections::BTreeSet<&str> = ids.collect();
+        let mut changed = false;
+        for card in &mut self.updates {
+            if card.pulse.first_shown_ms == 0 && ids.contains(card.id.as_str()) {
+                card.pulse.first_shown_ms = now;
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist_updates();
+        }
+    }
+
+    /// Cards Pulse showed a day ago and left untouched count as ignored, once each.
     pub(super) fn sweep_reactions(&mut self, now: u64) {
         let cards = self.updates.clone();
         let before = self.reactions_now().log.len();
@@ -205,6 +222,40 @@ impl Cabin {
 mod tests {
     use super::super::pulse_ui::{PulseAct, SourceAct};
     use super::*;
+
+    #[test]
+    fn pulse_stamps_a_card_the_first_time_it_paints_it_and_sweeps_from_there() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        let mut card = grokhub_core::update_feed::digest_card(
+            "source:hn:https://example.com/1",
+            "A post",
+            "",
+            1_000,
+        );
+        card.pulse.source_name = Some("Hacker News".into());
+        let id = card.id.clone();
+        cabin.updates.push(card);
+        let stamped = |cabin: &Cabin| {
+            cabin
+                .updates
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .pulse
+                .first_shown_ms
+        };
+        assert_eq!(stamped(&cabin), 0);
+        cabin.note_pulse_shown([id.as_str()].into_iter(), 5_000);
+        assert_eq!(stamped(&cabin), 5_000);
+        cabin.note_pulse_shown([id.as_str()].into_iter(), 9_000);
+        assert_eq!(stamped(&cabin), 5_000, "the first paint is kept");
+        // A day after it was posted it is not yet a day on screen.
+        cabin.sweep_reactions(1_000 + reactions::IGNORED_AFTER_MS);
+        assert_eq!(cabin.reactions_now().score("hn posts"), 0);
+        cabin.sweep_reactions(5_000 + reactions::IGNORED_AFTER_MS);
+        assert_eq!(cabin.reactions_now().score("hn posts"), -1);
+    }
     use grokhub_core::proactive::{CandidateSource, Reversibility};
 
     fn pinned(label: &str) -> crate::config::TestConfigDir {

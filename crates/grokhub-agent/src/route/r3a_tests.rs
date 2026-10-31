@@ -1006,3 +1006,22 @@ fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
     );
     super::local_gov::reset_for_test();
 }
+
+#[test]
+fn the_local_fallback_line_says_why_the_cloud_model_is_not_answering() {
+    let _on = local::ForceOn::with(None);
+    local::note_fallback(Some(local::FallbackWhy::CloudDown));
+    assert!(local::fallback_active());
+    assert_eq!(
+        local::fallback_msg(),
+        Some("Using local: no cloud model is answering")
+    );
+    local::note_fallback(Some(local::FallbackWhy::NoKeys));
+    assert_eq!(
+        local::fallback_msg(),
+        Some("Using local: the cloud model needs a sign-in or key")
+    );
+    local::note_fallback(None);
+    assert_eq!(local::fallback_msg(), None);
+    assert!(!local::fallback_active());
+}

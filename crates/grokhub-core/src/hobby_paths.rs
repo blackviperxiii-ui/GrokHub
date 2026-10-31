@@ -92,10 +92,6 @@ fn default_off() -> bool {
     false
 }
 
-fn default_daily_max() -> u32 {
-    DEFAULT_DAILY_MAX
-}
-
 /// Settings → Pulse → Learning paths. Each hobby is opt-in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,7 +108,7 @@ pub struct HobbyPathSettings {
     pub digital_art: bool,
     #[serde(default = "default_off")]
     pub cad: bool,
-    #[serde(default = "default_daily_max")]
+    #[serde(default = "crate::daily_cap::daily_max::<DEFAULT_DAILY_MAX>")]
     pub daily_max: u32,
 }
 
@@ -662,13 +658,6 @@ pub fn hobby_path_card(hobby: HobbyId, step: &PathStep, now_ms: u64) -> UpdateCa
     card
 }
 
-fn ledger_day_reset(ledger: &mut HobbyPathsLedger, today: &str) {
-    if ledger.day != today {
-        ledger.day = today.to_string();
-        ledger.posted_today = 0;
-    }
-}
-
 fn on_cooldown(ledger: &HobbyPathsLedger, hobby: HobbyId, now_ms: u64) -> bool {
     ledger
         .last_posted
@@ -716,7 +705,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
         today,
         now_ms,
     } = input;
-    ledger_day_reset(ledger, today);
+    crate::daily_cap::day_reset(&mut ledger.day, &mut ledger.posted_today, today);
     ledger.last_tick_ms = now_ms;
     if !settings.any_on() || ledger.posted_today >= settings.daily_max.max(1) {
         return TickOutput { cards: Vec::new() };

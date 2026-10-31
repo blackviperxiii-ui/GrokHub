@@ -27,7 +27,7 @@
 //! or `{GROKHUB_CONFIG}/models`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use regex::Regex;
@@ -87,7 +87,7 @@ pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
     if !on {
         // Off: nothing falls back to the device, so drop the chip and keep-warm.
-        note_fallback(false);
+        note_fallback(None);
     }
 }
 
@@ -372,21 +372,62 @@ pub fn local_verify_failed() -> bool {
     LOCAL_VERIFY_FAILED.load(Ordering::SeqCst)
 }
 
-static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Why the last routed call fell back to the device: 0 it did not, 1 no
+/// cloud model is answering, 2 the cloud model needs a sign-in or key.
+static FALLBACK_WHY: AtomicU8 = AtomicU8::new(0);
 
-/// What the cabin shows while online calls fall back to the device.
+/// What the cabin shows while online calls fall back to the device because
+/// no cloud model is answering.
 pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
+/// What the cabin shows while calls fall back to the device because the
+/// cloud model has no sign-in or key.
+pub const LOCAL_NO_KEYS_MSG: &str = "Using local: the cloud model needs a sign-in or key";
 
-/// Live path: the last routed call went to the device because no cloud model could take it.
+/// Why a routed call went to the device instead of the cloud.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackWhy {
+    /// `local:cloud_down`: every cloud model is failing.
+    CloudDown,
+    /// `local:no_keys`: no sign-in or key for the cloud model.
+    NoKeys,
+}
+
+/// Live path: the last routed call went to the device because no cloud model
+/// could take it (`Some(why)`), or it did not (`None`).
 ///
 /// A turn that started before Local AI was turned off can finish after it; its
-/// `true` is dropped then, so the chip and keep-warm stay off.
-pub fn note_fallback(active: bool) {
-    FALLBACK_ACTIVE.store(active && toggle_on(), Ordering::SeqCst);
+/// `Some` is dropped then, so the chip and keep-warm stay off.
+pub fn note_fallback(why: Option<FallbackWhy>) {
+    let code = match why {
+        Some(FallbackWhy::CloudDown) => 1,
+        Some(FallbackWhy::NoKeys) => 2,
+        None => 0,
+    };
+    FALLBACK_WHY.store(if toggle_on() { code } else { 0 }, Ordering::SeqCst);
 }
 
 pub fn fallback_active() -> bool {
-    FALLBACK_ACTIVE.load(Ordering::SeqCst) && toggle_on()
+    fallback_why().is_some()
+}
+
+/// Why the device is answering online calls right now, if it is.
+pub fn fallback_why() -> Option<FallbackWhy> {
+    if !toggle_on() {
+        return None;
+    }
+    match FALLBACK_WHY.load(Ordering::SeqCst) {
+        1 => Some(FallbackWhy::CloudDown),
+        2 => Some(FallbackWhy::NoKeys),
+        _ => None,
+    }
+}
+
+/// The line the cabin shows while the device answers online calls.
+pub fn fallback_msg() -> Option<&'static str> {
+    fallback_why().map(|why| match why {
+        FallbackWhy::CloudDown => LOCAL_FALLBACK_MSG,
+        FallbackWhy::NoKeys => LOCAL_NO_KEYS_MSG,
+    })
 }
 
 /// The model should be loaded ahead of time: offline, or online with no cloud

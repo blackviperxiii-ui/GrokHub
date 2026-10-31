@@ -731,13 +731,16 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
     // No route answers at all, so nothing is falling back to the device either.
-    super::local::note_fallback(
-        !route.no_route
-            && route
-                .rule_ids
-                .iter()
-                .any(|r| r == "local:cloud_down" || r == "local:no_keys"),
-    );
+    let by_rule = |rule: &str| route.rule_ids.iter().any(|r| r == rule);
+    super::local::note_fallback(if route.no_route {
+        None
+    } else if by_rule("local:no_keys") {
+        Some(super::local::FallbackWhy::NoKeys)
+    } else if by_rule("local:cloud_down") {
+        Some(super::local::FallbackWhy::CloudDown)
+    } else {
+        None
+    });
     // An offline turn leaves a line: where it went (local, kept, cloud queue).
     if let Some(rule) = route.rule_ids.iter().find(|r| r.starts_with("offline:")) {
         let what = format!("{} → {rule}", call.class);
@@ -1158,6 +1161,12 @@ pub fn stream_routed(
     };
     // Explicit turns go only to xAI or this computer's model.
     let screen = super::adult::screen(&req.conversation_id, &sent.input, dest);
+    // Signed out with no local model: nothing can take it, so the turn pauses
+    // for a sign-in before a send that can only fail, and the heads-up waits.
+    if screen.to_xai && !client.signed_in() && !super::local::available() {
+        route_log(&dir, &call, &decision, &RouteDone::unseen());
+        return Err(ClientError::Protocol(grokhub_core::XAI_NEED_SIGNIN.into()));
+    }
     let on_provider = decision.on_provider() && !screen.to_xai;
     let model = if screen.to_xai {
         super::adult::xai_model(&req.model)
@@ -1229,6 +1238,7 @@ pub fn stream_routed(
                 streamed = true;
                 if let Some(note) = &note {
                     sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                    super::adult::heads_up_shown(&req.conversation_id);
                 }
             }
             super::adult::guard(&mut reply, &mut *sink, ev)
@@ -1253,6 +1263,7 @@ pub fn stream_routed(
                 if let Ok(turn) = &out {
                     if let Some(note) = &note {
                         sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                        super::adult::heads_up_shown(&req.conversation_id);
                     }
                     // The chat shows streamed text, so the local answer goes out
                     // as one delta, like a provider's.
@@ -1271,6 +1282,7 @@ pub fn stream_routed(
                 if !streamed && out.is_ok() {
                     if let Some(note) = &note {
                         sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                        super::adult::heads_up_shown(&req.conversation_id);
                     }
                 }
                 out

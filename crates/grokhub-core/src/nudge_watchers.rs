@@ -89,15 +89,11 @@ pub struct NudgeWatcherSettings {
     #[serde(default = "default_off")]
     pub peripheral: bool,
     /// Max new nudges per local day across all watchers.
-    #[serde(default = "default_daily_max")]
+    #[serde(default = "crate::daily_cap::daily_max::<DEFAULT_DAILY_MAX>")]
     pub daily_max: u32,
     /// Free bytes below this triggers disk_low (default 15 GiB).
     #[serde(default = "default_disk_threshold")]
     pub disk_threshold_bytes: u64,
-}
-
-fn default_daily_max() -> u32 {
-    DEFAULT_DAILY_MAX
 }
 
 fn default_disk_threshold() -> u64 {
@@ -294,13 +290,6 @@ pub fn nudge_watcher_card(result: &WatcherResult, now_ms: u64) -> UpdateCard {
         ..Default::default()
     };
     card
-}
-
-fn ledger_day_reset(ledger: &mut NudgeLedger, today: &str) {
-    if ledger.day != today {
-        ledger.day = today.to_string();
-        ledger.posted_today = 0;
-    }
 }
 
 fn on_cooldown(ledger: &NudgeLedger, key: &str, now_ms: u64) -> bool {
@@ -604,7 +593,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
         today,
         now_ms,
     } = input;
-    ledger_day_reset(ledger, today);
+    crate::daily_cap::day_reset(&mut ledger.day, &mut ledger.posted_today, today);
     ledger.last_tick_ms = now_ms;
     let mut cards = Vec::new();
     let mut posted = 0u32;

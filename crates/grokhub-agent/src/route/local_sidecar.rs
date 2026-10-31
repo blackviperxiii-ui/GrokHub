@@ -140,12 +140,13 @@ impl Sidecar {
         )
     }
 
-    /// Block until healthy or [`HEALTH_TIMEOUT`].
+    /// Block until healthy or [`HEALTH_TIMEOUT`], then make sure the server
+    /// refuses a call without the token ([`auth_enforced`]).
     pub fn wait_healthy(&self) -> Result<(), String> {
         let deadline = Instant::now() + HEALTH_TIMEOUT;
         while Instant::now() < deadline {
             if self.healthy() {
-                return Ok(());
+                return auth_enforced(&self.host, self.port, Duration::from_millis(400));
             }
             if !self.alive() {
                 return Err("local model server stopped before it was ready".into());
@@ -405,23 +406,56 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     }
 }
 
+/// The one agent the loopback probes (`/health`, `/props`) send with. Every
+/// caller checks [`is_loopback_host`] first, so nothing leaves the machine.
+fn loopback_agent(timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .build()
+}
+
 /// GET `/health` with `Authorization: Bearer <token>`.
 pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool {
     if !is_loopback_host(host) {
         return false;
     }
     let url = format!("http://{host}:{port}/health");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .build();
-    match agent
+    match loopback_agent(timeout)
         .get(&url)
         .set("Authorization", &format!("Bearer {token}"))
         .call()
     {
         Ok(resp) => resp.status() == 200,
         Err(_) => false,
+    }
+}
+
+/// The error when the server answers a model endpoint without the bearer.
+pub const AUTH_IGNORED_MSG: &str = "this llama-server ignores LLAMA_API_KEY; update it";
+
+/// GET `/props` with no `Authorization` header: `true` when the server
+/// answers 200 anyway. `/health` is public on llama-server by design, so a
+/// model endpoint is the one that shows whether the key is enforced.
+pub fn props_open(host: &str, port: u16, timeout: Duration) -> bool {
+    if !is_loopback_host(host) {
+        return false;
+    }
+    let url = format!("http://{host}:{port}/props");
+    match loopback_agent(timeout).get(&url).call() {
+        Ok(resp) => resp.status() == 200,
+        Err(_) => false,
+    }
+}
+
+/// After a healthy answer with the token: the same server must refuse a
+/// call without it (401/403), or anything on this computer could use the
+/// model. A server that answers 200 is refused with [`AUTH_IGNORED_MSG`].
+pub fn auth_enforced(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
+    if props_open(host, port, timeout) {
+        Err(AUTH_IGNORED_MSG.into())
+    } else {
+        Ok(())
     }
 }
 
@@ -928,6 +962,15 @@ pub mod fake_server {
 
     impl FakeServer {
         pub fn start(exit_after_completions: Option<usize>) -> Self {
+            Self::start_with(exit_after_completions, true)
+        }
+
+        /// A server that ignores the API key: every call answers as if authed.
+        pub fn start_open() -> Self {
+            Self::start_with(None, false)
+        }
+
+        fn start_with(exit_after_completions: Option<usize>, enforce_auth: bool) -> Self {
             let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fake bind");
             let port = listener.local_addr().expect("addr").port();
             let token = random_token();
@@ -937,7 +980,14 @@ pub mod fake_server {
             let hits_t = hits.clone();
             let token_t = token.clone();
             let join = std::thread::spawn(move || {
-                serve_loop(listener, token_t, stop_t, hits_t, exit_after_completions)
+                serve_loop(
+                    listener,
+                    token_t,
+                    enforce_auth,
+                    stop_t,
+                    hits_t,
+                    exit_after_completions,
+                )
             });
             Self {
                 host: "127.0.0.1".into(),
@@ -973,6 +1023,7 @@ pub mod fake_server {
     fn serve_loop(
         listener: TcpListener,
         token: String,
+        enforce_auth: bool,
         stop: std::sync::Arc<AtomicBool>,
         hits: std::sync::Arc<AtomicUsize>,
         exit_after: Option<usize>,
@@ -985,7 +1036,7 @@ pub mod fake_server {
                     // or the first read can WouldBlock and we drop with no response
                     // (client sees WSAECONNABORTED / os error 10053).
                     stream.set_nonblocking(false).ok();
-                    let _ = handle_one(&mut stream, &token, &hits);
+                    let _ = handle_one(&mut stream, &token, enforce_auth, &hits);
                     if let Some(n) = exit_after {
                         if hits.load(AtomicOrdering::SeqCst) >= n {
                             break;
@@ -1069,13 +1120,23 @@ pub mod fake_server {
     fn handle_one(
         stream: &mut TcpStream,
         token: &str,
+        enforce_auth: bool,
         hits: &std::sync::Arc<AtomicUsize>,
     ) -> Result<(), ()> {
         let req = read_http_request(stream)?;
         let first = req.lines().next().unwrap_or("");
-        let auth_ok = req
-            .lines()
-            .any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
+        let auth_ok = !enforce_auth
+            || req
+                .lines()
+                .any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
+        if first.starts_with("GET /props") {
+            if auth_ok {
+                write_resp(stream, "200 OK", "{}");
+            } else {
+                write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
+            }
+            return Ok(());
+        }
         if first.starts_with("GET /health") {
             let body = if auth_ok { "ok" } else { "unauthorized" };
             let code = if auth_ok {
@@ -1471,6 +1532,23 @@ mod tests {
         assert!(is_loopback_host("127.0.0.1"));
         assert!(!is_loopback_host("0.0.0.0"));
         assert!(!is_loopback_host("192.168.1.1"));
+    }
+
+    #[test]
+    fn a_server_that_ignores_the_api_key_is_refused_after_the_health_check() {
+        let fake = FakeServer::start(None);
+        let t = Duration::from_secs(2);
+        assert!(health_ok(&fake.host, fake.port, &fake.token, t));
+        assert!(!props_open(&fake.host, fake.port, t));
+        assert_eq!(auth_enforced(&fake.host, fake.port, t), Ok(()));
+        let open = FakeServer::start_open();
+        assert!(health_ok(&open.host, open.port, &open.token, t));
+        assert!(props_open(&open.host, open.port, t));
+        assert_eq!(
+            auth_enforced(&open.host, open.port, t),
+            Err("this llama-server ignores LLAMA_API_KEY; update it".to_string())
+        );
+        assert!(!props_open("0.0.0.0", open.port, t), "loopback only");
     }
 
     #[test]

@@ -15,6 +15,10 @@ pub const FILE_NAME: &str = "net-log.json";
 /// The public resolvers each probe tries, in order.
 pub const PROBE_HOSTS: [&str; 2] = ["1.1.1.1:443", "9.9.9.9:443"];
 pub const PROBE_EVERY_MS: u64 = 60_000;
+/// No probe for this long means the app was closed or the PC asleep, not a
+/// stalled probe thread; an outage that ends across such a gap is closed at
+/// the last failed probe, not at the next launch.
+pub const CLOSED_GAP_MS: u64 = 15 * PROBE_EVERY_MS;
 /// Failed probes in a row before an outage starts.
 pub const FAILS_TO_DROP: u32 = 2;
 /// A connect slower than this counts as a slow minute.
@@ -86,6 +90,10 @@ pub struct NetLog {
     /// The last time an insight card posted.
     #[serde(default)]
     pub last_insight_ms: u64,
+    /// When the last probe ran, so an outage that ended while the app was
+    /// closed is closed at its last failed probe, not at the next launch.
+    #[serde(default)]
+    pub last_probe_ms: u64,
     #[serde(skip)]
     pub fails: u32,
 }
@@ -103,6 +111,7 @@ impl NetLog {
         offset_min: i32,
     ) -> Option<Change> {
         self.trim(now_ms);
+        let last_probe_ms = std::mem::replace(&mut self.last_probe_ms, now_ms);
         match latency_ms {
             None => {
                 self.fails += 1;
@@ -127,7 +136,15 @@ impl NetLog {
                     });
                 }
                 let open = self.outages.last_mut().filter(|o| o.end_ms.is_none())?;
-                open.end_ms = Some(now_ms);
+                // No probes for [`CLOSED_GAP_MS`]: the app was closed, so the
+                // outage is only known to have lasted one more interval.
+                let end =
+                    if last_probe_ms > 0 && now_ms.saturating_sub(last_probe_ms) > CLOSED_GAP_MS {
+                        (last_probe_ms + PROBE_EVERY_MS).max(open.start_ms)
+                    } else {
+                        now_ms
+                    };
+                open.end_ms = Some(end);
                 Some(Change::Restored(open.minutes(now_ms)))
             }
         }
@@ -296,6 +313,35 @@ mod tests {
             "2026-10-27T02:04:00Z"
         );
         assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn an_outage_that_ended_while_the_app_was_closed_stops_at_its_last_failed_probe() {
+        let mut log = NetLog::default();
+        let t0 = DAY0 + 2 * HOUR_MS;
+        assert_eq!(log.note(None, t0, 0), None);
+        assert_eq!(log.note(None, t0 + MIN, 0), Some(Change::Dropped));
+        assert_eq!(log.note(None, t0 + 2 * MIN, 0), None);
+        assert_eq!(log.last_probe_ms, t0 + 2 * MIN);
+        // A stalled probe thread is not a closed app: a short gap ends it now.
+        let mut short = log.clone();
+        assert_eq!(
+            short.note(Some(20), t0 + 2 * MIN + CLOSED_GAP_MS, 0),
+            Some(Change::Restored(17))
+        );
+        assert_eq!(short.outages[0].end_ms, Some(t0 + 2 * MIN + CLOSED_GAP_MS));
+        // Closed for ten hours; the first probe after launch answers.
+        let back = t0 + 10 * HOUR_MS;
+        assert_eq!(log.note(Some(20), back, 0), Some(Change::Restored(3)));
+        assert_eq!(log.outages[0].start_ms, t0);
+        assert_eq!(log.outages[0].end_ms, Some(t0 + 3 * MIN));
+        assert_eq!(log.outages[0].minutes(back), 3);
+        assert_eq!(log.last_probe_ms, back);
+        // The stamp is kept on disk; a file from before it loads as unknown.
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(json.contains("\"lastProbeMs\":"), "{json}");
+        let old: NetLog = serde_json::from_str(r#"{"on":true,"outages":[]}"#).unwrap();
+        assert_eq!(old.last_probe_ms, 0);
     }
 
     #[test]

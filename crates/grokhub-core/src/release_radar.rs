@@ -25,6 +25,8 @@ pub const LOOKUPS_PER_SEED: usize = 4;
 pub const POSTS_PER_CHECK: i32 = 3;
 pub const POSTS_MAX: i32 = 5;
 pub const REMIND_PREFIX: &str = "radar:remind:";
+/// App ids remembered as posted at most; past that the lowest ids go.
+pub const POSTED_MAX: usize = 500;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub fn details_url(app_id: u32) -> String {
@@ -407,6 +409,12 @@ impl Radar {
                 out.push(u);
             }
         }
+        while self.posted.len() > POSTED_MAX {
+            let Some(first) = self.posted.iter().next().copied() else {
+                break;
+            };
+            self.posted.remove(&first);
+        }
         out
     }
 
@@ -448,12 +456,15 @@ impl Radar {
         true
     }
 
-    /// Reminders whose day has come; they are taken off the list.
-    pub fn take_due(&mut self, now_ms: u64) -> Vec<(u32, Reminder)> {
+    /// Reminders whose release day has come where the user is (`offset_min`
+    /// east of UTC, so "today" is the local day, not UTC midnight); they are
+    /// taken off the list.
+    pub fn take_due(&mut self, now_ms: u64, offset_min: i32) -> Vec<(u32, Reminder)> {
+        let local_ms = i64::try_from(now_ms).unwrap_or(i64::MAX) + i64::from(offset_min) * 60_000;
         let due: Vec<u32> = self
             .reminders
             .iter()
-            .filter(|(_, r)| r.date_ms <= now_ms)
+            .filter(|(_, r)| i64::try_from(r.date_ms).unwrap_or(i64::MAX) <= local_ms)
             .map(|(id, _)| *id)
             .collect();
         due.into_iter()
@@ -813,6 +824,54 @@ mod tests {
     }
 
     #[test]
+    fn release_day_is_the_users_local_day_not_utc_midnight() {
+        let day = release_day_ms("14 Nov, 2026").unwrap();
+        let game = Upcoming {
+            app_id: 3,
+            name: "Game 3".into(),
+            base: "Star Forge".into(),
+            kind: Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(day),
+        };
+        let mut radar = Radar::default();
+        assert!(radar.remind(&game));
+        // 10 PM UTC on the 13th is already the 14th three hours east.
+        let late_13th = day - 2 * 60 * 60 * 1000;
+        assert_eq!(radar.take_due(late_13th, 0), Vec::new());
+        assert_eq!(radar.take_due(late_13th, 180).len(), 1);
+        // Midnight UTC on the 14th is still the 13th five hours west.
+        assert!(radar.remind(&game));
+        assert_eq!(radar.take_due(day, -300), Vec::new());
+        assert_eq!(radar.take_due(day + 4 * 60 * 60 * 1000, -300), Vec::new());
+        assert_eq!(radar.take_due(day + 5 * 60 * 60 * 1000, -300).len(), 1);
+        assert!(radar.reminders.is_empty());
+    }
+
+    #[test]
+    fn posted_ids_stay_under_the_cap() {
+        let mut radar = Radar {
+            posted: (1..=POSTED_MAX as u32).collect(),
+            ..Radar::default()
+        };
+        let fresh = radar.fresh(
+            vec![Upcoming {
+                app_id: 9_999,
+                name: "Game 9999".into(),
+                base: "Star Forge".into(),
+                kind: Kind::Sequel,
+                date_text: "Coming soon".into(),
+                date_ms: None,
+            }],
+            5,
+        );
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(radar.posted.len(), POSTED_MAX);
+        assert!(!radar.posted.contains(&1), "the lowest id went");
+        assert!(radar.posted.contains(&2) && radar.posted.contains(&9_999));
+    }
+
+    #[test]
     fn posts_dedupe_and_reminders_come_due() {
         let up = |id: u32, date_ms: Option<u64>| Upcoming {
             app_id: id,
@@ -832,8 +891,8 @@ mod tests {
         assert_eq!(again.iter().map(|u| u.app_id).collect::<Vec<_>>(), vec![1]);
         assert!(radar.remind(&up(3, Some(500))));
         assert!(!radar.remind(&up(1, None)));
-        assert_eq!(radar.take_due(499), Vec::new());
-        let due = radar.take_due(500);
+        assert_eq!(radar.take_due(499, 0), Vec::new());
+        let due = radar.take_due(500, 0);
         assert_eq!(due.len(), 1);
         assert_eq!(
             out_today_card(due[0].0, &due[0].1, 600).title,

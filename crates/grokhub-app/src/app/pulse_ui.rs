@@ -1269,6 +1269,13 @@ impl Cabin {
             .flat_map(|(_, rows)| rows)
             .collect();
         let posts = self.pulse_feed_posts(now);
+        self.note_pulse_shown(
+            ideas
+                .iter()
+                .map(|r| r.id.as_str())
+                .chain(posts.iter().map(|c| c.id.as_str())),
+            now,
+        );
         self.kick_pulse_images(&posts);
         self.paint_source_status(ui, posts.len());
         if ideas.is_empty() && (self.ideas_rx.is_some() || posts.is_empty()) {

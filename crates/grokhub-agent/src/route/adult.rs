@@ -51,11 +51,20 @@ pub struct Screen {
     pub heads_up_local: Option<String>,
 }
 
-fn first_warning(session: &str) -> bool {
+fn already_warned(session: &str) -> bool {
     WARNED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(session.to_string())
+        .contains(session)
+}
+
+/// The reply to a rerouted turn started, with the heads-up ahead of it: the
+/// session has had its one. A turn that never got an answer keeps it.
+pub fn heads_up_shown(session: &str) {
+    WARNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session.to_string());
 }
 
 /// The answer to a call whose newest ask is banned, after [`scrub`]: the
@@ -73,7 +82,7 @@ pub fn held_reply(input: &[InputItem]) -> Option<TurnOutput> {
 /// so an explicit history stays off a banning provider.
 pub fn screen(session: &str, input: &[InputItem], dest: Dest) -> Screen {
     let to_xai = to_xai(input, dest);
-    let warn = to_xai && first_warning(session);
+    let warn = to_xai && !already_warned(session);
     let name = adult_guard::dest_name(dest);
     Screen {
         to_xai,
@@ -227,6 +236,12 @@ mod tests {
         let first = screen(s, &horny, Dest::Anthropic);
         assert!(first.to_xai, "explicit turns never go to Anthropic");
         assert!(first.heads_up.is_some());
+        let unspent = screen(s, &horny, Dest::Anthropic);
+        assert_eq!(
+            unspent.heads_up, first.heads_up,
+            "a turn that got no reply leaves the heads-up for the next"
+        );
+        heads_up_shown(s);
         let again = screen(s, &horny, Dest::Anthropic);
         assert!(again.to_xai, "explicit turns never go to Anthropic");
         assert_eq!(again.heads_up, None, "once a session");

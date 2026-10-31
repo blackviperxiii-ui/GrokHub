@@ -25,7 +25,7 @@
 - Every other crate in the workspace `Cargo.toml`. The hub serves `HubState`.
 ## Non-obvious
 - `cabin_static_rules` / `cabin_learned_tail` (`cabin_rules.rs`) split the prompt-cache prefix from the volatile brief; the app joins them via `system_prompt_parts`.
-- `now_ms`, `user_home`, `redact_secrets`, and `redact_recall` (secrets + PII, `crates/grokhub-core/src/pii.rs`) live here; reuse them instead of re-deriving HOME, time, or redaction.
+- `now_ms`, `user_home`, `redact_secrets`, `redact_recall` (secrets + PII, `crates/grokhub-core/src/pii.rs`), and the per-day post counter `daily_cap::day_reset` / `daily_cap::daily_max` (`crates/grokhub-core/src/daily_cap.rs`) live here; reuse them instead of re-deriving HOME, time, redaction, or a ledger's day reset.
 - `crates/grokhub-core/src/goal.rs` stores per-chat intentions next to `ThreadGoal`. `set_intention_status` changes status only.
 - `state_for_disk` strips the live frame before `hub-state.json` is written (`disk_omits_frame`); writes are 0600 / user-only DACL (`win_acl` on Windows).
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`, `update.rs`); a reworded string or moved fn can fail a test.

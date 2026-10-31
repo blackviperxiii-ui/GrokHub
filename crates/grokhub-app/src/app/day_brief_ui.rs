@@ -613,6 +613,10 @@ mod tests {
             UpdateStatus::Opened,
             "a line with the same prompt from another card stays unread"
         );
+        // Every card was on screen; only the untouched ones count as ignored.
+        for card in &mut cabin.updates {
+            card.pulse.first_shown_ms = now;
+        }
         let mut learned = rx::Reactions::default();
         assert!(
             learned

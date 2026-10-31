@@ -51,16 +51,27 @@ pub struct ModelFile {
     pub bytes: u64,
 }
 
+/// Names kept in the seen set at most; past that the first names (in
+/// order) go, so the file stays bounded.
+pub const SEEN_MAX: usize = 500;
+
 /// The models in `dir` not in `seen`. The first scan (empty `seen`, `first`
 /// true) only records what is already there, so old downloads never offer.
+/// A name no longer in the folder leaves `seen`, and the set never grows
+/// past [`SEEN_MAX`].
 pub fn scan_new(dir: &Path, seen: &mut BTreeSet<String>, first: bool) -> Vec<ModelFile> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut out = Vec::new();
+    let mut present = BTreeSet::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !is_model(&name) || !seen.insert(name.clone()) || first {
+        if !is_model(&name) {
+            continue;
+        }
+        present.insert(name.clone());
+        if !seen.insert(name.clone()) || first {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
@@ -73,6 +84,13 @@ pub fn scan_new(dir: &Path, seen: &mut BTreeSet<String>, first: bool) -> Vec<Mod
                 bytes: meta.len(),
             });
         }
+    }
+    seen.retain(|n| present.contains(n));
+    while seen.len() > SEEN_MAX {
+        let Some(first) = seen.iter().next().cloned() else {
+            break;
+        };
+        seen.remove(&first);
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
@@ -883,5 +901,27 @@ mod tests {
         assert!(obj.chips(None, Path::new("/m"), false)[0]
             .value
             .contains("benchy.OBJ (60 × 31 × 48 (OBJ units))"));
+    }
+
+    #[test]
+    fn the_seen_set_follows_the_folder_and_stays_under_the_cap() {
+        let dir = tmp("seen-cap");
+        let mut seen: BTreeSet<String> = (0..600).map(|i| format!("gone-{i:03}.stl")).collect();
+        std::fs::write(dir.join("keep.stl"), b"x").unwrap();
+        assert!(scan_new(&dir, &mut seen, true).is_empty());
+        assert_eq!(
+            seen.iter().cloned().collect::<Vec<_>>(),
+            vec!["keep.stl".to_string()],
+            "names no longer in Downloads are dropped"
+        );
+        for i in 0..SEEN_MAX + 1 {
+            std::fs::write(dir.join(format!("part-{i:03}.3mf")), b"x").unwrap();
+        }
+        let got = scan_new(&dir, &mut seen, false);
+        assert_eq!(got.len(), SEEN_MAX + 1);
+        assert_eq!(seen.len(), SEEN_MAX);
+        assert!(!seen.contains("keep.stl"), "the first name in order goes");
+        assert!(seen.contains("part-500.3mf"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

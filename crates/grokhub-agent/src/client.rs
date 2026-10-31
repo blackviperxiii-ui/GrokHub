@@ -331,6 +331,13 @@ pub trait ModelClient {
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError>;
+
+    /// The client holds a credential to send with. The xAI client answers
+    /// from its bearer, so a turn that can only go to xAI pauses for a
+    /// sign-in instead of a send that fails.
+    fn signed_in(&self) -> bool {
+        true
+    }
 }
 
 pub fn request_headers(bearer: &str, conv_id: &str) -> Vec<(String, String)> {
@@ -560,6 +567,10 @@ impl std::fmt::Debug for XaiClient {
 }
 
 impl ModelClient for XaiClient {
+    fn signed_in(&self) -> bool {
+        !self.bearer.trim().is_empty()
+    }
+
     fn stream(
         &self,
         req: &ResponsesRequest,

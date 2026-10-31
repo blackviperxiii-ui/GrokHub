@@ -135,7 +135,10 @@ impl Cabin {
         if self.radar_now().reminders.is_empty() {
             return;
         }
-        let due = self.radar_now().take_due(now);
+        let clock = Self::local_clock();
+        let offset =
+            grokhub_core::pulse_writer::utc_offset_min(clock.hour, clock.minute, clock.now_ms);
+        let due = self.radar_now().take_due(now, offset);
         if due.is_empty() {
             return;
         }
@@ -296,7 +299,9 @@ mod tests {
             saved.reminders.get(&7).map(|r| r.date_ms),
             rr::release_day_ms("14 Nov, 2026")
         );
-        cabin.kick_release_radar(rr::release_day_ms("14 Nov, 2026").unwrap());
+        // Noon UTC on release day is that day in every time zone.
+        let noon = 12 * 60 * 60 * 1000;
+        cabin.kick_release_radar(rr::release_day_ms("14 Nov, 2026").unwrap() + noon);
         assert!(cabin
             .updates
             .iter()

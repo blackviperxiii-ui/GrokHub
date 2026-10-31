@@ -33,6 +33,7 @@ pub mod connector;
 pub mod consult;
 pub mod context;
 pub mod cursor_motion;
+pub mod daily_cap;
 pub mod daily_drop;
 pub mod desktop_entry;
 pub mod desktop_mcp;

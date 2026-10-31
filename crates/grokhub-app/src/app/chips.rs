@@ -18,7 +18,7 @@ fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
     match chip.kind {
         ChipKind::Nav => "Opens this page — nothing is sent".into(),
         ChipKind::Mode => "Changes the model mode — nothing is sent".into(),
-        ChipKind::Shell => "Runs on the host when you send — review the command first".into(),
+        ChipKind::Shell => "Runs this command on the host as soon as you click".into(),
         ChipKind::Chat => {
             if chip_chat_runs_immediately(chip, composer_draft) {
                 if chip.value.trim().starts_with('/') {

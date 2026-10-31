@@ -18,6 +18,9 @@ pub const SOURCE_NAME: &str = "Wind-down";
 pub const SLEEP_LINK: &str = "grokhub://wind-down/sleep";
 /// Past the wind-down hour by this many hours counts as late.
 pub const LATE_AFTER_HOURS: u32 = 1;
+/// Late ends this many hours past wind-down, or at the wake hour when that
+/// comes first: an 11 PM wind-down never offers sleep at 10 AM.
+pub const LATE_MAX_HOURS: u32 = 6;
 /// Late at night, idle this long is enough.
 pub const LATE_IDLE_SECS: u64 = 20 * 60;
 /// At any hour, idle this long is enough.
@@ -133,20 +136,30 @@ fn hours_past(hour: u32, wind_down: u32) -> u32 {
     (hour.min(23) + 24 - wind_down.min(23)) % 24
 }
 
-/// Late: at least [`LATE_AFTER_HOURS`] past the wind-down hour, and still
-/// within the first half of the night after it (not the next afternoon).
-pub fn is_late(hour: u32, wind_down: Option<u32>) -> bool {
-    wind_down.is_some_and(|w| (LATE_AFTER_HOURS..12).contains(&hours_past(hour, w)))
+/// Late: at least [`LATE_AFTER_HOURS`] past the wind-down hour and before
+/// the night ends, which is [`LATE_MAX_HOURS`] past it or the wake hour,
+/// whichever comes first. `night` is `(wind_down, wake)`; a wake hour equal
+/// to the wind-down hour means none is known.
+pub fn is_late(hour: u32, night: Option<(u32, u32)>) -> bool {
+    night.is_some_and(|(wind_down, wake)| {
+        let until_wake = hours_past(wake, wind_down);
+        let end = if until_wake == 0 {
+            LATE_MAX_HOURS
+        } else {
+            until_wake.min(LATE_MAX_HOURS)
+        };
+        (LATE_AFTER_HOURS..end).contains(&hours_past(hour, wind_down))
+    })
 }
 
 impl Tracker {
-    /// Whether to post now, and why. `wind_down` is the hour the user
-    /// usually stops (None when nothing is set or learned yet); `busy` is any
-    /// reason from the cabin or the PC not to offer.
+    /// Whether to post now, and why. `night` is the hours the user usually
+    /// stops and starts again (None when nothing is set or learned yet);
+    /// `busy` is any reason from the cabin or the PC not to offer.
     pub fn decide(
         &self,
         clock: &LocalClock,
-        wind_down: Option<u32>,
+        night: Option<(u32, u32)>,
         idle_secs: Option<u64>,
         busy: Option<Busy>,
     ) -> Option<Offer> {
@@ -155,7 +168,7 @@ impl Tracker {
         }
         let idle = idle_secs?;
         let idle_min = idle / 60;
-        if is_late(clock.hour, wind_down) && idle >= LATE_IDLE_SECS {
+        if is_late(clock.hour, night) && idle >= LATE_IDLE_SECS {
             Some(Offer::Late { idle_min })
         } else if idle >= LONG_IDLE_SECS {
             Some(Offer::Idle { idle_min })
@@ -290,7 +303,7 @@ mod tests {
 
     #[test]
     fn late_and_idle_posts_with_the_hour_and_the_idle_time() {
-        let offer = on().decide(&at(2, 0), Some(23), Some(45 * 60), None);
+        let offer = on().decide(&at(2, 0), Some((23, 7)), Some(45 * 60), None);
         assert_eq!(offer, Some(Offer::Late { idle_min: 45 }));
         assert_eq!(
             offer.unwrap().title(2),
@@ -301,14 +314,20 @@ mod tests {
     #[test]
     fn before_the_wind_down_hour_a_short_idle_waits() {
         // 10 PM, wind-down at 11 PM: not late, and 45 min is not a long idle.
-        assert_eq!(on().decide(&at(22, 0), Some(23), Some(45 * 60), None), None);
+        assert_eq!(
+            on().decide(&at(22, 0), Some((23, 7)), Some(45 * 60), None),
+            None
+        );
         // The first hour after wind-down is not "well past" yet.
         assert_eq!(
-            on().decide(&at(23, 30), Some(23), Some(45 * 60), None),
+            on().decide(&at(23, 30), Some((23, 7)), Some(45 * 60), None),
             None
         );
         // Late but only 10 min idle: the user is still here.
-        assert_eq!(on().decide(&at(1, 0), Some(23), Some(10 * 60), None), None);
+        assert_eq!(
+            on().decide(&at(1, 0), Some((23, 7)), Some(10 * 60), None),
+            None
+        );
     }
 
     #[test]
@@ -334,7 +353,7 @@ mod tests {
             Busy::Task,
         ] {
             assert_eq!(
-                on().decide(&at(2, 0), Some(23), Some(3 * 3600), Some(busy)),
+                on().decide(&at(2, 0), Some((23, 7)), Some(3 * 3600), Some(busy)),
                 None,
                 "{busy:?}"
             );
@@ -385,13 +404,13 @@ mod tests {
         for machine in unknowns {
             assert_eq!(machine.busy(), Some(Busy::Unknown), "{machine:?}");
             assert_eq!(
-                on().decide(&at(2, 0), Some(23), machine.idle_secs, machine.busy()),
+                on().decide(&at(2, 0), Some((23, 7)), machine.idle_secs, machine.busy()),
                 None,
                 "{machine:?}"
             );
         }
         assert_eq!(
-            on().decide(&at(2, 0), Some(23), known.idle_secs, known.busy()),
+            on().decide(&at(2, 0), Some((23, 7)), known.idle_secs, known.busy()),
             Some(Offer::Late { idle_min: 180 })
         );
     }
@@ -400,10 +419,13 @@ mod tests {
     fn once_a_night_from_noon_to_noon() {
         let mut t = on();
         let first = at(1, 0);
-        assert!(t.decide(&first, Some(23), Some(3600), None).is_some());
+        assert!(t.decide(&first, Some((23, 7)), Some(3600), None).is_some());
         t.offered(&first);
         // Later the same night: no second card.
-        assert_eq!(t.decide(&at(4, 0), Some(23), Some(2 * 3600), None), None);
+        assert_eq!(
+            t.decide(&at(4, 0), Some((23, 7)), Some(2 * 3600), None),
+            None
+        );
         // 1 AM and 11 PM the evening before are the same night.
         let evening_before = LocalClock {
             now_ms: first.now_ms - 2 * 3_600_000,
@@ -420,16 +442,19 @@ mod tests {
             minute: 0,
         };
         assert_eq!(night_of(&next), night_of(&first) + 1);
-        assert!(t.decide(&next, Some(23), Some(3600), None).is_some());
+        assert!(t.decide(&next, Some((23, 7)), Some(3600), None).is_some());
     }
 
     #[test]
     fn off_never_posts_and_turning_off_keeps_it_off() {
         let mut t = on();
         t.turn_off();
-        assert_eq!(t.decide(&at(2, 0), Some(23), Some(5 * 3600), None), None);
         assert_eq!(
-            Tracker::default().decide(&at(2, 0), Some(23), Some(5 * 3600), None),
+            t.decide(&at(2, 0), Some((23, 7)), Some(5 * 3600), None),
+            None
+        );
+        assert_eq!(
+            Tracker::default().decide(&at(2, 0), Some((23, 7)), Some(5 * 3600), None),
             None
         );
     }
@@ -471,9 +496,22 @@ mod tests {
 
     #[test]
     fn late_wraps_past_midnight_and_stops_by_the_next_morning() {
-        assert!(is_late(0, Some(23)));
-        assert!(is_late(9, Some(23)));
-        assert!(!is_late(11, Some(23)), "12 hours on is the next day");
+        // Wind-down 11 PM, up at 7: late runs from midnight to 5 AM.
+        assert!(!is_late(23, Some((23, 7))));
+        assert!(is_late(0, Some((23, 7))));
+        assert!(is_late(4, Some((23, 7))));
+        assert!(!is_late(5, Some((23, 7))), "6 hours on is the night's end");
+        assert!(!is_late(9, Some((23, 7))));
+        assert!(
+            !is_late(10, Some((23, 7))),
+            "the next morning is never late"
+        );
+        // An earlier wake hour ends the night first.
+        assert!(is_late(2, Some((23, 3))));
+        assert!(!is_late(3, Some((23, 3))), "the wake hour ends it");
+        // No wake hour known: the cap alone.
+        assert!(is_late(4, Some((23, 23))));
+        assert!(!is_late(5, Some((23, 23))));
         assert!(!is_late(3, None));
         assert_eq!(hour_label(0), "12 AM");
         assert_eq!(hour_label(23), "11 PM");
