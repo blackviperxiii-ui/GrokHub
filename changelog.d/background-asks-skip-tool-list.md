@@ -1,0 +1,1 @@
+- Background asks (quick chips, idea cards, feed rewrites and the home feed digest) now send one plain request with no tool list, about 2,700 fewer tokens each. The digest still searches the web for its links.
