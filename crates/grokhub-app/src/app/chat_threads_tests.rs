@@ -974,13 +974,22 @@ fn delete_all_history_needs_a_second_click() {
 
     // A click after the window lapsed re-arms instead of deleting.
     let late = t0 + super::DELETE_ALL_ARM + std::time::Duration::from_secs(1);
-    assert!(!cabin.history_delete_armed(late), "the arm lapses on its own");
-    assert!(!cabin.click_delete_all_history(late), "a stale arm never deletes");
+    assert!(
+        !cabin.history_delete_armed(late),
+        "the arm lapses on its own"
+    );
+    assert!(
+        !cabin.click_delete_all_history(late),
+        "a stale arm never deletes"
+    );
     assert!(cabin.threads.iter().any(|t| t.title == "Pier light"));
 
     // Confirming inside the window deletes.
     let confirm = late + std::time::Duration::from_secs(2);
-    assert!(cabin.click_delete_all_history(confirm), "second click deletes");
+    assert!(
+        cabin.click_delete_all_history(confirm),
+        "second click deletes"
+    );
     assert!(
         !cabin.threads.iter().any(|t| t.title == "Pier light"),
         "confirmed Delete all wipes the chats"
