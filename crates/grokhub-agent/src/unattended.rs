@@ -218,6 +218,7 @@ mod tests {
                     out.push_str(arguments);
                     out.push('\n');
                 }
+                InputItem::ServerCompaction { .. } => {}
             }
         }
         out

@@ -298,12 +298,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let show = src
         .split("fn show_from_tray(")
         .nth(1)
-        .and_then(|s| s.split("fn note_window_resume(").next())
+        .and_then(|s| s.split("fn logic_input_actions(").next())
         .expect("show_from_tray");
     assert!(
-        show.contains("open_fresh_home") && show.contains("apply_saved_geom"),
-        "tray show opens a fresh chat and restores the window: {show}"
+        show.contains("if was_hidden")
+            && show.contains("open_launch_page")
+            && show.contains("apply_saved_geom"),
+        "tray show opens Home (fresh draft behind it) and restores the window: {show}"
     );
+
     let fresh = fn_src(&src, "open_fresh_home");
     assert!(
         fresh.contains("new_thread(false)")
@@ -1917,6 +1920,32 @@ fn greeting_galley_h_drives_empty_home_greet_top() {
         cabin.chat_job_thread.is_none(),
         "galley height must not spawn a chat job"
     );
+}
+
+#[test]
+fn tray_restore_opens_home_but_a_raise_of_a_visible_window_keeps_the_page() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("tray-restore-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_cabin(vec![], 0);
+    let ctx = egui::Context::default();
+    // Minimized or behind other windows: still visible to the app.
+    cabin.window_visible = true;
+    cabin.nav = Nav::Pulse;
+    cabin.show_from_tray(&ctx);
+    assert_eq!(
+        cabin.nav,
+        Nav::Pulse,
+        "un-minimize / refocus keeps the page"
+    );
+    // Closed to the tray: comes back on Home.
+    cabin.window_visible = false;
+    cabin.nav = Nav::Settings;
+    cabin.show_from_tray(&ctx);
+    assert_eq!(cabin.nav, Nav::Home, "tray restore opens Home");
+    assert!(cabin.window_visible);
+    release_isolated(&root, cabin);
 }
 
 #[test]

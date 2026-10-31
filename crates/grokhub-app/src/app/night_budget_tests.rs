@@ -329,7 +329,7 @@ fn nightly_review_stays_quiet() {
         .and_then(|s| s.split("fn open_history_hit(").next())
         .expect("history search");
     assert!(
-        search.contains("write_memory")
+        search.contains("save_memory_file")
             && search.contains("mem_body")
             && search.contains("scratch()"),
         "History Search must flush the Memory editor before reading disk: {search}"
