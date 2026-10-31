@@ -4,8 +4,11 @@ use grokhub_agent::route::connectivity::NetState;
 use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
-use super::paint::{connection_text, game_mode_text, gpu_temp_text, usage_text, Tone};
+use super::paint::{
+    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, usage_text, Tone,
+};
 use crate::app::budget_ui::WeekSpend;
+use grokhub_agent::indexers::system_state::DiskUse;
 
 #[test]
 fn usage_tile_shows_tokens_against_the_cap_and_week_spend() {
@@ -146,4 +149,44 @@ fn gpu_temp_tile_reads_degrees_and_falls_back_honestly() {
     );
     let t = gpu_temp_text(None, None);
     assert_eq!((t.big.as_str(), t.tone), ("—", Tone::Quiet));
+}
+
+#[test]
+fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
+    let d = |label: &str, total: u64, free: u64| DiskUse {
+        label: label.into(),
+        total,
+        free,
+    };
+    let drives = [
+        d("/", 1_000_000_000_000, 400_000_000_000),
+        d("Games", 2_000_000_000_000, 60_000_000_000),
+    ];
+    let t = storage_text(&drives, Some(1));
+    assert_eq!(t.big, "60 GB free");
+    assert_eq!(t.caption, "Games · 97% used of 2.0 TB");
+    assert_eq!(t.detail.as_deref(), Some("2 drives · fullest shown"));
+    assert_eq!(t.tone, Tone::Alert);
+    let rows = storage_rows(&drives);
+    assert_eq!(
+        rows,
+        [
+            (
+                "Games".to_string(),
+                "60 GB free of 2.0 TB".to_string(),
+                Tone::Alert
+            ),
+            (
+                "/".to_string(),
+                "400 GB free of 1.0 TB".to_string(),
+                Tone::Normal
+            ),
+        ]
+    );
+    let early = storage_text(&[], Some(102_400));
+    assert_eq!(
+        (early.big.as_str(), early.caption.as_str()),
+        ("107 GB free", "Home drive")
+    );
+    assert_eq!(storage_text(&[], None).tone, Tone::Quiet);
 }
