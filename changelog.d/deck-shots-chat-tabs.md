@@ -1,1 +1,0 @@
-- Windows deck-match proof shots of Hangout chat tabs beside slide 02 (1600×900 and 1100×720).

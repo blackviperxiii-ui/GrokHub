@@ -112,6 +112,7 @@ fn cabin_src() -> String {
     // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
+        include_str!("lan_host.rs"),
         include_str!("persist.rs"),
         include_str!("persist_service.rs"),
         include_str!("acp.rs"),
@@ -2029,8 +2030,6 @@ fn quiet_cabin() -> Cabin {
         tray: None,
         tray_rx: None,
         window_visible: true,
-        resume_fresh: false,
-        saw_minimized: false,
         ideas_filled: false,
         ideas_rx: None,
         tray_saw_unfocused: false,

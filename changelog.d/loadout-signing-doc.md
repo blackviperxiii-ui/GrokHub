@@ -1,1 +1,0 @@
-- The code signing policy names the app Loadout. Release file names stay as they are, so updates and checksums keep working.

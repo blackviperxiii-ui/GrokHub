@@ -1,0 +1,1 @@
+- Long chats on Grok now compact on xAI's side, keeping more context for fewer tokens; if that fails or takes over 90 seconds, Loadout falls back to the old summary. Put `backend = "summary"` in `compaction.toml` in the config folder to always use the summary.

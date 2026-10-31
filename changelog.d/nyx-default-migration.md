@@ -1,1 +1,0 @@
-- A profile still on the retired "Default" personality now switches to Nyx on disk the first time it loads, in both the cabin and the shell, so the old id doesn't linger.

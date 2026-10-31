@@ -1,0 +1,1 @@
+- Internal: moved the Devices page's LAN-address helpers out of the main app file into their own module, so the file is back under its line budget. No behavior change.

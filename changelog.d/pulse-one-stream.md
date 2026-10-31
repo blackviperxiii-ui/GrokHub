@@ -1,1 +1,0 @@
-- Pulse is one stream: ideas and feed posts share a single centered column (an idea, then two posts, and so on), with no Feed | For You switch, side-by-side columns, or "From your feed" heading. Suggest for you and Feed instructions sit on the right of the Pulse title, the source check note waits behind a small Details toggle, and an empty Pulse shows one empty state.
