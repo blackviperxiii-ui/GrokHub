@@ -1,7 +1,7 @@
 //! The LAN address the Devices page shows for pairing, read off the UI thread.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use grokhub_core::{hub_pair_url, parse_hostname_i, pick_lan_ipv4};
 
@@ -53,7 +53,7 @@ pub(super) fn hostname_i_now() -> String {
 fn lan_candidates_now() -> String {
     let mut cmd = std::process::Command::new("hostname");
     cmd.arg("-I");
-    crate::desktop::run_limited(cmd, Duration::from_millis(400))
+    crate::desktop::run_limited(cmd, std::time::Duration::from_millis(400))
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
