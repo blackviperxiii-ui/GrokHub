@@ -41,10 +41,10 @@ const XP_REFRESH: Duration = Duration::from_secs(30);
 const PULSE_LINES: usize = 2;
 /// Listening waveform at rest, bar heights as a share of the row.
 const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
-/// XP for each finished task in the outcome log and each checked step.
-const XP_PER_TASK: u32 = 100;
-const XP_PER_STEP: u32 = 25;
-pub(super) const XP_PER_LEVEL: u32 = 500;
+use grokhub_core::xp::XpTally;
+pub(super) use grokhub_core::xp::XP_PER_LEVEL;
+/// What the XP bar's hover says earns XP.
+pub(super) const XP_HOW: &str = "XP comes from what you do: 100 per finished task, 25 per checked step, 25 per Home card you run and 50 when its work finishes, plus 10 for each day you're active. Card and day XP stops at 150 a day.";
 
 /// What Nyx is doing, shown in the corner box. The modes and her outfits
 /// live in [`grokhub_core::companion`] (`assets/companions/nyx/companion.toml`),
@@ -264,13 +264,19 @@ pub(super) fn wave_heights(t: f64, live: bool, still: bool) -> [f32; 9] {
     out
 }
 
-/// Level, total XP and progress into the level, from finished tasks and the
+/// Level, total XP and progress into the level, from the XP tally and the
 /// open mission's checked steps.
-pub(super) fn level_xp(finished: usize, checked: usize) -> (u32, u32, f32) {
-    let xp = finished as u32 * XP_PER_TASK + checked as u32 * XP_PER_STEP;
-    let level = xp / XP_PER_LEVEL + 1;
-    let frac = (xp % XP_PER_LEVEL) as f32 / XP_PER_LEVEL as f32;
-    (level, xp, frac)
+pub(super) fn level_xp(t: XpTally, checked: usize) -> (u32, u32, f32) {
+    grokhub_core::xp::level_xp(t.finished, checked, t.bonus)
+}
+
+/// The XP bar's hover: today's XP, then how XP is earned.
+pub(super) fn xp_hover(t: XpTally) -> String {
+    if t.today > 0 {
+        format!("+{} XP today.\n{XP_HOW}", grouped(t.today))
+    } else {
+        XP_HOW.to_string()
+    }
 }
 
 /// `2340` as `2,340`.
@@ -1454,27 +1460,29 @@ impl Cabin {
         view
     }
 
-    /// Finished tasks in the outcome log, re-read every [`XP_REFRESH`].
-    pub(super) fn dock_finished_tasks(&self, ctx: &egui::Context) -> usize {
-        type Cached = (Instant, usize);
-        let id = egui::Id::new("loadout-finished-tasks");
-        if let Some((at, n)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+    /// The XP tally from the outcome and card signal logs, re-read every
+    /// [`XP_REFRESH`].
+    pub(super) fn dock_xp(&self, ctx: &egui::Context) -> XpTally {
+        type Cached = (Instant, XpTally);
+        let id = egui::Id::new("loadout-xp-tally");
+        if let Some((at, t)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if at.elapsed() < XP_REFRESH {
-                return n;
+                return t;
             }
         }
-        let now = now_ms();
-        let n = grokhub_core::outcome::read_outcomes(&crate::config::config_dir())
-            .iter()
-            .filter(|o| o.effective(now) == grokhub_core::outcome::OutcomeResult::Success)
-            .count();
-        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), n)));
-        n
+        let dir = crate::config::config_dir();
+        let t = grokhub_core::xp::tally(
+            &grokhub_core::outcome::read_outcomes(&dir),
+            &grokhub_core::card_signals::read_signals(&dir),
+            now_ms(),
+        );
+        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), t)));
+        t
     }
 
     fn dock_objectives(&self, ui: &mut egui::Ui) {
         let mission = self.dock_mission(ui.ctx());
-        let finished = self.dock_finished_tasks(ui.ctx());
+        let tally = self.dock_xp(ui.ctx());
         card(ui, |ui| {
             let items = mission.as_ref().map_or(&[][..], |m| &m.checklist[..]);
             let (done, total) = objective_progress(items);
@@ -1529,7 +1537,7 @@ impl Cabin {
                     }
                 }
             }
-            let (level, xp, frac) = level_xp(finished, done);
+            let (level, xp, frac) = level_xp(tally, done);
             ui.add_space(crate::theme::SPACING_4);
             ui.horizontal(|ui| {
                 ui.label(caption(&format!("Lvl {level}")));
@@ -1543,8 +1551,9 @@ impl Cabin {
                     );
                 });
             });
-            let (bar, _) =
+            let (bar, bar_resp) =
                 ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+            bar_resp.on_hover_text(xp_hover(tally));
             ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
             let mut fill = bar;
             fill.set_width(bar.width() * frac);
@@ -2213,11 +2222,21 @@ mod tests {
     }
 
     #[test]
-    fn level_and_xp_come_from_finished_tasks_and_checked_steps() {
-        assert_eq!(level_xp(0, 0), (1, 0, 0.0));
+    fn level_and_xp_come_from_the_tally_and_checked_steps() {
+        let t = |finished, bonus| XpTally {
+            finished,
+            bonus,
+            today: 0,
+        };
+        assert_eq!(level_xp(t(0, 0), 0), (1, 0, 0.0));
         // 23 finished tasks and 2 checked steps: 2,350 XP, level 5, 70% in.
-        assert_eq!(level_xp(23, 2), (5, 2350, 0.7));
-        assert_eq!(level_xp(5, 0), (2, 500, 0.0));
+        assert_eq!(level_xp(t(23, 0), 2), (5, 2350, 0.7));
+        assert_eq!(level_xp(t(4, 100), 0), (2, 500, 0.0));
+        assert!(xp_hover(XpTally {
+            today: 1250,
+            ..t(0, 0)
+        })
+        .starts_with("+1,250 XP today."));
         assert_eq!(grouped(2350), "2,350");
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1_000_000), "1,000,000");

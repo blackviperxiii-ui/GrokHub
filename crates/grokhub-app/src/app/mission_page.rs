@@ -10,7 +10,7 @@ use grokhub_core::steam::SteamGame;
 
 use super::library_ui::paint_cover_at;
 use super::loadout_home::{
-    caption, card, diamond, grouped, header, level_xp, objective_progress, XP_PER_LEVEL,
+    caption, card, diamond, grouped, header, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
 };
 use super::*;
 
@@ -146,7 +146,8 @@ impl Cabin {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if show_xp {
-                    let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
+                    let xp_tally = self.dock_xp(ui.ctx());
+                    let (level, xp, frac) = level_xp(xp_tally, done);
                     ui.allocate_ui_with_layout(
                         egui::vec2(XP_W.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
@@ -171,10 +172,11 @@ impl Cabin {
                                     },
                                 );
                             });
-                            let (bar, _) = ui.allocate_exact_size(
+                            let (bar, bar_resp) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 6.0),
                                 egui::Sense::hover(),
                             );
+                            bar_resp.on_hover_text(xp_hover(xp_tally));
                             ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
                             let mut fill = bar;
                             fill.set_width(bar.width() * frac);
