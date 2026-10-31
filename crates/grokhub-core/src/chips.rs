@@ -724,6 +724,48 @@ fn family_quiet_this_hour(
     })
 }
 
+/// Id prefix of the starter chips below.
+pub const SEED_PREFIX: &str = "seed-";
+
+/// Loadout's starter chips (the deck's Hangout four plus Home's picks). They
+/// rank below anything the chat, history or signals suggest, so they only fill
+/// a thin row, and they dismiss and learn like any catalog chip (the label is
+/// fixed copy, never chat text).
+pub const SEED_CHIPS: &[(&str, &str)] = &[
+    ("stutter", "Fix my stutter"),
+    ("duo", "Find a duo"),
+    ("roast", "Roast my build"),
+    ("weekend", "Plan my weekend"),
+    ("storage", "Free up storage"),
+    ("week", "Plan my week"),
+];
+
+const SEED_SCORE: f32 = 30.0;
+
+fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
+    // Mid-chat they sink further so the conversation's own chips lead.
+    let base = if stage == ChipStage::Empty {
+        SEED_SCORE
+    } else {
+        SEED_SCORE - 15.0
+    };
+    SEED_CHIPS
+        .iter()
+        .enumerate()
+        .map(|(i, (key, label))| {
+            chip(
+                &format!("{SEED_PREFIX}{key}"),
+                label,
+                label,
+                ChipKind::Chat,
+                // Keep the listed order among equals.
+                base - i as f32 * 0.1,
+                "",
+            )
+        })
+        .collect()
+}
+
 fn guide_chips(connected: bool) -> Vec<QuickChip> {
     let mut out = Vec::new();
     if !connected {
@@ -2678,6 +2720,8 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         chips.push(copy);
     }
 
+    chips.extend(seed_chips(stage));
+
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
         if let Some(hit) = input
@@ -2795,6 +2839,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         picked.retain(|c| {
             let id = c.id.as_str();
             id.starts_with("home-")
+                || id.starts_with(SEED_PREFIX)
                 || id.starts_with("pred-tod")
                 || id.starts_with("pred-tx")
                 || id.starts_with("pred-habit")
@@ -3235,6 +3280,80 @@ mod tests {
             skill_count: 0,
             session_mode: "chat",
         }
+    }
+
+    fn ids(chips: &[QuickChip]) -> Vec<&str> {
+        chips.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn seeds_fill_a_thin_row_and_rank_below_real_chips() {
+        let memory = ChipMemory::default();
+        // A returning user (the first-run tour owns a brand new chat).
+        let familiar = |mut i: ChipInput<'_>| {
+            i.usage_messages = 20;
+            build_quick_chips(i)
+        };
+        let empty = familiar(input(&[], "", &memory, &[], &[]));
+        assert!(
+            empty.iter().any(|c| c.id.starts_with(SEED_PREFIX)),
+            "a fresh chat is never dev-only or empty: {:?}",
+            ids(&empty)
+        );
+        let chat = [
+            msg("user", "the build fails with a linker error"),
+            msg(
+                "assistant",
+                "Error: linker `cc` not found. Install build-essential.",
+            ),
+        ];
+        let mid = familiar(input(&chat, "", &memory, &[], &[]));
+        let first_seed = mid.iter().position(|c| c.id.starts_with(SEED_PREFIX));
+        let last_real = mid.iter().rposition(|c| !c.id.starts_with(SEED_PREFIX));
+        if let (Some(seed), Some(real)) = (first_seed, last_real) {
+            assert!(
+                seed > real,
+                "seeds trail the chat's own chips: {:?}",
+                ids(&mid)
+            );
+        }
+    }
+
+    #[test]
+    fn a_dismissed_seed_stays_gone() {
+        let memory = ChipMemory::default();
+        let mut fresh = input(&[], "", &memory, &[], &[]);
+        fresh.usage_messages = 20;
+        let before = build_quick_chips(fresh);
+        let seed = before
+            .iter()
+            .find(|c| c.id.starts_with(SEED_PREFIX))
+            .expect("a seed")
+            .clone();
+        let dismissed = vec![seed.id.clone()];
+        let mut again = input(&[], "", &memory, &dismissed, &[]);
+        again.usage_messages = 20;
+        let after = build_quick_chips(again);
+        assert!(
+            after.iter().all(|c| c.id != seed.id),
+            "{} came back: {:?}",
+            seed.id,
+            ids(&after)
+        );
+    }
+
+    #[test]
+    fn seed_clicks_are_remembered_by_their_fixed_label() {
+        let seed = seed_chips(ChipStage::Empty)
+            .into_iter()
+            .next()
+            .expect("seed");
+        assert_eq!(
+            seed.value, seed.label,
+            "seed copy is fixed text, never chat"
+        );
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Find a duo"));
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Fix my stutter"));
     }
 
     /// Every chip any row offers, clicked and dismissed, twice over (the
