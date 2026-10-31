@@ -1,4 +1,4 @@
-//! Command Centre card 49: opt-in screenshot folder watch and Explain chip.
+//! Opt-in screenshot folder watch and Explain chip.
 //! The folder scan and the image load both run off the UI thread.
 
 use std::path::PathBuf;

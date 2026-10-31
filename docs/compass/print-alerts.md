@@ -1,4 +1,4 @@
-# Compass: print finished/failed alerts (card 60)
+# Compass: print finished/failed alerts
 
 ## Owns
 - Opt-in LAN discovery and read-only polling of Moonraker/Klipper and OctoPrint printers; Pulse + OS notify on finish, fail, pause, or filament runout; optional camera snapshot; pause/cancel/resume gated by the hard approval card.

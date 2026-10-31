@@ -1,7 +1,8 @@
-# Command Centre board guide (Notion access)
+# Planning board guide (Notion access)
 
-Board: "Grok Bot Command Centre" database, data source "Command Center"
-(collection://f66443ba-e39d-4eeb-b8fd-14c2d87c3da1). Check it at the start of every session.
+Board: the planning board, a Notion database whose data source id is the
+repository variable `NOTION_DATA_SOURCE_ID` (see `.github/workflows/cards-sync.yml`).
+Check it at the start of every session.
 
 ## Fields
 - Name: card title. Body holds Evidence / Fix / Acceptance.

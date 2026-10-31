@@ -52,7 +52,7 @@ jobs:
             for (const r of reviews) {
               const who = r.user?.login || '';
               if (r.state === 'COMMENTED' || r.state === 'PENDING') continue;
-              if (who === owner || /copilot/i.test(who)) latest[who] = r.state;
+              if (who) latest[who] = r.state;
             }
             if (Object.values(latest).includes('CHANGES_REQUESTED')) return disable('changes requested');
             const body = (pr.body || '').split(/\r?\n/)

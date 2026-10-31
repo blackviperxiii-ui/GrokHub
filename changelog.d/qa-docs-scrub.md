@@ -1,0 +1,1 @@
+- CI: any reviewer's latest "Changes requested" review now holds auto-merge into beta, not only the owner's or Copilot's.

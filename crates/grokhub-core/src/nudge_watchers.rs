@@ -1,4 +1,4 @@
-//! Command Centre card 42: opt-in local watchers that post one Pulse nudge when
+//! Opt-in local watchers that post one Pulse nudge when
 //! something worth acting on happens. Pure logic and fixture-driven tests;
 //! the cabin collects a [`WatcherSnapshot`] and calls [`tick`].
 

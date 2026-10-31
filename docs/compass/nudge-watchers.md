@@ -1,4 +1,4 @@
-# Compass: nudge watchers (Command Centre card 42)
+# Compass: nudge watchers
 
 ## Owns
 - Opt-in local watchers that post one Pulse suggestion when metadata-only signals fire (game news, GPU driver offer, disk, crashes, OS packages, peripherals).

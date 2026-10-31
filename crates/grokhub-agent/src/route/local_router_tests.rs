@@ -84,7 +84,7 @@ fn ask<'a>(class: &'a str, gate: LocalGate) -> RouteInput<'a> {
 }
 
 #[test]
-fn tier_meta_carries_bench_caps_without_claiming_tools() {
+fn tier_meta_carries_bench_caps_and_offers_tools() {
     local::set_caps(TierCaps {
         context: 8_192,
         eval_pass_rate: 1.0,

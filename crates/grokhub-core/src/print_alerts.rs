@@ -1,4 +1,4 @@
-//! Command Centre card 60: opt-in LAN 3D printer alerts (Moonraker/Klipper
+//! Opt-in LAN 3D printer alerts (Moonraker/Klipper
 //! and OctoPrint). Pure parsers, transition detect, Pulse card shape, and
 //! approval-gated control rules. The cabin discovers, polls, and posts;
 //! credentials and host IPs live only in the user's config dir.

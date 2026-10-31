@@ -58,9 +58,9 @@ This is open-source work meant for anyone to use. Keep every file, commit, PR an
 - Commits use the GitHub no-reply email. Squash merges use a clean subject and body with no `Co-authored-by` lines.
 - `scripts/pii-guard/pii_guard.py` runs in CI as the required `pii-guard` check; run it locally before pushing.
 
-## Command Centre board guide (GitHub access only)
+## Planning board guide (GitHub access only)
 
-Work is planned on the Notion board "Grok Bot Command Centre". Cards with
+Work is planned on the planning board (a Notion database). Cards with
 Status = Ready sync to GitHub issues on blackviperxiii-ui/GrokHub (app "Loadout").
 You don't need Notion access: the issue is your copy of the card.
 

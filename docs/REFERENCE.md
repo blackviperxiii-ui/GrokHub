@@ -18,7 +18,7 @@ sudo pacman -S --needed git rustup base-devel pkgconf gtk3 libxkbcommon libxkbco
 rustup default stable
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
-cargo test --workspace
+cargo nextest run --workspace --locked --profile ci   # or: cargo test --workspace --locked
 ./scripts/install.sh --user
 grokhub
 ```
@@ -178,7 +178,7 @@ sudo rm -f /usr/share/applications/grokhub.desktop
 ## Development
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace --locked --profile ci   # CI gate; without nextest: cargo test --workspace --locked
 cargo run -p grokhub-app
 cargo run -p grokhub-app -- --agent
 cargo run -p grokhub-hub

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Notion Command Center cards <-> GitHub issues (stdlib only).
+"""Planning-board cards (Notion) <-> GitHub issues (stdlib only).
 
 Modes (argv[1]):
   sync  - Ready cards for this repo's Project become issues (capped per coder),

@@ -1,7 +1,7 @@
-//! Command Centre card: opt-in PC health while a game is running. Pure
+//! Opt-in PC health while a game is running. Pure
 //! parsers, session math, and the post-session Pulse summary. The cabin
 //! samples sensors lightly and posts the card; this module never touches
-//! fans, clocks, or drivers. Game-running detection reuses card 16.1 /
+//! fans, clocks, or drivers. Game-running detection reuses
 //! [`crate::local_governor`] (`game_in_processes`, GPU-busy fallback).
 
 use serde::{Deserialize, Serialize};
@@ -281,7 +281,7 @@ pub fn cpu_util_between(prev: (u64, u64), cur: (u64, u64)) -> Option<u8> {
     Some(((total - idle) * 100 / total) as u8)
 }
 
-/// Game running: process hit (card 16.1 / local_governor) or sustained GPU busy.
+/// Game running: process hit (local_governor) or sustained GPU busy.
 pub fn game_running(procs: &[(String, String)], gpu_util: Option<u8>) -> bool {
     if crate::local_governor::game_in_processes(procs) {
         return true;

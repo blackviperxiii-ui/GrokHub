@@ -590,10 +590,10 @@ pub struct AppConfig {
     /// Settings → Pulse → Daily drop: overnight ranked source posts (off by default).
     #[serde(default)]
     pub daily_drop: DailyDropSettings,
-    /// Settings → Pulse → Proactive nudges (Command Centre card 42).
+    /// Settings → Pulse → Proactive nudges (local nudge watchers).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
-    /// Settings → Behavior → Screenshot explain (Command Centre card 49).
+    /// Settings → Behavior → Screenshot explain (screenshot folder watch).
     #[serde(default)]
     pub screenshot_explain: grokhub_core::ScreenshotExplainSettings,
     /// Settings → Pulse / Behavior: PC health while gaming (opt-in).

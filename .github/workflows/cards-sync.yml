@@ -1,5 +1,5 @@
 name: cards-sync
-# Notion Command Center cards -> issues for this repo, and card -> Done on close.
+# Planning-board cards (Notion) -> issues for this repo, and card -> Done on close.
 # Needs secret NOTION_TOKEN and variable NOTION_DATA_SOURCE_ID; no-ops without the token.
 on:
   schedule:

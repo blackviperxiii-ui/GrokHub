@@ -10,7 +10,7 @@
 ## Key files
 - `crates/grokhub-core/src/pc_health.rs`: parsers, `observe`, `summarize`, `summary_card`.
 - `crates/grokhub-app/src/app/pc_health_ui.rs`: `tick_pc_health`, Settings toggle.
-- `crates/grokhub-core/src/local_governor.rs`: `game_in_processes` (card 16.1 detection).
+- `crates/grokhub-core/src/local_governor.rs`: `game_in_processes` (game detection).
 
 ## Change recipe
 - New sensor: add a pure parse fn + fixture test in `pc_health.rs`, then a collector branch in `pc_health_ui.rs`.

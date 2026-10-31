@@ -1,5 +1,5 @@
-//! Command Centre: opt-in PC health while gaming. Samples sensors lightly
-//! when card 16.1 / local_governor game detection says a game is up, then
+//! Opt-in PC health while gaming. Samples sensors lightly when
+//! local_governor game detection says a game is up, then
 //! posts one Pulse summary. Never changes fans, clocks, or drivers.
 
 use std::path::PathBuf;

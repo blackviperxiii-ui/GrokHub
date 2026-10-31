@@ -1,7 +1,7 @@
 //! Plan-to-skill wiring for Loadout built-in vstack skills.
 //!
-//! The agent picks these on its own at the moments the Command Centre card
-//! named: ship/release gates, verification before done, and multi-step
+//! The agent picks these on its own at the moments the feature calls
+//! for: ship/release gates, verification before done, and multi-step
 //! follow-through. Pure rules — no I/O — so playbooks, close-check, and the
 //! prompt can share one table.
 

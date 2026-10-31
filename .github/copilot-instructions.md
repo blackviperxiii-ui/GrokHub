@@ -1,6 +1,6 @@
-# Command Centre board guide (GitHub access only)
+# Planning board guide (GitHub access only)
 
-Work is planned on the Notion board "Grok Bot Command Centre". Cards with
+Work is planned on the planning board (a Notion database). Cards with
 Status = Ready sync to GitHub issues on blackviperxiii-ui/GrokHub (app "Loadout").
 You don't need Notion access: the issue is your copy of the card.
 

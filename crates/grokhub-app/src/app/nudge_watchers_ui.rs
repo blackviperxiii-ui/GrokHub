@@ -1,4 +1,4 @@
-//! Command Centre card 42: local nudge watchers in the cabin.
+//! Local nudge watchers in the cabin.
 
 use grokhub_core::know_me::load_tags;
 use grokhub_core::nudge_watchers::{

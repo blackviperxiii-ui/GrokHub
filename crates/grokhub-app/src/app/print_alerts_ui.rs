@@ -1,4 +1,4 @@
-//! Command Centre card 60: LAN 3D printer alerts in the cabin.
+//! LAN 3D printer alerts in the cabin.
 //!
 //! Discovers Moonraker/OctoPrint on the LAN (opt-in), polls status read-only,
 //! posts Pulse cards + OS notify on finish/fail/pause/filament, and parks
