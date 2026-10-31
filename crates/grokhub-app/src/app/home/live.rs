@@ -77,6 +77,14 @@ pub(super) fn live_facts() -> LiveFacts {
     slot.facts.clone()
 }
 
+/// Each drive's space as last read for Home. Never starts a read, so it is
+/// empty until Home has painted once.
+pub(in crate::app) fn cached_drives() -> Vec<DiskUse> {
+    SLOT.lock()
+        .map(|s| s.facts.drives.clone())
+        .unwrap_or_default()
+}
+
 /// Count the last day's sends and the busiest destination.
 pub(super) fn summarize_sends(read: &EgressRead, now_ms: u64) -> LiveFacts {
     if read.locked.is_some() {

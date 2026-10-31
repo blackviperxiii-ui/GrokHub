@@ -211,6 +211,16 @@ impl Cabin {
             .collect()
     }
 
+    /// A library game's name from what was last read. Never reads Steam.
+    pub(super) fn steam_cached_name(&self, app_id: u32) -> Option<&str> {
+        self.sources
+            .steam
+            .games
+            .iter()
+            .find(|g| g.app_id == app_id)
+            .map(|g| g.name.as_str())
+    }
+
     /// Game names from the library while the Steam source is on.
     pub(super) fn steam_game_names(&mut self) -> Vec<String> {
         self.sources.steam.refresh(now_ms(), steam::detect_root);

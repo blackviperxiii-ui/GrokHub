@@ -115,6 +115,13 @@ impl Cabin {
         });
     }
 
+    /// The library game that closed in the last half hour, while no other runs.
+    pub(super) fn game_just_ended(&self) -> Option<&str> {
+        let (game, at) = self.focus.game.ended.as_ref()?;
+        (self.game_running().is_none() && now_ms().saturating_sub(*at) < NOTE_OFFER_MS)
+            .then_some(game.name.as_str())
+    }
+
     /// The Steam app id the last sample saw running.
     pub(super) fn game_running(&self) -> Option<u32> {
         self.focus.game.watch.current
@@ -561,5 +568,82 @@ mod tests {
             cabin.game_watch_first_line(now),
             "Game watcher: Counter-Strike 2 first by default, since no supported game has playtime in your Steam library. League of Legends and World of Warcraft aren't on Steam, so they aren't ranked."
         );
+    }
+
+    fn chip_labels(cabin: &mut Cabin) -> Vec<String> {
+        cabin.chip_paint_key.clear();
+        cabin.refresh_chips();
+        cabin
+            .visible_chips
+            .iter()
+            .map(|c| c.label.clone())
+            .collect()
+    }
+
+    #[test]
+    fn quick_chips_follow_the_game_that_runs_and_the_one_that_closed() {
+        let mut cabin = Cabin::quiet_for_test();
+        // A returning user: a first-run cabin shows the guide row instead.
+        cabin.usage.messages = 20;
+        cabin.sources.steam =
+            super::super::steam_ui::SteamState::for_test(vec![game(7, "Hades")], 1_000);
+        cabin.focus.game.watch.primed = true;
+        cabin.focus.game.watch.current = Some(7);
+        let playing = chip_labels(&mut cabin);
+        assert!(
+            playing.iter().any(|l| l == "Fix stutter in Hades"),
+            "{playing:?}"
+        );
+        cabin.focus.game.watch.current = None;
+        cabin.focus.game.ended = Some((game(7, "Hades"), now_ms()));
+        let closed = chip_labels(&mut cabin);
+        assert!(closed.iter().any(|l| l == "How'd Hades go?"), "{closed:?}");
+        assert!(closed.iter().all(|l| !l.starts_with("Fix stutter")));
+        cabin.focus.game.ended = Some((game(7, "Hades"), now_ms() - NOTE_OFFER_MS - 1));
+        let later = chip_labels(&mut cabin);
+        assert!(later.iter().all(|l| !l.contains("Hades")), "{later:?}");
+    }
+
+    /// The chip signals read state the cabin already holds: no Steam read,
+    /// process sample, drive probe, file or network call of their own.
+    #[test]
+    fn chip_signals_read_only_cached_state() {
+        let body = |src: &str, start: &str, end: &str| -> String {
+            let from = src.find(start).unwrap_or_else(|| panic!("missing {start}"));
+            let rest = &src[from..];
+            rest[..rest[start.len()..].find(end).expect(end) + start.len()].to_string()
+        };
+        let chips = include_str!("chips.rs").replace("\r\n", "\n");
+        let fill = body(&chips, "let game = self", "let key = format!(");
+        let steam = include_str!("steam_ui.rs").replace("\r\n", "\n");
+        let name = body(&steam, "fn steam_cached_name(", "\n    }\n");
+        let ended = body(
+            include_str!("game_companion_ui.rs"),
+            "fn game_just_ended(",
+            "\n    }\n",
+        );
+        let live = include_str!("home/live.rs").replace("\r\n", "\n");
+        let drives = body(&live, "fn cached_drives(", "\n}\n");
+        for (what, src) in [
+            ("fill", &fill),
+            ("name", &name),
+            ("ended", &ended),
+            ("drives", &drives),
+        ] {
+            for io in [
+                "refresh(",
+                "steam_library(",
+                "running_now(",
+                "spawn",
+                "std::fs",
+                "Command",
+                "live_facts(",
+                "local_drives(",
+                "peek(",
+                "http",
+            ] {
+                assert!(!src.contains(io), "{what} must not call {io}: {src}");
+            }
+        }
     }
 }
