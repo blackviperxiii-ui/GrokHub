@@ -178,6 +178,9 @@ pub fn download_engine(
     ctl: &Control,
     on: &mut dyn FnMut(Progress),
 ) -> Outcome {
+    if let Err(e) = crate::offline::refuse() {
+        return Outcome::Failed(e);
+    }
     let bin = bin_dir(config_dir);
     if let Err(e) = fs::create_dir_all(&bin) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", bin.display()));

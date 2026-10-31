@@ -432,12 +432,27 @@ impl Decision {
             None if self.route.rule_ids.iter().any(|r| r == "local:paused") => {
                 super::local::LOCAL_PAUSED_MSG
             }
+            None if self.route.rule_ids.iter().any(|r| r == "offline:switch") => {
+                *grokhub_core::offline::OFFLINE_MSG
+            }
             None => *NO_ROUTE_MSG,
         }
     }
 
     /// What a paused call returns, with the reason the device can't take an offline turn.
     pub fn pause_text(&self) -> String {
+        let rule = |id: &str| self.route.rule_ids.iter().any(|r| r == id);
+        if self.budget_pause.is_none()
+            && grokhub_core::offline::enabled()
+            && rule("offline:local_unavailable")
+        {
+            let why = super::local::unavailable_reason();
+            return format!(
+                "{}: {why}. {}",
+                super::local::OFFLINE_NO_LOCAL_MSG,
+                *grokhub_core::offline::OFFLINE_MSG
+            );
+        }
         if self.budget_pause.is_none()
             && self
                 .route
@@ -743,8 +758,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         let what = format!("{} → {rule}", call.class);
         super::local_health::log_to(config_dir, "offline_turn", Some(&what), None);
     }
-    // A governor pause lifts on its own; it isn't a model to wait for.
-    if live && route.no_route && !route.rule_ids.iter().any(|r| r == "local:paused") {
+    // A governor pause lifts on its own and Offline only is the user's own
+    // switch: neither is a model to wait for.
+    if live
+        && route.no_route
+        && !route
+            .rule_ids
+            .iter()
+            .any(|r| r == "local:paused" || r == "offline:switch")
+    {
         let failed = reg
             .get(call.model)
             .map(|r| r.reason.clone())

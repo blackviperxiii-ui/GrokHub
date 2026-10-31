@@ -194,6 +194,9 @@ pub fn download(
     ctl: &Control,
     on: &mut dyn FnMut(Progress),
 ) -> Outcome {
+    if let Err(e) = crate::offline::refuse() {
+        return Outcome::Failed(e);
+    }
     if let Err(e) = fs::create_dir_all(dir) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", dir.display()));
     }

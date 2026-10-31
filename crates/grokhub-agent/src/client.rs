@@ -190,6 +190,7 @@ impl ClientError {
                 | ClientError::Transport(_)
                 | ClientError::Disconnect
         ) && !self.is_context_length()
+            && !matches!(self, ClientError::Transport(m) if grokhub_core::offline::is_refusal(m))
     }
 
     /// True when the provider refused the request because the prompt is too long.
