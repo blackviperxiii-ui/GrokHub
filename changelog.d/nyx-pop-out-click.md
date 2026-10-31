@@ -1,0 +1,1 @@
+- Fixed: Pop out (and Dock back) on Nyx's home card now works. The card's tap-to-talk area was on top of the button, so a click turned on voice instead.

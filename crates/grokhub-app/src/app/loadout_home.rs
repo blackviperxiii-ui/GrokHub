@@ -1304,93 +1304,94 @@ impl Cabin {
         let undocked = desktop && self.cfg.desktop_nyx_undocked;
         let mut pop_out = false;
         let mut dock_back = false;
-        let resp = card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                card_mark(ui);
-                ui.label(caption(&dock_title(&shown.id, name)));
-                if desktop {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (label, hint) = if undocked {
-                            ("Dock back", format!("Bring {name} back into the cabin"))
-                        } else {
-                            ("Pop out", format!("Put {name} on your desktop"))
-                        };
-                        let hit = ui
-                            .add(egui::Button::new(caption(label)).frame(false))
-                            .on_hover_text(hint);
-                        if hit.clicked() {
-                            if undocked {
-                                dock_back = true;
+        // The talk area senses clicks under the card's own widgets, so the
+        // Pop out button gets its click instead of the card behind it.
+        let talk = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    card_mark(ui);
+                    ui.label(caption(&dock_title(&shown.id, name)));
+                    if desktop {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (label, hint) = if undocked {
+                                ("Dock back", format!("Bring {name} back into the cabin"))
                             } else {
-                                pop_out = true;
+                                ("Pop out", format!("Put {name} on your desktop"))
+                            };
+                            let hit = ui
+                                .add(egui::Button::new(caption(label)).frame(false))
+                                .on_hover_text(hint);
+                            if hit.clicked() {
+                                if undocked {
+                                    dock_back = true;
+                                } else {
+                                    pop_out = true;
+                                }
                             }
-                        }
-                    });
-                }
-            });
-            ui.add_space(crate::theme::SPACING_4);
-            let w = ui.available_width();
-            let (art, _) =
-                ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
-            let tex = look
-                .and_then(|look| nyx_wardrobe::dock_pose(ui.ctx(), &look, activity))
-                .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
-            if pedestal_preview_pinned() {
-                paint_pedestal_preview(ui, art);
-            } else if undocked {
-                ui.painter().text(
-                    art.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{name} is on your desktop"),
-                    egui::FontId::proportional(crate::theme::TYPE_BODY),
-                    crate::theme::muted(),
-                );
-            } else if let Some(tex) = tex {
-                egui::Image::from_texture(&tex)
-                    .uv(cover_uv(tex.size(), art.size()))
-                    .corner_radius(crate::theme::RADIUS_SM)
-                    .paint_at(ui, art);
-            } else {
-                let side = (art.height() * 0.5).min(art.width());
-                let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
-                ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
-                    let letter = super::personality_ui::initial_letter(name);
-                    super::personality_ui::paint_letter_tile(ui, letter, side, true);
-                });
-            }
-            ui.horizontal(|ui| {
-                let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(dot.center(), 4.0, crate::theme::amber());
-                ui.label(
-                    egui::RichText::new("Here · tap to talk")
-                        .size(crate::theme::TYPE_BODY)
-                        .strong()
-                        .color(crate::theme::fg()),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    paint_wave(ui, live);
-                    if live {
-                        ui.label(caption("Listening"));
+                        });
                     }
                 });
-            });
+                ui.add_space(crate::theme::SPACING_4);
+                let w = ui.available_width();
+                let (art, _) =
+                    ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
+                let tex = look
+                    .and_then(|look| nyx_wardrobe::dock_pose(ui.ctx(), &look, activity))
+                    .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
+                if pedestal_preview_pinned() {
+                    paint_pedestal_preview(ui, art);
+                } else if undocked {
+                    ui.painter().text(
+                        art.center(),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{name} is on your desktop"),
+                        egui::FontId::proportional(crate::theme::TYPE_BODY),
+                        crate::theme::muted(),
+                    );
+                } else if let Some(tex) = tex {
+                    egui::Image::from_texture(&tex)
+                        .uv(cover_uv(tex.size(), art.size()))
+                        .corner_radius(crate::theme::RADIUS_SM)
+                        .paint_at(ui, art);
+                } else {
+                    let side = (art.height() * 0.5).min(art.width());
+                    let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
+                        let letter = super::personality_ui::initial_letter(name);
+                        super::personality_ui::paint_letter_tile(ui, letter, side, true);
+                    });
+                }
+                ui.horizontal(|ui| {
+                    let (dot, _) =
+                        ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter()
+                        .circle_filled(dot.center(), 4.0, crate::theme::amber());
+                    ui.label(
+                        egui::RichText::new("Here · tap to talk")
+                            .size(crate::theme::TYPE_BODY)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        paint_wave(ui, live);
+                        if live {
+                            ui.label(caption("Listening"));
+                        }
+                    });
+                });
+            })
         });
-        paint_brackets(ui.painter(), resp.rect);
+        paint_brackets(ui.painter(), talk.inner.rect);
         if pop_out {
             self.pop_nyx_out();
         } else if dock_back {
             self.dock_nyx_back();
         }
-        let click = ui
-            .interact(
-                resp.rect,
-                ui.id().with("loadout-companion"),
-                egui::Sense::click(),
-            )
+        let click = talk
+            .response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Talk to {name}"));
         if click.clicked() && !pop_out && !dock_back {
@@ -1673,6 +1674,68 @@ pub(super) fn pc_tile_grid(ui: &mut egui::Ui, tiles: &[PcTile]) {
 mod tests {
     use super::*;
     use grokhub_core::local_profile::{CpuInfo, Gpu, GpuVendor, PowerInfo};
+
+    /// Where `label` was painted in this pass, if anywhere.
+    fn text_center(shapes: &[egui::epaint::ClippedShape], label: &str) -> Option<egui::Pos2> {
+        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.galley.rect.translate(t.pos.to_vec2()).center())
+                }
+                egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, label)),
+                _ => None,
+            }
+        }
+        shapes.iter().find_map(|c| find(&c.shape, label))
+    }
+
+    /// Pop out sits on the companion card, which is also tap to talk. A click
+    /// on Pop out puts her on the desktop and never starts voice.
+    #[test]
+    fn pop_out_takes_its_own_click_and_never_starts_voice() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("dock-pop-out-click");
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_nyx = true;
+        cabin.cfg.desktop_nyx_undocked = false;
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let raw = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(420.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut at = None;
+        for _ in 0..2 {
+            let out = crate::theme::test_pass(&ctx, raw(vec![]), |ui| cabin.dock_companion(ui));
+            at = text_center(&out.shapes, "POP OUT");
+        }
+        let at = at.expect("Pop out shows while the desktop companion is on");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        crate::theme::test_pass(
+            &ctx,
+            raw(vec![egui::Event::PointerMoved(at), press(true)]),
+            |ui| cabin.dock_companion(ui),
+        );
+        crate::theme::test_pass(&ctx, raw(vec![press(false)]), |ui| cabin.dock_companion(ui));
+        assert!(
+            cabin.cfg.desktop_nyx_undocked,
+            "Pop out puts her on the desktop"
+        );
+        assert!(!cabin.voice_is_on(), "Pop out never starts voice");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn item(id: &str, status: MissionCheckStatus) -> MissionCheckItem {
         MissionCheckItem {
