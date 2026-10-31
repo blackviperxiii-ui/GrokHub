@@ -2055,6 +2055,7 @@ fn quiet_cabin() -> Cabin {
         history_q: String::new(),
         history_q_seen: String::new(),
         history_q_at: None,
+        history_delete_armed_at: None,
         history_hits: Vec::new(),
         archive_undo: None,
         chat_archive_day: None,

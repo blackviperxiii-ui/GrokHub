@@ -1,0 +1,1 @@
+- History's Delete all is now a red button that takes two clicks: the first turns it into "Delete all N chats?" with Cancel, and it disarms on its own after a few seconds. One click no longer wipes every chat.
