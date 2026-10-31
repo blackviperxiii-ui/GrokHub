@@ -1,8 +1,8 @@
-#define MyAppName "GrokHub"
+#define MyAppName "Loadout"
 #ifndef MyAppVersion
   #define MyAppVersion "3.4.0"
 #endif
-#define MyAppPublisher "GrokHub"
+#define MyAppPublisher "Loadout"
 #define MyAppExeName "grokhub.exe"
 
 [Setup]
@@ -11,7 +11,11 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\GrokHub
-DefaultGroupName=GrokHub
+DefaultGroupName=Loadout
+; The start menu group used to be GrokHub; a fresh group, and [InstallDelete]
+; below clears the old shortcuts. AppId, the install folder and the Setup file
+; name stay as they were so updates and the in-app updater keep working.
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\..\dist-release
@@ -37,9 +41,14 @@ Source: "stage\grokhub.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stage\grokhub-hub.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stage\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+Type: files; Name: "{autoprograms}\GrokHub\GrokHub.lnk"
+Type: dirifempty; Name: "{autoprograms}\GrokHub"
+Type: files; Name: "{autodesktop}\GrokHub.lnk"
+
 [Icons]
-Name: "{group}\GrokHub"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "GrokHub.Cabin"
-Name: "{autodesktop}\GrokHub"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "GrokHub.Cabin"
+Name: "{group}\Loadout"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "GrokHub.Cabin"
+Name: "{autodesktop}\Loadout"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "GrokHub.Cabin"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch GrokHub"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch Loadout"; Flags: nowait postinstall skipifsilent
