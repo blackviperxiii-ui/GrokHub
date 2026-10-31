@@ -69,6 +69,9 @@ fn form_error(v: &Value, fallback: &str) -> String {
 }
 
 /// The `WWW-Authenticate` of the server's 401 to an unsigned `initialize`.
+/// No version is negotiated yet, so the header names the one asked for.
+/// The `resource` (RFC 8707) goes on the authorize link, the code exchange
+/// and every refresh (`authorize_url`, `code_form`, `refresh_form`).
 fn probe(url: &str) -> Option<String> {
     guard_handshake(url).ok()?;
     let body = rpc::request(0, "initialize", rpc::initialize_params()).to_string();
@@ -76,7 +79,7 @@ fn probe(url: &str) -> Option<String> {
         .post(url)
         .set("Content-Type", "application/json")
         .set("Accept", "application/json, text/event-stream")
-        .set("MCP-Protocol-Version", rpc::PROTOCOL)
+        .set("MCP-Protocol-Version", rpc::LATEST)
         .timeout(Duration::from_secs(REQUEST_SECS))
         .send_string(&body);
     match resp {
@@ -448,7 +451,7 @@ pub(super) mod tests {
                 let msg: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
                 let id = msg.get("id").cloned().unwrap_or(Value::Null);
                 let result = match msg["method"].as_str().unwrap_or("") {
-                    "initialize" => json!({"protocolVersion": rpc::PROTOCOL, "capabilities": {}, "serverInfo": {"name": "auth", "version": "0"}}),
+                    "initialize" => json!({"protocolVersion": rpc::LATEST, "capabilities": {}, "serverInfo": {"name": "auth", "version": "0"}}),
                     "tools/list" => json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]}),
                     "tools/call" => {
                         calls.fetch_add(1, Ordering::SeqCst);

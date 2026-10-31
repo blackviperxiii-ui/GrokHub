@@ -100,6 +100,39 @@ pub enum StopReason {
     Error(String),
 }
 
+/// Cut-off replies in a row before the run stops instead of asking again.
+pub const TRUNCATED_STREAK_LIMIT: u32 = 3;
+/// Input tokens one unbounded run may send, summed over its requests, before it
+/// pauses for the user. Each request resends the whole context, so a run that
+/// loops burns this fast; a "continue" starts a fresh budget.
+pub const RUN_INPUT_TOKEN_BUDGET: u64 = 1_000_000;
+
+const TRUNCATED_STOP: &str = "I stopped here: my last three replies were cut off at the output \
+limit before they finished. Say continue and I'll go on in smaller steps.";
+
+fn budget_pause(sent: u64) -> String {
+    format!(
+        "I paused here: this run has sent about {}k tokens to the model so far. \
+         Say continue and I'll pick it up where I stopped.",
+        sent / 1000
+    )
+}
+
+/// Tokens one request asks the model to read: its input plus the tool schemas.
+fn request_tokens(req: &ResponsesRequest) -> u64 {
+    let tools = serde_json::to_vec(&req.tools).map(|b| b.len()).unwrap_or(0);
+    crate::compact::estimate_input_tokens(&req.input)
+        .saturating_add(crate::tokens::estimate_token_bytes(tools as u64))
+}
+
+fn stop_with_note(history: &mut Vec<InputItem>, on_event: &mut dyn FnMut(LoopEvent), note: String) {
+    on_event(LoopEvent::Text(format!("\n\n{note}")));
+    history.push(InputItem::Message {
+        role: "assistant".into(),
+        content: vec![ContentPart::InputText(note)],
+    });
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoopEvent {
     Text(String),
@@ -448,6 +481,7 @@ pub fn run_loop(
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
+    let mut run_tokens = 0u64;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
@@ -551,6 +585,15 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
+        let req_tokens = request_tokens(&req);
+        if input.max_turns == 0
+            && turns > 1
+            && run_tokens.saturating_add(req_tokens) > RUN_INPUT_TOKEN_BUDGET
+        {
+            stop_with_note(history, on_event, budget_pause(run_tokens));
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+        }
+        run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
         let class = crate::route::live::current_class();
@@ -656,6 +699,10 @@ pub fn run_loop(
                     call_id: call.call_id.clone(),
                     output: TRUNCATED_TOOL.into(),
                 });
+            }
+            if truncated_streak >= TRUNCATED_STREAK_LIMIT {
+                stop_with_note(history, on_event, TRUNCATED_STOP.to_string());
+                return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
             }
             continue;
         }
@@ -1974,6 +2021,92 @@ mod tests {
         let spans = std::fs::read_to_string(crate::harness::span_path(&config, "conv")).unwrap();
         assert!(spans.contains("turn_truncated"), "{spans}");
         assert!(spans.contains("max_output_tokens"), "{spans}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn three_cut_off_replies_in_a_row_stop_the_run() {
+        let dir = workspace("trunc-cap");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let cut = || ScriptTurn::truncated_calls(vec![call("w", "write", r#"{"path":"a"}"#)]);
+        let script = Script {
+            turns: Mutex::new(vec![cut(), cut(), cut(), cut(), ScriptTurn::text("never")]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && matches!(&content[0], ContentPart::InputText(t) if t == TRUNCATED_STOP)
+        ));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("cut off"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unbounded_run_pauses_once_it_has_sent_its_token_budget() {
+        let dir = workspace("budget");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        // About 600k tokens of context: the second request would cross the budget.
+        let system = "x".repeat(2_400_000);
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: &system,
+            conversation_id: "budget",
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut texts = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
+            if let LoopEvent::Text(t) = ev {
+                texts.push(t);
+            }
+        });
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            texts.iter().any(|t| t.contains("I paused here")),
+            "{texts:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
