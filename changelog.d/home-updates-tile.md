@@ -1,0 +1,1 @@
+- Home's Updates & Drivers tile is real now: it says whether a Loadout update is waiting, which installed Steam games need an update (from Steam's own manifest files), how many system packages are waiting (from the package list already on disk, only once system checks are on), and shows the GPU driver. Tapping it opens Settings > Update.

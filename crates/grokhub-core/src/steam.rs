@@ -346,6 +346,49 @@ pub fn manifest_game(vdf: &Vdf) -> Option<SteamGame> {
     })
 }
 
+/// `StateFlags` bits for an update Steam has to fetch or is fetching:
+/// UpdateRequired, UpdateRunning, UpdatePaused, UpdateStarted.
+const UPDATE_FLAGS: u64 = 2 | 256 | 512 | 1024;
+
+/// Steam marked this installed game as needing (or mid-way through) an update.
+pub fn manifest_needs_update(vdf: &Vdf) -> bool {
+    vdf.get("AppState")
+        .and_then(|s| s.get("StateFlags"))
+        .and_then(Vdf::str)
+        .and_then(|f| f.trim().parse::<u64>().ok())
+        .is_some_and(|f| f & UPDATE_FLAGS != 0)
+}
+
+/// Names of installed games Steam says need an update, read from the
+/// `appmanifest_*.acf` files Steam keeps (never from the game or its process).
+pub fn games_needing_update(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for folder in library_folders(root) {
+        let Ok(dir) = std::fs::read_dir(folder.join("steamapps")) else {
+            continue;
+        };
+        for entry in dir.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !(name.starts_with("appmanifest_") && name.ends_with(".acf")) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let vdf = parse_vdf(&text);
+            if manifest_needs_update(&vdf) {
+                if let Some(g) = manifest_game(&vdf) {
+                    if !out.contains(&g.name) {
+                        out.push(g.name);
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Last played and playtime per app from each account's `localconfig.vdf`.
 /// The newest value wins when there are several accounts.
 pub fn play_stats(root: &Path) -> BTreeMap<u32, (u64, u64)> {
@@ -650,6 +693,19 @@ mod tests {
 	}
 }
 "#;
+
+    #[test]
+    fn steam_state_flags_mark_games_with_an_update_waiting() {
+        let m = |flags: u32| {
+            parse_vdf(&format!(
+                "\"AppState\"\n{{\n\t\"appid\"\t\"730\"\n\t\"name\"\t\"Counter-Strike 2\"\n\t\"StateFlags\"\t\"{flags}\"\n}}\n"
+            ))
+        };
+        assert!(!manifest_needs_update(&m(4)), "fully installed");
+        assert!(manifest_needs_update(&m(6)), "installed + update required");
+        assert!(manifest_needs_update(&m(1026)), "update started");
+        assert!(!manifest_needs_update(&parse_vdf("\"AppState\"\n{\n}\n")));
+    }
 
     fn manifest(id: u32, name: &str, last: u64) -> String {
         format!(
