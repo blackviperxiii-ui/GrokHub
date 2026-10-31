@@ -46,39 +46,55 @@ const XP_PER_TASK: u32 = 100;
 const XP_PER_STEP: u32 = 25;
 pub(super) const XP_PER_LEVEL: u32 = 500;
 
-/// What Nyx is doing, shown in the corner box: a tool turn picks Working,
-/// Doctor, Reading or Writing by what the tool does, a turn with no tool
-/// yet is Thinking, a game the user just left is Gaming, and anything else
-/// is Hanging out. With adults-only on, the Viper personality wears the
-/// snake onesie and the other explicit ones the raunchy outfit, whatever
-/// the mode. Each mode's own picture is its first pose; the rest are in
-/// [`nyx_wardrobe`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Mood {
-    Working,
-    Gaming,
-    Doctor,
-    Reading,
-    HangingOut,
-    Viper,
-    Thinking,
-    Writing,
-    Raunchy,
+/// What Nyx is doing, shown in the corner box. The modes and her outfits
+/// live in [`grokhub_core::companion`] (`assets/companions/nyx/companion.toml`),
+/// so the desktop companion reads the same source.
+pub(super) use grokhub_core::companion::Mood;
+
+/// The shipped picture an outfit file names, embedded in the build. The
+/// companion file is the source of which outfit a mode wears; this is
+/// only how the bytes get into the binary.
+fn builtin_art(file: &str) -> Option<&'static [u8]> {
+    Some(match file {
+        "brand/nyx-working.jpg" => NYX_WORKING_JPG,
+        "brand/nyx-gaming.jpg" => NYX_GAMING_JPG,
+        "brand/nyx-doctor.jpg" => NYX_DOCTOR_JPG,
+        "brand/nyx-reading.jpg" => NYX_READING_JPG,
+        "brand/nyx-hanging-out.jpg" => NYX_HANGING_OUT_JPG,
+        "brand/nyx-viper.jpg" => NYX_VIPER_JPG,
+        "brand/nyx/actions/thinking/1.jpg" => NYX_THINKING_JPG,
+        "brand/nyx/actions/writing/1.jpg" => NYX_WRITING_JPG,
+        "brand/nyx-raunchy.jpg" => NYX_RAUNCHY_JPG,
+        _ => return None,
+    })
 }
 
-impl Mood {
+/// The outfit Nyx wears for `mood`: the shipped one the companion file
+/// names, or the default when a mode has no picture of its own. Adult
+/// outfits are included; the wardrobe only asks for an explicit mode with
+/// adults-only personalities on.
+pub(super) fn mood_outfit(mood: Mood) -> &'static grokhub_core::companion::Outfit {
+    grokhub_core::companion::nyx().outfit_for(mood, true)
+}
+
+/// The embedded picture for `mood`, by way of the companion file.
+pub(super) fn mood_art(mood: Mood) -> &'static [u8] {
+    let nyx = grokhub_core::companion::nyx();
+    builtin_art(&mood_outfit(mood).file)
+        .or_else(|| builtin_art(&nyx.default_outfit().file))
+        .unwrap_or(NYX_HANGING_OUT_JPG)
+}
+
+/// The corner box's picture and texture key for a mode. The key stays a
+/// static name because [`nyx_wardrobe`] uses it to name a pose set.
+pub(super) trait MoodArt {
+    fn art(self) -> &'static [u8];
+    fn key(self) -> &'static str;
+}
+
+impl MoodArt for Mood {
     fn art(self) -> &'static [u8] {
-        match self {
-            Mood::Working => NYX_WORKING_JPG,
-            Mood::Gaming => NYX_GAMING_JPG,
-            Mood::Doctor => NYX_DOCTOR_JPG,
-            Mood::Reading => NYX_READING_JPG,
-            Mood::HangingOut => NYX_HANGING_OUT_JPG,
-            Mood::Viper => NYX_VIPER_JPG,
-            Mood::Thinking => NYX_THINKING_JPG,
-            Mood::Writing => NYX_WRITING_JPG,
-            Mood::Raunchy => NYX_RAUNCHY_JPG,
-        }
+        mood_art(self)
     }
 
     fn key(self) -> &'static str {
@@ -97,22 +113,11 @@ impl Mood {
 }
 
 /// `GROKHUB_DECK_MOOD` (`working`, `gaming`, `doctor`, `reading`,
-/// `hanging-out`, `viper`, `raunchy`, `thinking`, `writing`) pins the
-/// picture for the deck screenshots (`scripts/deck-shots.ps1`), where no
-/// turn or game can run.
+/// `hanging-out`, `viper`, `thinking`, `writing`, `raunchy`) pins the picture
+/// for the deck screenshots (`scripts/deck-shots.ps1`), where no turn or
+/// game can run.
 pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "working" => Some(Mood::Working),
-        "gaming" => Some(Mood::Gaming),
-        "doctor" => Some(Mood::Doctor),
-        "reading" => Some(Mood::Reading),
-        "hanging-out" => Some(Mood::HangingOut),
-        "viper" => Some(Mood::Viper),
-        "thinking" => Some(Mood::Thinking),
-        "writing" => Some(Mood::Writing),
-        "raunchy" => Some(Mood::Raunchy),
-        _ => None,
-    }
+    Mood::parse(raw)
 }
 
 /// Launch pins are read once per run. Tests flip them inside one process,
@@ -1847,7 +1852,7 @@ mod tests {
             Mood::Raunchy,
         ];
         for mood in all {
-            let img = image::load_from_memory(mood.art()).expect("mode art decodes");
+            let img = image::load_from_memory(mood_art(mood)).expect("mode art decodes");
             assert_eq!((img.width(), img.height()), (448, 350), "{mood:?}");
         }
         let mut keys: Vec<_> = all.iter().map(|m| m.key()).collect();
@@ -1858,6 +1863,28 @@ mod tests {
         arts.sort();
         arts.dedup();
         assert_eq!(arts.len(), 9, "each mode shows a different picture");
+    }
+
+    #[test]
+    fn the_corner_box_reads_its_outfits_from_the_companion_file() {
+        let nyx = grokhub_core::companion::nyx();
+        for outfit in &nyx.outfits {
+            assert!(
+                builtin_art(&outfit.file).is_some(),
+                "{} is named in companion.toml but not embedded",
+                outfit.file
+            );
+        }
+        assert_eq!(mood_outfit(Mood::Working).id, "working");
+        assert_eq!(Mood::Working.key(), "loadout-nyx-working");
+        assert_eq!(Mood::HangingOut.key(), "loadout-nyx-hanging-out");
+        // Every mode has a picture of its own in the shipped file.
+        assert_eq!(mood_outfit(Mood::Thinking).id, "thinking");
+        assert_eq!(mood_art(Mood::Thinking), NYX_THINKING_JPG);
+        assert_eq!(mood_art(Mood::Writing), NYX_WRITING_JPG);
+        assert_eq!(mood_art(Mood::Raunchy), NYX_RAUNCHY_JPG);
+        assert!(mood_outfit(Mood::Raunchy).adult, "raunchy is adults only");
+        assert_eq!(builtin_art("brand/nyx-nothing.jpg"), None);
     }
 
     #[test]
