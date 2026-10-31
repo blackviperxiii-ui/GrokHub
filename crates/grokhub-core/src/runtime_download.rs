@@ -478,20 +478,32 @@ mod tests {
     fn manifest_parses_and_every_url_is_https_and_allowlisted() {
         validate_manifest_urls().expect("manifest");
         let m = manifest_for_key("linux-x86_64").expect("linux asset");
-        assert_eq!(m.version, "b11602");
+        assert_eq!(m.version, "b12017");
         assert!(m.asset.url.starts_with("https://github.com/"));
-        assert_eq!(m.asset.size, 30_359_972);
+        assert_eq!(m.asset.size, 35_665_113);
         // x86_64 gets the Vulkan build (GPU when a driver loads, CPU otherwise).
         assert_eq!(
             m.asset.archive_file_name(),
-            "llama-b11602-bin-ubuntu-vulkan-x64.tar.gz"
+            "llama-b12017-bin-ubuntu-vulkan-x64.tar.gz"
         );
         let w = manifest_for_key("windows-x86_64").expect("windows asset");
         assert_eq!(
             w.asset.archive_file_name(),
-            "llama-b11602-bin-win-vulkan-x64.zip"
+            "llama-b12017-bin-win-vulkan-x64.zip"
         );
-        assert_eq!(w.asset.size, 32_127_294);
+        assert_eq!(w.asset.size, 37_514_219);
+        // Arm gets the CPU builds.
+        let names: Vec<String> = ["linux-aarch64", "windows-aarch64"]
+            .iter()
+            .map(|k| manifest_for_key(k).expect(k).asset.archive_file_name())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "llama-b12017-bin-ubuntu-arm64.tar.gz",
+                "llama-b12017-bin-win-cpu-arm64.zip"
+            ]
+        );
     }
 
     struct FakeServer {

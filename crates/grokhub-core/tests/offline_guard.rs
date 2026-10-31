@@ -89,6 +89,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // On-device model (loopback only).
     ("crates/grokhub-agent/src/route/local_http.rs", 1, "llama-server chat on loopback"),
     ("crates/grokhub-agent/src/route/local_sidecar.rs", 1, "llama-server /health on loopback"),
+    ("crates/grokhub-agent/src/route/local_effort.rs", 1, "llama-server /props on loopback (refuses any other host)"),
     ("crates/grokhub-agent/src/route/local_spec.rs", 1, "speed test against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-app/src/desktop.rs", 4, "hub health, CDP HTTP + websocket: loopback via egress_ok"),

@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 
 /// Span trace when no chat is open.
 pub(crate) const SELF_TRACE: &str = "grokhub-self";
-const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const LINE_CAP: usize = 1 << 20;
 
 /// What the server needs from the world: the park handoff, the elicit card,

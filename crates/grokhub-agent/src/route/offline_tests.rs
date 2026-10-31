@@ -157,6 +157,62 @@ fn offline_serve_chat_uses_chat_stream() {
     assert_eq!(out.text, "hello offline");
 }
 
+/// Says back the effort each chat turn reached it with.
+struct EffortRt;
+
+impl LocalRuntime for EffortRt {
+    fn classify(&self, _text: &str, labels: &[&str]) -> Result<Value, String> {
+        Ok(json!({ "label": labels[0], "score": 0.9 }))
+    }
+    fn summarize(&self, _text: &str, _max_words: u32) -> Result<Value, String> {
+        Ok(json!({ "summary": "two lines" }))
+    }
+    fn difficulty(&self, _text: &str) -> Result<Value, String> {
+        Ok(json!({ "d": 0.4 }))
+    }
+    fn chat_stream_at(
+        &self,
+        _messages: &[local::ChatMessage],
+        effort: Option<&str>,
+        _on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        Ok(format!("effort {}", effort.unwrap_or("none sent")))
+    }
+}
+
+#[test]
+fn a_local_chat_turn_hands_its_effort_to_the_runtime() {
+    use crate::client::{ContentPart, InputItem, ResponsesRequest};
+    let _on = ForceOn::with(Some(Arc::new(EffortRt)));
+    let go = crate::client::CancelToken::new();
+    let req = |effort: Option<&str>, tools: Vec<Value>| ResponsesRequest {
+        model: "local:small".into(),
+        effort: effort.map(str::to_string),
+        input: vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("hi".into())],
+        }],
+        conversation_id: "s".into(),
+        tools,
+        hosted_search: false,
+        call_timeout: None,
+    };
+    let text = |r: &ResponsesRequest| {
+        local::serve_request("chat:default", r, &go)
+            .expect("serve")
+            .text
+    };
+    assert_eq!(text(&req(Some("xhigh"), Vec::new())), "effort xhigh");
+    assert_eq!(text(&req(None, Vec::new())), "effort none sent");
+    // With tools, the default `chat_tools` passes it on too.
+    let tool = json!({"type": "function", "name": "web_search", "parameters": {}});
+    assert_eq!(text(&req(Some("low"), vec![tool])), "effort low");
+    // Background helpers never take one.
+    let bg = local::serve_request("background:summarize", &req(Some("high"), Vec::new()), &go)
+        .expect("serve");
+    assert_eq!(bg.text, r#"{"summary":"two lines"}"#);
+}
+
 #[test]
 fn offline_work_goes_local_at_every_level_but_unload_which_pauses_with_a_chip() {
     use grokhub_core::local_governor::Level;
