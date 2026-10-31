@@ -1,1 +1,0 @@
-- Pulse: weekly "Your week" recap Digest from opt-in counters (games playtime, projects, prints, disk, tasks) at your usual active hour, with a path-free share image.

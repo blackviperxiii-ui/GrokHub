@@ -1,1 +1,0 @@
-- Start my day waits for the morning (5 AM to 2 PM) until your rhythm is learned, waits for the code-resume scan, leaves out snoozed cards, muted Steam games and steps you said "Not this" or never to, keeps quiet categories from crowding out real items, and counts a one-tap as using the brief and its card.

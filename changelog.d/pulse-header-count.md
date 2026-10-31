@@ -1,2 +1,0 @@
-- Pulse: the line over the Feed counts the posts it shows (with any check in progress) instead of saying "Nothing to check yet" over cards.
-- Settings › Pulse: the Add topic field and its Add button line up; hobbies not seen on this PC say so in plain words.

@@ -182,6 +182,57 @@ fn stdio_server_lists_calls_paginates_and_reports_a_crash() {
 }
 
 #[test]
+fn a_2025_11_25_stdio_server_gives_structured_and_linked_results_inside_the_fence() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("rich");
+    import_bin(
+        bin,
+        &[("FAKE_MCP_VERSION", "2025-11-25"), ("FAKE_MCP_RICH", "1")],
+    );
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 1),
+        "{rows:?}"
+    );
+    let listed = mcp::tool_list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].display_name(), "Echo Weather");
+    assert!(listed[0].hints.read_only);
+    assert_eq!(listed[0].hints.open_world, Some(false));
+    assert_eq!(listed[0].icons[0].src, "https://example.com/echo.png");
+    let output = run_call(&dir, true, &mut |_| {});
+    let body = "weather ok\n\
+                [resource_link] Forecast (forecast.json) <file:///tmp/forecast.json> (application/json): Five-day forecast\n\
+                structuredContent: {\"temperature\":22.5}";
+    assert!(
+        output.starts_with("<<<UNTRUSTED source=mcp nonce="),
+        "{output}"
+    );
+    assert!(
+        output.contains(&format!(">>>\n{body}\n<<<END_UNTRUSTED nonce=")),
+        "{output}"
+    );
+}
+
+#[test]
+fn a_server_answering_an_unknown_version_is_an_error_row() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (_dir, _clean, _guard) = scratch("version");
+    import_bin(bin, &[("FAKE_MCP_VERSION", "1999-01-01")]);
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].last_error.as_str(), rows[0].tool_count),
+        (
+            "error",
+            "MCP server `box` answered with MCP version 1999-01-01; this client speaks 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05",
+            0
+        ),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn a_saved_key_reaches_a_stdio_server_in_its_token_env() {
     let bin = env!("CARGO_BIN_EXE_fake_mcp");
     let (dir, _clean, _guard) = scratch("token-env");

@@ -2223,6 +2223,44 @@ mod tests {
         assert_eq!(grouped(1_000_000), "1,000,000");
     }
 
+    /// The fixed slide-02 four once replaced every ranked chip mid-chat on the
+    /// default theme. Outside a deck shot the ranked pool shows.
+    #[test]
+    fn loadout_chat_shows_ranked_chips_outside_deck_shots() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        let mut chat = ChatThread::new("Build", false);
+        chat.messages = Arc::new(vec![
+            ("user".into(), "the build fails".into()),
+            ("assistant".into(), "linker not found".into()),
+        ]);
+        let mut cabin = Cabin::quiet_cabin(vec![chat], 0);
+        cabin.messages = cabin.threads[0].messages.clone();
+        cabin.visible_chips = vec![QuickChip {
+            id: "ctx-fix".into(),
+            label: "Fix the linker".into(),
+            value: "Fix the linker error.".into(),
+            kind: ChipKind::Chat,
+            score: 90.0,
+            hint: String::new(),
+            primary: true,
+        }];
+        let chips = cabin.composer_chips();
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        assert!(
+            chips.iter().any(|c| c.id == "ctx-fix")
+                && chips.iter().all(|c| !c.id.starts_with("hangout-deck-")),
+            "{:?}",
+            chips.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn deck_shot_seed_restores_hangout_after_fresh_home() {
         let _g = crate::config::hold_test_config();

@@ -41,8 +41,8 @@ use super::table::{load_table, table_path, RoutingTable};
 use super::tune::{self, StepRisk};
 use super::{Route, RouteInput, Router};
 use crate::client::{
-    ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
-    Usage,
+    ClientError, CompactOutput, CompactRequest, ContentPart, InputItem, ModelClient,
+    ResponsesRequest, StreamEvent, TurnOutput, Usage,
 };
 use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
 use crate::timing::{self, Breakdown};
@@ -1164,7 +1164,13 @@ pub fn stream_routed(
     } else {
         decision.send_model(&req.model)
     };
-    sent.effort = effort.clone();
+    // A local tier has no effort menu, so the router picks none for it; the
+    // sidecar maps the turn's own effort onto what the model's template renders.
+    sent.effort = if on_device {
+        effort.clone().or_else(|| req.effort.clone())
+    } else {
+        effort.clone()
+    };
     sent.model = model.clone();
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));
@@ -1318,6 +1324,61 @@ pub fn stream_routed(
         &RouteDone::of(&out, started.elapsed()),
     );
     out
+}
+
+/// xAI's server-side compaction of `req`, when the router would send this
+/// compaction to xAI. `None` when it would go to this computer's model or a
+/// provider, the router pauses it, the ask is held, or the client has no
+/// compaction endpoint: the caller summarizes through [`stream_routed`] instead,
+/// which decides again. The call keeps the chat's own model (`req.model`): the
+/// compaction item is read back by that model, so the router's pick for the
+/// summary class is not used. A success is logged like any routed call.
+pub fn compact_routed(
+    client: &dyn ModelClient,
+    req: &CompactRequest,
+    cancel: &CancelToken,
+) -> Option<Result<CompactOutput, ClientError>> {
+    if !client.compacts_server_side() {
+        return None;
+    }
+    let dir = crate::perm::config_dir();
+    // Playbooks 8: a banned ask never leaves the computer, here either.
+    let mut sent = req.clone();
+    super::adult::scrub(&mut sent.input);
+    if super::adult::held_reply(&sent.input).is_some() {
+        return None;
+    }
+    let (text, needs_image) = last_user_text(&sent.input);
+    let call = RouteCall {
+        provider: super::PROVIDER_XAI,
+        class: super::CLASS_COMPACT,
+        model: &req.model,
+        session: &req.conversation_id,
+        ctx_tokens: crate::compact::estimate_input_tokens(&req.input),
+        text: &text,
+        needs_image,
+        providers: true,
+        ..RouteCall::default()
+    };
+    let decision = decide(&dir, &call, grokhub_core::now_ms());
+    if decision.paused() || decision.on_device() || decision.on_provider() {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let out = client.compact(&sent, cancel)?;
+    if let Ok(done) = &out {
+        let turn = Ok(TurnOutput {
+            usage: done.usage.clone(),
+            ..TurnOutput::default()
+        });
+        route_log(
+            &dir,
+            &call,
+            &decision,
+            &RouteDone::of(&turn, started.elapsed()),
+        );
+    }
+    Some(out)
 }
 
 /// Provider name for turns Grok Build runs itself.

@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-agent"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
@@ -2126,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-app"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "clipboard-win",
  "eframe",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-core"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "dirs",
  "flate2",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-desktop"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "ashpd",
  "evdev",
@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-hub"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "grokhub-core",
  "serde",
@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-proto"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "serde",
  "serde_json",

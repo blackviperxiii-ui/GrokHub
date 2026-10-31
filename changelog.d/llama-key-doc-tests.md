@@ -1,1 +1,0 @@
-- Local model launch: the llama-server doc comment now says the API key goes in the child environment, and its tests check the exact `--api-key` argument and the key variable instead of the whole environment.

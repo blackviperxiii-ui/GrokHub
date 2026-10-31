@@ -1738,3 +1738,119 @@ fn scheduled_and_orphan_background_reports_post_in_main() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Stop used to drop the half-streamed reply: the text lived only in the stream
+/// buffers and halt_in_flight cleared them, then popped the assistant row.
+#[test]
+fn stop_keeps_the_reply_that_already_streamed() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-keeps-reply");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Stutter", false);
+    chat.messages_mut()
+        .push(("user".into(), "why does my game stutter".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.ingest_stream_chunk(LiveKind::Say, "Shader cache rebuilds on every launch, so");
+    cabin.halt_in_flight();
+    let last = cabin.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant", "{:?}", cabin.messages);
+    assert!(
+        last.1.contains("Shader cache rebuilds") && last.1.ends_with("*Stopped*"),
+        "the partial reply stays, marked stopped: {:?}",
+        last.1
+    );
+    assert!(cabin.stream_buf.is_empty() && cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+}
+
+#[test]
+fn stop_keeps_the_tool_calls_of_the_run() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-keeps-tools");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Disk", false);
+    chat.messages_mut()
+        .push(("user".into(), "what is eating my disk".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.ingest_stream_chunk(LiveKind::Say, "Checking the big folders.");
+    append_tool(&mut cabin.turn_log, "t1", "Scan Downloads", "completed", "");
+    cabin.ingest_stream_chunk(LiveKind::Say, "Downloads holds 40 GB of");
+    let expected = {
+        let mut log = cabin.turn_log.clone();
+        append_say(&mut log, STOPPED_TURN_SEAM);
+        encode_turn(&log)
+    };
+    cabin.halt_in_flight();
+    let last = cabin.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant");
+    assert_eq!(
+        last.1, expected,
+        "the whole timeline, tools in place, is kept"
+    );
+    assert!(last.1.contains("Scan Downloads") && last.1.contains("*Stopped*"));
+}
+
+#[test]
+fn stop_before_anything_streamed_leaves_no_empty_bubble() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-nothing-yet");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Duo", false);
+    chat.messages_mut()
+        .push(("user".into(), "find me a duo".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.halt_in_flight();
+    assert_eq!(
+        cabin.messages.last().map(|m| m.0.as_str()),
+        Some("user"),
+        "{:?}",
+        cabin.messages
+    );
+}
+
+#[test]
+fn stop_keeps_a_run_streaming_on_another_tab_in_that_tab() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-other-tab");
+    let mut cabin = Cabin::quiet_for_test();
+    let here = crate::threads::ChatThread::new("Here", false);
+    let mut there = crate::threads::ChatThread::new("There", false);
+    there
+        .messages_mut()
+        .push(("user".into(), "plan my weekend".into()));
+    let there_id = there.id.clone();
+    cabin.threads = vec![here, there];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(there_id.clone());
+    cabin.ingest_stream_chunk(LiveKind::Say, "Saturday: ranked grind, then");
+    cabin.halt_in_flight();
+    assert!(
+        cabin.messages.is_empty(),
+        "nothing lands on the visible tab"
+    );
+    let there = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == there_id)
+        .expect("there");
+    let last = there.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant");
+    assert!(last.1.contains("ranked grind") && last.1.ends_with("*Stopped*"));
+}

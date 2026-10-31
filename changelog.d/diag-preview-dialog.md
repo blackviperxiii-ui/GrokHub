@@ -1,1 +1,0 @@
-- Labs Diagnostics Save now opens a preview of the redacted bundle with a count of what was hidden; Save writes exactly what was shown and Cancel writes nothing.

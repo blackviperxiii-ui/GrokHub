@@ -1,2 +1,0 @@
-- Pulse: an achievements check that takes a while to fail waits its full retry time from when it failed, and one that fails after you switch the source off no longer schedules a retry.
-- Chat: web search source chips show the keyboard focus ring.

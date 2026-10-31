@@ -1,1 +1,0 @@
-- Library: each game shows its real cover art. The art comes from Steam's own cache on this PC first, then a copy kept in the settings folder, then Steam's public store images (logged in the off-device ledger). Covers fade in, and a game with no art keeps the painted cover, offline too.

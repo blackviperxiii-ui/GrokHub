@@ -1,1 +1,0 @@
-- Playwright browser fallback: `PLAYWRIGHT_MCP_*` values of `false` or `0` no longer count as a browser choice, `PLAYWRIGHT_BROWSERS_PATH=0` still prefers an installed browser (and otherwise leaves Playwright to its package cache), a relative MCP working folder resolves against the cabin's own, and current macOS "Google Chrome for Testing" downloads are found.

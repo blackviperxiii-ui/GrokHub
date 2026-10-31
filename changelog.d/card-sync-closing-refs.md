@@ -1,1 +1,0 @@
-- CI: card sync only closes a card for a merged beta PR that says "Fixes #N", not one that just mentions it.

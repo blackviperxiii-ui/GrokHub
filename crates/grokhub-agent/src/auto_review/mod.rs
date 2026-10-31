@@ -243,7 +243,10 @@ fn should_review(input: &ReviewIn<'_>) -> bool {
     if !matches!(attended_decision(input), Decision::Ask) {
         return false;
     }
-    if hard_shell(input.name, input.arguments) {
+    // A tool its MCP server marks destructive keeps its card for the user.
+    if hard_shell(input.name, input.arguments)
+        || crate::mcp::is_destructive_call(input.name, input.arguments)
+    {
         return false;
     }
     !input.policy.is_some_and(|policy| {
@@ -532,7 +535,7 @@ fn history_item_fenced(item: &InputItem) -> bool {
             ContentPart::InputImage(_) => false,
         }),
         InputItem::FunctionCallOutput { output, .. } => crate::tools::fence::looks_fenced(output),
-        InputItem::FunctionCall { .. } => false,
+        InputItem::FunctionCall { .. } | InputItem::ServerCompaction { .. } => false,
     }
 }
 

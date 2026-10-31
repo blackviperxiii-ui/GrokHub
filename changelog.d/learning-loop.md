@@ -1,1 +1,0 @@
-- Chats now teach the cabin as you go: facts about you land in USER.md, "always/don't" corrections in SOUL.md, and "remember that…" in MEMORY.md as short clean lines, replaced instead of piled up. Raw chat is no longer copied into memory, and every write is logged in `memory/learn-log.jsonl`.

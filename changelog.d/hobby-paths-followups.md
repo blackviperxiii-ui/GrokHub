@@ -1,1 +1,0 @@
-- Learning-path tips now wait out quiet hours, show up on the Feed where their Done, Skip, Too easy and Too hard buttons are, and pick the game modding path when you're playing a recognized game.
