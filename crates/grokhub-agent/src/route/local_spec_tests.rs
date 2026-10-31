@@ -7,6 +7,7 @@ use grokhub_core::local_draft::Verdict;
 use grokhub_core::local_picker::CpuSimd;
 use grokhub_core::local_profile::{Backend, CpuInfo, Gpu, GpuVendor, PowerInfo, Thermal};
 
+/// Lines of llama.cpp b11602's `llama-server --help` (the build pinned before b12017).
 const B11602_HELP: &str = "\
 --spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N
@@ -14,6 +15,10 @@ const B11602_HELP: &str = "\
 --spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash
 --draft, --draft-n, --draft-max N       the argument has been removed. use --spec-draft-n-max or
 ";
+
+/// The whole `llama-server --help` of the pinned llama.cpp b12017.
+const B12017_HELP: &str =
+    include_str!("../../../grokhub-core/tests/fixtures/llama_server_help_b12017.txt");
 
 fn nvidia(vram_mb: u64, free: u64) -> Gpu {
     Gpu {
@@ -240,7 +245,7 @@ impl Rig {
             meta,
             p,
             a,
-            flags: ld::parse_help(B11602_HELP),
+            flags: ld::parse_help(B12017_HELP),
         }
     }
 
@@ -443,5 +448,114 @@ fn the_speed_test_reads_speed_and_acceptance_from_the_server() {
     assert_eq!(
         measure(&bare, "sk-abcdefghijklmnopqrstuv"),
         Err("the server didn't report its speed".into())
+    );
+}
+
+/// The flags in `args` that `help` doesn't list as live: unknown, removed or
+/// deprecated. A value (a number, a path, `all`) is not a flag.
+fn not_live(help: &str, args: &[String]) -> Vec<String> {
+    let known = ld::help_flags(help);
+    args.iter()
+        .filter(|a| {
+            a.starts_with('-') && a[1..].starts_with(|c: char| c == '-' || c.is_ascii_alphabetic())
+        })
+        .filter(|a| known.get(a.as_str()) != Some(&false))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn every_launch_flag_is_live_in_the_pinned_engine() {
+    let flags = ld::parse_help(B12017_HELP);
+    let draft = |kind, model: Option<&str>| DraftArgs {
+        kind,
+        model: model.map(PathBuf::from),
+        on_gpu: true,
+        flags: flags.clone(),
+    };
+    let simple = draft(DraftKind::Simple, Some("/m/drafters/e2b.gguf"));
+    assert_eq!(
+        simple.to_args().join(" "),
+        "--spec-type draft-simple --spec-draft-model /m/drafters/e2b.gguf --spec-draft-ngl all --spec-draft-n-max 16"
+    );
+    // Every optional flag on: MoE offload, batch threads, mlock, a GPU split
+    // and each kind of draft.
+    let full = |d: DraftArgs| LaunchArgs {
+        backend: Backend::Vulkan,
+        ngl: 49,
+        all_layers: 49,
+        n_cpu_moe: Some(4),
+        ctx: 16_384,
+        kv: KvType::Q8,
+        threads: 8,
+        threads_batch: Some(16),
+        flash_attn: true,
+        mlock: true,
+        tensor_split: Some(vec![3, 1]),
+        draft: Some(Box::new(d)),
+    };
+    let launches = [
+        full(simple),
+        full(draft(DraftKind::Dflash, Some("/m/drafters/dflash.gguf"))),
+        full(draft(DraftKind::Mtp, None)),
+    ];
+    let model = Path::new("/m/model.gguf");
+    for a in &launches {
+        let line = crate::route::local_sidecar::llama_args_with_launch(model, "127.0.0.1", 4711, a);
+        assert_eq!(
+            not_live(B12017_HELP, &line),
+            Vec::<String>::new(),
+            "{line:?}"
+        );
+    }
+    assert_eq!(
+        crate::route::local_sidecar::llama_args_with_launch(model, "127.0.0.1", 4711, &launches[0])
+            .join(" "),
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 -ngl 49 -c 16384 --threads 8 \
+--cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 4 --threads-batch 16 \
+--load-mode mmap+mlock --split-mode layer --tensor-split 3,1 --spec-type draft-simple \
+--spec-draft-model /m/drafters/e2b.gguf --spec-draft-ngl all --spec-draft-n-max 16 --cache-prompt"
+    );
+    // The one-shot defaults, with every optional flag on.
+    let perf = crate::route::local_perf::RuntimeDefaults {
+        n_gpu_layers: 99,
+        threads: 8,
+        ctx: 8_192,
+        flash_attn: true,
+        kv_cache_q8: true,
+        idle_unload_secs: 600,
+    };
+    let line = crate::route::local_sidecar::llama_args_with_perf(model, "127.0.0.1", 4711, &perf);
+    assert_eq!(
+        line.join(" "),
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 -ngl 99 --threads 8 -c 8192 \
+--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-prompt"
+    );
+    assert_eq!(not_live(B12017_HELP, &line), Vec::<String>::new());
+}
+
+#[test]
+fn the_flags_b12017_removed_never_go_out() {
+    // An older engine's names would still be built for an older engine...
+    let old = ld::parse_help(
+        "-md,   --model-draft FNAME   draft model\n--draft-max, --draft, --draft-n N   tokens to draft\n",
+    );
+    let legacy = DraftArgs {
+        kind: DraftKind::Simple,
+        model: Some(PathBuf::from("d.gguf")),
+        on_gpu: false,
+        flags: old,
+    };
+    // ...and b12017 would refuse the draft length (`--model-draft` is still
+    // an alias there).
+    assert_eq!(not_live(B12017_HELP, &legacy.to_args()), ["--draft-max"]);
+    // The names read from b12017's own help are all live there.
+    let pinned = DraftArgs {
+        flags: ld::parse_help(B12017_HELP),
+        ..legacy
+    };
+    assert_eq!(
+        pinned.to_args().join(" "),
+        "--spec-type draft-simple --spec-draft-model d.gguf --spec-draft-ngl 0 --spec-draft-n-max 16"
     );
 }

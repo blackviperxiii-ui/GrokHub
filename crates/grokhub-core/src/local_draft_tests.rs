@@ -4,7 +4,7 @@ const E2B: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.g
 const G12B: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 const G26B: &str = "Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 
-/// Lines of the pinned llama.cpp b11602 `llama-server --help`.
+/// Lines of llama.cpp b11602's `llama-server --help` (the build pinned before b12017).
 const B11602_HELP: &str = "\
 --spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)
@@ -22,6 +22,9 @@ const B11602_HELP: &str = "\
 --draft-min, --draft-n-min N            the argument has been removed. use --spec-draft-n-min or
 ";
 
+/// The whole `llama-server --help` of the pinned llama.cpp b12017.
+const B12017_HELP: &str = include_str!("../tests/fixtures/llama_server_help_b12017.txt");
+
 /// An older engine, before `--spec-*`.
 const OLD_HELP: &str = "\
 -md,   --model-draft FNAME              draft model for speculative decoding (default: unused)
@@ -31,7 +34,7 @@ const OLD_HELP: &str = "\
 ";
 
 #[test]
-fn the_pinned_engine_uses_the_spec_flags_and_skips_removed_ones() {
+fn b11602_uses_the_spec_flags_and_skips_removed_ones() {
     let f = parse_help(B11602_HELP);
     assert_eq!(
         f,
@@ -56,6 +59,97 @@ fn the_pinned_engine_uses_the_spec_flags_and_skips_removed_ones() {
     assert!(f.supports(DraftKind::Simple));
     assert!(f.supports(DraftKind::Dflash));
     assert!(f.supports(DraftKind::Mtp));
+}
+
+#[test]
+fn b12017_drafts_with_the_spec_flags_and_lists_every_kind() {
+    let f = parse_help(B12017_HELP);
+    assert_eq!(
+        f,
+        DraftFlags {
+            model: Some("--spec-draft-model".into()),
+            ngl: Some("--spec-draft-ngl".into()),
+            max: Some("--spec-draft-n-max".into()),
+            spec_type: Some("--spec-type".into()),
+            kinds: [
+                "none",
+                "draft-simple",
+                "draft-eagle3",
+                "draft-mtp",
+                "draft-dflash",
+                "draft-dspark",
+                "ngram-simple",
+                "ngram-map-k",
+                "ngram-map-k4v",
+                "ngram-mod",
+                "ngram-cache"
+            ]
+            .map(String::from)
+            .to_vec(),
+        }
+    );
+    assert!(f.supports(DraftKind::Simple));
+    assert!(f.supports(DraftKind::Dflash));
+    assert!(f.supports(DraftKind::Mtp));
+}
+
+#[test]
+fn b12017_help_marks_the_removed_and_deprecated_flags() {
+    let all = help_flags(B12017_HELP);
+    let retired: Vec<&str> = all
+        .iter()
+        .filter(|(_, r)| **r)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(
+        retired,
+        [
+            "--defrag-thold",
+            "--draft",
+            "--draft-max",
+            "--draft-min",
+            "--draft-n",
+            "--draft-n-min",
+            "--spec-ngram-min-hits",
+            "--spec-ngram-size-m",
+            "--spec-ngram-size-n",
+            "-dt"
+        ]
+    );
+    // The flags the draft picks use are live; section rules name nothing.
+    for live in [
+        "--spec-draft-model",
+        "--spec-draft-ngl",
+        "--spec-draft-n-max",
+        "--spec-type",
+        "--reasoning-effort",
+        "--api-key",
+    ] {
+        assert_eq!(all.get(live), Some(&false), "{live}");
+    }
+    assert!(!all.keys().any(|n| n.starts_with("---")));
+    let f = parse_help(B12017_HELP);
+    for picked in [&f.model, &f.ngl, &f.max, &f.spec_type] {
+        let name = picked.as_deref().expect("picked");
+        assert_eq!(all.get(name), Some(&false), "{name}");
+    }
+}
+
+#[test]
+fn a_notice_further_down_the_description_still_retires_the_flag() {
+    let help = "\
+--old-thing N                           what it did
+                                        (env: LLAMA_ARG_OLD)
+                                        the argument has been removed. use --new-thing
+--new-thing N                           what it does
+";
+    assert_eq!(
+        help_flags(help).into_iter().collect::<Vec<_>>(),
+        [
+            ("--new-thing".to_string(), false),
+            ("--old-thing".to_string(), true)
+        ]
+    );
 }
 
 #[test]

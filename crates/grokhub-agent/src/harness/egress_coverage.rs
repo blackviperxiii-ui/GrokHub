@@ -37,6 +37,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
     ("grokhub-agent/src/route/local_http.rs", 1, "HttpLocalRuntime: loopback-only chat/completions; no egress line (on-device)"),
     ("grokhub-agent/src/route/local_sidecar.rs", 1, "Sidecar health_ok: loopback /health with bearer token; no egress line"),
+    ("grokhub-agent/src/route/local_effort.rs", 1, "fetch_levels: loopback-only /props with bearer token; no egress line"),
     ("grokhub-agent/src/route/local_spec.rs", 1, "measure: the speed test's loopback chat/completions to the sidecar it just started; no egress line"),
     ("grokhub-agent/src/route/sources.rs", 1, "XaiApiSource::get / XaiProbeTransport::send: guard_egress (no user data) to api.x.ai"),
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
