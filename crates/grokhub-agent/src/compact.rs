@@ -1,12 +1,14 @@
 // Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
-//! Auto-compact at 85% and manual compaction. The summary prompt is the detailed
-//! prompt from `xai-grok-shell` `helpers/session_compact.rs`.
+//! Auto-compact at 85% and manual compaction. Two backends: xAI's server-side
+//! compaction (`/v1/responses/compact`) for an xAI model on api.x.ai, and the
+//! summary (the detailed prompt from `xai-grok-shell` `helpers/session_compact.rs`)
+//! for every other model and whenever the server path fails.
 
 use std::path::{Path, PathBuf};
 
 use crate::client::{
-    ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
-    Usage,
+    ClientError, CompactRequest, ContentPart, InputItem, ModelClient, ResponsesRequest,
+    StreamEvent, TurnOutput, Usage,
 };
 use crate::tokens::{self, estimate_token_bytes};
 use crate::CancelToken;
@@ -20,6 +22,95 @@ pub const RECENT_TAIL_TOKEN_BUDGET: u64 = 4_000;
 
 /// Stop reason when a second context-length error follows a reactive compact.
 pub const CONTEXT_STILL_TOO_LARGE: &str = "context still too large after compaction";
+
+/// Config file under [`crate::perm::config_dir`]: `backend = "summary"` turns the
+/// xAI server-side compaction off. With no file an xAI model uses the server.
+pub const COMPACTION_CONFIG: &str = "compaction.toml";
+
+/// How one compaction folds the history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactBackend {
+    /// xAI `/v1/responses/compact`: opaque compaction items plus the recent tail.
+    Server,
+    /// A model-written summary plus the recent tail.
+    Summary,
+}
+
+/// Hard cap on one xAI server compaction, retries included. Past it the
+/// compaction falls back to the summary, so a slow endpoint can't hold the turn.
+pub const SERVER_COMPACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+static SERVER_COMPACT_TIMEOUT_TEST: std::sync::Mutex<Option<std::time::Duration>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn set_server_compact_timeout_for_tests(limit: Option<std::time::Duration>) {
+    *SERVER_COMPACT_TIMEOUT_TEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = limit;
+}
+
+fn server_compact_timeout() -> std::time::Duration {
+    SERVER_COMPACT_TIMEOUT_TEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or(SERVER_COMPACT_TIMEOUT)
+}
+
+/// True when `{config_dir}/compaction.toml` sets `backend = "summary"`.
+pub fn summary_forced(config_dir: &Path) -> bool {
+    std::fs::read_to_string(config_dir.join(COMPACTION_CONFIG))
+        .map(|text| parse_compaction_file(&text) == Some(CompactBackend::Summary))
+        .unwrap_or(false)
+}
+
+fn parse_compaction_file(text: &str) -> Option<CompactBackend> {
+    let mut backend = None;
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("backend") {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim();
+        if value.eq_ignore_ascii_case("summary") {
+            backend = Some(CompactBackend::Summary);
+        } else if value.eq_ignore_ascii_case("server") {
+            backend = Some(CompactBackend::Server);
+        }
+    }
+    backend
+}
+
+/// A bare xAI model id (`grok-…`), not a provider's `provider/model` or a local tier.
+pub fn is_xai_model(model: &str) -> bool {
+    let id = model.trim();
+    id.to_ascii_lowercase().starts_with("grok")
+        && grokhub_core::model_registry::discover::split_provider_model(id).is_none()
+        && !crate::route::local::is_local(id)
+}
+
+/// The backend a compaction tries first: the server for an xAI model unless the
+/// config forces the summary. The router and the client still decide whether the
+/// call really goes to api.x.ai; anything else summarizes.
+pub fn compact_backend(config_dir: &Path, model: &str) -> CompactBackend {
+    if is_xai_model(model) && !summary_forced(config_dir) {
+        CompactBackend::Server
+    } else {
+        CompactBackend::Summary
+    }
+}
+
+/// What a finished compaction did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compacted {
+    /// The compaction call's own usage.
+    pub usage: Usage,
+    /// Set when xAI's server compaction ran; `None` for the summary path.
+    pub server: Option<grokhub_core::wire::CompactDetail>,
+}
 
 /// Config file under [`crate::perm::config_dir`] (off by default).
 pub const TOOL_OUTPUT_COMPACT_CONFIG: &str = "tool_output_compact.toml";
@@ -522,6 +613,10 @@ pub fn estimate_input_tokens(items: &[InputItem]) -> u64 {
                     .saturating_add(call_id.len() as u64)
                     .saturating_add(output.len() as u64);
             }
+            // The whole item, `encrypted_content` included: never less than the blob.
+            InputItem::ServerCompaction { raw } => {
+                bytes = bytes.saturating_add(raw.len() as u64);
+            }
         }
     }
     estimate_token_bytes(bytes).saturating_add(tokens::estimate_image_tokens(images))
@@ -539,8 +634,8 @@ pub fn is_manual_compact_command(text: &str) -> bool {
     text.trim() == "/compact"
 }
 
-/// Flush pending memory, then summarize. A flush error still compacts.
-/// The summary call sees the memory file already written.
+/// Flush pending memory, then compact. A flush error still compacts.
+/// The compaction call sees the memory file already written.
 #[allow(clippy::too_many_arguments)]
 pub fn compact_after_flush(
     workspace: &Path,
@@ -551,7 +646,7 @@ pub fn compact_after_flush(
     conversation_id: &str,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
-) -> Result<Usage, CompactError> {
+) -> Result<Compacted, CompactError> {
     let _ = crate::memory::flush_pending(workspace, history);
     compact_transcript(
         client,
@@ -564,8 +659,10 @@ pub fn compact_after_flush(
     )
 }
 
-/// Summarize `history` and replace it. On failure or cancel, `history` is unchanged.
-/// The returned usage is the summary call only.
+/// Compact `history` and replace it: xAI's server compaction when
+/// [`compact_backend`] picks it and the call goes to api.x.ai, else (or when that
+/// fails) the summary. On failure or cancel, `history` is unchanged. The returned
+/// usage is the compaction call only.
 pub fn compact_transcript(
     client: &dyn ModelClient,
     cancel: &CancelToken,
@@ -574,18 +671,136 @@ pub fn compact_transcript(
     conversation_id: &str,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
-) -> Result<Usage, CompactError> {
+) -> Result<Compacted, CompactError> {
     if history.is_empty() {
         return Err(CompactError::Failed("nothing to compact".into()));
     }
     let snapshot = history.clone();
+    if let Some((rebuilt, done)) =
+        server_compact(client, cancel, model, conversation_id, &snapshot)?
+    {
+        *history = rebuilt;
+        return Ok(done);
+    }
     let call = request_summary(client, cancel, model, effort, conversation_id, &snapshot)?;
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
     *history = build_compacted_history(&snapshot, &call.summary, modified_paths);
     crate::image_budget::apply_image_budget(history);
-    Ok(call.usage)
+    Ok(Compacted {
+        usage: call.usage,
+        server: None,
+    })
+}
+
+/// The server path. `Ok(None)` means summarize instead: not an xAI model, the
+/// config forces the summary, the call would not go to api.x.ai, nothing is old
+/// enough to fold, or the endpoint failed (logged once here).
+fn server_compact(
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    conversation_id: &str,
+    items: &[InputItem],
+) -> Result<Option<(Vec<InputItem>, Compacted)>, CompactError> {
+    if compact_backend(&crate::perm::config_dir(), model) != CompactBackend::Server
+        || !client.compacts_server_side()
+    {
+        return Ok(None);
+    }
+    let (head, rest) = split_leading_system(items);
+    let tail_at = server_tail_start(rest);
+    if tail_at == 0 {
+        return Ok(None);
+    }
+    let mut input = rest[..tail_at].to_vec();
+    crate::image_budget::apply_image_budget(&mut input);
+    let req = CompactRequest {
+        model: model.trim().to_string(),
+        input,
+        conversation_id: conversation_id.to_string(),
+        timeout: server_compact_timeout(),
+    };
+    let Some(result) = crate::route::live::compact_routed(client, &req, cancel) else {
+        return Ok(None);
+    };
+    let out = match result {
+        Ok(out) => out,
+        Err(ClientError::Cancelled) => return Err(CompactError::Cancelled),
+        Err(err) => {
+            eprintln!("grokhub compact: xAI server compaction failed, using the summary: {err}");
+            return Ok(None);
+        }
+    };
+    if cancel.is_cancelled() {
+        return Err(CompactError::Cancelled);
+    }
+    let mut rebuilt = head.to_vec();
+    rebuilt.extend(out.items);
+    rebuilt.extend_from_slice(&rest[tail_at..]);
+    crate::image_budget::apply_image_budget(&mut rebuilt);
+    let detail = grokhub_core::wire::CompactDetail {
+        tokens_before: estimate_input_tokens(items),
+        tokens_after: estimate_input_tokens(&rebuilt),
+        dropped_message_count: out.dropped_message_count,
+    };
+    Ok(Some((
+        rebuilt,
+        Compacted {
+            usage: out.usage,
+            server: Some(detail),
+        },
+    )))
+}
+
+/// Leading system messages, then the rest.
+fn split_leading_system(items: &[InputItem]) -> (&[InputItem], &[InputItem]) {
+    let n = items
+        .iter()
+        .take_while(|item| matches!(item, InputItem::Message { role, .. } if role == "system"))
+        .count();
+    items.split_at(n)
+}
+
+/// Where the server path's verbatim tail starts in `items`: the longest unbroken
+/// suffix within [`RECENT_TAIL_TOKEN_BUDGET`] that reaches back at most to the last
+/// user turn. A call and its output stay on one side. Everything before it is folded,
+/// so nothing is both folded and repeated.
+pub fn server_tail_start(items: &[InputItem]) -> usize {
+    let mut start = items.len();
+    let mut used = 0u64;
+    while start > 0 {
+        let end = start - 1;
+        let unit = match &items[end] {
+            InputItem::FunctionCallOutput { call_id, .. } => match end.checked_sub(1) {
+                Some(prev) if matches!(&items[prev], InputItem::FunctionCall { call_id: cid, .. } if cid == call_id) => {
+                    prev
+                }
+                _ => end,
+            },
+            _ => end,
+        };
+        let cost = estimate_input_tokens(&items[unit..start]);
+        if used.saturating_add(cost) > RECENT_TAIL_TOKEN_BUDGET {
+            break;
+        }
+        used = used.saturating_add(cost);
+        start = unit;
+        if matches!(&items[start], InputItem::Message { role, .. } if role == "user") {
+            break;
+        }
+    }
+    // An output whose call was folded can't open the tail.
+    while let Some(orphan) = items[start..].iter().position(|item| match item {
+        InputItem::FunctionCallOutput { call_id, .. } => !items[start..].iter().any(
+            |other| matches!(other, InputItem::FunctionCall { call_id: cid, .. } if cid == call_id),
+        ),
+        _ => false,
+    }) {
+        start += orphan + 1;
+    }
+    start
 }
 
 pub fn request_summary(
@@ -665,17 +880,8 @@ pub fn build_compacted_history(
     summary_raw: &str,
     modified_paths: &[String],
 ) -> Vec<InputItem> {
-    let mut out = Vec::new();
-    let mut rest = items;
-    while let Some(InputItem::Message { role, .. }) = rest.first() {
-        if role != "system" {
-            break;
-        }
-        if let Some((head, tail)) = rest.split_first() {
-            out.push(head.clone());
-            rest = tail;
-        }
-    }
+    let (head, rest) = split_leading_system(items);
+    let mut out = head.to_vec();
     out.push(InputItem::Message {
         role: "user".into(),
         content: vec![ContentPart::InputText(format_compact_summary_content(
@@ -826,7 +1032,7 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
                 used = used.saturating_add(cost);
                 acc.push(items[i].clone());
             }
-            InputItem::Message { .. } => break,
+            InputItem::Message { .. } | InputItem::ServerCompaction { .. } => break,
         }
     }
     acc.reverse();
@@ -1093,6 +1299,10 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
         .replace("</summary_request>", "<\u{200b}/summary_request>")
         .replace("<summary_request>", "<\u{200b}summary_request>")
 }
+
+#[cfg(test)]
+#[path = "compact_server_tests.rs"]
+mod server_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1442,7 +1652,8 @@ mod tests {
             &[],
         )
         .expect("manual compact");
-        assert_eq!(usage.cost_in_usd_ticks, 8);
+        assert_eq!(usage.server, None);
+        assert_eq!(usage.usage.cost_in_usd_ticks, 8);
         assert!(message_text(&history[0]).contains("manual summary"));
         assert_eq!(history.last(), Some(&last));
         assert!(!history

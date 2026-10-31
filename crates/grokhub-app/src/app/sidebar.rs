@@ -140,8 +140,6 @@ impl Cabin {
                                 crate::titlebar::titlebar_chrome_tip(ChromeBtn::Minimize, false),
                             ),
                         ) {
-                            self.resume_fresh = true;
-                            self.saw_minimized = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
