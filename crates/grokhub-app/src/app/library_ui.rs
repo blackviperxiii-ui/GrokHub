@@ -330,6 +330,7 @@ impl Cabin {
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 if !found || games.is_empty() {
+                    self.ui_bnet_games(ui);
                     if crate::ui_kit::empty_state(
                         ui,
                         "No Steam library",
@@ -342,6 +343,7 @@ impl Cabin {
                 }
                 self.library_header(ui, &mut view);
                 ui.add_space(16.0);
+                self.ui_bnet_games(ui);
                 let shown = filter_games(&games, view.tab, &view.query, &objective);
                 if view
                     .picked
