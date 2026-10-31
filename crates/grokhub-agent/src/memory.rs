@@ -1341,6 +1341,13 @@ fn open_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+const STEMMED_FTS_SQL: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+    body,
+    content='entries',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);";
+
 /// Create `entries_fts` with the Porter stemmer ("saves" finds "save").
 /// An index from before the stemmer is dropped and rebuilt from `entries`
 /// once, and every file is marked stale so its paragraphs are re-chunked on
@@ -1356,7 +1363,14 @@ fn ensure_stemmed_fts(conn: &Connection) -> Result<(), String> {
         .optional()
         .map_err(err)
     };
-    if schema(conn)?.is_some_and(|sql| sql.contains("porter")) {
+    let Some(current) = schema(conn)? else {
+        // Fresh index: one autocommit statement, the same lock footprint as
+        // before the stemmer. No transaction, so a second connection opening
+        // the index at the same moment never waits on this one.
+        conn.execute_batch(STEMMED_FTS_SQL).map_err(err)?;
+        return Ok(());
+    };
+    if current.contains("porter") {
         return Ok(());
     }
     conn.execute_batch("BEGIN IMMEDIATE").map_err(err)?;
@@ -1370,15 +1384,7 @@ fn ensure_stemmed_fts(conn: &Connection) -> Result<(), String> {
             conn.execute_batch("DROP TABLE entries_fts; DELETE FROM files;")
                 .map_err(err)?;
         }
-        conn.execute_batch(
-            "CREATE VIRTUAL TABLE entries_fts USING fts5(
-                body,
-                content='entries',
-                content_rowid='id',
-                tokenize='porter unicode61'
-            );",
-        )
-        .map_err(err)?;
+        conn.execute_batch(STEMMED_FTS_SQL).map_err(err)?;
         rebuild_fts(conn)
     })();
     let end = if result.is_ok() { "COMMIT" } else { "ROLLBACK" };
