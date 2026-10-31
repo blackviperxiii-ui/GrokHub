@@ -1,1 +1,0 @@
-- Web app: when its connection to the desktop drops and comes back, the page gets the chat events it missed, so a reply that was streaming finishes on screen. If it was gone too long for that, the chat says part of the reply may be missing.

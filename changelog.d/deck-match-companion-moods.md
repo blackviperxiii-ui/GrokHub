@@ -1,1 +1,0 @@
-- Home dock: the companion changes pose with the chat, as on slide 17. Hello waves you in on an empty chat, Helping holds the checklist while a tool runs, and Hanging out sits back while you talk. Each pose is a file in `brand/`.

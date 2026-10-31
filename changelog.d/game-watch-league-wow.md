@@ -1,1 +1,0 @@
-- The game watcher can now follow League of Legends matches through Riot's own local match feed, and World of Warcraft boss pulls (kills, wipes and your deaths) from the combat log.
