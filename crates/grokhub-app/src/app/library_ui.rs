@@ -312,6 +312,16 @@ impl Cabin {
         let now = now_ms();
         let (found, games) = self.steam_library(now);
         let games = games.to_vec();
+        if self.sources.steam.reading() {
+            // Steam is there but its first library read is still on its thread:
+            // paint the page background and come back, no "No Steam library" flash.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+            egui::Frame::NONE.fill(crate::theme::bg()).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+            });
+            return;
+        }
         let mission = self.dock_mission(ui.ctx());
         let objective = objective_text(mission.as_ref());
         egui::Frame::NONE

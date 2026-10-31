@@ -144,7 +144,15 @@ fn parse_block(tokens: &[Tok], pos: &mut usize) -> Vec<(String, Vdf)> {
                         let block = parse_block(tokens, pos);
                         items.push((key.clone(), Vdf::Block(block)));
                     }
-                    _ => return items,
+                    // A key with no value ends this block. Take its `}` too,
+                    // or the parent block ends on it and drops every later
+                    // sibling (most games' play stats, in localconfig.vdf).
+                    _ => {
+                        if matches!(tokens.get(*pos), Some(Tok::Close)) {
+                            *pos += 1;
+                        }
+                        return items;
+                    }
                 }
             }
         }
@@ -713,6 +721,36 @@ mod tests {
                 .at(&["libraryfolders", "0", "path"])
                 .and_then(Vdf::str),
             Some("C:\\Program Files (x86)\\Steam")
+        );
+    }
+
+    #[test]
+    fn a_key_with_no_value_ends_only_its_own_block() {
+        // Steam writes `"LastPlayed"` with no value for a game it never
+        // launched; the siblings after it must still parse.
+        let vdf = parse_vdf(
+            "\"UserLocalConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { \"apps\" { \"570\" { \"LastPlayed\" } \"1091500\" { \"LastPlayed\" \"1700000000\" \"Playtime\" \"90\" } \"620\" { \"Playtime\" \"5\" } } } } } }",
+        );
+        let path = ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"];
+        let apps = vdf.at(&path).expect("apps block");
+        let ids: Vec<&str> = apps.entries().iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(ids, ["570", "1091500", "620"]);
+        assert_eq!(
+            apps.at(&["1091500", "LastPlayed"]).and_then(Vdf::str),
+            Some("1700000000")
+        );
+        let mut stats = BTreeMap::new();
+        merge_stats(&vdf, &mut stats);
+        assert_eq!(
+            stats.into_iter().collect::<Vec<_>>(),
+            [(570, (0, 0)), (620, (0, 5)), (1091500, (1_700_000_000, 90))]
+        );
+        // A key with no value right before the end of input parses too.
+        assert_eq!(
+            parse_vdf("\"a\" { \"b\" \"1\" \"c\"")
+                .at(&["a", "b"])
+                .and_then(Vdf::str),
+            Some("1")
         );
     }
 

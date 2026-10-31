@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
-import { chatActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
+import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
 import { Chat, type Prefill } from "./Chat";
@@ -43,7 +43,7 @@ export function App() {
         const key = `chat:${envelope.conversationId}`;
         const next = chatActivity(now[key], envelope, Date.now());
         if (next === now[key]) return now;
-        const copy = { ...now };
+        const copy = pruneActivity({ ...now }, Date.now());
         if (next) copy[key] = next;
         else delete copy[key];
         return copy;
@@ -128,14 +128,20 @@ export function App() {
         <Automations
           active={view === "automations"}
           onStarted={(id, name) =>
-            setActivity((now) => ({ ...now, [`run:${id}`]: routineStarted(id, name, Date.now()) }))
+            setActivity((now) => ({
+              ...pruneActivity(now, Date.now()),
+              [`run:${id}`]: routineStarted(id, name, Date.now()),
+            }))
           }
           onFinished={(run) => {
             setNotice((now) => ({ ...run, n: (now?.n ?? 0) + 1 }));
             setActivity((now) => {
               const key = `run:${run.id}`;
               const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
-              return { ...now, [key]: routineFinished(item, run.ok, run.text, Date.now()) };
+              return {
+                ...pruneActivity(now, Date.now()),
+                [key]: routineFinished(item, run.ok, run.text, Date.now()),
+              };
             });
           }}
         />

@@ -668,6 +668,14 @@ fn pulse_steam_saves_the_toggle_and_mutes_and_reports_them() {
         call(json!({ "on": true }), false),
         Err("Steam is not installed on this computer, so there is no library to use.".into())
     );
+    assert_eq!(
+        call(json!({ "mute": ["Old Save"] }), false),
+        Err("Steam is not installed on this computer, so there is no library to use.".into())
+    );
+    assert_eq!(
+        call(json!({ "on": false }), false),
+        Ok("Steam is not installed on this computer.".into())
+    );
     assert_eq!(grokhub_core::steam::load_prefs(&root).on, Some(false));
     let _ = std::fs::remove_dir_all(root);
 }

@@ -459,8 +459,7 @@ pub(super) fn pc_profile() -> Option<LocalProfile> {
     let mut slot = profile_slot().lock().unwrap_or_else(|e| e.into_inner());
     let stale = slot.read_at.is_none_or(|t| t.elapsed() >= PROFILE_REFRESH);
     if stale && !slot.reading {
-        slot.reading = true;
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("loadout-pc".into())
             .spawn(|| {
                 let home = grokhub_core::paths::user_home()
@@ -471,6 +470,10 @@ pub(super) fn pc_profile() -> Option<LocalProfile> {
                 slot.read_at = Some(Instant::now());
                 slot.reading = false;
             });
+        // The lock is still held here, so the probe can't have finished yet.
+        // A spawn that fails (thread limit) leaves `reading` false, and the
+        // next frame tries again instead of showing "Reading this PC…" forever.
+        slot.reading = spawned.is_ok();
     }
     slot.profile.clone()
 }
