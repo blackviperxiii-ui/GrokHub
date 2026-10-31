@@ -135,6 +135,15 @@ pub fn is_local_dest(dest: &str) -> bool {
     matches!(dest, "127.0.0.1" | "localhost" | "[::1]")
 }
 
+/// The xAI endpoints the cabin's own model client ([`crate::XaiClient`]) posts
+/// chat to: streamed turns and server-side context compaction. The client posts
+/// nowhere else but loopback test servers; each goes through [`guard_egress`] and
+/// is allowed as a model host (basis `model_host`).
+pub const XAI_MODEL_ENDPOINTS: &[&str] = &[
+    crate::client::RESPONSES_URL,
+    crate::client::RESPONSES_COMPACT_URL,
+];
+
 /// grok.com, x.ai, api.x.ai, and their subdomains.
 pub fn is_model_host(dest: &str) -> bool {
     grokhub_core::DEFAULT_CONNECTOR_HOSTS
@@ -808,6 +817,39 @@ mod tests {
             !text.contains("api.x.ai"),
             "nothing readable at rest: {text}"
         );
+    }
+
+    #[test]
+    fn xai_model_endpoints_go_as_model_host_chat_and_personal() {
+        let (d, _g) = dir("xai-endpoints");
+        assert_eq!(
+            XAI_MODEL_ENDPOINTS,
+            &[
+                "https://api.x.ai/v1/responses",
+                "https://api.x.ai/v1/responses/compact"
+            ]
+        );
+        for url in XAI_MODEL_ENDPOINTS {
+            assert_eq!(egress_dest(url), "api.x.ai");
+            assert_eq!(
+                guard_egress(
+                    &d,
+                    &EgressReq::new(url, &[DataClass::Chat, DataClass::Personal])
+                ),
+                GateOutcome::Allow,
+                "{url}"
+            );
+        }
+        let log = read_egress(&d);
+        assert_eq!(log.len(), 2);
+        for line in &log {
+            assert_eq!(line.dest, "api.x.ai");
+            assert_eq!(line.basis, "model_host");
+            assert_eq!(
+                line.data_classes,
+                vec![DataClass::Chat, DataClass::Personal]
+            );
+        }
     }
 
     #[test]
