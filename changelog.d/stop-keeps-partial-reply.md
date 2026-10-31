@@ -1,0 +1,1 @@
+- Stop no longer erases the reply it cuts off. Whatever already came in (the text so far, its thinking and any tool calls) stays in the chat with a "Stopped" line at the end, on the tab the run belongs to. Stopping before anything arrived still leaves no empty bubble.
