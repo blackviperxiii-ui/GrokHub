@@ -63,6 +63,22 @@ fn two_calls(name: &str, first_args: &str, second_args: &str) -> Vec<InputItem> 
     ]
 }
 
+/// Every answered call in `items` counted as succeeded.
+fn all_succeeded(items: &[InputItem]) -> std::collections::HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn trim(items: &mut [InputItem], ctx: u64) -> usize {
+    let ok = all_succeeded(items);
+    trim_history(items, ctx, &ok)
+}
+
 /// A window the history fills to 50%, above the trim threshold.
 fn half_full(items: &[InputItem]) -> u64 {
     estimate_input_tokens(items) * 2
@@ -73,7 +89,7 @@ fn a_repeated_read_above_40_percent_drops_only_the_older_output() {
     let mut history = two_calls("read_file", NOTES_ARGS, NOTES_ARGS);
     let before = history.clone();
     let ctx = half_full(&history);
-    assert_eq!(trim_history(&mut history, ctx), 1);
+    assert_eq!(trim(&mut history, ctx), 1);
     assert_eq!(output_of(&history, "c1"), NOTE_C2);
     assert_eq!(
         output_of(&history, "c2"),
@@ -88,7 +104,7 @@ fn a_repeated_read_above_40_percent_drops_only_the_older_output() {
         }
     }
     // A second pass finds nothing new.
-    assert_eq!(trim_history(&mut history, ctx), 0);
+    assert_eq!(trim(&mut history, ctx), 0);
     assert_eq!(output_of(&history, "c1"), NOTE_C2);
 }
 
@@ -97,21 +113,21 @@ fn different_paths_other_tools_and_a_roomy_window_trim_nothing() {
     let mut paths = two_calls("read_file", NOTES_ARGS, r#"{"path":"todo.txt"}"#);
     let ctx = half_full(&paths);
     let before = paths.clone();
-    assert_eq!(trim_history(&mut paths, ctx), 0);
+    assert_eq!(trim(&mut paths, ctx), 0);
     assert_eq!(paths, before);
 
     let shell_args = r#"{"command":"cat notes.txt"}"#;
     let mut shell = two_calls("run_terminal_command", shell_args, shell_args);
     let ctx = half_full(&shell);
     let before = shell.clone();
-    assert_eq!(trim_history(&mut shell, ctx), 0);
+    assert_eq!(trim(&mut shell, ctx), 0);
     assert_eq!(shell, before);
 
     let mut roomy = two_calls("read_file", NOTES_ARGS, NOTES_ARGS);
     let before = roomy.clone();
     let under = estimate_input_tokens(&roomy) * 3;
-    assert_eq!(trim_history(&mut roomy, under), 0);
-    assert_eq!(trim_history(&mut roomy, 0), 0);
+    assert_eq!(trim(&mut roomy, under), 0);
+    assert_eq!(trim(&mut roomy, 0), 0);
     assert_eq!(roomy, before);
     assert_eq!(HISTORY_TRIM_PERCENT, 40);
 }
@@ -130,7 +146,7 @@ fn every_older_repeat_points_at_the_newest_and_key_order_does_not_matter() {
     ));
     history.push(out("c3", "src/main.rs:3: TODO"));
     let ctx = half_full(&history);
-    assert_eq!(trim_history(&mut history, ctx), 2);
+    assert_eq!(trim(&mut history, ctx), 2);
     let note =
         "[Output dropped: grep ran again later with the same arguments (call c3). Use that result.]";
     assert_eq!(output_of(&history, "c1"), note);
@@ -146,7 +162,7 @@ fn a_later_call_with_no_output_yet_keeps_the_older_result() {
     );
     let ctx = half_full(&history);
     let before = history.clone();
-    assert_eq!(trim_history(&mut history, ctx), 0);
+    assert_eq!(trim(&mut history, ctx), 0);
     assert_eq!(history, before);
 }
 
@@ -246,20 +262,91 @@ fn age_out_is_off_by_default_and_spools_old_big_outputs_when_on() {
 }
 
 #[test]
-fn trim_pass_follows_the_config_file() {
+fn trim_pass_follows_the_config_file_and_only_trusts_noted_results() {
     let dir = std::env::temp_dir().join(format!("gh-trim-pass-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let conv = format!("trim-pass-{}", std::process::id());
     let mut history = two_calls("read_file", NOTES_ARGS, NOTES_ARGS);
     let ctx = half_full(&history);
-    std::fs::write(dir.join(HISTORY_TRIM_CONFIG), "enabled = false\n").unwrap();
     let before = history.clone();
-    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, "sess"), 0);
+    // Nothing noted for this conversation yet (a resumed chat): nothing drops.
+    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 0);
+    assert_eq!(history, before);
+    note_tool_result(&conv, "c1", "read_file", false);
+    note_tool_result(&conv, "c2", "read_file", false);
+    note_tool_result(&conv, "s1", "run_terminal_command", false);
+    let noted: std::collections::HashSet<String> = ["c1".into(), "c2".into()].into();
+    assert_eq!(trim_results(&conv), noted);
+    std::fs::write(dir.join(HISTORY_TRIM_CONFIG), "enabled = false\n").unwrap();
+    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 0);
     assert_eq!(history, before);
     std::fs::remove_file(dir.join(HISTORY_TRIM_CONFIG)).unwrap();
-    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, "sess"), 1);
+    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 1);
     assert_eq!(output_of(&history, "c1"), NOTE_C2);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One real read_file call through the tool dispatch, recorded as the run loop does.
+fn real_read(ws: &Path, conv: &str, id: &str) -> (InputItem, InputItem, bool) {
+    let args = r#"{"target_file":"notes.txt"}"#;
+    let stop = || false;
+    let ctx = crate::tools::ToolCtx {
+        workspace: ws,
+        desktop: None,
+        stop: &stop,
+        tasks: None,
+        owner: None,
+        session: None,
+    };
+    let result = crate::tools::dispatch(&ctx, "read_file", args);
+    note_tool_result(conv, id, "read_file", result.failed);
+    (
+        call(id, "read_file", args),
+        out(id, &result.text),
+        result.failed,
+    )
+}
+
+#[test]
+fn a_later_read_that_errored_never_drops_the_good_result() {
+    let ws = std::env::temp_dir().join(format!("gh-trim-err-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(&ws).unwrap();
+    let conv = format!("trim-err-{}", std::process::id());
+    std::fs::write(ws.join("notes.txt"), "save folder is D:/saves\n").unwrap();
+    let mut history = vec![msg("system", "RULES"), msg("user", "read my notes")];
+    let (c1, o1, failed1) = real_read(&ws, &conv, "c1");
+    assert!(!failed1);
+    assert_eq!(o1, out("c1", "1|save folder is D:/saves\n"));
+    history.extend([c1, o1]);
+    std::fs::remove_file(ws.join("notes.txt")).unwrap();
+    history.push(msg("user", "read them again"));
+    let (c2, o2, failed2) = real_read(&ws, &conv, "c2");
+    assert!(failed2);
+    let InputItem::FunctionCallOutput { output: err, .. } = &o2 else {
+        panic!("not an output: {o2:?}");
+    };
+    assert!(err.starts_with("read "), "{err}");
+    history.extend([c2, o2.clone()]);
+    let ctx = half_full(&history);
+    let before = history.clone();
+    assert_eq!(trim_pass(&mut history, ctx, &ws, &ws, &conv), 0);
+    assert_eq!(output_of(&history, "c1"), "1|save folder is D:/saves\n");
+    assert_eq!(history, before);
+    // Once the file is back and read again, both older outputs point at it.
+    std::fs::write(ws.join("notes.txt"), "save folder is D:/saves\n").unwrap();
+    let (c3, o3, failed3) = real_read(&ws, &conv, "c3");
+    assert!(!failed3);
+    history.extend([c3, o3]);
+    let ctx = half_full(&history);
+    assert_eq!(trim_pass(&mut history, ctx, &ws, &ws, &conv), 2);
+    assert_eq!(
+        output_of(&history, "c1"),
+        "[Output dropped: read_file ran again later with the same arguments (call c3). Use that result.]"
+    );
+    assert_eq!(output_of(&history, "c3"), "1|save folder is D:/saves\n");
+    let _ = std::fs::remove_dir_all(&ws);
 }
 
 #[test]
@@ -268,7 +355,9 @@ fn a_refused_repeat_is_not_a_result_to_point_at() {
     history.push(call("c3", "read_file", NOTES_ARGS));
     history.push(out("c3", "not run: the same call already ran twice."));
     let ctx = half_full(&history);
-    assert_eq!(trim_history(&mut history, ctx), 1);
+    // The repeat guard's refusal is a failed ToolOutput, so c3 is never noted.
+    let ok: std::collections::HashSet<String> = ["c1".into(), "c2".into()].into();
+    assert_eq!(trim_history(&mut history, ctx, &ok), 1);
     assert_eq!(output_of(&history, "c1"), NOTE_C2);
     assert_eq!(
         output_of(&history, "c2"),

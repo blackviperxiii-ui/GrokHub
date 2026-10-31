@@ -410,6 +410,41 @@ pub const AGE_OUT_USER_TURNS: usize = 3;
 
 const DROPPED_OUTPUT_PREFIX: &str = "[Output dropped: ";
 
+/// [`TRIM_TOOLS`] calls that returned a real result (`ToolOutput::failed` false),
+/// per conversation. Only these may stand in for an older identical call, so a
+/// later error never drops a good result, and a history resumed after a restart
+/// keeps its old outputs until the reads run again.
+static TRIM_RESULTS: std::sync::Mutex<
+    std::collections::BTreeMap<String, std::collections::HashSet<String>>,
+> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Keep the record small: a long-lived cabin opens many conversations.
+const MAX_TRIM_CONVERSATIONS: usize = 256;
+
+/// Record how a tool call ended (the run loop does, for every output it adds).
+pub fn note_tool_result(conversation_id: &str, call_id: &str, tool: &str, failed: bool) {
+    if failed || !TRIM_TOOLS.contains(&tool) {
+        return;
+    }
+    let mut map = TRIM_RESULTS.lock().unwrap_or_else(|e| e.into_inner());
+    if map.len() >= MAX_TRIM_CONVERSATIONS && !map.contains_key(conversation_id) {
+        map.clear();
+    }
+    map.entry(conversation_id.to_string())
+        .or_default()
+        .insert(call_id.to_string());
+}
+
+/// Call ids [`note_tool_result`] recorded as succeeded for this conversation.
+pub fn trim_results(conversation_id: &str) -> std::collections::HashSet<String> {
+    TRIM_RESULTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(conversation_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// `{config}/history_trim.toml`: `enabled = false` keeps repeated outputs;
 /// `age_out = true` spools big, old outputs (off by default: it trades quality).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,7 +504,7 @@ pub fn trim_pass(
 ) -> usize {
     let settings = history_trim_settings(config_dir);
     let dropped = if settings.enabled {
-        trim_history(history, ctx_len)
+        trim_history(history, ctx_len, &trim_results(conversation_id))
     } else {
         0
     };
@@ -489,12 +524,17 @@ fn already_shrunk(output: &str) -> bool {
 }
 
 /// At [`HISTORY_TRIM_PERCENT`] of `ctx_len` or more: when a later [`TRIM_TOOLS`]
-/// call with the same name and the same arguments has a real result in `history`
-/// (not a `not run:` refusal), the older call's output text becomes a short note
-/// naming the newest such call.
+/// call with the same name and the same arguments succeeded (its id is in
+/// `succeeded`, see [`note_tool_result`]) and its output is in `history` whole,
+/// the older call's output text becomes a short note naming the newest such call.
+/// An errored, refused or unknown later call never drops anything.
 /// Every item stays, so call/output pairs hold; messages, other tools and the
 /// newest of each repeat are never touched. Returns how many outputs changed.
-pub fn trim_history(history: &mut [InputItem], ctx_len: u64) -> usize {
+pub fn trim_history(
+    history: &mut [InputItem],
+    ctx_len: u64,
+    succeeded: &std::collections::HashSet<String>,
+) -> usize {
     if !trim_due(history, ctx_len) {
         return 0;
     }
@@ -520,7 +560,7 @@ pub fn trim_history(history: &mut [InputItem], ctx_len: u64) -> usize {
                 let output = outputs.get(call_id.as_str())?;
                 let args = serde_json::from_str(arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
-                let result = !output.starts_with("not run:") && !already_shrunk(output);
+                let result = succeeded.contains(call_id) && !already_shrunk(output);
                 Some((call_id.clone(), name.clone(), args, result))
             }
             _ => None,

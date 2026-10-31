@@ -867,7 +867,7 @@ pub fn run_loop(
             if batch_failed {
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
                 emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -925,7 +925,7 @@ pub fn run_loop(
             *seen = seen.saturating_add(1);
             if *seen >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -965,7 +965,7 @@ pub fn run_loop(
             if reviewed.cancelled {
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if reviewed.halted {
@@ -1071,7 +1071,7 @@ pub fn run_loop(
                         Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
-                            push_output(history, call, output);
+                            push_output(history, input.conversation_id, call, output);
                             return finish(
                                 input,
                                 StopReason::Cancelled,
@@ -1121,7 +1121,7 @@ pub fn run_loop(
             if !output.failed && call.name == "report_findings" {
                 fresh.note_findings();
             }
-            push_output(history, call, output);
+            push_output(history, input.conversation_id, call, output);
             if cancelled {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
@@ -1276,11 +1276,18 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
     }
 }
 
-fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOutput) {
+fn push_output(
+    history: &mut Vec<InputItem>,
+    conversation_id: &str,
+    call: &FunctionCall,
+    output: ToolOutput,
+) {
     if output.failed {
         // E1: the next routed step thinks one rung harder.
         crate::route::ladder::note_tool_error();
     }
+    // Only a call that succeeded may stand in for an older identical one.
+    crate::compact::note_tool_result(conversation_id, &call.call_id, &call.name, output.failed);
     history.push(InputItem::FunctionCallOutput {
         call_id: call.call_id.clone(),
         output: output.text,
@@ -1627,7 +1634,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
-        push_output(history, call, output);
+        push_output(history, input.conversation_id, call, output);
     }
 
     ReadonlyBatchOutcome::Ran(calls.len())
