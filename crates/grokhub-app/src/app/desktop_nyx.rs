@@ -62,6 +62,10 @@ pub(super) struct Snapshot {
     pub still: bool,
     pub behind: bool,
     pub accent: Option<Color32>,
+    /// An outfit the user pinned from the menu, by id.
+    pub outfit_pin: Option<String>,
+    /// The mouth while a reply is spoken.
+    pub mouth: Option<crate::lipsync::Mouth>,
 }
 
 impl Default for Snapshot {
@@ -73,6 +77,8 @@ impl Default for Snapshot {
             still: false,
             behind: false,
             accent: None,
+            outfit_pin: None,
+            mouth: None,
         }
     }
 }
@@ -94,6 +100,10 @@ pub(super) enum Event {
     Hide,
     ToggleBehind,
     PushToTalk,
+    /// Wear the outfit at this index in the companion file.
+    ChangeOutfit(u8),
+    /// Let her mode pick the outfit again.
+    OutfitAuto,
 }
 
 /// Shared between the cabin and the viewport callback.
@@ -388,6 +398,8 @@ impl Cabin {
             voice: self.desktop_voice_look(),
             still: crate::motion::reduced_motion_ctx(ctx),
             behind: self.cfg.desktop_nyx_behind,
+            outfit_pin: self.cfg.desktop_nyx_outfit.clone(),
+            mouth: crate::lipsync::mouth_now(&self.lips),
             accent: grokhub_core::companion::nyx()
                 .pedestal_tint
                 .as_deref()
@@ -503,6 +515,17 @@ impl Cabin {
                 self.persist_cfg();
             }
             Event::PushToTalk => self.listen_voice(),
+            Event::ChangeOutfit(i) => {
+                let nyx = grokhub_core::companion::nyx();
+                if let Some(o) = nyx.outfits.get(usize::from(i)) {
+                    self.cfg.desktop_nyx_outfit = Some(o.id.clone());
+                    self.persist_cfg();
+                }
+            }
+            Event::OutfitAuto => {
+                self.cfg.desktop_nyx_outfit = None;
+                self.persist_cfg();
+            }
         }
     }
 
@@ -600,12 +623,26 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
     }
     let painter = ui.painter().with_clip_rect(frame);
     crate::pedestal::paint(&painter, frame, t, snap.still, &colors);
-    let (tex, outfit) = outfit_texture(ui.ctx(), snap.mood, snap.adults_ok);
+    let (tex, outfit) = outfit_texture(
+        ui.ctx(),
+        snap.mood,
+        snap.adults_ok,
+        snap.outfit_pin.as_deref(),
+    );
     let art = tex
         .as_ref()
         .map(|(tex, _)| art_rect(frame, tex.size()))
         .unwrap_or(frame);
-    let fading = paint_companion(ui, &painter, art, tex.as_ref(), outfit, t, snap.still);
+    let fading = paint_companion(
+        ui,
+        &painter,
+        art,
+        tex.as_ref(),
+        outfit,
+        t,
+        snap.still,
+        snap.mouth,
+    );
     let resp = ui.interact(
         frame,
         ui.id().with("desktop-nyx"),
@@ -630,6 +667,28 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
             events.push(Event::PushToTalk);
             ui.close();
         }
+        ui.menu_button("Change outfit", |ui| {
+            ui.set_min_width(150.0);
+            let nyx = grokhub_core::companion::nyx();
+            for (i, o) in nyx.outfits.iter().enumerate().take(usize::from(u8::MAX)) {
+                if o.adult && !snap.adults_ok {
+                    continue;
+                }
+                let pinned = snap.outfit_pin.as_deref() == Some(o.id.as_str());
+                if ui.selectable_label(pinned, outfit_label(&o.id)).clicked() {
+                    events.push(Event::ChangeOutfit(i as u8));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .selectable_label(snap.outfit_pin.is_none(), "Pick for me")
+                .clicked()
+            {
+                events.push(Event::OutfitAuto);
+                ui.close();
+            }
+        });
         let behind = if snap.behind {
             "Float above windows"
         } else {
@@ -666,6 +725,7 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
 /// Nyx herself: breathing and bobbing, blinking when her outfit has an
 /// eyes patch, and crossfading with a scanline sweep when the outfit just
 /// changed. Returns whether a fade is still running.
+#[allow(clippy::too_many_arguments)]
 fn paint_companion(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
@@ -674,6 +734,7 @@ fn paint_companion(
     outfit: &Outfit,
     t: f64,
     still: bool,
+    mouth: Option<crate::lipsync::Mouth>,
 ) -> bool {
     let anim_id = ui.id().with("desktop-nyx-anim");
     let mut state = ui
@@ -714,6 +775,25 @@ fn paint_companion(
             b,
             anim::fade_tint(k),
         )));
+        if let (Some(mouth), Some(patches)) = (mouth, &outfit.mouth) {
+            let file = match mouth {
+                crate::lipsync::Mouth::Closed => &patches.closed,
+                crate::lipsync::Mouth::Half => &patches.half,
+                crate::lipsync::Mouth::Open => &patches.open,
+            };
+            if let Some(patch) = patch_texture(ui.ctx(), file) {
+                let r = anim::patch_rect(
+                    art_b,
+                    tex.size(),
+                    Pos2::new(patches.x, patches.y),
+                    patch.size(),
+                    anim::head_lift(art, b),
+                );
+                egui::Image::from_texture(&patch)
+                    .tint(anim::fade_tint(k))
+                    .paint_at(ui, r);
+            }
+        }
         if anim::blink_closed(t, still) {
             if let Some(eyes) = &outfit.eyes {
                 if let Some(patch) = patch_texture(ui.ctx(), &eyes.file) {
@@ -787,10 +867,32 @@ fn outfit_texture(
     ctx: &egui::Context,
     mood: Mood,
     adults_ok: bool,
+    pin: Option<&str>,
 ) -> (Option<Cached>, &'static Outfit) {
     let nyx = grokhub_core::companion::nyx();
-    let outfit = nyx.outfit_for(mood, adults_ok);
+    let outfit =
+        pinned_outfit(nyx, pin, adults_ok).unwrap_or_else(|| nyx.outfit_for(mood, adults_ok));
     (load_outfit_texture(ctx, outfit, mood), outfit)
+}
+
+/// The outfit the user pinned, when the file still has it and it is
+/// allowed on the desktop right now.
+pub(super) fn pinned_outfit<'a>(
+    nyx: &'a grokhub_core::companion::Companion,
+    pin: Option<&str>,
+    adults_ok: bool,
+) -> Option<&'a Outfit> {
+    nyx.outfit(pin?).filter(|o| adults_ok || !o.adult)
+}
+
+/// A menu label for an outfit id: `hanging-out` reads "Hanging out".
+pub(super) fn outfit_label(id: &str) -> String {
+    let mut s = id.replace('-', " ");
+    if let Some(first) = s.get(..1) {
+        let up = first.to_ascii_uppercase();
+        s.replace_range(..1, &up);
+    }
+    s
 }
 
 fn load_outfit_texture(ctx: &egui::Context, outfit: &Outfit, mood: Mood) -> Option<Cached> {
@@ -1027,5 +1129,50 @@ mod tests {
         cabin.cfg.desktop_nyx_undocked = true;
         cabin.on_desktop_nyx_event(Event::DockBack, &ctx);
         assert!(!cabin.cfg.desktop_nyx_undocked);
+    }
+}
+
+#[cfg(test)]
+mod outfit_pin_tests {
+    use super::*;
+
+    #[test]
+    fn a_pinned_outfit_wins_unless_it_is_adult_and_adults_are_not_ok() {
+        let nyx = grokhub_core::companion::nyx();
+        assert_eq!(pinned_outfit(nyx, None, true), None);
+        assert_eq!(pinned_outfit(nyx, Some("nope"), true), None);
+        assert_eq!(
+            pinned_outfit(nyx, Some("gaming"), false).map(|o| o.id.as_str()),
+            Some("gaming")
+        );
+        assert_eq!(pinned_outfit(nyx, Some("raunchy"), false), None);
+        assert_eq!(
+            pinned_outfit(nyx, Some("raunchy"), true).map(|o| o.id.as_str()),
+            Some("raunchy")
+        );
+        assert_eq!(outfit_label("hanging-out"), "Hanging out");
+        assert_eq!(outfit_label("viper"), "Viper");
+        assert_eq!(outfit_label(""), "");
+    }
+
+    #[test]
+    fn the_menu_pins_and_releases_the_outfit() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        cabin.on_desktop_nyx_event(Event::ChangeOutfit(1), &ctx);
+        let nyx = grokhub_core::companion::nyx();
+        assert_eq!(
+            cabin.cfg.desktop_nyx_outfit.as_deref(),
+            Some(nyx.outfits[1].id.as_str())
+        );
+        cabin.on_desktop_nyx_event(Event::ChangeOutfit(200), &ctx);
+        assert_eq!(
+            cabin.cfg.desktop_nyx_outfit.as_deref(),
+            Some(nyx.outfits[1].id.as_str()),
+            "an index past the list changes nothing"
+        );
+        cabin.on_desktop_nyx_event(Event::OutfitAuto, &ctx);
+        assert_eq!(cabin.cfg.desktop_nyx_outfit, None);
     }
 }

@@ -23,6 +23,7 @@ mod helpers;
 mod host;
 mod icons;
 mod imagine_auth;
+mod lipsync;
 mod loops;
 mod markdown;
 mod motion;

@@ -2128,6 +2128,7 @@ fn quiet_cabin() -> Cabin {
         voice_ready_at: None,
         desktop_nyx: None,
         voice_hold_rx: None,
+        lips: Default::default(),
         cmd_line: String::new(),
         cmd_hist: Vec::new(),
         agents: Vec::new(),
