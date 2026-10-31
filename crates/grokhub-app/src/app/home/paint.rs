@@ -739,8 +739,8 @@ pub(super) fn updates_text(
     let caption = if waiting.is_empty() {
         match f.os {
             OsUpdates::NotAllowed => "Loadout and Steam checked · system checks off".into(),
-            OsUpdates::Unknown => "Loadout and Steam checked".into(),
-            _ => "Loadout, Steam and system checked".into(),
+            OsUpdates::Unknown | OsUpdates::NoChecker => "Loadout and Steam checked".into(),
+            OsUpdates::Pending(_) => "Loadout, Steam and system checked".into(),
         }
     } else {
         waiting.join(" · ")

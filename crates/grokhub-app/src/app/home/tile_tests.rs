@@ -216,4 +216,12 @@ fn updates_tile_names_what_is_waiting() {
         steam: vec!["Apex Legends".into()],
     };
     assert_eq!(updates_text(false, &one, None).caption, "Apex Legends");
+    let windows = UpdateFacts {
+        os: OsUpdates::NoChecker,
+        steam: vec![],
+    };
+    assert_eq!(
+        updates_text(false, &windows, None).caption,
+        "Loadout and Steam checked"
+    );
 }
