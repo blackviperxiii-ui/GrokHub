@@ -39,6 +39,24 @@ fn read(path: PathBuf) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// `card10` -> 10, so cards sort the way the kernel numbered them.
+#[cfg(any(target_os = "linux", test))]
+fn card_number(name: &str) -> u32 {
+    name.trim_start_matches("card").parse().unwrap_or(u32::MAX)
+}
+
+/// The PCI id database pciutils / hwdata install, for model names.
+#[cfg(target_os = "linux")]
+fn pci_ids() -> Option<String> {
+    [
+        "/usr/share/hwdata/pci.ids",
+        "/usr/share/misc/pci.ids",
+        "/usr/share/pci.ids",
+    ]
+    .iter()
+    .find_map(|p| std::fs::read_to_string(p).ok())
+}
+
 #[cfg(target_os = "linux")]
 fn read_u64(path: PathBuf) -> Option<u64> {
     read(path)?.trim().parse().ok()
@@ -74,12 +92,25 @@ impl GpuProbe for Platform {
                         vram_used: read_u64(dev.join("mem_info_vram_used")),
                         lmem_total: read_u64(dev.join("lmem_total_bytes"))
                             .or_else(|| read_u64(dev.join("tile0/vram0/size"))),
+                        device: read(dev.join("device")).unwrap_or_default().trim().into(),
+                        pci_name: None,
                     },
                 ))
             })
             .collect();
-        cards.sort_by(|a, b| a.0.cmp(&b.0));
-        let cards: Vec<lp::DrmCard> = cards.into_iter().map(|(_, c)| c).collect();
+        // card2 before card10.
+        cards.sort_by_key(|(name, _)| card_number(name));
+        let ids = pci_ids();
+        let cards: Vec<lp::DrmCard> = cards
+            .into_iter()
+            .map(|(_, mut c)| {
+                c.vendor = c.vendor.trim().into();
+                c.pci_name = ids
+                    .as_deref()
+                    .and_then(|t| lp::pci_ids_name(t, &c.vendor, &c.device));
+                c
+            })
+            .collect();
         lp::gpus_from_drm(&cards)
     }
 
@@ -304,6 +335,57 @@ pub(super) fn read_profile(home: &Path) -> lp::LocalProfile {
     })
 }
 
+/// The main GPU's temperature in °C, read from the OS: `nvidia-smi`, else
+/// the hwmon `temp1_input` of the DRM card with the most VRAM (Linux). Never
+/// touches a game process. `None` when nothing reads (Windows without
+/// `nvidia-smi`).
+pub(super) fn gpu_temp_c() -> Option<i32> {
+    run(
+        "nvidia-smi",
+        &[
+            "--query-gpu=temperature.gpu",
+            "--format=csv,noheader,nounits",
+        ],
+    )
+    .and_then(|s| first_int(&s))
+    .or_else(drm_gpu_temp_c)
+}
+
+/// The first whole number in a reader's output (`61`, `61\n58`).
+fn first_int(text: &str) -> Option<i32> {
+    text.lines().next()?.trim().parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn drm_gpu_temp_c() -> Option<i32> {
+    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+    entries
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            n.starts_with("card") && !n.contains('-')
+        })
+        .filter_map(|e| {
+            let dev = e.path().join("device");
+            let vram = read_u64(dev.join("mem_info_vram_total"))
+                .or_else(|| read_u64(dev.join("lmem_total_bytes")))
+                .unwrap_or(0);
+            let milli = std::fs::read_dir(dev.join("hwmon"))
+                .ok()?
+                .flatten()
+                .find_map(|h| read_u64(h.path().join("temp1_input")))?;
+            Some((vram, (milli / 1_000) as i32))
+        })
+        .max_by_key(|(vram, _)| *vram)
+        .map(|(_, c)| c)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn drm_gpu_temp_c() -> Option<i32> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +398,19 @@ mod tests {
             assert!(p.ram_mb > 0 && p.free_disk_mb > 0, "{p:?}");
         }
         assert!(p.cpu.logical >= p.cpu.physical);
+    }
+
+    #[test]
+    fn temperature_reads_the_first_number() {
+        assert_eq!(first_int("61\n58\n"), Some(61));
+        assert_eq!(first_int("[N/A]"), None);
+        assert_eq!(first_int(""), None);
+    }
+
+    #[test]
+    fn cards_sort_by_number_not_by_text() {
+        let mut names = vec!["card10", "card2", "card0"];
+        names.sort_by_key(|n| card_number(n));
+        assert_eq!(names, ["card0", "card2", "card10"]);
     }
 }

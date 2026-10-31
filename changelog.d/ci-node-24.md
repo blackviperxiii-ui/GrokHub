@@ -1,0 +1,1 @@
+- Internal: CI and release builds now use Node 24 (LTS) for the web UI instead of Node 22. No app behavior change.

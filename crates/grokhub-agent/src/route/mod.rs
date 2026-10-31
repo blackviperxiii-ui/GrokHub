@@ -25,6 +25,7 @@ pub mod local;
 pub mod local_autoconfig;
 pub mod local_bench;
 pub mod local_effort;
+pub mod local_fit;
 pub mod local_gov;
 pub mod local_health;
 pub mod local_http;
@@ -1004,6 +1005,19 @@ impl Router {
             }
             pick
         };
+        // Offline only (LU-13): whatever branch picked a cloud model (verify
+        // escalate, no keys, cloud down, hard work), nothing goes to the cloud.
+        let chosen =
+            if input.local.offline_switch && !chosen.no_route && !local::is_local(&chosen.model) {
+                rules.push("offline:switch".into());
+                ModelPick {
+                    model: input.current_model.trim().to_string(),
+                    no_route: true,
+                    replaced: None,
+                }
+            } else {
+                chosen
+            };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
             Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,
@@ -1240,6 +1254,19 @@ mod tests {
     use super::*;
     use crate::client::{ContentPart, StreamEvent};
     use std::sync::Mutex;
+
+    #[test]
+    fn routing_reads_what_was_typed_not_the_cabin_notes() {
+        let stored = crate::prefix_cache::user_message_text(
+            "Playbook for this turn: Code changes. Reproduce first, run the tests.",
+            "hi",
+        );
+        let input = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(stored)],
+        }];
+        assert_eq!(live::last_user_text(&input), ("hi".to_string(), false));
+    }
 
     struct Echo(Mutex<Vec<ResponsesRequest>>);
 

@@ -410,6 +410,8 @@ pub struct LocalGate {
     pub hard_tool: bool,
     /// Connectivity is offline (PR B): chat may go local too.
     pub offline: bool,
+    /// Offline only is on (LU-13): no step may go to the cloud at all.
+    pub offline_switch: bool,
     /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
@@ -428,6 +430,7 @@ impl LocalGate {
             cloud_grant,
             hard_tool,
             offline: super::connectivity::state().prefer_local(),
+            offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
         }
     }
@@ -481,7 +484,14 @@ pub fn offline_only(gate: &LocalGate) -> bool {
 
 /// Online after a failed on-device verify: leave local and pick a cloud model.
 pub fn escalate_after_verify(gate: &LocalGate) -> bool {
-    gate.enabled && !gate.offline && gate.local_verify_failed
+    gate.enabled && !gate.offline && !gate.offline_switch && gate.local_verify_failed
+}
+
+/// The on-device model could take chat with Offline only on: Local AI is on
+/// and an engine and model are installed. `false` ⇒ the toggle should warn
+/// (with [`unavailable_reason`]) before it turns the switch on.
+pub fn ready_for_offline() -> bool {
+    LocalCapacity::now().ready
 }
 
 /// Hard or long work should stay on the cloud when online (PR E).
@@ -588,6 +598,11 @@ pub trait LocalRuntime: Send + Sync {
     ) -> Result<String, String> {
         let _ = effort;
         self.chat_stream(messages, on_delta)
+    }
+
+    /// The model's context window in tokens, when the runtime can tell.
+    fn context_tokens(&self) -> Option<u64> {
+        None
     }
 
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
@@ -761,7 +776,13 @@ pub fn serve_request(
     if req.tools.is_empty() {
         return serve_within_at(class, &text, req.effort.as_deref(), HEAVY_WAIT, cancel);
     }
-    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
+    // The device window is often 4k to 16k: send only what fits, with room to answer.
+    let n_ctx = rt
+        .context_tokens()
+        .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    let (fitted, _) = super::local_fit::fit(req, n_ctx);
+    rt.chat_tools(&fitted, cancel)
+        .map_err(ClientError::Protocol)
 }
 
 pub(crate) fn serve_within(

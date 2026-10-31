@@ -1,5 +1,6 @@
 //! Paint one Home module at a given size. Missing data → clean "coming soon".
 
+use grokhub_agent::indexers::system_state::DiskUse;
 use grokhub_core::home::{lookup, DataStatus, ModuleSize};
 use grokhub_core::local_profile::Thermal;
 use grokhub_core::mission::MissionView;
@@ -423,42 +424,59 @@ fn paint_pulse(
     });
 }
 
+/// The Small PC tile: the main GPU's °C when the OS reports it, else the
+/// PC's thermal reading.
+pub(super) fn gpu_temp_text(temp_c: Option<i32>, thermal: Option<Thermal>) -> TileText {
+    match (temp_c, thermal.unwrap_or(Thermal::Unknown)) {
+        (Some(c), _) => {
+            let (word, tone) = if c >= 85 {
+                ("hot", Tone::Alert)
+            } else if c >= 70 {
+                ("warm", Tone::Warn)
+            } else {
+                ("cool", Tone::Normal)
+            };
+            TileText {
+                big: format!("{c} °C"),
+                caption: format!("Main GPU · {word}"),
+                detail: None,
+                tone,
+            }
+        }
+        (None, Thermal::Unknown) => TileText {
+            big: "—".into(),
+            caption: "No temperature sensor found".into(),
+            detail: None,
+            tone: Tone::Quiet,
+        },
+        (None, th) => {
+            let (word, tone) = match th {
+                Thermal::Fair => ("Warm", Tone::Warn),
+                Thermal::Serious => ("Hot", Tone::Alert),
+                Thermal::Critical => ("Critical", Tone::Alert),
+                _ => ("Cool", Tone::Normal),
+            };
+            TileText {
+                big: word.into(),
+                caption: "PC sensors · no GPU sensor".into(),
+                detail: None,
+                tone,
+            }
+        }
+    }
+}
+
 fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let profile = pc_profile();
-    card(ui, |ui| {
+    super::pc_sheet::show_pc_sheet(ui.ctx(), profile.as_ref());
+    let resp = card(ui, |ui| {
         let reading = profile.as_ref().and_then(pc_reading).unwrap_or_default();
         match size {
             ModuleSize::Small => {
-                let heat_read = profile
-                    .as_ref()
-                    .is_some_and(|p| p.thermal != Thermal::Unknown);
                 header(ui, false, "GPU temp", "", crate::theme::fg());
-                let temp: String = profile
-                    .as_ref()
-                    .map(|p| match p.thermal {
-                        Thermal::Unknown => "—",
-                        Thermal::Nominal => "OK",
-                        Thermal::Fair => "Warm",
-                        Thermal::Serious => "Hot",
-                        Thermal::Critical => "Critical",
-                    })
-                    .unwrap_or("—")
-                    .to_string();
-                ui.label(
-                    RichText::new(temp)
-                        .size(crate::theme::TYPE_TITLE)
-                        .strong()
-                        .color(crate::theme::fg()),
-                );
-                ui.label(
-                    RichText::new(if heat_read {
-                        "Thermal"
-                    } else {
-                        "Sensors unavailable"
-                    })
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
-                );
+                let thermal = profile.as_ref().map(|p| p.thermal);
+                let t = gpu_temp_text(super::live::live_facts().gpu_temp_c, thermal);
+                paint_tile_text(ui, &t, size);
             }
             ModuleSize::Medium | ModuleSize::Large => {
                 header(ui, false, "PC loadout", &reading, crate::theme::fg());
@@ -488,13 +506,17 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                         if crate::ui_kit::recipe::button(ui, None, "DETAILS", false, btn, true)
                             .clicked()
                         {
-                            actions.push(ModuleAction::Nav("devices"));
+                            super::pc_sheet::open_pc_sheet(ui.ctx());
                         }
                     });
                 }
             }
         }
     });
+    // Medium and Large have their own buttons; the Small tile opens the sheet.
+    if size == ModuleSize::Small && card_clicked(ui, &resp, "home-pc", "This PC's hardware") {
+        super::pc_sheet::open_pc_sheet(ui.ctx());
+    }
 }
 
 fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
@@ -580,25 +602,104 @@ pub(super) fn usage_text(
     }
 }
 
+fn gb_bytes(bytes: u64) -> String {
+    let gb = bytes as f64 / 1_000_000_000.0;
+    if gb >= 1_000.0 {
+        format!("{:.1} TB", gb / 1_000.0)
+    } else {
+        format!("{gb:.0} GB")
+    }
+}
+
+fn free_tone(d: &DiskUse) -> Tone {
+    let pct_free = (d.free * 100).checked_div(d.total).unwrap_or(100);
+    if pct_free < 5 {
+        Tone::Alert
+    } else if pct_free < 15 {
+        Tone::Warn
+    } else {
+        Tone::Normal
+    }
+}
+
+/// One line per drive, fullest first: label, "120 GB free of 1.0 TB", tone.
+pub(super) fn storage_rows(drives: &[DiskUse]) -> Vec<(String, String, Tone)> {
+    let mut ds: Vec<&DiskUse> = drives.iter().filter(|d| d.total > 0).collect();
+    ds.sort_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
+    ds.iter()
+        .map(|d| {
+            (
+                d.label.clone(),
+                format!("{} free of {}", gb_bytes(d.free), gb_bytes(d.total)),
+                free_tone(d),
+            )
+        })
+        .collect()
+}
+
+/// The Small tile: the fullest drive, or the profile's free space before the first read.
+pub(super) fn storage_text(drives: &[DiskUse], fallback_free_mb: Option<u64>) -> TileText {
+    let fullest = drives
+        .iter()
+        .filter(|d| d.total > 0)
+        .min_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
+    match (fullest, fallback_free_mb) {
+        (Some(d), _) => {
+            let used = 100 - (d.free * 100).checked_div(d.total).unwrap_or(100);
+            let n = drives.iter().filter(|d| d.total > 0).count();
+            TileText {
+                big: format!("{} free", gb_bytes(d.free)),
+                caption: format!("{} · {used}% used of {}", d.label, gb_bytes(d.total)),
+                detail: (n > 1).then(|| format!("{n} drives · fullest shown")),
+                tone: free_tone(d),
+            }
+        }
+        (None, Some(mb)) if mb > 0 => TileText {
+            big: format!("{} free", gb_bytes(mb * 1_048_576)),
+            caption: "Home drive".into(),
+            detail: None,
+            tone: Tone::Normal,
+        },
+        _ => TileText {
+            big: "—".into(),
+            caption: "Reading drives…".into(),
+            detail: None,
+            tone: Tone::Quiet,
+        },
+    }
+}
+
 fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
-    let profile = pc_profile();
-    let free = profile
-        .as_ref()
-        .filter(|p| p.free_disk_mb > 0)
-        .map(|p| format!("{:.0} GB", p.free_disk_mb as f32 / 1024.0))
-        .unwrap_or_else(|| "—".into());
+    let facts = super::live::live_facts();
+    let fallback = pc_profile().map(|p| p.free_disk_mb);
     card(ui, |ui| {
         header(ui, false, "Storage", "", crate::theme::fg());
-        ui.label(
-            RichText::new(format!("FREE {free}"))
-                .size(if size == ModuleSize::Small {
-                    crate::theme::TYPE_BODY
-                } else {
-                    crate::theme::TYPE_TITLE
-                })
-                .strong()
-                .color(crate::theme::fg()),
-        );
+        let rows = storage_rows(&facts.drives);
+        if size == ModuleSize::Small || rows.len() < 2 {
+            paint_tile_text(ui, &storage_text(&facts.drives, fallback), size);
+        } else {
+            let cap = if size == ModuleSize::Medium { 3 } else { 6 };
+            for (label, value, tone) in rows.iter().take(cap) {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(label)
+                            .size(crate::theme::TYPE_CAPTION)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(value)
+                                .size(crate::theme::TYPE_BODY)
+                                .strong()
+                                .color(tone_color(*tone)),
+                        );
+                    });
+                });
+            }
+            if rows.len() > cap {
+                ui.label(caption(&format!("+{} more", rows.len() - cap)));
+            }
+        }
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Free up storage") {
             actions.push(ModuleAction::OpenChat("Free up storage on this PC.".into()));
         }

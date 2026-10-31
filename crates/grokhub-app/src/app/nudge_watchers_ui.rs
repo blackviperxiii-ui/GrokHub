@@ -146,11 +146,7 @@ fn gpu_driver_snap(_cabin: &Cabin) -> Option<GpuDriverSnap> {
     let home =
         grokhub_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
     let profile = super::local_probe::read_profile(&home);
-    let gpu = profile
-        .gpus
-        .iter()
-        .find(|g| !g.integrated)
-        .or_else(|| profile.gpus.first())?;
+    let gpu = profile.main_gpu()?;
     let installed = gpu.driver.trim();
     if installed.is_empty() {
         return None;
