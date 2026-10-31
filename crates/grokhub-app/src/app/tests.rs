@@ -24,6 +24,9 @@ mod local_indexer_tests;
 #[path = "pulse_page_tests.rs"]
 mod pulse_page_tests;
 
+#[path = "narrow_window_tests.rs"]
+mod narrow_window_tests;
+
 #[path = "background_run_tests.rs"]
 mod background_run_tests;
 
@@ -137,6 +140,8 @@ fn cabin_src() -> String {
         include_str!("ideas_ui.rs"),
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
+        include_str!("lan_host.rs"),
+        include_str!("chat_paint.rs"),
     )
     .replace("\r\n", "\n")
     .replace("pub(super) ", "")
@@ -2091,6 +2096,9 @@ fn quiet_cabin() -> Cabin {
         window_focused: true,
         focus: Default::default(),
         pc_health: Default::default(),
+        ticks: Default::default(),
+        nudge_probe: None,
+        week_recap_share: None,
         print_alerts: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),

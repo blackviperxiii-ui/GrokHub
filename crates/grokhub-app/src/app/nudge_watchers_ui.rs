@@ -9,24 +9,70 @@ use grokhub_core::nudge_watchers::{
 use super::*;
 use crate::config;
 
-fn ledger_path() -> std::path::PathBuf {
-    config::config_dir().join(nw::LEDGER_FILE)
-}
-
 pub(super) fn load_ledger() -> NudgeLedger {
-    std::fs::read_to_string(ledger_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(nw::LEDGER_FILE)
 }
 
 pub(super) fn save_ledger(ledger: &NudgeLedger) {
-    if let Ok(text) = serde_json::to_string_pretty(ledger) {
-        let path = ledger_path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+    super::ledger_store::save_ledger(nw::LEDGER_FILE, ledger);
+}
+
+/// The half of a watcher snapshot that walks folders and devices, read on
+/// a worker thread so the frame never waits on the disk.
+pub(super) struct NudgeFsSnap {
+    disk: Option<DiskSnap>,
+    crashes: Vec<CrashCount>,
+    os_updates: OsUpdateSnap,
+    peripherals: Vec<PeripheralEvent>,
+}
+
+/// Read the disk, crash, OS update and peripheral signals. `last_game`
+/// names the game a found controller is offered for.
+fn fs_snapshot(last_game: Option<String>) -> NudgeFsSnap {
+    let home =
+        grokhub_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
+    let free = super::setup_wizard::free_disk_mb(&home).map(|mb| mb * 1024 * 1024);
+    let disk = free.map(|free_bytes| DiskSnap {
+        free_bytes,
+        cache_folders: cache_folders(&home),
+    });
+    NudgeFsSnap {
+        disk,
+        crashes: crash_counts_linux(),
+        os_updates: os_updates_linux(),
+        peripherals: peripheral_events(last_game),
+    }
+}
+
+fn peripheral_events(last_game: Option<String>) -> Vec<PeripheralEvent> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/dev/input") {
+            for ent in entries.flatten() {
+                let name = ent.file_name().to_string_lossy().into_owned();
+                if name.starts_with("js") {
+                    out.push(PeripheralEvent::Controller {
+                        name: "Game controller".into(),
+                        last_game,
+                    });
+                    break;
+                }
+            }
         }
-        let _ = std::fs::write(path, text);
+        if std::path::Path::new("/dev/usb/lp0").exists()
+            || std::path::Path::new("/dev/usb/lp1").exists()
+        {
+            out.push(PeripheralEvent::Printer {
+                name: "USB printer".into(),
+            });
+        }
+        out
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = last_game;
+        Vec::new()
     }
 }
 
@@ -177,23 +223,18 @@ fn gpu_driver_snap(_cabin: &Cabin) -> Option<GpuDriverSnap> {
 }
 
 impl Cabin {
-    pub(super) fn collect_nudge_snapshot(&mut self, now: u64) -> WatcherSnapshot {
-        let home = grokhub_core::paths::user_home()
-            .unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
-        let free = super::setup_wizard::free_disk_mb(&home).map(|mb| mb * 1024 * 1024);
-        let disk = free.map(|free_bytes| DiskSnap {
-            free_bytes,
-            cache_folders: cache_folders(&home),
-        });
+    /// The snapshot from the worker's folder and device reads plus the
+    /// Steam and GPU signals the cabin already holds.
+    pub(super) fn collect_nudge_snapshot(&mut self, now: u64, fs: NudgeFsSnap) -> WatcherSnapshot {
         self.steam_refresh_library(now);
         let steam_news = self.steam_news_hits(now);
         WatcherSnapshot {
             steam_news,
             gpu: gpu_driver_snap(self),
-            disk,
-            crashes: crash_counts_linux(),
-            os_updates: Some(os_updates_linux()),
-            peripherals: self.peripheral_events(),
+            disk: fs.disk,
+            crashes: fs.crashes,
+            os_updates: Some(fs.os_updates),
+            peripherals: fs.peripherals,
         }
     }
 
@@ -223,44 +264,27 @@ impl Cabin {
         out
     }
 
-    fn peripheral_events(&self) -> Vec<PeripheralEvent> {
-        #[cfg(target_os = "linux")]
-        {
-            let mut out = Vec::new();
-            if let Ok(entries) = std::fs::read_dir("/dev/input") {
-                for ent in entries.flatten() {
-                    let name = ent.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("js") {
-                        out.push(PeripheralEvent::Controller {
-                            name: "Game controller".into(),
-                            last_game: self.last_played_game_hint(),
-                        });
-                        break;
-                    }
-                }
-            }
-            if std::path::Path::new("/dev/usb/lp0").exists()
-                || std::path::Path::new("/dev/usb/lp1").exists()
-            {
-                out.push(PeripheralEvent::Printer {
-                    name: "USB printer".into(),
-                });
-            }
-            out
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Vec::new()
-        }
-    }
-
-    #[cfg(target_os = "linux")]
+    /// The game a found controller is offered for: the most played Steam
+    /// title, when the Steam source is on.
     fn last_played_game_hint(&self) -> Option<String> {
         self.sources.steam.top_game_name()
     }
 
+    /// Each frame: take the worker's reads when they land; otherwise, once
+    /// per `TICK_EVERY_MS`, read the ledger and start the worker.
     pub(super) fn tick_nudge_watchers(&mut self) {
         let now = now_ms();
+        if let Some(rx) = self.nudge_probe.take() {
+            match rx.try_recv() {
+                Ok(fs) => self.finish_nudge_tick(fs, now),
+                Err(mpsc::TryRecvError::Empty) => self.nudge_probe = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+            return;
+        }
+        if !self.ticks.due(nw::LEDGER_FILE, now, TICK_EVERY_MS) {
+            return;
+        }
         let mut ledger = load_ledger();
         if now.saturating_sub(ledger.last_tick_ms) < TICK_EVERY_MS {
             return;
@@ -270,7 +294,18 @@ impl Cabin {
             save_ledger(&ledger);
             return;
         }
-        let snap = self.collect_nudge_snapshot(now);
+        let last_game = self.last_played_game_hint();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(fs_snapshot(last_game));
+        });
+        self.nudge_probe = Some(rx);
+    }
+
+    /// The worker's reads landed: run the watchers and post their cards.
+    fn finish_nudge_tick(&mut self, fs: NudgeFsSnap, now: u64) {
+        let mut ledger = load_ledger();
+        let snap = self.collect_nudge_snapshot(now, fs);
         let know_me = load_tags(&config::config_dir());
         let today = Self::local_day();
         let out = nw::tick(TickInput {

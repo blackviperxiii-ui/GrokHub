@@ -1611,7 +1611,7 @@ impl Cabin {
                                 .max(1) as u32;
                             // A reply after real work that ends in a Finished
                             // block paints without it, then as a recap card.
-                            let recap = super::recap_ui::recap_at(shown, i);
+                            let recap = super::recap_ui::recap_at_cached(&thread_id, shown, i);
                             let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                 let reply = recap.as_ref().map_or(block, |r| &r.0);
                                 let mut p = if reply.body.trim().is_empty() {

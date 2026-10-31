@@ -39,36 +39,24 @@ struct RecapFile {
     latest_at: u64,
 }
 
-fn state_path() -> std::path::PathBuf {
-    config::config_dir().join(FILE_NAME)
-}
-
-fn counters_path() -> std::path::PathBuf {
-    config::config_dir().join(COUNTERS_FILE)
-}
+/// How often the housekeep slot re-reads the recap file to see whether
+/// this week's recap went up. The gate itself turns on the hour.
+const CHECK_EVERY_MS: u64 = 60_000;
 
 fn share_path() -> std::path::PathBuf {
     config::config_dir().join(SHARE_PNG)
 }
 
 fn load_state() -> RecapFile {
-    std::fs::read_to_string(state_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(FILE_NAME)
 }
 
 fn save_state(s: &RecapFile) {
-    if let Ok(text) = serde_json::to_string_pretty(s) {
-        let _ = std::fs::write(state_path(), text);
-    }
+    super::ledger_store::save_ledger(FILE_NAME, s);
 }
 
 fn load_counters() -> WeekCounters {
-    std::fs::read_to_string(counters_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(COUNTERS_FILE)
 }
 
 impl Cabin {
@@ -84,6 +72,9 @@ impl Cabin {
     /// Post the weekly recap once per week at the usual active hour.
     pub(super) fn tick_week_recap(&mut self) {
         let now = grokhub_core::now_ms();
+        if !self.ticks.due(FILE_NAME, now, CHECK_EVERY_MS) {
+            return;
+        }
         let clock = Self::local_clock();
         let today = Self::local_day();
         let week_key = wr::week_key_from_day(&today, clock.weekday);
@@ -117,8 +108,15 @@ impl Cabin {
         state.latest_md = Some(md.clone());
         state.latest_at = now;
         save_state(&state);
-        let png = wr::share_png(&recap);
-        let _ = std::fs::write(share_path(), png);
+        // Encoding the PNG takes tens of milliseconds: not on the frame.
+        let share = share_path();
+        let for_png = recap.clone();
+        self.week_recap_share = std::thread::Builder::new()
+            .name("week-recap-share".into())
+            .spawn(move || {
+                let _ = std::fs::write(share, wr::share_png(&for_png));
+            })
+            .ok();
         self.post_week_recap_card(&recap, &md, now);
     }
 
@@ -275,6 +273,12 @@ mod tests {
         assert!(details.contains("## Disk freed"), "{details}");
         assert!(details.contains("## Top Loadout tasks"), "{details}");
         assert!(!details.contains("/home/"), "{details}");
+        cabin
+            .week_recap_share
+            .take()
+            .expect("the share png is written on a worker")
+            .join()
+            .unwrap();
         assert!(share_path().is_file(), "share png written");
         let png = std::fs::read(share_path()).expect("png");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));

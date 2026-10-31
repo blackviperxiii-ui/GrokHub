@@ -9,6 +9,11 @@ use super::{Cabin, Nav};
 
 const DOCK_FILE: &str = "dock.json";
 
+/// Room between the dock panels and the window's right edge, so a panel's
+/// scroll bar (8 px, flush right) is not under the East resize grip
+/// (`crate::titlebar::EDGE_GRIP`, which paints over everything).
+pub(super) const DOCK_EDGE_INSET: i8 = 6;
+
 /// One dockable main-panel tab (GROK_NAV destinations).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(super) enum DockTab {
@@ -204,7 +209,14 @@ impl Cabin {
         {
             let mut viewer = CabinTabViewer { cabin: self };
             egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(crate::theme::bg()))
+                .frame(
+                    egui::Frame::NONE
+                        .fill(crate::theme::bg())
+                        .inner_margin(egui::Margin {
+                            right: DOCK_EDGE_INSET,
+                            ..egui::Margin::ZERO
+                        }),
+                )
                 .show(ui, |ui| {
                     DockArea::new(&mut dock_state)
                         .style(Style::from_egui(ui.style().as_ref()))

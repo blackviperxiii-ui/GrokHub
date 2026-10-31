@@ -13,7 +13,6 @@ use grokhub_core::update_feed::{self as feed, UpdateCard, UpdateKind, UpdateStat
 use serde::{Deserialize, Serialize};
 
 use super::Cabin;
-use crate::config;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,21 +40,12 @@ struct TapRow {
     card: Option<String>,
 }
 
-fn state_path() -> std::path::PathBuf {
-    config::config_dir().join(FILE_NAME)
-}
-
 fn load_state() -> BriefFile {
-    std::fs::read_to_string(state_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(FILE_NAME)
 }
 
 fn save_state(s: &BriefFile) {
-    if let Ok(text) = serde_json::to_string_pretty(s) {
-        let _ = std::fs::write(state_path(), text);
-    }
+    super::ledger_store::save_ledger(FILE_NAME, s);
 }
 
 impl Cabin {

@@ -7,27 +7,13 @@ use grokhub_core::ask_offers::{
 use grokhub_core::UpdateStatus;
 
 use super::*;
-use crate::config;
-
-fn ledger_path() -> std::path::PathBuf {
-    config::config_dir().join(LEDGER_FILE)
-}
 
 pub(crate) fn load_ask_offer_ledger() -> AskOfferLedger {
-    std::fs::read_to_string(ledger_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(LEDGER_FILE)
 }
 
 pub(super) fn save_ask_offer_ledger(ledger: &AskOfferLedger) {
-    if let Ok(text) = serde_json::to_string_pretty(ledger) {
-        let path = ledger_path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, text);
-    }
+    super::ledger_store::save_ledger(LEDGER_FILE, ledger);
 }
 
 impl Cabin {
@@ -44,6 +30,9 @@ impl Cabin {
 
     pub(super) fn tick_ask_offers(&mut self) {
         let now = now_ms();
+        if !self.ticks.due(LEDGER_FILE, now, TICK_EVERY_MS) {
+            return;
+        }
         let mut ledger = load_ask_offer_ledger();
         if now.saturating_sub(ledger.last_tick_ms) < TICK_EVERY_MS {
             return;

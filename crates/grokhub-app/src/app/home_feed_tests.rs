@@ -1787,7 +1787,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Shop K2",
     ));
     rows.push((
-        "tick_nudge_watchers",
+        "finish_nudge_tick",
         grokhub_core::nudge_watcher_card(&nudge, now),
         "Test GPU",
     ));

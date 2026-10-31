@@ -31,6 +31,8 @@ struct WindowAnim {
     outfit: String,
     prev: Option<Cached>,
     fade_start: f64,
+    /// The blink last painted, stepped forward each frame.
+    blink: anim::BlinkCursor,
 }
 
 /// The window in points.
@@ -131,6 +133,10 @@ pub(super) struct DesktopNyx {
     pub capture_excluded: bool,
     /// Frames the window has been shown this run (for first-frame setup).
     pub shown_frames: u32,
+    /// Frames that asked Windows to keep her out of screen captures and
+    /// got no window back yet. Stops at [`CAPTURE_EXCLUDE_TRIES`].
+    #[cfg(windows)]
+    pub capture_tries: u32,
 }
 
 impl Default for DesktopNyx {
@@ -144,9 +150,17 @@ impl Default for DesktopNyx {
             passthrough: None,
             capture_excluded: false,
             shown_frames: 0,
+            #[cfg(windows)]
+            capture_tries: 0,
         }
     }
 }
+
+/// How many shown frames try `exclude_from_capture` before giving up until
+/// the window is next shown. The window exists by the third frame; a few
+/// more cover a slow first paint, and each try walks every top-level window.
+#[cfg(windows)]
+const CAPTURE_EXCLUDE_TRIES: u32 = 30;
 
 /// Whether the window shows this frame. `gaming` is the game guard not
 /// clear or a fullscreen app in front. She hides at once and comes back
@@ -382,6 +396,10 @@ impl Cabin {
             state.shown_frames = 0;
             state.passthrough = None;
             state.capture_excluded = false;
+            #[cfg(windows)]
+            {
+                state.capture_tries = 0;
+            }
             self.desktop_nyx = Some(state);
             return;
         }
@@ -466,7 +484,11 @@ impl Cabin {
         );
         state.shown_frames = state.shown_frames.saturating_add(1);
         #[cfg(windows)]
-        if !state.capture_excluded && state.shown_frames > 2 {
+        if !state.capture_excluded
+            && state.shown_frames > 2
+            && state.capture_tries < CAPTURE_EXCLUDE_TRIES
+        {
+            state.capture_tries += 1;
             state.capture_excluded =
                 crate::win_native::exclude_from_capture(grokhub_core::brand::companion_name());
         }
@@ -633,16 +655,19 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
         .as_ref()
         .map(|(tex, _)| art_rect(frame, tex.size()))
         .unwrap_or(frame);
-    let fading = paint_companion(
+    let painted = paint_companion(
         ui,
         &painter,
-        art,
-        tex.as_ref(),
-        outfit,
-        t,
-        snap.still,
-        snap.mouth,
+        &CompanionPaint {
+            art,
+            tex: tex.as_ref(),
+            outfit,
+            t,
+            still: snap.still,
+            mouth: snap.mouth,
+        },
     );
+    let fading = painted.fading;
     let resp = ui.interact(
         frame,
         ui.id().with("desktop-nyx"),
@@ -718,24 +743,44 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
         ui.ctx().request_repaint_after(wait);
     } else if !snap.still {
         ui.ctx()
-            .request_repaint_after(Duration::from_secs_f64(anim::blink_next_change(t)));
+            .request_repaint_after(Duration::from_secs_f64(painted.blink_change));
     }
+}
+
+/// What one frame of Nyx is painted from.
+struct CompanionPaint<'a> {
+    art: Rect,
+    tex: Option<&'a Cached>,
+    outfit: &'a Outfit,
+    t: f64,
+    still: bool,
+    mouth: Option<crate::lipsync::Mouth>,
+}
+
+/// What a frame of Nyx leaves for the repaint schedule.
+struct CompanionPainted {
+    /// A crossfade is still running.
+    fading: bool,
+    /// Seconds until the eyes next open or close.
+    blink_change: f64,
 }
 
 /// Nyx herself: breathing and bobbing, blinking when her outfit has an
 /// eyes patch, and crossfading with a scanline sweep when the outfit just
-/// changed. Returns whether a fade is still running.
-#[allow(clippy::too_many_arguments)]
+/// changed.
 fn paint_companion(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
-    art: Rect,
-    tex: Option<&Cached>,
-    outfit: &Outfit,
-    t: f64,
-    still: bool,
-    mouth: Option<crate::lipsync::Mouth>,
-) -> bool {
+    frame: &CompanionPaint<'_>,
+) -> CompanionPainted {
+    let CompanionPaint {
+        art,
+        tex,
+        outfit,
+        t,
+        still,
+        mouth,
+    } = *frame;
     let anim_id = ui.id().with("desktop-nyx-anim");
     let mut state = ui
         .ctx()
@@ -744,6 +789,7 @@ fn paint_companion(
             outfit: outfit.id.clone(),
             prev: None,
             fade_start: f64::NEG_INFINITY,
+            blink: anim::BlinkCursor::default(),
         });
     if state.outfit != outfit.id {
         // Keep the old picture for the fade; its texture is cached on the
@@ -794,7 +840,7 @@ fn paint_companion(
                     .paint_at(ui, r);
             }
         }
-        if anim::blink_closed(t, still) {
+        if state.blink.closed(t, still) {
             if let Some(eyes) = &outfit.eyes {
                 if let Some(patch) = patch_texture(ui.ctx(), &eyes.file) {
                     let r = anim::patch_rect(
@@ -820,8 +866,12 @@ fn paint_companion(
     if !fading {
         state.prev = None;
     }
+    let blink_change = state.blink.next_change(t);
     ui.ctx().data_mut(|d| d.insert_temp(anim_id, state));
-    fading
+    CompanionPainted {
+        fading,
+        blink_change,
+    }
 }
 
 /// A patch picture (eyes closed, a mouth shape) read from its file and

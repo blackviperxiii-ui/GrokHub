@@ -1322,19 +1322,6 @@ impl Cabin {
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(pc::silence_line(self.last_pulse_ms(), now_ms()))
-                .size(crate::theme::FONT_TIP)
-                .color(crate::theme::subtle()),
-        );
-    }
-
-    pub(super) fn last_pulse_ms(&self) -> u64 {
-        let p = &self.cfg.feed_pulse;
-        p.last_expiry_ms
-            .max(p.last_quiet_release_ms)
-            .max(p.last_ideas_ms)
     }
 
     // ranking inputs

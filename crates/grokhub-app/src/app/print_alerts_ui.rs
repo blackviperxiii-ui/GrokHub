@@ -7,7 +7,6 @@
 
 use std::io::Read;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -19,27 +18,13 @@ use grokhub_core::print_alerts::{
 };
 
 use super::*;
-use crate::config;
-
-fn ledger_path() -> PathBuf {
-    config::config_dir().join(pa::LEDGER_FILE)
-}
 
 fn load_ledger() -> PrintAlertsLedger {
-    std::fs::read_to_string(ledger_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(pa::LEDGER_FILE)
 }
 
 fn save_ledger(ledger: &PrintAlertsLedger) {
-    if let Ok(text) = serde_json::to_string_pretty(ledger) {
-        let path = ledger_path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, text);
-    }
+    super::ledger_store::save_ledger(pa::LEDGER_FILE, ledger);
 }
 
 /// No redirects: `egress_ok` checks only the printer URL, so a redirect

@@ -22,6 +22,9 @@ pub(super) fn save_ledger(ledger: &HobbyPathsLedger) {
 impl Cabin {
     pub(super) fn tick_hobby_paths(&mut self) {
         let now = now_ms();
+        if !self.ticks.due(FILE_NAME, now, TICK_EVERY_MS) {
+            return;
+        }
         let mut ledger = load_ledger();
         if now.saturating_sub(ledger.last_tick_ms) < TICK_EVERY_MS {
             return;

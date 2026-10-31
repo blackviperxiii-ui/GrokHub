@@ -1,7 +1,7 @@
 # Compass: grokhub-app app/ (the Cabin UI)
 
 ## Owns
-- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
+- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...), plus free helpers in `chat_paint` (tool cards, eyes texture), `lan_host` (LAN address) and `ledger_store` (per-feature JSON ledgers). Each submodule starts with `use super::*;`.
 - The frame loop (`impl eframe::App for Cabin`: `logic`, `ui`, `on_exit`) and the background job polls it drives.
 ## Quick commands
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app app::tests::<name> -- --test-threads=1`
@@ -14,10 +14,10 @@
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.
 - New behavior: put logic in a pure fn (often in grokhub-core) and unit-test it; keep the egui code thin. Then add a cabin test with `isolated_cabin` and finish with `release_isolated`.
-- Disk work stays off the UI thread: `persist_svc.submit_*` (and `dock.json` under `persist_io`); `status_toasts.rs` mirrors status. Settings → Behavior self-review rows paint from `harness.self_review.file` / `.history`; writers go through `mutate_self_review_file`. Settings → Cabin defaults / Permissions provider rows paint from `harness.router.providers.list` / `.model_choices` (`ensure_providers`); writers call `invalidate_providers`. Pulse Feed thumbs decode off-thread (`kick_pulse_decode` / `take_pulse_rgba`). Short `request_repaint_after` timers only while a wait/crossfade/Background sub-minute countdown is in flight.
+- Disk work stays off the UI thread: `persist_svc.submit_*` (and `dock.json` under `persist_io`); `status_toasts.rs` mirrors status. Settings → Behavior self-review rows paint from `harness.self_review.file` / `.history`; writers go through `mutate_self_review_file`. Settings → Cabin defaults / Permissions provider rows paint from `harness.router.providers.list` / `.model_choices` (`ensure_providers`); writers call `invalidate_providers`. Pulse Feed thumbs decode off-thread (`kick_pulse_decode` / `take_pulse_rgba`). Short `request_repaint_after` timers only while a wait/crossfade/Background sub-minute countdown is in flight. Ledger tickers (`tick_nudge_watchers`, `tick_ask_offers`, `tick_screenshot_offer`, `tick_hobby_paths`, `tick_week_recap`) ask `TickGate::due` first and only then load through `ledger_store::load_ledger` (`config::load_json`: cap, BOM, quarantine).
 ## What breaks it
 - Growing the `ComposerStackSlot::Pill` arm in `chat_ui.rs`: `chat_composer_pins_stop_on_the_right` reads a fixed 15,000-byte window after it (`CLAUDE.md`). Move code into helpers.
-- Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
+- Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules; `lan_host.rs` and `chat_paint.rs` come last) and ends at the next same-indent fn, and many tests assert on that slice.
 - Reordering `paint_approval_stack` / `paint_perm_ask` / `paint_elicit_ask` in `chat_ui.rs`: `needs_attention_summary_is_only_on_the_stack` slices between those signatures.
 - Blocking the frame on disk, network, or a model call.
 - Letting a pill act while private data is locked: Settings grant rows go through `settings_grant_row` with `lock_hover` (disabled look, hover), Try again calls `retry_keyring`, and the `/privacy` Revoke and `/skills changes` Undo rows start at `result_text_inset()`.

@@ -19,6 +19,27 @@ const TRAILING_CHROME_W: f32 = 96.0;
 const NEW_CHAT_TAB: &str = "New chat";
 
 impl Cabin {
+    /// Archived (not deleted) threads with their rail titles, for the
+    /// Archived menu.
+    fn archived_tab_titles(&self) -> Vec<(usize, String)> {
+        self.threads
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| threads::is_archived(t) && !threads::is_deleted(t))
+            .map(|(i, _)| (i, self.thread_rail_title(i)))
+            .collect()
+    }
+
+    /// Deleted threads with their rail titles, for the Recently deleted menu.
+    fn deleted_tab_titles(&self) -> Vec<(usize, String)> {
+        self.threads
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| threads::is_deleted(t))
+            .map(|(i, _)| (i, self.thread_rail_title(i)))
+            .collect()
+    }
+
     /// Loadout tab strip: even-fit tabs, overflow menu, deck tokens.
     pub(super) fn ui_chat_tabs(&mut self, ui: &mut egui::Ui) {
         let mut act: Option<TabAct> = None;
@@ -27,20 +48,6 @@ impl Cabin {
         let mut restore_archived: Option<usize> = None;
         let mut restore_deleted: Option<usize> = None;
 
-        let archived = self
-            .threads
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| threads::is_archived(t) && !threads::is_deleted(t))
-            .map(|(i, _)| (i, self.thread_rail_title(i)))
-            .collect::<Vec<_>>();
-        let deleted = self
-            .threads
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| threads::is_deleted(t))
-            .map(|(i, _)| (i, self.thread_rail_title(i)))
-            .collect::<Vec<_>>();
         let listed = self.chat_tab_indices();
         let order = self.chat_tab_order(&listed);
         let active_pos = order
@@ -149,6 +156,8 @@ impl Cabin {
                             }
                             ui.separator();
                             ui.menu_button("Archived", |ui| {
+                                // Titles are built only while the menu is open.
+                                let archived = self.archived_tab_titles();
                                 if archived.is_empty() {
                                     ui.label(
                                         RichText::new("No archived chats")
@@ -169,6 +178,7 @@ impl Cabin {
                                 }
                             });
                             ui.menu_button("Recently deleted", |ui| {
+                                let deleted = self.deleted_tab_titles();
                                 if deleted.is_empty() {
                                     ui.label(
                                         RichText::new("Trash is empty")

@@ -124,8 +124,17 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
         1,
         "{texts:?}"
     );
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|t| t.as_str()
+                == "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing.")
+            .count(),
+        1,
+        "one empty line, not a second 'No pulse yet' under it: {texts:?}"
+    );
     assert!(
-        texts.iter().any(|t| t == "No pulse yet. Nothing to do."),
+        !texts.iter().any(|t| t.starts_with("No pulse yet")),
         "{texts:?}"
     );
 }
@@ -884,8 +893,16 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         "{empty:?}"
     );
     assert_eq!(
-        count(&empty, "No pulse yet. Nothing to do."),
+        count(
+            &empty,
+            "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing."
+        ),
         1,
+        "{empty:?}"
+    );
+    assert_eq!(
+        count(&empty, "No pulse yet. Nothing to do."),
+        0,
         "{empty:?}"
     );
     assert!(

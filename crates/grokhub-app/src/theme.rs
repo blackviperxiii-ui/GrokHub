@@ -862,7 +862,8 @@ pub const IMAGINE_TILE_TALL: f32 = 345.0;
 pub const IMAGINE_FRAME_MS: u64 = 1600;
 
 /// Live grok.com primary rail (dock tabs). Settings is an avatar menu, not a row.
-#[allow(dead_code)]
+/// Pinned by tests only; the cabin paints `LOADOUT_NAV`.
+#[cfg(test)]
 pub const GROK_NAV: &[(&str, &str)] = &[
     ("chat", "Chat"),
     ("imagine", "Imagine"),

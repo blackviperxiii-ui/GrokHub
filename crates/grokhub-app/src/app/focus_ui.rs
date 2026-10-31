@@ -68,23 +68,31 @@ impl Cabin {
 
     /// Each frame with the window's focus. Only transitions do anything.
     pub(super) fn tick_focus(&mut self, focused: bool) {
+        self.tick_focus_after(focused, READ_DELAY);
+    }
+
+    /// [`Self::tick_focus`] with the read's delay given. Returns whether a
+    /// read of the foreground process started.
+    pub(super) fn tick_focus_after(&mut self, focused: bool, delay: Duration) -> bool {
         let was = std::mem::replace(&mut self.focus.was_focused, focused);
         if !self.cfg.focus_help || was == focused {
-            return;
+            return false;
         }
         if focused {
             let name = self.focus.read.lock().ok().and_then(|mut g| g.take());
             self.note_focus_process(name.as_deref());
+            false
         } else {
             self.focus.app = None;
             let slot = Arc::clone(&self.focus.read);
             std::thread::spawn(move || {
-                std::thread::sleep(READ_DELAY);
+                std::thread::sleep(delay);
                 let name = super::local_signals::foreground_process();
                 if let Ok(mut g) = slot.lock() {
                     *g = name;
                 }
             });
+            true
         }
     }
 
@@ -160,9 +168,11 @@ mod tests {
     fn off_reads_nothing_and_shows_nothing() {
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.focus_help = false;
-        cabin.tick_focus(true);
-        cabin.tick_focus(false);
-        std::thread::sleep(READ_DELAY * 3);
+        assert!(!cabin.tick_focus_after(true, Duration::ZERO));
+        assert!(
+            !cabin.tick_focus_after(false, Duration::ZERO),
+            "leaving the window starts no read while off"
+        );
         assert_eq!(*cabin.focus.read.lock().unwrap(), None, "no read while off");
         cabin.note_focus_process(Some("blender"));
         assert_eq!(cabin.focus_chip(), None);

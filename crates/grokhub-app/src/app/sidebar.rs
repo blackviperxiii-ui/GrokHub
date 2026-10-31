@@ -43,6 +43,16 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
 
 /// Space between the titlebar pills, so their rings never touch.
 const TITLEBAR_PILL_GAP: f32 = 8.0;
+/// A titlebar pill's horizontal padding (8 px a side) plus its 1 px stroke.
+const TITLEBAR_PILL_PAD_W: f32 = 18.0;
+
+#[cfg(test)]
+thread_local! {
+    /// The last painted titlebar: its width, where the window controls begin
+    /// and where the brand and pills end.
+    pub(super) static TITLEBAR_FIT: std::cell::Cell<Option<(f32, f32, f32)>> =
+        const { std::cell::Cell::new(None) };
+}
 
 impl Cabin {
     pub(super) fn paint_loadout_window_border(ui: &mut egui::Ui) {
@@ -74,7 +84,75 @@ impl Cabin {
             .exact_size(crate::theme::TITLEBAR_H)
             .frame(egui::Frame::NONE.fill(bar_fill))
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
+                let bar = ui.max_rect();
+                // The window controls go first, from the right edge, so they
+                // keep their place however narrow the window is. The brand and
+                // pills then take what is left, and the last pill gives way.
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(bar)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                {
+                    let ui = &mut right;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let hide = crate::tray::should_hide_on_close(
+                        self.cfg.close_to_tray,
+                        self.tray.is_some(),
+                    ) && !self.want_quit;
+                    if titlebar_chrome_hit(
+                        &titlebar_chrome_btn(ui, ChromeBtn::Close).on_hover_text(
+                            crate::titlebar::titlebar_chrome_tip(ChromeBtn::Close, hide),
+                        ),
+                    ) {
+                        if hide {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                            self.hide_to_tray(&ctx);
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                    let max_kind = if self.win_max {
+                        ChromeBtn::Restore
+                    } else {
+                        ChromeBtn::Maximize
+                    };
+                    if titlebar_chrome_hit(
+                        &titlebar_chrome_btn(ui, max_kind)
+                            .on_hover_text(crate::titlebar::titlebar_chrome_tip(max_kind, false)),
+                    ) {
+                        self.toggle_maximize(&ctx);
+                    }
+                    if titlebar_chrome_hit(
+                        &titlebar_chrome_btn(ui, ChromeBtn::Minimize).on_hover_text(
+                            crate::titlebar::titlebar_chrome_tip(ChromeBtn::Minimize, false),
+                        ),
+                    ) {
+                        self.resume_fresh = true;
+                        self.saw_minimized = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    // RTL: allocated after minimize, so it sits immediately to its left.
+                    let _ = self.paint_session_actions_menu(ui);
+                    // Activity Dock left of the session menu (every view).
+                    self.ui_activity_dock(ui);
+                    if !loadout {
+                        self.paint_personality_switch(ui);
+                    }
+                }
+                let chrome_left = right.min_rect().left();
+                let left_rect = egui::Rect::from_min_max(
+                    bar.min,
+                    egui::pos2(chrome_left - TITLEBAR_PILL_GAP, bar.max.y),
+                );
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(left_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                left.set_clip_rect(left_rect.intersect(ui.clip_rect()));
+                {
+                    let ui = &mut left;
                     ui.add_space(12.0);
                     if loadout {
                         self.paint_loadout_titlebar_brand(ui);
@@ -105,64 +183,25 @@ impl Cabin {
                         ui.add_space(8.0);
                         self.paint_loadout_titlebar_pills(ui);
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let hide = crate::tray::should_hide_on_close(
-                            self.cfg.close_to_tray,
-                            self.tray.is_some(),
-                        ) && !self.want_quit;
-                        if titlebar_chrome_hit(
-                            &titlebar_chrome_btn(ui, ChromeBtn::Close).on_hover_text(
-                                crate::titlebar::titlebar_chrome_tip(ChromeBtn::Close, hide),
-                            ),
-                        ) {
-                            if hide {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                                self.hide_to_tray(&ctx);
-                            } else {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                        }
-                        let max_kind = if self.win_max {
-                            ChromeBtn::Restore
-                        } else {
-                            ChromeBtn::Maximize
-                        };
-                        if titlebar_chrome_hit(
-                            &titlebar_chrome_btn(ui, max_kind).on_hover_text(
-                                crate::titlebar::titlebar_chrome_tip(max_kind, false),
-                            ),
-                        ) {
-                            self.toggle_maximize(&ctx);
-                        }
-                        if titlebar_chrome_hit(
-                            &titlebar_chrome_btn(ui, ChromeBtn::Minimize).on_hover_text(
-                                crate::titlebar::titlebar_chrome_tip(ChromeBtn::Minimize, false),
-                            ),
-                        ) {
-                            self.resume_fresh = true;
-                            self.saw_minimized = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        }
-                        // RTL: allocated after minimize, so it sits immediately to its left.
-                        let _ = self.paint_session_actions_menu(ui);
-                        // Activity Dock left of the session menu (every view).
-                        self.ui_activity_dock(ui);
-                        if !loadout {
-                            self.paint_personality_switch(ui);
-                        }
-                        let (_rect, drag) = ui.allocate_exact_size(
-                            ui.available_size(),
-                            egui::Sense::click_and_drag(),
-                        );
-                        if titlebar_should_start_drag(drag.drag_started()) {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                        }
-                        if drag.double_clicked() {
-                            self.toggle_maximize(&ctx);
-                        }
-                    });
-                });
+                }
+                // The bare bar between the two moves the window.
+                let left_right = left.min_rect().right().min(chrome_left);
+                #[cfg(test)]
+                TITLEBAR_FIT.with(|f| f.set(Some((bar.width(), chrome_left, left_right))));
+                let drag = ui.interact(
+                    egui::Rect::from_min_max(
+                        egui::pos2(left_right, bar.top()),
+                        egui::pos2(chrome_left, bar.bottom()),
+                    ),
+                    ui.id().with("titlebar-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if titlebar_should_start_drag(drag.drag_started()) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if drag.double_clicked() {
+                    self.toggle_maximize(&ctx);
+                }
                 let hair = ui.max_rect();
                 ui.painter().hline(
                     hair.x_range(),
@@ -192,6 +231,7 @@ impl Cabin {
         let name = self.titlebar_personality_label();
         let week = super::privacy_page::ledger_week(ui.ctx(), now_ms());
         let sent = crate::theme::titlebar_sent_label(week.total());
+        let font = crate::theme::loadout_font(11.0);
         for (i, (label, red_ring)) in [
             (format!("PERSONALITY · {}", name.to_ascii_uppercase()), true),
             (sent, false),
@@ -199,6 +239,16 @@ impl Cabin {
         .into_iter()
         .enumerate()
         {
+            // A pill that would run under the window controls is left out;
+            // the window has no room for it, and a clipped pill reads as a bug.
+            let gap = if i > 0 { TITLEBAR_PILL_GAP } else { 0.0 };
+            let text_w = ui
+                .fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), crate::theme::steel()))
+                .size()
+                .x;
+            if gap + text_w + TITLEBAR_PILL_PAD_W > ui.available_width() {
+                break;
+            }
             if i > 0 {
                 ui.add_space(TITLEBAR_PILL_GAP);
             }
@@ -216,7 +266,7 @@ impl Cabin {
                     ui.add(
                         egui::Label::new(
                             RichText::new(label)
-                                .font(crate::theme::loadout_font(11.0))
+                                .font(font.clone())
                                 .color(crate::theme::steel()),
                         )
                         .selectable(false),
@@ -517,7 +567,7 @@ impl Cabin {
                 ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
-                let cur = self.nav_id();
+                let cur = self.rail_active_id();
                 for (id, label) in crate::theme::LOADOUT_NAV {
                     let active = cur == *id;
                     let resp =
@@ -547,6 +597,16 @@ impl Cabin {
             Nav::Chat
         } else {
             self.settings_back
+        }
+    }
+
+    /// The rail row lit now: the gear while Settings covers a page (the
+    /// page under it is not where the user is), else the page.
+    pub(super) fn rail_active_id(&self) -> &'static str {
+        if self.nav == Nav::Settings && !self.settings_menu_open {
+            "settings"
+        } else {
+            self.nav_id()
         }
     }
 

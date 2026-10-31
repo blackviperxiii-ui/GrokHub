@@ -154,6 +154,7 @@ mod budget_ui;
 mod canary_ui;
 mod change_history_ui;
 mod change_undo;
+mod chat_paint;
 mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
@@ -190,6 +191,8 @@ mod interests_ui;
 mod jobs;
 mod journal_ui;
 mod knowme_ui;
+mod lan_host;
+mod ledger_store;
 mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
@@ -257,6 +260,7 @@ mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
 use background::BgWork;
+use chat_paint::*;
 use chat_ui::*;
 
 use confirm::*;
@@ -264,6 +268,7 @@ use confirm::*;
 use feed_ui::*;
 use glance::*;
 use imagine::*;
+use lan_host::*;
 use oauth::*;
 use persist::*;
 use persist_service::*;
@@ -605,6 +610,13 @@ pub struct Cabin {
     focus: focus_ui::FocusState,
     pc_health: pc_health_ui::PcHealthState,
     print_alerts: print_alerts_ui::PrintAlertsState,
+    /// When each ledger ticker last ran, so a frame before its cadence
+    /// reads no file.
+    ticks: ledger_store::TickGate,
+    /// The nudge watchers' folder and device reads, on their worker.
+    nudge_probe: Option<std::sync::mpsc::Receiver<nudge_watchers_ui::NudgeFsSnap>>,
+    /// The week recap's share PNG being encoded and written off-thread.
+    week_recap_share: Option<std::thread::JoinHandle<()>>,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -1239,6 +1251,9 @@ impl Cabin {
             window_focused: true,
             focus: Default::default(),
             pc_health: Default::default(),
+            ticks: Default::default(),
+            nudge_probe: None,
+            week_recap_share: None,
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
@@ -1716,6 +1731,9 @@ impl Cabin {
             window_focused: true,
             focus: Default::default(),
             pc_health: Default::default(),
+            ticks: Default::default(),
+            nudge_probe: None,
+            week_recap_share: None,
             print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
@@ -5597,249 +5615,6 @@ impl Cabin {
     }
 }
 
-fn paint_running(ui: &mut egui::Ui, label: &str, hint: &str) {
-    crate::cards::paint_run_pulse(ui, label, hint)
-}
-
-/// `Grep · 3 matches…` while it runs. The header says what the call touched,
-/// not just its tool name.
-fn tool_header_text(label: &str, running: bool) -> String {
-    if running {
-        format!("{label}…")
-    } else {
-        label.to_string()
-    }
-}
-fn tool_header_color(failed: bool) -> Color32 {
-    if failed {
-        crate::cards::chip_tone_color(crate::cards::ChipTone::Offline)
-    } else {
-        crate::theme::muted()
-    }
-}
-
-fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
-    let label = tool_group_label([(
-        card.title.as_str(),
-        card.status.as_str(),
-        card.detail.as_str(),
-    )]);
-    egui::CollapsingHeader::new(
-        RichText::new(tool_header_text(&label, tool_status_running(&card.status)))
-            .size(crate::theme::FONT_META)
-            .color(tool_header_color(tool_status_failed(&card.status))),
-    )
-    .id_salt(("tool-card", card.id.as_str()))
-    .default_open(false)
-    .show(ui, |ui| {
-        paint_tool_card_body(ui, card);
-        harness_ui::paint_click_marker(ui, &[card]);
-    });
-}
-
-/// A run of back-to-back tool calls is one quiet row. Open it for each call.
-fn paint_tool_group(ui: &mut egui::Ui, cards: &[std::borrow::Cow<'_, ToolCard>]) {
-    let [first, ..] = cards else {
-        return;
-    };
-    if cards.len() == 1 {
-        paint_one_tool_card(ui, first);
-        return;
-    }
-    let label = tool_group_label(
-        cards
-            .iter()
-            .map(|c| (c.title.as_str(), c.status.as_str(), c.detail.as_str())),
-    );
-    let running = cards.iter().any(|c| tool_status_running(&c.status));
-    let failed = cards.iter().any(|c| tool_status_failed(&c.status));
-    egui::CollapsingHeader::new(
-        RichText::new(tool_header_text(&label, running))
-            .size(crate::theme::FONT_META)
-            .color(tool_header_color(failed)),
-    )
-    .id_salt(("tool-group", first.id.as_str()))
-    .default_open(false)
-    .show(ui, |ui| {
-        for card in cards {
-            paint_tool_card_body(ui, card);
-            ui.add_space(4.0);
-        }
-        let refs: Vec<&ToolCard> = cards.iter().map(|c| c.as_ref()).collect();
-        harness_ui::paint_click_marker(ui, &refs);
-    });
-}
-
-/// Stored tool rows of a finished turn: one line each, a failure marked.
-fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
-    for row in rows {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(tool_display_title(&row.title))
-                    .size(12.0)
-                    .color(crate::theme::fg()),
-            );
-            if tool_status_failed(&row.status) {
-                ui.label(
-                    RichText::new(row.status.trim())
-                        .size(12.0)
-                        .color(tool_header_color(true)),
-                );
-            }
-        });
-        if !crate::cards::paint_native_media_card(ui, &row.title, &row.detail) {
-            let detail = row.detail.trim();
-            if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
-                ui.label(
-                    RichText::new(detail.chars().take(160).collect::<String>())
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
-            }
-        }
-        ui.add_space(4.0);
-    }
-}
-
-fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
-    egui::Frame::NONE
-        .fill(egui::Color32::TRANSPARENT)
-        .corner_radius(crate::theme::CHROME_RADIUS)
-        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(8))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(&card.title)
-                        .size(13.0)
-                        .color(crate::theme::fg()),
-                );
-                crate::cards::status_chip(
-                    ui,
-                    &card.status,
-                    if card.status == "failed" {
-                        crate::cards::ChipTone::Offline
-                    } else if card.is_computer_use() {
-                        crate::cards::ChipTone::Live
-                    } else {
-                        crate::cards::ChipTone::Mute
-                    },
-                );
-            });
-            let painted = crate::cards::paint_native_media_card(ui, &card.title, &card.detail);
-            if !painted
-                && !card.diff.is_empty()
-                && !card.diff.trim().starts_with('{')
-                && !card.diff.trim().starts_with('[')
-            {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(card.diff.chars().take(800).collect::<String>())
-                        .size(12.0)
-                        .monospace()
-                        .color(crate::theme::muted()),
-                );
-            } else if !painted
-                && !card.detail.is_empty()
-                && !card.detail.trim().starts_with('{')
-                && !card.detail.trim().starts_with('[')
-                && !grokhub_core::tool_detail_is_status(&card.detail)
-            {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(card.detail.chars().take(120).collect::<String>())
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
-            }
-            if let Some(url) = card.image_data_url.as_deref() {
-                if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
-                    let max_w = ui.available_width().min(360.0);
-                    let shown = crate::cards::framed_preview(ui, &tex, size, max_w);
-                    harness_ui::remember_work_frame(ui, &card.id, shown, size);
-                }
-            }
-        });
-}
-
-fn eyes_frame_tex(ctx: &egui::Context, url: &str) -> Option<(TextureHandle, [usize; 2])> {
-    if url.len() > FRAME_CAP {
-        return None;
-    }
-    let key: String = url.chars().take(48).collect();
-    let id = egui::Id::new(("eyes-frame", url.len(), key.as_str()));
-    if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
-        return Some(hit);
-    }
-    let cache_key = format!("{}:{key}", url.len());
-    if let Some(img) = take_eyes_rgba(&cache_key) {
-        let size = [img.width() as usize, img.height() as usize];
-        let tex = ctx.load_texture(
-            "eyes-last-frame",
-            ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
-            TextureOptions::LINEAR,
-        );
-        let hit = (tex, size);
-        ctx.data_mut(|d| d.insert_temp(id, hit.clone()));
-        return Some(hit);
-    }
-    kick_eyes_tex(ctx.clone(), cache_key, url.to_string());
-    None
-}
-
-struct EyesTexGate {
-    inflight: HashSet<String>,
-    ready: HashMap<String, image::RgbaImage>,
-}
-
-fn eyes_tex_gate() -> &'static Mutex<EyesTexGate> {
-    static G: OnceLock<Mutex<EyesTexGate>> = OnceLock::new();
-    G.get_or_init(|| {
-        Mutex::new(EyesTexGate {
-            inflight: HashSet::new(),
-            ready: HashMap::new(),
-        })
-    })
-}
-
-fn take_eyes_rgba(key: &str) -> Option<image::RgbaImage> {
-    let mut g = eyes_tex_gate().lock().ok()?;
-    g.ready.remove(key)
-}
-
-fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
-    {
-        let Ok(mut g) = eyes_tex_gate().lock() else {
-            return;
-        };
-        if g.ready.contains_key(&key) || !g.inflight.insert(key.clone()) {
-            return;
-        }
-    }
-    std::thread::spawn(move || {
-        let frame = PresenceFrame {
-            data_url: url,
-            at: 0,
-        };
-        let decoded = frame_bytes(&frame).and_then(|(_, buf)| {
-            if (buf.len() as u64) > IMAGE_FILE_CAP {
-                return None;
-            }
-            if !crate::desktop::image_pixels_ok_for_bytes(&buf) {
-                return None;
-            }
-            image::load_from_memory(&buf).ok().map(|img| img.to_rgba8())
-        });
-        if let Ok(mut g) = eyes_tex_gate().lock() {
-            g.inflight.remove(&key);
-            if let Some(img) = decoded {
-                g.ready.insert(key, img);
-            }
-        }
-        ctx.request_repaint();
-    });
-}
-
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
 }
@@ -5856,106 +5631,6 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     state.store(ui.ctx(), id);
 }
 
-struct LanHostCache {
-    at: Instant,
-    out: String,
-    inflight: bool,
-}
-
-static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
 const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
-
-fn hostname_i() -> String {
-    if let Ok(g) = LAN_HOST.lock() {
-        if let Some(c) = g.as_ref() {
-            let hit = c.out.clone();
-            let fresh = c.at.elapsed().as_secs() < 30;
-            let busy = c.inflight;
-            drop(g);
-            if !fresh && !busy {
-                kick_hostname();
-            }
-            return hit;
-        }
-    }
-    let out = hostname_i_now();
-    if let Ok(mut g) = LAN_HOST.lock() {
-        *g = Some(LanHostCache {
-            at: Instant::now(),
-            out: out.clone(),
-            inflight: false,
-        });
-    }
-    out
-}
-
-fn hostname_i_now() -> String {
-    let out = lan_candidates_now();
-    let addrs = parse_hostname_i(&out);
-    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
-    if pick_lan_ipv4(&refs).is_some() {
-        return out;
-    }
-    // No candidate (macOS has no `hostname -I`): the address outbound traffic leaves from.
-    routed_ipv4().unwrap_or(out)
-}
-
-/// Space-separated local IPv4 addresses, in `hostname -I`'s format.
-#[cfg(not(windows))]
-fn lan_candidates_now() -> String {
-    let mut cmd = std::process::Command::new("hostname");
-    cmd.arg("-I");
-    crate::desktop::run_limited(cmd, Duration::from_millis(400))
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
-}
-
-/// Windows has no `hostname -I` (its `hostname` treats `-I` as an error), so read the
-/// adapters directly instead of spawning a process that always fails.
-#[cfg(windows)]
-fn lan_candidates_now() -> String {
-    let ips: Vec<String> = crate::win_native::adapter_ipv4s()
-        .iter()
-        .map(|ip| ip.to_string())
-        .collect();
-    ips.join(" ")
-}
-
-/// The local address the OS would route outbound traffic from. A UDP connect sends nothing;
-/// 192.0.2.1 is TEST-NET-1 (RFC 5737).
-fn routed_ipv4() -> Option<String> {
-    let sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    sock.connect(("192.0.2.1", 9)).ok()?;
-    Some(sock.local_addr().ok()?.ip().to_string())
-}
-
-fn kick_hostname() {
-    if let Ok(mut g) = LAN_HOST.lock() {
-        if let Some(c) = g.as_mut() {
-            if c.inflight {
-                return;
-            }
-            c.inflight = true;
-        }
-    }
-    std::thread::spawn(|| {
-        let out = hostname_i_now();
-        if let Ok(mut g) = LAN_HOST.lock() {
-            *g = Some(LanHostCache {
-                at: Instant::now(),
-                out,
-                inflight: false,
-            });
-        }
-    });
-}
-
-fn discover_hub_pair_url(port: u16) -> String {
-    let out = hostname_i();
-    let addrs = parse_hostname_i(&out);
-    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
-    hub_pair_url(port, pick_lan_ipv4(&refs).as_deref())
-}

@@ -2,7 +2,6 @@
 //! when card 16.1 / local_governor game detection says a game is up, then
 //! posts one Pulse summary. Never changes fans, clocks, or drivers.
 
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -19,31 +18,17 @@ use grokhub_core::pc_health::{
 use grokhub_core::pc_health::{game_running, nvidia_max_util, parse_nvidia_sensor_csv};
 
 use super::*;
-use crate::config;
 
 /// A sensor or process-list command that hasn't answered by now is killed,
 /// and that sample counts as no reading.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn ledger_path() -> PathBuf {
-    config::config_dir().join(ph::LEDGER_FILE)
-}
-
 fn load_ledger() -> PcHealthLedger {
-    std::fs::read_to_string(ledger_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    super::ledger_store::load_ledger(ph::LEDGER_FILE)
 }
 
 fn save_ledger(ledger: &PcHealthLedger) {
-    if let Ok(text) = serde_json::to_string_pretty(ledger) {
-        let path = ledger_path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, text);
-    }
+    super::ledger_store::save_ledger(ph::LEDGER_FILE, ledger);
 }
 
 #[derive(Default)]

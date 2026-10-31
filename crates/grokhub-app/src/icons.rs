@@ -128,7 +128,6 @@ pub enum RailIcon {
     Imagine,
     Clock,
     History,
-    #[allow(dead_code)]
     Grid,
     Folder,
     Chat,

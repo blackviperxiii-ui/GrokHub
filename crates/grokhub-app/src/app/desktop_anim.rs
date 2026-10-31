@@ -117,33 +117,78 @@ pub fn blink_gap(i: u32) -> f64 {
     BLINK_MIN_SECS + (BLINK_MAX_SECS - BLINK_MIN_SECS) * frac
 }
 
-/// When the blink that is current or next at time `t` starts.
+/// When the blink that is current or next at time `t` starts, walked from
+/// the first blink: the reference the [`BlinkCursor`] tests check against.
+#[cfg(test)]
 pub fn blink_start(t: f64) -> f64 {
-    let mut start = blink_gap(0);
-    let mut i = 1;
-    while start + BLINK_SECS <= t {
-        start += blink_gap(i);
-        i += 1;
-    }
-    start
+    let mut cursor = BlinkCursor::default();
+    cursor.start_at(t)
 }
 
-/// Whether the eyes are closed at `t`. Still: never.
-pub fn blink_closed(t: f64, still: bool) -> bool {
-    if still {
-        return false;
-    }
-    let start = blink_start(t);
-    t >= start && t < start + BLINK_SECS
+/// The blink that was current or next the last time the companion was
+/// painted: its index and start. A frame steps it forward from there, so
+/// after hours up it costs one gap per blink that passed, not one per
+/// blink since launch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlinkCursor {
+    index: u32,
+    start: f64,
+    /// When the blink before `index` ended; a `t` before it rewinds.
+    floor: f64,
 }
 
-/// Seconds until the eyes next change, for the repaint schedule.
-pub fn blink_next_change(t: f64) -> f64 {
-    let start = blink_start(t);
-    if t < start {
-        start - t
-    } else {
-        start + BLINK_SECS - t
+impl Default for BlinkCursor {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            start: blink_gap(0),
+            floor: 0.0,
+        }
+    }
+}
+
+impl BlinkCursor {
+    /// When the blink that is current or next at `t` starts, stepping from
+    /// the cached blink with [`blink_gap`].
+    pub fn start_at(&mut self, t: f64) -> f64 {
+        self.start_at_with(t, blink_gap)
+    }
+
+    /// [`Self::start_at`] with the gap table injected, so a test can count
+    /// how many gaps one frame asks for.
+    pub fn start_at_with(&mut self, t: f64, gap: impl Fn(u32) -> f64) -> f64 {
+        if t < self.floor {
+            *self = Self {
+                index: 0,
+                start: gap(0),
+                floor: 0.0,
+            };
+        }
+        while self.start + BLINK_SECS <= t {
+            self.floor = self.start + BLINK_SECS;
+            self.index += 1;
+            self.start += gap(self.index);
+        }
+        self.start
+    }
+
+    /// Whether the eyes are closed at `t`. Still: never.
+    pub fn closed(&mut self, t: f64, still: bool) -> bool {
+        if still {
+            return false;
+        }
+        let start = self.start_at(t);
+        t >= start && t < start + BLINK_SECS
+    }
+
+    /// Seconds until the eyes next change, for the repaint schedule.
+    pub fn next_change(&mut self, t: f64) -> f64 {
+        let start = self.start_at(t);
+        if t < start {
+            start - t
+        } else {
+            start + BLINK_SECS - t
+        }
     }
 }
 
@@ -249,18 +294,57 @@ mod tests {
         assert_ne!(blink_gap(0), blink_gap(1), "not a metronome");
         let first = blink_start(0.0);
         assert_eq!(first, blink_gap(0));
-        assert!(!blink_closed(first - 0.01, false));
-        assert!(blink_closed(first, false));
-        assert!(blink_closed(first + 0.11, false));
-        assert!(!blink_closed(first + 0.13, false));
-        assert!(!blink_closed(first, true), "still: eyes stay open");
+        let mut eyes = BlinkCursor::default();
+        assert!(!eyes.closed(first - 0.01, false));
+        assert!(eyes.closed(first, false));
+        assert!(eyes.closed(first + 0.11, false));
+        assert!(!eyes.closed(first + 0.13, false));
+        assert!(!eyes.closed(first, true), "still: eyes stay open");
         let second = blink_start(first + 0.2);
         assert!((second - (first + blink_gap(1))).abs() < 1e-9);
-        assert!((blink_next_change(0.0) - first).abs() < 1e-9);
-        assert!((blink_next_change(first + 0.05) - 0.07).abs() < 1e-9);
+        assert!((eyes.next_change(0.0) - first).abs() < 1e-9);
+        assert!((eyes.next_change(first + 0.05) - 0.07).abs() < 1e-9);
         // A long session still answers quickly and stays in step.
         let late = blink_start(3600.0);
         assert!((3600.0 - BLINK_SECS..3600.0 + BLINK_MAX_SECS).contains(&late));
+    }
+
+    #[test]
+    fn a_frame_a_week_in_steps_the_cursor_instead_of_walking_every_blink() {
+        use std::cell::Cell;
+        let week = 7.0 * 24.0 * 3600.0;
+        let gaps = Cell::new(0u32);
+        let counted = |i: u32| {
+            gaps.set(gaps.get() + 1);
+            blink_gap(i)
+        };
+        let mut cursor = BlinkCursor::default();
+        assert_eq!(cursor.start_at_with(week, counted), blink_start(week));
+        // Warming up walks the week once (about 121k blinks at 5 s each).
+        let warm = gaps.get();
+        assert!((100_000..150_000).contains(&warm), "{warm}");
+        // The next frame, 16 ms on, asks for no gap at all.
+        gaps.set(0);
+        assert_eq!(
+            cursor.start_at_with(week + 0.016, counted),
+            blink_start(week + 0.016)
+        );
+        assert_eq!(gaps.get(), 0);
+        // A frame a minute later asks for one gap per blink that passed.
+        gaps.set(0);
+        assert_eq!(
+            cursor.start_at_with(week + 60.0, counted),
+            blink_start(week + 60.0)
+        );
+        assert!((8..=20).contains(&gaps.get()), "{}", gaps.get());
+        let start = blink_start(week + 60.0);
+        assert_eq!(
+            cursor.closed(week + 60.0, false),
+            (start..start + BLINK_SECS).contains(&(week + 60.0))
+        );
+        assert!(cursor.next_change(week + 60.0) > 0.0);
+        // Time running backwards (a clock reset) rewinds to the first blink.
+        assert_eq!(cursor.start_at(0.0), blink_gap(0));
     }
 
     #[test]

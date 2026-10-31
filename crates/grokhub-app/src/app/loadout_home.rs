@@ -1136,7 +1136,7 @@ impl Cabin {
             // must not shoot Chat in place of the page, so undo it and say so.
             // `profile` opens the menu over the current page, which may be Chat.
             if self.nav == Nav::Chat && !matches!(id.as_str(), "chat" | "eyes" | "profile") {
-                eprintln!("GROKHUB_DECK_NAV: unknown page `{id}`, ignored");
+                self.status = format!("GROKHUB_DECK_NAV: unknown page `{id}`, ignored");
                 self.nav = before;
             } else {
                 self.activity.open = false;

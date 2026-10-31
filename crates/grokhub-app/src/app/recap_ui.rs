@@ -4,11 +4,49 @@
 //! with a mark, then what needs the person, where to undo, and a Show details
 //! fold with the turn's tool steps. Plain chat replies never get a card.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
 use eframe::egui::{self, RichText};
 use grokhub_core::findings::DO_ALL;
 use grokhub_core::recap::{split_recap, Recap, RecapStatus};
 use grokhub_core::turn_timeline::{decode_tool_rows, tool_status_failed, ToolRow};
 use grokhub_core::{ChatKind, ChatView};
+
+/// One reply's recap split, keyed by thread, row and the reply's text.
+type RecapKey = (String, usize, u64);
+type RecapHit = Option<(ChatView, Recap, Vec<ToolRow>)>;
+thread_local! {
+    static RECAPS: std::cell::RefCell<HashMap<RecapKey, RecapHit>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+const RECAPS_CAP: usize = 256;
+
+/// [`recap_at`] for the painted transcript: the split and the decoded tool
+/// rows are kept per `(thread, row, reply text)`, since every painted reply
+/// asks every frame and the tool rows are JSON.
+pub(super) fn recap_at_cached(
+    thread_id: &str,
+    shown: &[ChatView],
+    i: usize,
+) -> Option<(ChatView, Recap, Vec<ToolRow>)> {
+    let block = shown.get(i).filter(|b| b.kind == ChatKind::Assistant)?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    block.body.hash(&mut h);
+    let key = (thread_id.to_string(), i, h.finish());
+    if let Some(hit) = RECAPS.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let out = recap_at(shown, i);
+    RECAPS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= RECAPS_CAP {
+            c.clear();
+        }
+        c.insert(key, out.clone());
+    });
+    out
+}
 
 /// For the assistant row `i`: the reply without its recap, the recap, and the
 /// tool steps of its turn, when the turn did work and the reply ends with one.

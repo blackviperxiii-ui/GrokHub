@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(grid_cols(332.0), 2);
         assert_eq!(grid_cols(1240.0), 6);
         assert_eq!(grid_cols(5000.0), 6);
-        assert_eq!(cover_style(10), cover_style(10));
+        assert_eq!(cover_style(10), (egui::Color32::from_rgb(34, 58, 120), 2));
         assert_eq!(cover_style(0).1, 0);
         assert_eq!(cover_style(5).1, 1);
         assert_ne!(cover_style(0).0, cover_style(4).0);

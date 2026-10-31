@@ -94,19 +94,34 @@ pub fn current() -> GameGuard {
 /// The last reading, without blocking. A stale one is refreshed on a worker
 /// thread for the next call. Clear until the first reading lands.
 pub fn peek() -> GameGuard {
-    let last = CACHE.cached();
+    peek_in(&CACHE, read)
+}
+
+/// Clears `refreshing` when the worker is done, however it ends: a reader
+/// that panics must not leave [`peek`] thinking a refresh is still on its
+/// way, or the guard would never update again.
+struct RefreshDone(&'static AtomicBool);
+
+impl Drop for RefreshDone {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// [`peek`] on `cache` with the readers in `read`.
+fn peek_in(cache: &'static Cache, read: fn() -> GameGuard) -> GameGuard {
+    let last = cache.cached();
     if last.is_none_or(|(at, _)| at.elapsed() >= FRESH)
-        && !CACHE.refreshing.swap(true, Ordering::SeqCst)
+        && !cache.refreshing.swap(true, Ordering::SeqCst)
     {
-        let spawned = std::thread::Builder::new()
+        let done = RefreshDone(&cache.refreshing);
+        // A thread that cannot start drops the closure, and `done` with it.
+        let _ = std::thread::Builder::new()
             .name("game-guard".into())
-            .spawn(|| {
-                CACHE.current(read);
-                CACHE.refreshing.store(false, Ordering::SeqCst);
+            .spawn(move || {
+                let _done = done;
+                cache.current(read);
             });
-        if spawned.is_err() {
-            CACHE.refreshing.store(false, Ordering::SeqCst);
-        }
     }
     last.map(|(_, g)| g).unwrap_or_default()
 }
@@ -488,6 +503,37 @@ mod tests {
         assert_eq!(first.join().unwrap(), FACEIT);
         assert_eq!(second.join().unwrap(), FACEIT);
         assert_eq!(SECOND_READS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_reader_that_panics_leaves_peek_able_to_refresh_again() {
+        static JAM: Cache = Cache::new();
+        fn boom() -> GameGuard {
+            panic!("the reader fell over");
+        }
+        fn calm() -> GameGuard {
+            FACEIT
+        }
+        let settled = || {
+            let until = Instant::now() + Duration::from_secs(5);
+            while JAM.refreshing.load(Ordering::SeqCst) {
+                assert!(Instant::now() < until, "the refresh flag never cleared");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        assert_eq!(
+            peek_in(&JAM, boom),
+            GameGuard::default(),
+            "nothing cached yet"
+        );
+        settled();
+        assert_eq!(JAM.cached(), None, "the panicked read stored nothing");
+        // The next stale peek starts a new worker instead of waiting on the
+        // one that died.
+        assert_eq!(peek_in(&JAM, calm), GameGuard::default());
+        settled();
+        assert_eq!(JAM.cached().map(|(_, g)| g), Some(FACEIT));
+        assert_eq!(peek_in(&JAM, boom), FACEIT, "fresh: no reader runs");
     }
 
     #[cfg(any(target_os = "linux", windows))]

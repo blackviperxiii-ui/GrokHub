@@ -169,7 +169,7 @@ pub fn titlebar_chrome_tip(kind: ChromeBtn, hide_on_close: bool) -> &'static str
 
 /// How far in from the window edge a resize grab reaches, and how long the
 /// corner grabs run along each side.
-const EDGE_GRIP: f32 = 5.0;
+pub const EDGE_GRIP: f32 = 5.0;
 const CORNER_GRIP: f32 = 12.0;
 
 /// The undecorated cabin has no OS frame to drag, so these strips along its

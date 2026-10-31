@@ -1,0 +1,7 @@
+- The desktop companion no longer costs more CPU the longer it stays up: each frame steps from the last blink instead of replaying every blink since launch, and on Windows the screen-capture exclusion stops retrying after thirty frames.
+- Pulse's empty state is one line ("Nothing on Pulse yet…"), not two.
+- At the window's narrowest width the minimize, maximize and close buttons stay on screen (a titlebar pill with no room is left out), and the Get Started card wraps inside the window.
+- The rail lights the gear while Settings is open, not the page under it.
+- Dock panels leave room at the right edge so their scroll bar is not under the window's resize grip.
+- Proactive tickers (nudge watchers, ask and screenshot offers, hobby paths, the week recap) keep their cadence in memory and read their ledger only when due; the nudge watchers' folder and device reads and the week recap's share PNG run on worker threads. Those ledgers now load through the same size-capped, quarantining reader as the other stores.
+- A game-guard reader that panics no longer stops the guard from refreshing.

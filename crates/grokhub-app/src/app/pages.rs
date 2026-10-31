@@ -720,7 +720,9 @@ impl Cabin {
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::same(24))
                         .show(ui, |ui| {
-                            ui.set_max_width(520.0);
+                            // Never wider than the window: a 420 px cabin wraps
+                            // the card's text instead of spilling past its edge.
+                            ui.set_max_width(520.0_f32.min(ui.available_width()));
                             if crate::cards::get_started_panel(
                                 ui,
                                 pending.as_deref(),

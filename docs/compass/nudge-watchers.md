@@ -11,7 +11,7 @@
 ## Key files
 - `crates/grokhub-core/src/nudge_watchers.rs`: detect, cooldown, daily cap, card shape.
 - `crates/grokhub-core/src/know_me.rs`: optional tag load.
-- `crates/grokhub-app/src/app/nudge_watchers_ui.rs`: `tick_nudge_watchers`, Settings UI.
+- `crates/grokhub-app/src/app/nudge_watchers_ui.rs`: `tick_nudge_watchers` (folder and device reads on a worker: `fs_snapshot`, then `finish_nudge_tick`), Settings UI.
 - `crates/grokhub-app/src/config.rs`: `nudge_watchers` in `app.json`.
 
 ## Change recipe

@@ -26,6 +26,7 @@
 ## Non-obvious
 - Game-up uses `game_in_processes` plus GPU util ≥ `GPU_BUSY_GAME_PCT` (same idea as the local governor).
 - Sessions under `MIN_SESSION_MS` never post; sample cadence is `SAMPLE_EVERY_MS`.
+- The ledger loads and saves through `crates/grokhub-app/src/app/ledger_store.rs` (`load_json` cap and quarantine), like the other ticker ledgers.
 
 ## See also
 - [nudge-watchers](nudge-watchers.md), [grokhub-core](grokhub-core.md)

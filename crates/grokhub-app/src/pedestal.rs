@@ -343,19 +343,45 @@ mod tests {
         );
     }
 
+    /// Shapes one pedestal paint adds in a 320×480 box (shadow, cone mesh
+    /// and scanlines, disc, rims, rings), the same held still, and in a 2 px
+    /// box with no room for the light cone and its scanlines.
+    const PEDESTAL_SHAPES_MOVING: usize = 72;
+    const PEDESTAL_SHAPES_STILL: usize = 72;
+    const PEDESTAL_SHAPES_TINY: usize = 43;
+
     #[test]
-    fn painting_adds_shapes_without_panicking() {
+    fn painting_adds_the_pedestal_shapes() {
         egui::__run_test_ui(|ui| {
+            let layer = ui.layer_id();
+            let shapes = |ui: &egui::Ui| {
+                ui.ctx()
+                    .graphics(|g| g.get(layer).map_or(0, |l| l.all_entries().len()))
+            };
             let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 480.0));
             let c = colors_from(Color32::from_rgb(0xff, 0xb0, 0x20));
+            assert_eq!(shapes(ui), 0);
             paint(ui.painter(), rect, 3.3, false, &c);
+            let moving = shapes(ui);
+            assert_eq!(moving, PEDESTAL_SHAPES_MOVING);
             paint(ui.painter(), rect, 3.3, true, &c);
+            assert_eq!(
+                shapes(ui) - moving,
+                PEDESTAL_SHAPES_STILL,
+                "still: same shapes, no drift"
+            );
+            let before = shapes(ui);
             paint(
                 ui.painter(),
                 Rect::from_min_size(Pos2::ZERO, Vec2::splat(2.0)),
                 0.0,
                 false,
                 &c,
+            );
+            assert_eq!(
+                shapes(ui) - before,
+                PEDESTAL_SHAPES_TINY,
+                "no cone in a 2 px box"
             );
         });
     }
