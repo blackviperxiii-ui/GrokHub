@@ -65,7 +65,7 @@ jobs:
           name: deck-shots
           path: target/deck-shots/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
       - name: Web search shots
         if: inputs.web_search
         continue-on-error: true
@@ -79,4 +79,4 @@ jobs:
           name: web-search-shots
           path: target/web-search-shots/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
