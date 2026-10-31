@@ -2029,8 +2029,6 @@ fn quiet_cabin() -> Cabin {
         tray: None,
         tray_rx: None,
         window_visible: true,
-        resume_fresh: false,
-        saw_minimized: false,
         ideas_filled: false,
         ideas_rx: None,
         tray_saw_unfocused: false,
