@@ -1,0 +1,1 @@
+- Home: Loadout comes back on Home when you restore it from the tray; un-minimizing or refocusing the window keeps the page you were on instead of jumping to a new chat.

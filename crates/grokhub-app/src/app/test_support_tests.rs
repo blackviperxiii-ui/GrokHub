@@ -193,6 +193,14 @@ pub(super) fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
     panic!("{label}");
 }
 
+/// Poll background file writes until each has reported to the status line.
+pub(super) fn wait_file_writes(cabin: &mut Cabin) {
+    wait_until("background file writes must report", || {
+        cabin.poll_file_writes();
+        cabin.file_writes.is_empty()
+    });
+}
+
 /// Alias kept for existing call sites.
 pub(super) fn wait_for(label: &str, ready: impl FnMut() -> bool) {
     wait_until(label, ready);

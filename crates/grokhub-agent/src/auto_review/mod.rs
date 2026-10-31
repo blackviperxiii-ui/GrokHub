@@ -532,7 +532,7 @@ fn history_item_fenced(item: &InputItem) -> bool {
             ContentPart::InputImage(_) => false,
         }),
         InputItem::FunctionCallOutput { output, .. } => crate::tools::fence::looks_fenced(output),
-        InputItem::FunctionCall { .. } => false,
+        InputItem::FunctionCall { .. } | InputItem::ServerCompaction { .. } => false,
     }
 }
 

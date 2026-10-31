@@ -155,6 +155,7 @@ impl Cabin {
                     started,
                     usage,
                     error,
+                    ..
                 } => {
                     if self.stream_here() {
                         self.apply_compact_status(started, usage, error);
