@@ -5,8 +5,8 @@ use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
 use super::paint::{
-    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
-    usage_text, Tone,
+    connection_text, game_mode_text, gpu_temp_text, speeds_text, storage_rows, storage_text,
+    updates_text, usage_text, Tone,
 };
 use crate::app::budget_ui::WeekSpend;
 use grokhub_agent::indexers::system_state::DiskUse;
@@ -224,4 +224,39 @@ fn updates_tile_names_what_is_waiting() {
         updates_text(false, &windows, None).caption,
         "Loadout and Steam checked"
     );
+}
+
+#[test]
+fn speeds_tile_reads_the_internet_log_and_sends_nothing_when_off() {
+    use crate::app::net_log_ui::{jitter_ms, NetTileFacts};
+    assert_eq!(jitter_ms(&[20, 30, 25, 25]), Some(5));
+    assert_eq!(jitter_ms(&[20]), None);
+    let off = NetTileFacts {
+        on: false,
+        down: false,
+        ping_ms: None,
+        jitter_ms: None,
+        last_speed: None,
+        testing: false,
+        note: String::new(),
+    };
+    let t = speeds_text(&off, 0);
+    assert_eq!((t.big.as_str(), t.tone), ("Off", Tone::Quiet));
+    let now = 10 * 60_000;
+    let on = NetTileFacts {
+        on: true,
+        ping_ms: Some(24),
+        jitter_ms: Some(3),
+        last_speed: Some((412.5, now - 3 * 60_000)),
+        ..off.clone()
+    };
+    let t = speeds_text(&on, now);
+    assert_eq!(t.big, "24 ms");
+    assert_eq!(t.caption, "Ping · jitter 3 ms");
+    assert_eq!(t.detail.as_deref(), Some("Down 412.5 Mbps · 3m ago"));
+    let down = NetTileFacts {
+        down: true,
+        ..on.clone()
+    };
+    assert_eq!(speeds_text(&down, now).tone, Tone::Alert);
 }
