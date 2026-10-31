@@ -146,7 +146,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             Err(grokhub_core::state::PairError::Phone) => send_json(
                 req,
                 403,
-                json!({ "ok": false, "error": "Phones can't pair with a GrokHub hub." }),
+                json!({
+                    "ok": false,
+                    "error": format!("Phones can't pair with a {} hub.", grokhub_core::brand::product_name()),
+                }),
             ),
         };
     }
@@ -597,6 +600,11 @@ mod tests {
         id: &str,
         name: &str,
     ) -> (u16, Option<String>) {
+        let (status, v) = pair_reply(state, port, id, name);
+        (status, v["token"].as_str().map(str::to_string))
+    }
+
+    fn pair_reply(state: &Arc<Mutex<HubState>>, port: u16, id: &str, name: &str) -> (u16, Value) {
         let code = lock(state).rotate_pair().code;
         let body = format!(r#"{{"code":"{code}","deviceId":"{id}","deviceName":"{name}"}}"#);
         let req = format!(
@@ -604,8 +612,7 @@ mod tests {
             body.len()
         );
         let (status, _, out) = http(port, &req);
-        let v: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
-        (status, v["token"].as_str().map(str::to_string))
+        (status, serde_json::from_slice(&out).unwrap_or(Value::Null))
     }
 
     fn claim(port: u16, token: &str) -> (u16, Value) {
@@ -639,6 +646,8 @@ mod tests {
             let (status, token) = pair_as(&state, port, "d-phone", name);
             assert_eq!((status, token), (403, None), "{name}");
         }
+        let (_, reply) = pair_reply(&state, port, "d-phone", "Pixel phone");
+        assert_eq!(reply["error"], "Phones can't pair with a Loadout hub.");
         assert!(
             state.lock().unwrap().peers.is_empty(),
             "no phone may be registered"

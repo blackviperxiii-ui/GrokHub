@@ -98,8 +98,13 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
 /// cabin's masked elicit card, as Spike-5b's `connection_add` does.
 pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
     let dir = crate::perm::config_dir();
-    let mut ask =
-        |msg: &str| crate::mcp::ask_secret("GrokHub", msg, crate::tools::connections::TOKEN_TITLE);
+    let mut ask = |msg: &str| {
+        crate::mcp::ask_secret(
+            grokhub_core::brand::product_name(),
+            msg,
+            crate::tools::connections::TOKEN_TITLE,
+        )
+    };
     run(&SelfCtx::new(&dir), name, args, &mut ask)
 }
 

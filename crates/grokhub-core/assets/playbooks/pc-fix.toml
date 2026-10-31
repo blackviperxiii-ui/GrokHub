@@ -1,4 +1,4 @@
-# GrokHub playbook: fix a computer. One family for Linux (Arch, Debian or
+# Loadout playbook: fix a computer. One family for Linux (Arch, Debian or
 # Ubuntu, Fedora; KDE Plasma or any desktop), Windows and macOS. A step with
 # `os` runs only there; the turn's prompt keeps only this computer's steps.
 #

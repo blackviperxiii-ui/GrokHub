@@ -649,8 +649,9 @@ impl Cabin {
         let home = grokhub_core::paths::user_home().unwrap_or_default();
         if !sr::is_recording_dir(&home, &dir) {
             self.status = format!(
-                "Not deleted: {} is not a GrokHub recording folder.",
-                dir.display()
+                "Not deleted: {} is not a {} recording folder.",
+                dir.display(),
+                grokhub_core::brand::product_name()
             );
             return;
         }
@@ -1144,12 +1145,14 @@ mod tests {
         cabin.delete_recording("x", &outside.display().to_string(), "Docs");
         assert!(
             outside.exists(),
-            "only a GrokHub recording folder can be deleted"
+            "only a Loadout recording folder can be deleted"
         );
-        assert!(
-            cabin.status.starts_with("Not deleted: "),
-            "{}",
-            cabin.status
+        assert_eq!(
+            cabin.status,
+            format!(
+                "Not deleted: {} is not a Loadout recording folder.",
+                outside.display()
+            )
         );
         unpin(home);
     }

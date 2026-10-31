@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(
             app.setup.installed,
             Some(installed),
-            "the model GrokHub runs is unchanged"
+            "the model Loadout runs is unchanged"
         );
         assert!(
             !app.cfg.local_model,

@@ -1443,6 +1443,11 @@ fn local_model_routing_lines_match_the_privacy_docs() {
             include_str!("../../../../packaging/windows/privacy.txt"),
         ),
     ] {
+        assert_eq!(
+            doc.matches("Loadout sends data only to the AI services and accounts the user configures, and only when the user asks.").count(),
+            1,
+            "{name} names the product"
+        );
         for line in lines {
             assert_eq!(
                 doc.matches(&format!("- {line}")).count(),

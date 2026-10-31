@@ -52,12 +52,13 @@ fn desktop_entry_for(exe: &Path, home: Option<&Path>) -> PathBuf {
 fn kwin_refused_message(exe: &Path, desktop: &Path) -> String {
     format!(
         "{CAPTURE_FAILED_HEAD} KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
-         Screenshot portal did not work either. GrokHub will not ask KWin again this session. \
+         Screenshot portal did not work either. {product} will not ask KWin again this session. \
          To fix it, make {desktop} contain the line \
          X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2 and an absolute Exec={exe}, \
-         run kbuildsycoca6, then restart GrokHub. Do not take another screenshot until then.",
+         run kbuildsycoca6, then restart {product}. Do not take another screenshot until then.",
         desktop = desktop.display(),
         exe = exe.display(),
+        product = grokhub_core::brand::product_name(),
     )
 }
 
@@ -556,10 +557,10 @@ mod tests {
         ]);
         let first = chain.capture("all", &[]).unwrap_err();
         let want = "Can't capture the screen: KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
-                    Screenshot portal did not work either. GrokHub will not ask KWin again this session. \
+                    Screenshot portal did not work either. Loadout will not ask KWin again this session. \
                     To fix it, make /usr/share/applications/grokhub.desktop contain the line \
                     X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2 and an absolute \
-                    Exec=/usr/bin/grokhub, run kbuildsycoca6, then restart GrokHub. Do not take \
+                    Exec=/usr/bin/grokhub, run kbuildsycoca6, then restart Loadout. Do not take \
                     another screenshot until then.";
         assert_eq!(first, want);
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();

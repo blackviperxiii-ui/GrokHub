@@ -1,10 +1,10 @@
-# GrokHub playbook: winding down. They are tired, stressed or venting.
+# Loadout playbook: winding down. They are tired, stressed or venting.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
 # replaces the shipped one; Reset puts the shipped one back.
 #
-# Every step here only talks. A playbook can never make GrokHub skip an
+# Every step here only talks. A playbook can never make Loadout skip an
 # approval.
 
 id = "wind-down"

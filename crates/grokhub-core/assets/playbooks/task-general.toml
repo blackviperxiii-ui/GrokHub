@@ -1,4 +1,4 @@
-# GrokHub playbook: slim fallback for tasks and repairs when no specialist fits.
+# Loadout playbook: slim fallback for tasks and repairs when no specialist fits.
 # Desktop and files keep their own playbooks; this one is the general catch-all.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
@@ -8,7 +8,7 @@
 # Phases go from read-only (look), to safe (reversible changes), to risky.
 # A step that runs a hard-class command (money, send, delete, credentials,
 # irreversible system actions) must be risky, and it still asks you first.
-# A playbook can never make GrokHub skip an approval.
+# A playbook can never make Loadout skip an approval.
 
 id = "task-general"
 name = "Any task"
