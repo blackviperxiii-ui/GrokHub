@@ -3,10 +3,7 @@
 use super::*;
 
 #[allow(unused_imports)]
-pub(super) use feed_ui::{
-    kit_daily_drop_badge, kit_pulse_feed_post, kit_pulse_ideas_row, paint_feed_empty_prompt,
-    paint_ideas_empty_prompt,
-};
+pub(super) use feed_ui::{kit_daily_drop_badge, kit_pulse_feed_post, kit_pulse_ideas_row};
 
 pub(super) fn should_paint_pulse(empty_chat: bool, scratch: bool, signed_in: bool) -> bool {
     empty_chat && !scratch && signed_in
@@ -38,7 +35,7 @@ mod tests {
     fn pulse_reexports_feed_kit_paint() {
         let pulse = include_str!("pulse.rs");
         assert!(
-            pulse.contains("kit_pulse_feed_post") && pulse.contains("paint_feed_empty_prompt"),
+            pulse.contains("kit_pulse_feed_post") && pulse.contains("kit_pulse_ideas_row"),
             "pulse.rs surfaces feed_ui kit helpers"
         );
     }

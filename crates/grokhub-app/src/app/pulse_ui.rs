@@ -1,6 +1,6 @@
-//! Pulse: one page, two views. Ideas are rows under category headers (an icon,
-//! a bold "I can …" line, a short description, a ··· menu). Feed is a column of
-//! posts (source, headline, summary, the source's own images, actions).
+//! Pulse: one page, one stream. Ideas are rows (an icon, a bold "I can …"
+//! line, a short description, a ··· menu) and feed posts (source, headline,
+//! summary, the source's own images, actions) sit in one column, interleaved.
 //! `grokhub_core::pulse` picks and orders cards by rules; a model only writes
 //! sentences. Every choice lands in MEMORY.md as one ledger line.
 
@@ -14,30 +14,16 @@ use grokhub_core::pulse::{
 use grokhub_core::{CardReaction, UpdateAction, UpdateCard, UpdateKind};
 
 const ICON: f32 = 32.0;
-/// The header's action slot: Feed instructions on Feed, Suggest ideas on
-/// Ideas when the list has rows or a suggestion is loading. An empty Ideas
-/// list already paints Suggest in the body, so the header slot stays blank.
-/// One width, so the Feed | Ideas switch never moves.
-pub(super) const HEADER_SLOT_W: f32 = 150.0;
 /// Keyboard focus: a 2px ring.
 pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90, 0xe2);
-/// The sign-in line under Suggest ideas.
+/// The sign-in line under the header.
 const NOTE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xb7, 0x40);
-const COL_MAX_W: f32 = 680.0;
 /// Left and right padding of the Pulse page.
 const PAGE_PAD_X: f32 = 24.0;
-/// Page widths where Pulse changes shape (deck slide 14, pulse-live.html):
-/// two columns from 1100, the 60/40 split from 1500, one column from 720,
-/// and the Feed | Ideas switch below that.
-const STACK_MIN_W: f32 = 720.0;
-const SPLIT_MIN_W: f32 = 1100.0;
-const WIDE_MIN_W: f32 = 1500.0;
-/// A column tiles its cards 2-up once two of these fit side by side.
-const IDEA_TILE_MIN_W: f32 = 560.0;
-const POST_TILE_MIN_W: f32 = 420.0;
-const STACKED_POST_MIN_W: f32 = 340.0;
-const IDEA_TILE_GAP: f32 = 10.0;
-const POST_TILE_GAP: f32 = 12.0;
+/// The stream never grows wider than this; wider pages center it.
+pub(super) const STREAM_MAX_W: f32 = 800.0;
+/// Pages narrower than this keep Run on each idea row at rest.
+const NARROW_W: f32 = 720.0;
 /// Posts narrower than this show two source images, not three.
 const POST_THREE_THUMBS_W: f32 = 560.0;
 const THUMB_H: f32 = 96.0;
@@ -48,63 +34,53 @@ const IMAGE_CAP: u64 = 4 * 1024 * 1024;
 /// Re-read the MEMORY.md ledger at most this often while the page is open.
 const LEDGER_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Feed is the main view and opens first; Ideas is second.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum PulseTab {
-    #[default]
-    Feed,
-    Ideas,
-}
-
-impl PulseTab {
-    /// Left to right in the header switch.
-    pub const ORDER: [PulseTab; 2] = [PulseTab::Feed, PulseTab::Ideas];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            PulseTab::Feed => "Feed",
-            PulseTab::Ideas => grokhub_core::pulse::FOR_YOU_LABEL,
-        }
-    }
-}
-
-/// Pulse's shape at a page width.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum PulseFit {
-    /// Ideas and Feed side by side.
-    Split,
-    /// One column: Ideas, then Feed below.
-    Stacked,
-    /// One view at a time behind the Feed | Ideas switch. Run stays on each
-    /// Ideas row; Snooze and Dismiss live in its ··· menu.
-    #[default]
-    Compact,
-}
-
-/// Column widths and tiling for one frame of the Pulse page.
+/// Pulse's one column at a page width (padding included).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PulseLayout {
-    pub fit: PulseFit,
-    pub ideas_w: f32,
-    pub feed_w: f32,
-    pub gap: f32,
-    pub ideas_cols: usize,
-    pub feed_cols: usize,
+pub(super) struct PulseColumn {
+    /// The stream's width: the page inside its padding, up to [`STREAM_MAX_W`].
+    pub width: f32,
+    /// Under 720: idea rows keep Run at rest.
+    pub narrow: bool,
 }
 
-fn tiles(width: f32, min: f32, gap: f32) -> usize {
-    if width >= 2.0 * min + gap {
-        2
-    } else {
-        1
+/// One centered column at every width.
+pub(super) fn pulse_column(page_w: f32) -> PulseColumn {
+    let inner = (page_w - PAGE_PAD_X * 2.0).max(0.0);
+    PulseColumn {
+        width: inner.min(STREAM_MAX_W),
+        narrow: page_w < NARROW_W,
     }
 }
 
-/// The line over the Feed, counted from the same posts the Feed paints. With
-/// posts showing it counts them, plus what a check is doing right now; a
-/// "nothing to check" note never sits over cards. With no posts, the empty
-/// state below says so, and only a live note shows here. `live` is whether a
-/// source check or summary is still running; a finished one's note is old news.
+/// One entry in the Pulse stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum StreamItem<I, P> {
+    Idea(I),
+    Post(P),
+}
+
+/// The Pulse stream: an idea, then two posts, then an idea, and so on. Ideas
+/// keep their rank order and posts stay newest first; whatever is left of
+/// either kind goes at the end in order.
+pub(super) fn pulse_stream<I, P>(
+    ideas: impl IntoIterator<Item = I>,
+    posts: impl IntoIterator<Item = P>,
+) -> Vec<StreamItem<I, P>> {
+    let mut ideas = ideas.into_iter().peekable();
+    let mut posts = posts.into_iter().peekable();
+    let mut out = Vec::new();
+    while ideas.peek().is_some() || posts.peek().is_some() {
+        out.extend(ideas.next().map(StreamItem::Idea));
+        out.extend(posts.by_ref().take(2).map(StreamItem::Post));
+    }
+    out
+}
+
+/// The source line under the Pulse header, counted from the same posts the
+/// stream paints. With posts showing it counts them, plus what a check is
+/// doing right now; a "nothing to check" note never sits over cards. With no
+/// posts, only a live note shows here. `live` is whether a source check or
+/// summary is still running; a finished one's note waits behind Details.
 pub(super) fn feed_header(note: &str, live: bool, shown: usize) -> Option<String> {
     let note = note.trim();
     let busy = live && !note.is_empty() && note != super::pulse_sources_ui::NOTHING_TO_CHECK;
@@ -122,72 +98,12 @@ pub(super) fn feed_header(note: &str, live: bool, shown: usize) -> Option<String
     })
 }
 
-/// [`layout_at`] for a column with no padding around it.
-#[cfg(test)]
-pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
-    layout_at(page_w, page_w)
-}
-
-/// Pulse inside its page: the breakpoints read the page beside the rail,
-/// padding included, as the deck's container queries do; the columns fill
-/// what's left inside the padding.
-pub(super) fn pulse_page_layout(page_w: f32) -> PulseLayout {
-    layout_at(page_w, page_w - PAGE_PAD_X * 2.0)
-}
-
-/// The fluid Pulse grid, like the reference CSS: Ideas 3fr and Feed 2fr when
-/// wide, 1.35fr and 1fr on laptops, one stacked column on small windows, and
-/// the switch below 720.
-fn layout_at(container_w: f32, content_w: f32) -> PulseLayout {
-    let fit_w = container_w.max(0.0);
-    let w = content_w.max(0.0);
-    let gap = (w * 0.013).clamp(16.0, 30.0);
-    if fit_w < STACK_MIN_W {
-        let col = w.min(COL_MAX_W);
-        return PulseLayout {
-            fit: PulseFit::Compact,
-            ideas_w: col,
-            feed_w: col,
-            gap,
-            ideas_cols: 1,
-            feed_cols: 1,
-        };
-    }
-    if fit_w < SPLIT_MIN_W {
-        return PulseLayout {
-            fit: PulseFit::Stacked,
-            ideas_w: w,
-            feed_w: w,
-            gap,
-            ideas_cols: 1,
-            feed_cols: tiles(w, STACKED_POST_MIN_W, POST_TILE_GAP),
-        };
-    }
-    let share = if fit_w >= WIDE_MIN_W {
-        0.6
+/// The header's Suggest control, and its label while a suggestion runs.
+pub(super) fn suggest_label(busy: bool) -> &'static str {
+    if busy {
+        "Suggesting…"
     } else {
-        1.35 / 2.35
-    };
-    let inner = w - gap;
-    let ideas_w = inner * share;
-    let feed_w = inner - ideas_w;
-    PulseLayout {
-        fit: PulseFit::Split,
-        ideas_w,
-        feed_w,
-        gap,
-        ideas_cols: tiles(ideas_w, IDEA_TILE_MIN_W, IDEA_TILE_GAP),
-        feed_cols: tiles(feed_w, POST_TILE_MIN_W, POST_TILE_GAP),
-    }
-}
-
-/// The header's Suggest control. The one-column page (720-1100) shortens it
-/// to "Suggest", as on deck slide 14.
-pub(super) fn suggest_label(busy: bool, fit: PulseFit) -> &'static str {
-    match (busy, fit) {
-        (true, _) => "Suggesting…",
-        (false, PulseFit::Stacked) => "Suggest",
-        (false, _) => "Suggest for you",
+        "Suggest for you"
     }
 }
 
@@ -203,13 +119,10 @@ pub(super) fn post_thumb_count(post_w: f32) -> usize {
 /// What the Pulse page keeps between frames.
 #[derive(Default)]
 pub(super) struct PulseView {
-    pub tab: PulseTab,
-    /// The shape painted last frame (set in ui_pulse from the page width).
-    pub fit: PulseFit,
-    /// The switch was pressed on the stacked page: scroll to that section.
-    scroll_to: Option<PulseTab>,
-    /// Crossfade progress Feed(0)→Ideas(1); set each frame in ui_pulse.
-    pub tab_t: f32,
+    /// The page was under 720 wide last frame (set in ui_pulse).
+    pub narrow: bool,
+    /// The source check note under the header is open (closed by default).
+    pub sources_open: bool,
     /// The Feed instructions sheet is open with this draft.
     pub sheet: Option<String>,
     ledger: Vec<LedgerEntry>,
@@ -218,7 +131,7 @@ pub(super) struct PulseView {
     image_rx: Option<mpsc::Receiver<(String, Option<String>)>>,
     image_tried: HashSet<String>,
     pub rewrite_rx: Option<mpsc::Receiver<String>>,
-    /// The Ideas row the keyboard is on (Up/Down or J/K; R, S, D, N, Enter act on it).
+    /// The idea row the keyboard is on (Up/Down or J/K; R, S, D, N, Enter act on it).
     pub focus: Option<String>,
     /// The row under the pointer last frame, and whether its bold line was.
     hover: Option<String>,
@@ -235,7 +148,7 @@ pub(super) struct RowState {
     pub hovered: bool,
     pub focused: bool,
     pub title_hot: bool,
-    /// Compact page: Run shows at rest, Snooze and Dismiss stay in ···.
+    /// Narrow page: Run shows at rest, Snooze and Dismiss stay in ···.
     pub compact: bool,
 }
 
@@ -506,35 +419,6 @@ fn icon(ui: &mut egui::Ui, glyph: Glyph, tint: egui::Color32) {
     paint_glyph(ui.painter(), rect.shrink(5.0), glyph, tint);
 }
 
-/// Feed | Ideas header tab: amber outline + underline when selected (slide 13).
-fn pulse_header_tab(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
-    if !crate::theme::is_loadout_paint() {
-        return crate::cards::felt_tab(ui, label, on);
-    }
-    use crate::ui_kit::recipe::{look, paint, state, Mark, Part};
-    let font = egui::FontId::proportional(crate::theme::FONT_BODY);
-    let galley =
-        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
-    let pad = ui.style().spacing.button_padding;
-    let size = egui::vec2((galley.size().x + pad.x * 2.0).max(52.0), 32.0);
-    let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-    let (resp, rect, _) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
-    // Selected uses Accent (amber rim); keep the slide's amber underline too.
-    let mut l = look(Part::Tab, state(resp.hovered(), false, on));
-    if on {
-        l.mark = Mark::Underline;
-    }
-    paint(ui.painter(), rect, &l);
-    ui.painter().galley(
-        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
-        galley,
-        l.ink,
-    );
-    let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, label));
-    resp.clicked()
-}
-
 /// Up to `rows` lines, then an ellipsis.
 fn clamp_label(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32, rows: usize) {
     let mut job = egui::text::LayoutJob::simple(
@@ -726,7 +610,7 @@ fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
 /// type word, and ···. Hovered or focused, Run · Snooze · Dismiss show inline.
-/// On the compact page Run always shows and Snooze and Dismiss stay in ···.
+/// On a narrow page Run always shows and Snooze and Dismiss stay in ···.
 /// Returns the action, the row's rect, and whether the bold line is hovered.
 pub(super) fn paint_pulse_row(
     ui: &mut egui::Ui,
@@ -1230,9 +1114,8 @@ fn paint_heart_button(ui: &mut egui::Ui, on: bool) -> bool {
 }
 
 impl Cabin {
-    /// The Pulse page. Its shape follows the page width (`pulse_layout`):
-    /// Ideas and Feed side by side, stacked, or one at a time behind the
-    /// Feed | Ideas switch.
+    /// The Pulse page: the header, then one centered column where ideas and
+    /// feed posts share a single stream at every width.
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_pulse_images();
@@ -1240,138 +1123,31 @@ impl Cabin {
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::symmetric(PAGE_PAD_X as i8, 20));
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
-            let lay = pulse_page_layout(ui.available_width() + PAGE_PAD_X * 2.0);
-            self.pulse_view.fit = lay.fit;
+            let col = pulse_column(ui.available_width() + PAGE_PAD_X * 2.0);
+            self.pulse_view.narrow = col.narrow;
             egui::ScrollArea::vertical()
                 .id_salt("pulse-scroll")
                 .auto_shrink([false, false])
-                .show(ui, |ui| match lay.fit {
-                    PulseFit::Split => self.paint_pulse_split(ui, lay),
-                    PulseFit::Stacked => self.paint_pulse_stacked(ui, lay),
-                    PulseFit::Compact => {
-                        let full = ui.available_width();
-                        let pad = ((full - lay.ideas_w) * 0.5).max(0.0);
-                        ui.horizontal_top(|ui| {
-                            ui.add_space(pad);
-                            ui.vertical(|ui| {
-                                ui.set_width(lay.ideas_w);
-                                self.paint_pulse_header(ui);
-                                // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
-                                // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
-                                // Header Feed|Ideas control stays put (painted above).
-                                let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
-                                let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
-                                self.pulse_view.tab_t = tab_t;
-                                let (opacity, x) = if ideas_on {
-                                    (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
-                                } else {
-                                    (
-                                        (1.0 - tab_t).clamp(0.0, 1.0),
-                                        crate::motion::feed_axis_x(tab_t),
-                                    )
-                                };
-                                let avail = ui.available_rect_before_wrap();
-                                let rect = avail.translate(egui::vec2(x, 0.0));
-                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                    ui.set_min_width(avail.width());
-                                    ui.multiply_opacity(opacity.max(0.001));
-                                    match self.pulse_view.tab {
-                                        PulseTab::Ideas => self.ui_ideas(ui, 1),
-                                        PulseTab::Feed => self.ui_pulse_feed(ui, 1),
-                                    }
-                                });
-                                // Crossfade only: settled tabs and reduced motion stay idle.
-                                if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(16),
-                                    );
-                                }
-                                ui.add_space(24.0);
-                            });
+                .show(ui, |ui| {
+                    let full = ui.available_width();
+                    let width = full.min(col.width);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.add_space(((full - width) * 0.5).max(0.0));
+                        ui.vertical(|ui| {
+                            ui.set_width(width);
+                            self.paint_pulse_header(ui);
+                            self.ui_pulse_stream(ui);
+                            ui.add_space(24.0);
                         });
-                    }
+                    });
                 });
         });
         self.paint_feed_instructions_sheet(&ctx);
     }
 
-    /// Wide and laptop pages: Ideas on the left under the header, Feed on the
-    /// right behind a hairline, each tiling 2-up when it has room.
-    fn paint_pulse_split(&mut self, ui: &mut egui::Ui, lay: PulseLayout) {
-        // Both views are on screen, so rows don't wait on the tab crossfade.
-        self.pulse_view.tab_t = 1.0;
-        let top = ui.cursor().top();
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.vertical(|ui| {
-                ui.set_width(lay.ideas_w);
-                self.paint_pulse_header(ui);
-                self.ui_ideas(ui, lay.ideas_cols);
-            });
-            let (gap, _) = ui.allocate_exact_size(egui::vec2(lay.gap, 0.0), egui::Sense::hover());
-            ui.vertical(|ui| {
-                ui.set_width(lay.feed_w);
-                ui.add_space(4.0);
-                self.paint_feed_heading(ui);
-                self.ui_pulse_feed(ui, lay.feed_cols);
-            });
-            let bottom = ui.min_rect().bottom();
-            ui.painter().vline(
-                gap.center().x,
-                top..=bottom,
-                egui::Stroke::new(1.0_f32, crate::theme::border()),
-            );
-        });
-        ui.add_space(24.0);
-    }
-
-    /// Small windows: one column, Ideas first, then the Feed below a hairline.
-    /// The switch scrolls to its section.
-    fn paint_pulse_stacked(&mut self, ui: &mut egui::Ui, lay: PulseLayout) {
-        self.pulse_view.tab_t = 1.0;
-        let jump = self.pulse_view.scroll_to.take();
-        let ideas_top = ui.cursor();
-        self.paint_pulse_header(ui);
-        self.ui_ideas(ui, lay.ideas_cols);
-        ui.add_space(18.0);
-        let line = ui.cursor().top();
-        ui.painter().hline(
-            ui.max_rect().x_range(),
-            line,
-            egui::Stroke::new(1.0_f32, crate::theme::border()),
-        );
-        ui.add_space(14.0);
-        let feed_top = ui.cursor();
-        self.paint_feed_heading(ui);
-        self.ui_pulse_feed(ui, lay.feed_cols);
-        ui.add_space(24.0);
-        match jump {
-            Some(PulseTab::Ideas) => ui.scroll_to_rect(ideas_top, Some(egui::Align::TOP)),
-            Some(PulseTab::Feed) => ui.scroll_to_rect(feed_top, Some(egui::Align::TOP)),
-            None => {}
-        }
-    }
-
-    /// "From your feed" over the Feed column, with Feed instructions.
-    fn paint_feed_heading(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.set_min_height(32.0);
-            ui.label(
-                RichText::new(pc::FEED_HEADING.to_uppercase())
-                    .size(crate::theme::TYPE_CAPTION)
-                    .strong()
-                    .extra_letter_spacing(1.5)
-                    .color(crate::theme::muted()),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::cards::ghost_pill(ui, "Feed instructions") {
-                    self.open_feed_instructions();
-                }
-            });
-        });
-        ui.add_space(10.0);
-    }
-
+    /// The title row with its two actions, then the sign-in note, the brief
+    /// and helper offers, and the source line.
     fn paint_pulse_header(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -1381,51 +1157,13 @@ impl Cabin {
                     .color(crate::theme::fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // The tab's action has one fixed-width slot on the right, so the
-                // Feed | Ideas switch sits in the same place on both tabs.
-                let (slot, _) =
-                    ui.allocate_exact_size(egui::vec2(HEADER_SLOT_W, 32.0), egui::Sense::hover());
-                let mut cell = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(slot)
-                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                );
-                // With both views on the page the Feed column has its own
-                // Feed instructions, so the slot keeps Suggest ideas.
-                let slot_tab = if self.pulse_view.fit == PulseFit::Compact {
-                    self.pulse_view.tab
-                } else {
-                    PulseTab::Ideas
-                };
-                match slot_tab {
-                    PulseTab::Feed => {
-                        if crate::cards::ghost_pill(&mut cell, "Feed instructions") {
-                            self.open_feed_instructions();
-                        }
-                    }
-                    PulseTab::Ideas => {
-                        // Same emptiness check as ui_ideas: purge once, then group.
-                        // Hide this control only when the body will paint the inline
-                        // Suggest (empty, and not mid-fetch). Loading keeps
-                        // "Suggesting…"; a list that has ideas keeps "Suggest ideas".
-                        self.ensure_useful_ideas();
-                        let busy = self.ideas_rx.is_some();
-                        let empty = self.pulse_groups(now_ms()).is_empty();
-                        if busy || !empty {
-                            let label = suggest_label(busy, self.pulse_view.fit);
-                            if crate::cards::ghost_pill(&mut cell, label) && !busy {
-                                self.suggest_ideas_pressed();
-                            }
-                        }
-                    }
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if crate::cards::ghost_pill(ui, "Feed instructions") {
+                    self.open_feed_instructions();
                 }
-                ui.add_space(6.0);
-                for tab in PulseTab::ORDER.iter().rev() {
-                    let on = self.pulse_view.tab == *tab;
-                    if pulse_header_tab(ui, tab.label(), on) {
-                        self.pulse_view.tab = *tab;
-                        self.pulse_view.scroll_to = Some(*tab);
-                    }
+                let busy = self.ideas_rx.is_some();
+                if crate::cards::ghost_pill(ui, suggest_label(busy)) && !busy {
+                    self.suggest_ideas_pressed();
                 }
             });
         });
@@ -1438,7 +1176,7 @@ impl Cabin {
         if self.pulse_view.signin_note && self.agent_ready() {
             self.pulse_view.signin_note = false;
         }
-        if self.pulse_view.tab == PulseTab::Ideas && self.pulse_view.signin_note {
+        if self.pulse_view.signin_note {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label(
@@ -1469,12 +1207,101 @@ impl Cabin {
         ui.add_space(14.0);
     }
 
-    /// Nothing to show: placeholder rows while ideas are being found, else the
-    /// empty line for this tab and when the heartbeat last ran.
-    /// Ideas empty: inline Suggest ideas. Feed empty: Feed instructions link.
-    pub(super) fn paint_pulse_silence(&mut self, ui: &mut egui::Ui, feed: bool) {
+    /// One subtle line under the header: how many posts are on Pulse, with
+    /// the last source check note behind Details until you open it.
+    fn paint_source_status(&mut self, ui: &mut egui::Ui, shown: usize) {
+        let note = self.sources.note.trim().to_string();
+        let line = feed_header(&note, self.sources_busy(), shown);
+        let more = !note.is_empty() && !line.as_deref().is_some_and(|l| l.ends_with(&note));
+        if line.is_none() && !more {
+            return;
+        }
+        let open = more && self.pulse_view.sources_open;
+        ui.horizontal(|ui| {
+            if let Some(line) = &line {
+                ui.label(
+                    RichText::new(line)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::subtle()),
+                );
+            }
+            if more {
+                let toggle = ui.add(
+                    egui::Label::new(
+                        RichText::new(if open { "Hide details" } else { "Details" })
+                            .size(crate::theme::FONT_TIP)
+                            .underline()
+                            .color(crate::theme::subtle()),
+                    )
+                    .sense(egui::Sense::click())
+                    .selectable(false),
+                );
+                if toggle.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if toggle.clicked() {
+                    self.pulse_view.sources_open = !open;
+                }
+            }
+        });
+        if open {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&note)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::subtle()),
+                )
+                .wrap(),
+            );
+        }
         ui.add_space(8.0);
-        if !feed && self.ideas_rx.is_some() {
+    }
+
+    /// Pulse's one list: ideas in rank order and posts newest first, mixed by
+    /// `pulse_stream`. Loading ideas show placeholder rows up top; with
+    /// nothing of either kind there is one empty state.
+    pub(super) fn ui_pulse_stream(&mut self, ui: &mut egui::Ui) {
+        let now = now_ms();
+        self.ensure_useful_ideas();
+        let ideas: Vec<Ranked> = self
+            .pulse_groups(now)
+            .into_iter()
+            .flat_map(|(_, rows)| rows)
+            .collect();
+        let posts = self.pulse_feed_posts(now);
+        self.kick_pulse_images(&posts);
+        self.paint_source_status(ui, posts.len());
+        if ideas.is_empty() && (self.ideas_rx.is_some() || posts.is_empty()) {
+            self.paint_pulse_silence(ui);
+            if posts.is_empty() {
+                return;
+            }
+        }
+        let rows: Vec<String> = ideas.iter().map(|r| r.id.clone()).collect();
+        let mut pass = self.begin_ideas_pass(ui, &rows);
+        let mut post_act = None;
+        for item in pulse_stream(&ideas, &posts) {
+            match item {
+                StreamItem::Idea(row) => self.paint_idea_slot(ui, row, &mut pass),
+                StreamItem::Post(card) => {
+                    if let Some(a) = self.paint_pulse_post(ui, card, now) {
+                        post_act = Some(a);
+                    }
+                    ui.add_space(crate::theme::SPACING_8);
+                }
+            }
+        }
+        self.finish_ideas_pass(ui, pass);
+        if let Some(a) = post_act {
+            self.apply_pulse_act(a);
+        }
+    }
+
+    /// Nothing to show: placeholder rows while ideas are being found, else
+    /// one empty line for the page and when the heartbeat last ran.
+    pub(super) fn paint_pulse_silence(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        if self.ideas_rx.is_some() {
             ui.label(
                 RichText::new(pc::IDEAS_LOADING)
                     .size(crate::theme::FONT_BODY)
@@ -1490,13 +1317,11 @@ impl Cabin {
                 .request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
-        if feed {
-            if super::feed_ui::paint_feed_empty_prompt(ui) {
-                self.open_feed_instructions();
-            }
-        } else if super::feed_ui::paint_ideas_empty_prompt(ui) {
-            self.suggest_ideas_pressed();
-        }
+        ui.label(
+            RichText::new(pc::PULSE_EMPTY)
+                .size(crate::theme::FONT_BODY)
+                .color(crate::theme::muted()),
+        );
         ui.add_space(4.0);
         ui.label(
             RichText::new(pc::silence_line(self.last_pulse_ms(), now_ms()))
@@ -1564,7 +1389,7 @@ impl Cabin {
         pc::rank_pulse(&self.updates, &inputs)
     }
 
-    /// The Ideas view: the top group, then one group per category in order.
+    /// Ideas by rank: the top group, then one group per category in order.
     pub(super) fn pulse_groups(&mut self, now: u64) -> Vec<(Option<PulseCategory>, Vec<Ranked>)> {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
@@ -1580,7 +1405,7 @@ impl Cabin {
         pc::group_ideas(&self.updates, &inputs)
     }
 
-    /// The Feed view: posts newest first; muted sources stay off.
+    /// Feed posts, newest first; muted sources stay off.
     pub(super) fn pulse_feed_posts(&mut self, now: u64) -> Vec<UpdateCard> {
         let ledger = self.pulse_ledger();
         let reactions = self.reactions_now().clone();
@@ -1622,51 +1447,6 @@ impl Cabin {
             posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
         }
         posts
-    }
-
-    // feed view
-
-    /// The Feed's posts, newest first, `cols` across (filled left to right).
-    pub(super) fn ui_pulse_feed(&mut self, ui: &mut egui::Ui, cols: usize) {
-        let now = now_ms();
-        let posts = self.pulse_feed_posts(now);
-        self.kick_pulse_images(&posts);
-        let live = self.sources_busy();
-        if let Some(line) = feed_header(&self.sources.note, live, posts.len()) {
-            ui.label(
-                RichText::new(line)
-                    .size(crate::theme::FONT_TIP)
-                    .color(crate::theme::muted()),
-            );
-            ui.add_space(8.0);
-        }
-        if posts.is_empty() {
-            self.paint_pulse_silence(ui, true);
-            return;
-        }
-        let mut act = None;
-        if cols > 1 {
-            ui.spacing_mut().item_spacing.x = POST_TILE_GAP;
-            ui.columns(cols, |columns| {
-                for (i, card) in posts.iter().enumerate() {
-                    let col = &mut columns[i % cols];
-                    if let Some(a) = self.paint_pulse_post(col, card, now) {
-                        act = Some(a);
-                    }
-                    col.add_space(POST_TILE_GAP);
-                }
-            });
-        } else {
-            for card in &posts {
-                if let Some(a) = self.paint_pulse_post(ui, card, now) {
-                    act = Some(a);
-                }
-                ui.add_space(crate::theme::SPACING_8);
-            }
-        }
-        if let Some(a) = act {
-            self.apply_pulse_act(a);
-        }
     }
 
     /// One post: "source · age" with ··· on top, the headline, the short
@@ -1883,7 +1663,7 @@ impl Cabin {
 
     // keyboard
 
-    /// One key on the Ideas view. Up/Down (or J/K) move the focused row; R runs
+    /// One key on the idea rows. Up/Down (or J/K) move the focused row; R runs
     /// it in the background, S snoozes, D dismisses, N is Not this, Enter opens,
     /// Esc lets go. After Snooze, Dismiss, or Not this the next row takes focus.
     pub(super) fn pulse_key(&mut self, key: egui::Key, rows: &[String]) -> Option<PulseAct> {
@@ -1981,7 +1761,7 @@ impl Cabin {
             hovered: self.pulse_view.hover.as_deref() == Some(id),
             focused: self.pulse_view.focus.as_deref() == Some(id),
             title_hot: self.pulse_view.title_hover.as_deref() == Some(id),
-            compact: self.pulse_view.fit == PulseFit::Compact,
+            compact: self.pulse_view.narrow,
         }
     }
 
@@ -2833,5 +2613,44 @@ mod feed_header_tests {
             Some("2 posts on Pulse")
         );
         assert_eq!(feed_header(done, false, 0), None);
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::{pulse_stream, StreamItem};
+
+    fn ids(stream: Vec<StreamItem<&str, &str>>) -> Vec<String> {
+        stream
+            .into_iter()
+            .map(|item| match item {
+                StreamItem::Idea(id) => format!("i:{id}"),
+                StreamItem::Post(id) => format!("p:{id}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_stream_starts_with_an_idea_then_two_posts_and_so_on() {
+        assert_eq!(
+            ids(pulse_stream(
+                ["a", "b", "c"],
+                ["1", "2", "3", "4", "5", "6"]
+            )),
+            ["i:a", "p:1", "p:2", "i:b", "p:3", "p:4", "i:c", "p:5", "p:6"]
+        );
+        // Ideas run out: the posts that are left follow in order.
+        assert_eq!(
+            ids(pulse_stream(["a"], ["1", "2", "3", "4"])),
+            ["i:a", "p:1", "p:2", "p:3", "p:4"]
+        );
+        // Posts run out: the ideas that are left follow in order.
+        assert_eq!(
+            ids(pulse_stream(["a", "b", "c"], ["1"])),
+            ["i:a", "p:1", "i:b", "i:c"]
+        );
+        assert_eq!(ids(pulse_stream([], ["1", "2"])), ["p:1", "p:2"]);
+        assert_eq!(ids(pulse_stream(["a", "b"], [])), ["i:a", "i:b"]);
+        assert!(pulse_stream::<&str, &str>([], []).is_empty());
     }
 }

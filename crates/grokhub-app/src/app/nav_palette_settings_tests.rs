@@ -849,15 +849,23 @@ fn palette_arrow_down_reveals_the_next_row_before_the_edge() {
 }
 
 #[test]
-fn motion_wave2e_pulse_header_control_unmoved() {
+fn pulse_header_has_both_actions_and_no_tab_switch() {
     let pulse = include_str!("pulse_ui.rs");
+    let header = pulse
+        .split("fn paint_pulse_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_source_status(").next())
+        .expect("paint_pulse_header");
     assert!(
-        pulse.contains("HEADER_SLOT_W") && pulse.contains("pulse_header_tab"),
-        "Feed|Ideas must keep the fixed header slot with deck outlined tabs"
+        header.contains("ghost_pill(ui, \"Feed instructions\")")
+            && header.contains("ghost_pill(ui, suggest_label(busy))"),
+        "the title row carries Suggest for you and Feed instructions: {header}"
     );
     assert!(
-        pulse.contains("pulse_tab_t") && pulse.contains("ideas_axis_x"),
-        "Pulse must use Wave 2E crossfade helpers"
+        !pulse.contains("PulseTab")
+            && !pulse.contains("pulse_header_tab")
+            && !pulse.contains("pulse_tab_t"),
+        "Pulse is one stream: no Feed | For You switch or crossfade"
     );
 }
 

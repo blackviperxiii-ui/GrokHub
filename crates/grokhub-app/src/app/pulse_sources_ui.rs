@@ -1449,14 +1449,14 @@ mod tests {
         );
         let ui = include_str!("pulse_ui.rs");
         assert!(ui.contains("\"Looking…\""), "button label while looking");
-        let feed = ui
-            .split("fn ui_pulse_feed(")
+        let status = ui
+            .split("fn paint_source_status(")
             .nth(1)
-            .and_then(|rest| rest.split("/// One post:").next())
-            .expect("ui_pulse_feed");
+            .and_then(|rest| rest.split("fn ui_pulse_stream(").next())
+            .expect("paint_source_status");
         assert!(
-            feed.contains("self.sources.note"),
-            "Feed banner shows the check note: {feed}"
+            status.contains("self.sources.note") && status.contains("sources_open"),
+            "the source line keeps the check note behind its toggle: {status}"
         );
     }
 

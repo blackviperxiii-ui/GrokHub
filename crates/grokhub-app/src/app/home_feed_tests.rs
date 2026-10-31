@@ -361,14 +361,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
         "the feed must not paint an empty label"
     );
+    let header = include_str!("pulse_ui.rs")
+        .split("fn paint_pulse_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_source_status(").next())
+        .expect("paint_pulse_header");
     let ideas = include_str!("ideas_ui.rs")
-        .split("fn ui_ideas(")
+        .split("fn suggest_ideas_with(")
         .nth(1)
         .and_then(|s| s.split("fn paint_idea_open(").next())
-        .expect("ui_ideas");
+        .expect("suggest_ideas_with");
     assert!(
-        ideas.contains("Suggest for you") && ideas.contains("maybe_suggest_ideas(true)"),
-        "the For You button asks the model for ideas now, not a disk reload: {ideas}"
+        header.contains("suggest_label(busy)")
+            && header.contains("self.suggest_ideas_pressed()")
+            && ideas.contains("maybe_suggest_ideas(true)"),
+        "Suggest for you asks the model for ideas now, not a disk reload: {header} {ideas}"
     );
     let offer = pulse
         .split("fn accept_automate_offer(")
