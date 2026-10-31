@@ -2,19 +2,15 @@
   /* Light (classic) defaults; dark OS / data-theme swaps to Loadout. */
   --bg: #f6f6f4;
   --panel: #ffffff;
-  --raised: #ffffff;
   --text: #1c1c1a;
   --muted: #6b6b66;
-  --steel: #6b6b66;
   --accent: #1c1c1a;
   --accent-text: #ffffff;
-  --amber: #ffb000;
   --user: #e9e9e4;
   --border: #dcdcd6;
-  --hover: #ececea;
-  --selected: #e0e0dc;
   --danger: #a3261c;
-  --signal: #d7263d;
+  /* Error text: at least 4.5:1 on --bg and --panel (WCAG AA). */
+  --danger-text: #a3261c;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -27,34 +23,26 @@
   --ops-bg: #0b0b0d;
   --ops-surface: #121215;
   --ops-raised: #18191c;
-  --ops-hover: #2a2b2f;
-  --ops-selected: #3a3b40;
-  --ops-steel: #c9cbd1;
   --ops-bright: #f2f2f4;
   --ops-muted: #8a8c94;
   --ops-line: #232428;
   --ops-signal: #d7263d;
+  --ops-signal-text: #ff6b7a;
   --ops-amber: #ffb000;
-  --ops-red-dim: #5e1a25;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: var(--ops-bg);
     --panel: var(--ops-surface);
-    --raised: var(--ops-raised);
     --text: var(--ops-bright);
     --muted: var(--ops-muted);
-    --steel: var(--ops-steel);
     --accent: var(--ops-amber);
     --accent-text: var(--ops-void);
-    --amber: var(--ops-amber);
     --user: var(--ops-raised);
     --border: var(--ops-line);
-    --hover: var(--ops-hover);
-    --selected: var(--ops-selected);
     --danger: var(--ops-signal);
-    --signal: var(--ops-signal);
+    --danger-text: var(--ops-signal-text);
   }
 }
 
@@ -62,19 +50,14 @@
 :root[data-theme="ops-dark"] {
   --bg: var(--ops-bg);
   --panel: var(--ops-surface);
-  --raised: var(--ops-raised);
   --text: var(--ops-bright);
   --muted: var(--ops-muted);
-  --steel: var(--ops-steel);
   --accent: var(--ops-amber);
   --accent-text: var(--ops-void);
-  --amber: var(--ops-amber);
   --user: var(--ops-raised);
   --border: var(--ops-line);
-  --hover: var(--ops-hover);
-  --selected: var(--ops-selected);
   --danger: var(--ops-signal);
-  --signal: var(--ops-signal);
+  --danger-text: var(--ops-signal-text);
   color-scheme: dark;
 }
 
@@ -82,19 +65,14 @@
 :root[data-theme="oled-black"] {
   --bg: #000000;
   --panel: #050506;
-  --raised: #0a0a0b;
   --text: #f2f2f4;
   --muted: #8a8c94;
-  --steel: #c9cbd1;
   --accent: #ffb000;
   --accent-text: #0a0a0b;
-  --amber: #ffb000;
   --user: #0a0a0b;
   --border: #151619;
-  --hover: #25262a;
-  --selected: #34353a;
   --danger: #d7263d;
-  --signal: #d7263d;
+  --danger-text: #ff6b7a;
   color-scheme: dark;
 }
 
@@ -102,19 +80,14 @@
 :root[data-theme="soft-charcoal"] {
   --bg: #17181b;
   --panel: #1d1e22;
-  --raised: #232428;
   --text: #f2f2f4;
   --muted: #8a8c94;
-  --steel: #c9cbd1;
   --accent: #ffb000;
   --accent-text: #0a0a0b;
-  --amber: #ffb000;
   --user: #232428;
   --border: #2e2f34;
-  --hover: #2f3035;
-  --selected: #3f4046;
   --danger: #c8304a;
-  --signal: #c8304a;
+  --danger-text: #ff6b7a;
   color-scheme: dark;
 }
 
@@ -371,7 +344,7 @@ textarea {
 }
 
 .error {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .composer {
@@ -464,7 +437,7 @@ textarea {
 }
 
 .note.warn {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .card {
@@ -535,7 +508,7 @@ textarea {
 }
 
 button.danger {
-  color: var(--danger);
+  color: var(--danger-text);
   border-color: var(--danger);
 }
 
@@ -616,7 +589,7 @@ button.danger {
 
 .card-health,
 .automations .error {
-  color: var(--danger);
+  color: var(--danger-text);
   margin: 0;
 }
 
@@ -646,7 +619,7 @@ button.danger {
 
 .connectors .error,
 .card.connector .card-health {
-  color: var(--danger);
+  color: var(--danger-text);
   margin: 0;
 }
 
@@ -756,7 +729,7 @@ button.danger {
 
 .badge.warn,
 .badge.rule-deny {
-  color: var(--danger);
+  color: var(--danger-text);
   border-color: var(--danger);
 }
 
@@ -768,6 +741,42 @@ button.danger {
 
 .local-file input {
   flex: 1;
+}
+
+/* Local engine and draft model: cards like .card, full width. */
+.local-engine,
+.local-draft-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.local-engine h3,
+.local-draft-offer h3,
+.local-engine p,
+.local-draft-offer p {
+  margin: 0;
+}
+
+.local-engine button,
+.local-draft-offer button {
+  align-self: flex-start;
+}
+
+.note.local-engine-progress,
+.note.local-draft-progress {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.local-ai .note.error {
+  color: var(--danger-text);
 }
 
 .local-ai .notice {
@@ -1110,7 +1119,7 @@ span.chip.quiet {
 }
 
 .card.notice.warn .card-status {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 /* On/off settings: a slider switch on the right of its label. */
@@ -1273,7 +1282,7 @@ label.toggle-row {
 }
 
 .feed-menu button.danger {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .feed-menu-date {
@@ -1630,7 +1639,7 @@ label.toggle-row {
 
 .activity-item.waiting .activity-status,
 .activity-item.failed .activity-status {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .activity-detail,

@@ -85,7 +85,7 @@ export interface Prefill {
 }
 
 const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: "Message Grok",
+  chat: `Message ${PRODUCT_NAME}`,
   plan: "Describe what to plan",
   btw: "Ask on the side",
 };
@@ -255,15 +255,20 @@ export function Chat({
     }
   }
 
+  // The conversation as of the latest render, for effects that must not
+  // re-run when it changes.
+  const conversationRef = useRef(conversationId);
+  conversationRef.current = conversationId;
   useEffect(() => {
     if (!prefill) return;
     const to = prefill.conversationId;
-    if (to && to !== conversationId) {
+    const now = conversationRef.current;
+    if (to && to !== now) {
       if (busyRef.current) {
         setError(MISSION_BUSY);
         return;
       }
-      void closeChat(conversationId);
+      void closeChat(now);
       setItems([]);
       setError(null);
       setConversationId(to);

@@ -73,16 +73,17 @@ export function Snippet({ text }: { text: string }) {
 /** Cached images as data URLs, loaded once per name. */
 function useImages(names: string[]): string[] {
   const [urls, setUrls] = useState<string[]>([]);
+  // `names` is a new array on every page load; its joined text is stable.
   const key = names.join("|");
   useEffect(() => {
     let live = true;
-    Promise.all(names.map((n) => pulseImage(n).catch(() => ""))).then((got) => {
+    const wanted = key.split("|").filter(Boolean);
+    Promise.all(wanted.map((n) => pulseImage(n).catch(() => ""))).then((got) => {
       if (live) setUrls(got.filter(Boolean));
     });
     return () => {
       live = false;
     };
-    // `key` stands for `names`, which is a new array on every page load.
   }, [key]);
   return urls;
 }

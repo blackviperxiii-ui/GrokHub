@@ -24,5 +24,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/setupTests.ts"],
+    // Let styles.test.ts read styles.css as text through `?raw`.
+    css: { include: [/styles\.css/] },
   },
 });

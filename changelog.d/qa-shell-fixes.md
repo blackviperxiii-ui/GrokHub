@@ -1,0 +1,9 @@
+- Shell: error text now meets WCAG AA contrast on every theme (a `--danger-text` token; borders and fills keep `--danger`), and a test keeps every theme at 4.5:1 or better.
+- Shell: the Local AI engine and draft model panels are styled cards; download errors show in the error colour and status lines announce to screen readers.
+- Shell: a draft model download started in Manual keeps its progress and Cancel when you switch to Auto, a paused download offers Resume, and the engine's Cancel button clears as soon as the install finishes.
+- Shell: draft model downloads only follow HTTPS redirects inside the Hugging Face Hub and refuse private addresses, like the engine download already did.
+- Shell: a download that fails before it starts no longer leaves Get engine or Install draft stuck.
+- Shell: picking a catalog build with its safety training removed shows the notice once, like a third-party file.
+- Shell: the chat box says "Message Loadout"; the model is still Grok.
+- Shell CI: the Windows engine-install smoke no longer plants a stub binary when the download fails; a skipped download is named as such.
+- Shell lint: unused variables and the rules of React hooks are errors.

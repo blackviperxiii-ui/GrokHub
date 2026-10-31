@@ -1,9 +1,11 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   LocalAiConfig,
   LocalAiView,
+  LocalDrafterEvent,
+  LocalEngineEvent,
   LocalFileRow,
   LocalModelRow,
   LocalStatus,
@@ -19,21 +21,64 @@ const api = vi.hoisted(() => ({
   cancelLocalEngineDownload: vi.fn(),
   startLocalDrafterDownload: vi.fn(),
   cancelLocalDrafterDownload: vi.fn(),
-  onLocalEngineEvent: vi.fn(async () => () => undefined),
-  onLocalDrafterEvent: vi.fn(async () => () => undefined),
+  onLocalEngineEvent: vi.fn(async (cb: (event: LocalEngineEvent) => void) => {
+    engineEvents.push(cb);
+    return () => undefined;
+  }),
+  onLocalDrafterEvent: vi.fn(async (cb: (event: LocalDrafterEvent) => void) => {
+    drafterEvents.push(cb);
+    return () => undefined;
+  }),
 }));
+
+/** The listeners the panel registered, so a test can play a backend event. */
+const engineEvents = vi.hoisted(() => [] as ((event: LocalEngineEvent) => void)[]);
+const drafterEvents = vi.hoisted(() => [] as ((event: LocalDrafterEvent) => void)[]);
+
+function engineEvent(event: LocalEngineEvent) {
+  act(() => {
+    for (const cb of engineEvents) cb(event);
+  });
+}
+
+function drafterEvent(event: LocalDrafterEvent) {
+  act(() => {
+    for (const cb of drafterEvents) cb(event);
+  });
+}
 
 vi.mock("./api", () => api);
 
-import { LocalAi, MODEL_NOTICE } from "./LocalAi";
+import { ABLITERATED_NOTICE, LocalAi, MODEL_NOTICE } from "./LocalAi";
 
+// Catalog ids as `local_setup` names them (every build is abliterated); Muse
+// stands in for an optional model the catalog no longer carries.
 const IDS: Record<string, string> = {
-  "Gemma 4 31B": "gemma-4-31b-it-q4_k_m",
+  "Gemma 4 31B": "gemma-4-31b-it-abliterated-q4_k",
   "Muse Glimmer 30B": "muse-glimmer-30b-q4_k_m",
-  "Gemma 4 26B-A4B": "gemma-4-26b-a4b-it-q4_k_m",
-  "Gemma 4 12B": "gemma-4-12b-it-q4_k_m",
-  "Gemma 4 E4B": "gemma-4-e4b-it-q4_k_m",
-  "Gemma 4 E2B": "gemma-4-e2b-it-q4_k_m",
+  "Gemma 4 26B-A4B": "gemma-4-26b-a4b-it-abliterated-q4_k",
+  "Gemma 4 12B": "gemma-4-12b-it-abliterated-q4_k",
+  "Gemma 4 E4B": "gemma-4-e4b-it-abliterated-q4_k",
+  "Gemma 4 E2B": "gemma-4-e2b-it-abliterated-q4_k",
+};
+
+/** A Gemma 4 E2B drafter offer for the 12B target, as the backend words it. */
+const GEMMA_OFFER = {
+  id: "gemma-4-e2b-it-abliterated-q4_k",
+  name: "Gemma 4 E2B",
+  sizeLabel: "3.2 GB",
+  line: "Optional: Gemma 4 E2B can draft replies for Gemma 4 12B, which can make them faster on some machines. Loadout only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+  button: "Install and run draft model (3.2 GB)",
+  targetId: "gemma-4-12b-it-abliterated-q4_k",
+  targetName: "Gemma 4 12B",
+};
+
+const GEMMA_PROGRESS = {
+  id: "gemma-4-e2b-it-abliterated-q4_k",
+  done: 1_200_000_000,
+  total: 3_200_000_000,
+  verifying: false,
+  line: "Downloading Gemma 4 E2B: 1.2 of 3.2 GB",
 };
 
 function model(
@@ -95,6 +140,16 @@ function missingEngine(): LocalAiView["engine"] {
     error: null,
   };
 }
+
+const READY: LocalAiView["engine"] = {
+  state: "ready",
+  version: "b11602",
+  sizeLabel: "",
+  hint: "llama-server is ready at /home/user/.config/Loadout/bin/llama-server",
+  button: "",
+  progress: null,
+  error: null,
+};
 
 function view(
   models: LocalModelRow[],
@@ -228,6 +283,8 @@ async function openManual() {
 describe("LocalAi", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    engineEvents.length = 0;
+    drafterEvents.length = 0;
   });
 
   it.each([
@@ -409,7 +466,7 @@ describe("LocalAi", () => {
     expect(api.saveLocalAi).toHaveBeenCalledWith(
       config({
         mode: "manual",
-        localModel: { selected: "gemma-4-12b-it-q4_k_m" },
+        localModel: { selected: "gemma-4-12b-it-abliterated-q4_k" },
         manual: {
           backend: "vulkan",
           draft: "off",
@@ -437,12 +494,16 @@ describe("LocalAi", () => {
     render(<LocalAi />);
     await openManual();
     await userEvent.click(screen.getByRole("button", { name: "Re-run speed test" }));
-    expect(
-      await screen.findByText("Set up a local engine and model first, then run the speed test."),
-    ).toBeInTheDocument();
+    const failed = await screen.findByText(
+      "Set up a local engine and model first, then run the speed test.",
+    );
+    expect(failed).toHaveAttribute("role", "status");
+    expect(failed).toHaveClass("note", "local-note", "error");
     await userEvent.click(screen.getByRole("button", { name: "Reset to Auto" }));
     expect(api.resetLocalAi).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("Back to Auto.")).toBeInTheDocument();
+    const back = await screen.findByText("Back to Auto.");
+    expect(back).toHaveAttribute("role", "status");
+    expect(back).not.toHaveClass("error");
     expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -462,35 +523,138 @@ describe("LocalAi", () => {
     render(<LocalAi />);
     expect(await screen.findByLabelText("Local engine")).toBeInTheDocument();
     expect(screen.getByText(/llama\.cpp b11602/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Get engine b11602/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Get engine b11602 (32 MB)" }));
     expect(api.startLocalEngineDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveClass("get-engine");
+    expect(screen.getByText("Downloading engine b11602: 0 of 32 MB")).toHaveClass(
+      "local-engine-progress",
+    );
+    expect(screen.queryByRole("button", { name: "Get engine b11602 (32 MB)" })).toBeNull();
+
+    // The ready event clears Cancel on its own, before the panel re-reads.
+    api.getLocalAi.mockResolvedValue({ ...PROFILES["8 GB GPU"], engine: READY });
+    engineEvent({
+      state: "ready",
+      progress: null,
+      error: null,
+      message: "Installed llama.cpp b11602 (32 MB) at /home/user/.config/Loadout/bin/llama-server",
+    });
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByText(/Downloading engine/)).toBeNull();
+    const note = screen.getByText(/Installed llama\.cpp b11602/);
+    expect(note).toHaveAttribute("role", "status");
+    expect(note).not.toHaveClass("error");
+    expect(await screen.findByText(/llama-server is ready at/)).toBeInTheDocument();
+    expect(api.getLocalAi).toHaveBeenCalledTimes(2);
   });
 
-  it("picking Muse shows the draft install offer when its drafter is missing", async () => {
-    const museOffer = {
-      id: "muse-glimmer-30b-dflash-q4_k_m",
-      name: "Muse Glimmer DFlash drafter",
-      sizeLabel: "1.6 GB",
-      line: "Optional: Muse Glimmer DFlash drafter can draft replies for Muse Glimmer 30B, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps.",
-      button: "Install and run draft model (1.6 GB)",
-      targetId: "muse-glimmer-30b-q4_k_m",
-      targetName: "Muse Glimmer 30B",
+  it("a failed engine download shows its error in the error colour and offers Get engine again", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["8 GB GPU"]);
+    api.startLocalEngineDownload.mockResolvedValue({
+      ...missingEngine(),
+      state: "downloading",
+      button: "Cancel",
+      progress: { done: 0, total: 32_000_000, verifying: false, line: "Downloading engine b11602: 0 of 32 MB" },
+    });
+    render(<LocalAi />);
+    await userEvent.click(await screen.findByRole("button", { name: "Get engine b11602 (32 MB)" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    const failed =
+      "The engine download didn't match its published checksum, so it was deleted. Try Get engine again.";
+    engineEvent({ state: "missing", progress: null, error: failed, message: failed });
+    const line = screen.getByText(failed, { selector: ".local-engine-error" });
+    expect(line).toHaveClass("note", "error");
+    expect(line).toHaveAttribute("role", "status");
+    expect(screen.getByText(failed, { selector: ".local-note" })).toHaveClass("error");
+    expect(screen.getByRole("button", { name: "Get engine b11602 (32 MB)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("a catalog build with its safety training removed asks once, in its own words", async () => {
+    const path = "/home/user/Loadout/models/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+    const file: LocalFileRow = {
+      path,
+      name: "Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf",
+      size: "5 GB",
+      source: "Loadout models",
+      thirdParty: false,
+      abliterated: true,
+      needsNotice: true,
     };
     api.getLocalAi.mockResolvedValue({
-      ...PROFILES["24 GB GPU"],
-      draftOffers: [museOffer],
+      ...PROFILES["8 GB GPU"],
+      picker: { ...PROFILES["8 GB GPU"].picker, onThisPc: [file] },
+    });
+    render(<LocalAi />);
+    await openManual();
+    const row = screen.getByRole("listitem", { name: file.name });
+    expect(within(row).getByText("Safety training removed")).toBeInTheDocument();
+    expect(within(row).queryByText("Third-party")).toBeNull();
+    await userEvent.click(within(row).getByRole("radio"));
+    const notice = await screen.findByRole("alertdialog", { name: "About this model" });
+    expect(notice).toHaveTextContent(ABLITERATED_NOTICE);
+    expect(notice).not.toHaveTextContent(MODEL_NOTICE);
+    await userEvent.click(screen.getByRole("button", { name: "I understand" }));
+    expect(checkedName()).toBe(file.name);
+  });
+
+  it("a running draft download keeps its progress and Cancel in Auto", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["16 GB GPU"],
+      draftOffers: [GEMMA_OFFER],
+      draftProgress: GEMMA_PROGRESS,
+    });
+    api.cancelLocalDrafterDownload.mockResolvedValue(undefined);
+    render(<LocalAi />);
+    const offer = await screen.findByLabelText("Draft model offer");
+    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(offer).getByText("Downloading Gemma 4 E2B: 1.2 of 3.2 GB")).toHaveClass(
+      "local-draft-progress",
+    );
+    await userEvent.click(within(offer).getByRole("button", { name: "Cancel draft download" }));
+    expect(api.cancelLocalDrafterDownload).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Cancelled the draft model download.")).toHaveAttribute(
+      "role",
+      "status",
+    );
+  });
+
+  it("a paused draft download offers Resume until the panel re-reads", async () => {
+    const v = { ...PROFILES["16 GB GPU"], draftOffers: [GEMMA_OFFER], draftProgress: GEMMA_PROGRESS };
+    api.getLocalAi.mockResolvedValueOnce(v).mockReturnValue(new Promise<LocalAiView>(() => {}));
+    render(<LocalAi />);
+    await openManual();
+    await userEvent.click(screen.getByRole("radio", { name: /Gemma 4 12B/ }));
+    expect(screen.getByRole("button", { name: "Cancel draft download" })).toBeInTheDocument();
+    drafterEvent({
+      state: "paused",
+      progress: null,
+      error: null,
+      message: "Paused Gemma 4 E2B at 1.2 of 3.2 GB. Resume picks up where it stopped.",
+    });
+    expect(screen.getByRole("button", { name: "Resume…" })).toHaveClass("install-draft");
+    expect(screen.queryByText(/Downloading Gemma 4 E2B/)).toBeNull();
+    expect(api.getLocalAi).toHaveBeenCalledTimes(2);
+  });
+
+  it("picking Gemma 4 12B shows the draft install offer when its E2B drafter is missing", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["16 GB GPU"],
+      draftOffers: [GEMMA_OFFER],
       draftOffer: null,
     });
-    api.startLocalDrafterDownload.mockResolvedValue(museOffer);
+    api.startLocalDrafterDownload.mockResolvedValue(GEMMA_OFFER);
     render(<LocalAi />);
     await openManual();
     expect(screen.queryByLabelText("Draft model offer")).toBeNull();
-    await userEvent.click(screen.getByRole("radio", { name: /Muse Glimmer 30B/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /Gemma 4 12B/ }));
     const offer = await screen.findByLabelText("Draft model offer");
-    expect(offer).toHaveTextContent(/Optional: Muse Glimmer DFlash drafter/);
-    await userEvent.click(
-      screen.getByRole("button", { name: "Install and run draft model (1.6 GB)" }),
+    expect(offer).toHaveTextContent(
+      "Optional: Gemma 4 E2B can draft replies for Gemma 4 12B, which can make them faster on some machines.",
     );
-    expect(api.startLocalDrafterDownload).toHaveBeenCalledWith("muse-glimmer-30b-q4_k_m");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Install and run draft model (3.2 GB)" }),
+    );
+    expect(api.startLocalDrafterDownload).toHaveBeenCalledWith("gemma-4-12b-it-abliterated-q4_k");
   });
 });
