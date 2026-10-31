@@ -2055,6 +2055,7 @@ fn quiet_cabin() -> Cabin {
         history_q: String::new(),
         history_q_seen: String::new(),
         history_q_at: None,
+        history_delete_armed_at: None,
         history_hits: Vec::new(),
         archive_undo: None,
         chat_archive_day: None,
@@ -2218,6 +2219,7 @@ fn quiet_cabin() -> Cabin {
         imagine_pending: false,
         imagine_native: super::imagine::ImagineNative::default(),
         imagine_save_rx: None,
+        file_writes: Vec::new(),
         goal_rx: None,
         goal_busy: false,
         goal_stale: false,
@@ -2486,12 +2488,17 @@ fn export_writes_html_and_json_next_to_export_md() {
     cabin.cfg.project_dir.clear();
 
     cabin.run_slash_line("/export html");
+    wait_file_writes(cabin);
     let html_path = cabin
         .status
         .strip_prefix("Wrote ")
         .unwrap_or("")
         .to_string();
-    assert!(html_path.ends_with("export.html"), "{}", cabin.status);
+    assert!(
+        html_path.contains("export-") && html_path.ends_with(".html"),
+        "{}",
+        cabin.status
+    );
     wait_for("export.html must hold the escaped chat", || {
         let page = std::fs::read_to_string(&html_path).unwrap_or_default();
         page.contains("harbor &lt;b&gt;export&lt;/b&gt; line")
@@ -2499,12 +2506,17 @@ fn export_writes_html_and_json_next_to_export_md() {
     });
 
     cabin.run_slash_line("/export json");
+    wait_file_writes(cabin);
     let json_path = cabin
         .status
         .strip_prefix("Wrote ")
         .unwrap_or("")
         .to_string();
-    assert!(json_path.ends_with("export.json"), "{}", cabin.status);
+    assert!(
+        json_path.contains("export-") && json_path.ends_with(".json"),
+        "{}",
+        cabin.status
+    );
     wait_for("export.json must parse and keep both turns", || {
         std::fs::read_to_string(&json_path)
             .ok()
@@ -2513,7 +2525,8 @@ fn export_writes_html_and_json_next_to_export_md() {
     });
 
     cabin.run_slash_line("/export md");
-    assert!(cabin.status.ends_with("export.md"), "{}", cabin.status);
+    wait_file_writes(cabin);
+    assert!(cabin.status.ends_with(".md"), "{}", cabin.status);
     cabin.run_slash_line("/export pdf");
     assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
     assert!(!cabin.running);

@@ -637,7 +637,7 @@ pub(super) fn paint_speech_bubble(
                     mark.id(),
                     mark_rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    crate::theme::muted(),
+                    egui::Color32::WHITE,
                 );
             }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {

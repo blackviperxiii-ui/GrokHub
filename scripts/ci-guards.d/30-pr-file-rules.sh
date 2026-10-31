@@ -62,6 +62,14 @@ else:
 PY
 }
 
+# The Setup script's version define (`cargo xtask bump` rewrites it). The rest
+# of grokhub.iss (names, shortcuts, files) is ordinary packaging.
+inno_version_line() {
+  local file="$1"
+  [[ -f "$file" ]] || { echo ""; return; }
+  grep -E '^[[:space:]]*#define[[:space:]]+MyAppVersion[[:space:]]' "$file" | head -n1 || true
+}
+
 cabin_reports_version_line() {
   local file="$1"
   [[ -f "$file" ]] || { echo ""; return; }
@@ -192,7 +200,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     version_hits=()
     for f in "${pr_changed[@]+"${pr_changed[@]}"}"; do
       case "$f" in
-        VERSION|CHANGELOG.md|packaging/PKGBUILD|packaging/aur/PKGBUILD|packaging/windows/grokhub.iss)
+        VERSION|CHANGELOG.md|packaging/PKGBUILD|packaging/aur/PKGBUILD)
           version_hits+=("$f")
           ;;
       esac
@@ -209,6 +217,20 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
         fail=1
       elif [[ "$old_ver" != "$new_ver" ]]; then
         version_hits+=("Cargo.toml[workspace.package].version (${old_ver}->${new_ver})")
+      fi
+    fi
+
+    if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'packaging/windows/grokhub.iss'; then
+      old_iss=$(mktemp)
+      git show "$pr_merge_base:packaging/windows/grokhub.iss" >"$old_iss" 2>/dev/null || true
+      old_line=$(inno_version_line "$old_iss")
+      new_line=$(inno_version_line "packaging/windows/grokhub.iss")
+      rm -f "$old_iss"
+      if [[ -z "$new_line" ]]; then
+        echo "ci-guards: could not find the MyAppVersion define in packaging/windows/grokhub.iss" >&2
+        fail=1
+      elif [[ "$old_line" != "$new_line" ]]; then
+        version_hits+=("packaging/windows/grokhub.iss (MyAppVersion)")
       fi
     fi
 
