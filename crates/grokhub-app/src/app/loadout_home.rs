@@ -343,11 +343,7 @@ pub(super) fn pc_tiles(p: &LocalProfile) -> Vec<PcTile> {
 
 /// Every tile the probes could fill, in the dock's order.
 pub(super) fn pc_tile_list(p: &LocalProfile) -> Vec<PcTile> {
-    let gpu = p
-        .gpus
-        .iter()
-        .find(|g| !g.integrated)
-        .or_else(|| p.gpus.first());
+    let gpu = p.main_gpu();
     let mut tiles = Vec::new();
     if let Some(g) = gpu.filter(|g| !g.name.trim().is_empty()) {
         let value = if g.vram_mb > 0 && !g.unified {

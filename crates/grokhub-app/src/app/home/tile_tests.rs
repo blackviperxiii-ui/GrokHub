@@ -4,7 +4,7 @@ use grokhub_agent::route::connectivity::NetState;
 use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
-use super::paint::{connection_text, game_mode_text, usage_text, Tone};
+use super::paint::{connection_text, game_mode_text, gpu_temp_text, usage_text, Tone};
 use crate::app::budget_ui::WeekSpend;
 
 #[test]
@@ -127,4 +127,23 @@ fn connection_tile_counts_the_last_days_sends() {
     assert_eq!(off.big, "—");
     assert_eq!(off.caption, "Offline · local AI off");
     assert_eq!(off.tone, Tone::Alert);
+}
+
+#[test]
+fn gpu_temp_tile_reads_degrees_and_falls_back_honestly() {
+    use grokhub_core::local_profile::Thermal;
+    let t = gpu_temp_text(Some(62), Some(Thermal::Unknown));
+    assert_eq!(
+        (t.big.as_str(), t.caption.as_str()),
+        ("62 °C", "Main GPU · cool")
+    );
+    assert_eq!(gpu_temp_text(Some(78), None).tone, Tone::Warn);
+    assert_eq!(gpu_temp_text(Some(91), None).caption, "Main GPU · hot");
+    let t = gpu_temp_text(None, Some(Thermal::Fair));
+    assert_eq!(
+        (t.big.as_str(), t.caption.as_str()),
+        ("Warm", "PC sensors · no GPU sensor")
+    );
+    let t = gpu_temp_text(None, None);
+    assert_eq!((t.big.as_str(), t.tone), ("—", Tone::Quiet));
 }

@@ -423,42 +423,59 @@ fn paint_pulse(
     });
 }
 
+/// The Small PC tile: the main GPU's °C when the OS reports it, else the
+/// PC's thermal reading.
+pub(super) fn gpu_temp_text(temp_c: Option<i32>, thermal: Option<Thermal>) -> TileText {
+    match (temp_c, thermal.unwrap_or(Thermal::Unknown)) {
+        (Some(c), _) => {
+            let (word, tone) = if c >= 85 {
+                ("hot", Tone::Alert)
+            } else if c >= 70 {
+                ("warm", Tone::Warn)
+            } else {
+                ("cool", Tone::Normal)
+            };
+            TileText {
+                big: format!("{c} °C"),
+                caption: format!("Main GPU · {word}"),
+                detail: None,
+                tone,
+            }
+        }
+        (None, Thermal::Unknown) => TileText {
+            big: "—".into(),
+            caption: "No temperature sensor found".into(),
+            detail: None,
+            tone: Tone::Quiet,
+        },
+        (None, th) => {
+            let (word, tone) = match th {
+                Thermal::Fair => ("Warm", Tone::Warn),
+                Thermal::Serious => ("Hot", Tone::Alert),
+                Thermal::Critical => ("Critical", Tone::Alert),
+                _ => ("Cool", Tone::Normal),
+            };
+            TileText {
+                big: word.into(),
+                caption: "PC sensors · no GPU sensor".into(),
+                detail: None,
+                tone,
+            }
+        }
+    }
+}
+
 fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let profile = pc_profile();
-    card(ui, |ui| {
+    super::pc_sheet::show_pc_sheet(ui.ctx(), profile.as_ref());
+    let resp = card(ui, |ui| {
         let reading = profile.as_ref().and_then(pc_reading).unwrap_or_default();
         match size {
             ModuleSize::Small => {
-                let heat_read = profile
-                    .as_ref()
-                    .is_some_and(|p| p.thermal != Thermal::Unknown);
                 header(ui, false, "GPU temp", "", crate::theme::fg());
-                let temp: String = profile
-                    .as_ref()
-                    .map(|p| match p.thermal {
-                        Thermal::Unknown => "—",
-                        Thermal::Nominal => "OK",
-                        Thermal::Fair => "Warm",
-                        Thermal::Serious => "Hot",
-                        Thermal::Critical => "Critical",
-                    })
-                    .unwrap_or("—")
-                    .to_string();
-                ui.label(
-                    RichText::new(temp)
-                        .size(crate::theme::TYPE_TITLE)
-                        .strong()
-                        .color(crate::theme::fg()),
-                );
-                ui.label(
-                    RichText::new(if heat_read {
-                        "Thermal"
-                    } else {
-                        "Sensors unavailable"
-                    })
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
-                );
+                let thermal = profile.as_ref().map(|p| p.thermal);
+                let t = gpu_temp_text(super::live::live_facts().gpu_temp_c, thermal);
+                paint_tile_text(ui, &t, size);
             }
             ModuleSize::Medium | ModuleSize::Large => {
                 header(ui, false, "PC loadout", &reading, crate::theme::fg());
@@ -488,13 +505,17 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                         if crate::ui_kit::recipe::button(ui, None, "DETAILS", false, btn, true)
                             .clicked()
                         {
-                            actions.push(ModuleAction::Nav("devices"));
+                            super::pc_sheet::open_pc_sheet(ui.ctx());
                         }
                     });
                 }
             }
         }
     });
+    // Medium and Large have their own buttons; the Small tile opens the sheet.
+    if size == ModuleSize::Small && card_clicked(ui, &resp, "home-pc", "This PC's hardware") {
+        super::pc_sheet::open_pc_sheet(ui.ctx());
+    }
 }
 
 fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {

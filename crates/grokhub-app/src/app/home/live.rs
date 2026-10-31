@@ -19,6 +19,8 @@ pub(super) struct LiveFacts {
     pub top_dest: Option<String>,
     /// The local model is on, installed, and the governor lets it run.
     pub local_ready: bool,
+    /// The main GPU's temperature in °C, when the OS reports one.
+    pub gpu_temp_c: Option<i32>,
 }
 
 struct Slot {
@@ -32,6 +34,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
         sends_24h: None,
         top_dest: None,
         local_ready: false,
+        gpu_temp_c: None,
     },
     at: None,
     reading: false,
@@ -51,6 +54,7 @@ pub(super) fn live_facts() -> LiveFacts {
                 let read = hx::read_egress_report(&dir);
                 let mut facts = summarize_sends(&read, grokhub_core::now_ms());
                 facts.local_ready = grokhub_agent::route::local::available();
+                facts.gpu_temp_c = crate::app::local_probe::gpu_temp_c();
                 if let Ok(mut slot) = SLOT.lock() {
                     slot.facts = facts;
                     slot.at = Some(Instant::now());
@@ -87,6 +91,6 @@ pub(super) fn summarize_sends(read: &EgressRead, now_ms: u64) -> LiveFacts {
     LiveFacts {
         sends_24h: Some(total),
         top_dest,
-        local_ready: false,
+        ..LiveFacts::default()
     }
 }
