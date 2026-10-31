@@ -171,7 +171,7 @@ fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() 
     let empty = last_chat_text(&cabin);
     assert!(
         empty.contains("Health\n\nUpdates: none pending.\nServices: ")
-            && empty.ends_with("\nLast dream: none yet. GrokHub dreams once a night after the review, in memory repo mode."),
+            && empty.ends_with("\nLast dream: none yet. Loadout dreams once a night after the review, in memory repo mode."),
         "{empty}"
     );
     assert!(
@@ -193,7 +193,7 @@ fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() 
     cabin.run_slash_line("/health");
     let block = last_chat_text(&cabin);
     assert!(
-        block.contains("Health\n\nUpdates: GrokHub 99.0.0 is ready. Run /update.\nServices: "),
+        block.contains("Health\n\nUpdates: Loadout 99.0.0 is ready. Run /update.\nServices: "),
         "{block}"
     );
     assert!(
@@ -749,7 +749,8 @@ fn permission_slashes_arm_always_and_set_auto() {
         cabin.permission_mode,
         PermissionMode::AlwaysApprove
     ));
-    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.cfg.permission_mode, "always-approve");
+    assert!(cabin.cfg.always_confirmed);
     assert_eq!(cabin.status, "Permission always-approve");
     assert!(cabin.confirm.is_none());
     cabin.run_slash_line("/always-approve");
@@ -876,7 +877,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
             cabin.status.clear();
             cabin.run_slash_line(line);
             assert_eq!(
-                cabin.status, "Workflows were a grok CLI feature and are not in GrokHub",
+                cabin.status, "Workflows were a grok CLI feature and are not in Loadout",
                 "{line} (thread: {with_thread})"
             );
             assert!(cabin.running, "{line} must not touch the live turn");

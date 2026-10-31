@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "vstack": {
+      "source": {
+        "source": "github",
+        "repo": "blackviperxiii-ui/vstack"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "vstack@vstack": true
+  }
+}

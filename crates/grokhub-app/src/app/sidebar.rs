@@ -1,10 +1,9 @@
 //! Rail, titlebar, and avatar.
 
 use super::*;
-use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
-/// Shown at the right of the rail's Search row: the key that opens the palette.
-pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
+pub(super) const RAIL_FOOTER_H: f32 = 40.0;
+use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
 fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
     ui.label(
@@ -17,6 +16,9 @@ fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
             )),
     );
 }
+
+/// Palette shortcut hint shared by the chat tab strip Search row.
+pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
 
 pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
@@ -39,22 +41,50 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     "…".into()
 }
 
+/// Space between the titlebar pills, so their rings never touch.
+const TITLEBAR_PILL_GAP: f32 = 8.0;
+
 impl Cabin {
+    pub(super) fn paint_loadout_window_border(ui: &mut egui::Ui) {
+        if !crate::theme::is_loadout_paint() {
+            return;
+        }
+        let rect = ui.max_rect();
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.0, crate::theme::signal_red()),
+            egui::StrokeKind::Inside,
+        );
+    }
+
     pub(super) fn ui_titlebar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // First thing each frame: everything after reads the reduced-motion flag.
+        crate::motion::sync_reduced(&ctx, self.cfg.reduce_motion);
         let mut run_pending_update = false;
         let update_chip = update_chip_label(self.update_pending_now());
+        let loadout = crate::theme::is_loadout_paint();
+        let bar_fill = if loadout {
+            crate::theme::surface()
+        } else {
+            crate::theme::bg()
+        };
         egui::Panel::top("titlebar")
             .exact_size(crate::theme::TITLEBAR_H)
-            .frame(egui::Frame::NONE.fill(crate::theme::bg()))
+            .frame(egui::Frame::NONE.fill(bar_fill))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(12.0);
-                    ui.label(
-                        RichText::new(grokhub_core::brand::product_name())
-                            .font(crate::theme::title_font(crate::theme::FONT_CHROME))
-                            .color(crate::theme::fg()),
-                    );
+                    if loadout {
+                        self.paint_loadout_titlebar_brand(ui);
+                    } else {
+                        ui.label(
+                            RichText::new(grokhub_core::brand::product_name())
+                                .font(crate::theme::title_font(crate::theme::FONT_CHROME))
+                                .color(crate::theme::fg()),
+                        );
+                    }
                     if let Some(label) = update_chip {
                         ui.add_space(8.0);
                         if crate::cards::titlebar_update_chip(ui, label) {
@@ -70,6 +100,10 @@ impl Cabin {
                             self.nav = Nav::Settings;
                             self.settings_sec = SettingsSec::Behavior;
                         }
+                    }
+                    if loadout {
+                        ui.add_space(8.0);
+                        self.paint_loadout_titlebar_pills(ui);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
@@ -112,7 +146,11 @@ impl Cabin {
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
                         let _ = self.paint_session_actions_menu(ui);
-                        self.paint_personality_switch(ui);
+                        // Activity Dock left of the session menu (every view).
+                        self.ui_activity_dock(ui);
+                        if !loadout {
+                            self.paint_personality_switch(ui);
+                        }
                         let (_rect, drag) = ui.allocate_exact_size(
                             ui.available_size(),
                             egui::Sense::click_and_drag(),
@@ -135,6 +173,60 @@ impl Cabin {
         if run_pending_update {
             self.open_update_overlay();
             self.queue_cabin_update();
+        }
+    }
+
+    fn paint_loadout_titlebar_brand(&self, ui: &mut egui::Ui) {
+        let mark = crate::theme::loadout_mark(ui.ctx());
+        let size = egui::vec2(24.0, 24.0);
+        ui.add(egui::Image::from_texture((mark.id(), size)));
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(grokhub_core::brand::product_name().to_ascii_uppercase())
+                .font(crate::theme::loadout_font(15.0))
+                .color(crate::theme::fg()),
+        );
+    }
+
+    fn paint_loadout_titlebar_pills(&mut self, ui: &mut egui::Ui) {
+        let name = self.titlebar_personality_label();
+        let week = super::privacy_page::ledger_week(ui.ctx(), now_ms());
+        let sent = crate::theme::titlebar_sent_label(week.total());
+        for (i, (label, red_ring)) in [
+            (format!("PERSONALITY · {}", name.to_ascii_uppercase()), true),
+            (sent, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i > 0 {
+                ui.add_space(TITLEBAR_PILL_GAP);
+            }
+            let stroke = if red_ring {
+                crate::theme::signal_red()
+            } else {
+                crate::theme::border()
+            };
+            let pill = egui::Frame::NONE
+                .fill(crate::theme::bg())
+                .stroke(egui::Stroke::new(1.0, stroke))
+                .corner_radius(20.0)
+                .inner_margin(egui::Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(label)
+                                .font(crate::theme::loadout_font(11.0))
+                                .color(crate::theme::steel()),
+                        )
+                        .selectable(false),
+                    )
+                });
+            let id = egui::Id::new(("titlebar-pill", i));
+            let pill = ui.interact(pill.response.rect, id, egui::Sense::click());
+            if red_ring && pill.clicked() {
+                self.open_personality_pill();
+            }
         }
     }
 
@@ -177,7 +269,7 @@ impl Cabin {
         }
     }
 
-    fn chat_rename_act(&mut self, ui: &mut egui::Ui, idx: usize) -> Option<TabAct> {
+    pub(super) fn chat_rename_act(&mut self, ui: &mut egui::Ui, idx: usize) -> Option<TabAct> {
         let edit = ui.add(
             egui::TextEdit::singleline(&mut self.rename_buf)
                 .desired_width(ui.available_width())
@@ -205,6 +297,69 @@ impl Cabin {
         } else {
             None
         }
+    }
+
+    pub(super) fn icon_nav_row(
+        ui: &mut egui::Ui,
+        active: bool,
+        icon: crate::icons::RailIcon,
+        tip: &str,
+    ) -> egui::Response {
+        let tile = crate::theme::RAIL_TILE;
+        let (slot, resp) = ui.allocate_exact_size(
+            egui::vec2(crate::theme::SIDEBAR_W, tile),
+            egui::Sense::click(),
+        );
+        if !ui.is_rect_visible(slot) {
+            return resp;
+        }
+        let center = slot.center();
+        let icon_rect = egui::Rect::from_center_size(
+            center,
+            egui::vec2(crate::theme::ICON_ACTION, crate::theme::ICON_ACTION),
+        );
+        let tile_rect = egui::Rect::from_center_size(center, egui::vec2(tile, tile));
+        let color = if crate::theme::is_loadout_paint() {
+            use crate::ui_kit::recipe::{look, paint_mark, Mark, Part, State};
+            let st = if active {
+                State::Selected
+            } else if resp.hovered() {
+                State::Hover
+            } else {
+                State::Default
+            };
+            let lk = look(Part::Nav, st);
+            if st == State::Selected {
+                ui.painter().rect_filled(tile_rect, lk.radius, lk.fill);
+                let inner = slot.with_min_x(slot.left() + crate::ui_kit::recipe::MARK_W + 4.0);
+                paint_mark(ui.painter(), inner, Mark::LeftBar);
+            } else if st == State::Hover {
+                ui.painter().rect_filled(tile_rect, lk.radius, lk.fill);
+            } else if lk.stroke.width > 0.0 {
+                ui.painter()
+                    .rect_stroke(tile_rect, lk.radius, lk.stroke, egui::StrokeKind::Inside);
+            }
+            lk.ink
+        } else if active {
+            ui.painter()
+                .rect_filled(tile_rect, 8.0, crate::theme::selected());
+            let tick = egui::Rect::from_min_max(
+                egui::pos2(slot.left(), slot.top() + 6.0),
+                egui::pos2(slot.left() + crate::theme::RAIL_TICK_W, slot.bottom() - 6.0),
+            );
+            ui.painter().rect_filled(tick, 2.0, crate::theme::amber());
+            crate::theme::steel()
+        } else if resp.hovered() {
+            ui.painter()
+                .rect_filled(tile_rect, 8.0, crate::theme::hover());
+            crate::theme::muted()
+        } else {
+            crate::theme::muted()
+        };
+        let pose = crate::icons::rail_pose(ui, &resp, icon, active);
+        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color, pose);
+        crate::theme::paint_focus_ring(ui, tile_rect, 8.0, &resp);
+        resp.on_hover_text(tip)
     }
 
     pub(super) fn nav_row(
@@ -237,11 +392,24 @@ impl Cabin {
                 egui::StrokeKind::Middle,
             );
         }
+        // Slide 07 nav: the selected item carries an amber bar on its left edge.
+        // Only the row the glide highlights, so a second active row stays plain.
+        if active
+            && crate::theme::is_loadout_paint()
+            && crate::theme::glide_selected_is(ui, "rail", rect)
+        {
+            use crate::ui_kit::recipe::{look, paint_mark, Part, State};
+            // The mark sits just left of the rect it is given; shift it inside
+            // the slot so the rail's clip doesn't cut it off.
+            let inner = slot.with_min_x(slot.left() + crate::ui_kit::recipe::MARK_W + 4.0);
+            paint_mark(ui.painter(), inner, look(Part::Nav, State::Selected).mark);
+        }
         // The hover scale grows the highlight only. Icon and label stay on the resting
         // slot, or a 1.035 scale on a full-width row slides them ~4px left.
         let icon_c = egui::pos2(slot.left() + 20.0, slot.center().y);
         let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
-        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
+        let pose = crate::icons::rail_pose(ui, &resp, icon, active);
+        crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color, pose);
         let text_left = slot.left() + 38.0;
         let text_right = slot.right() - 12.0;
         let painted = fit_rail_label(ui, label, (text_right - text_left).max(8.0));
@@ -321,324 +489,52 @@ impl Cabin {
     }
 
     pub(super) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
-        let chrome = self.avatar_chrome();
-        let photo = self.photo_for_path(&chrome.picture_path);
         egui::Panel::left("rail")
             .exact_size(crate::theme::SIDEBAR_W)
             .resizable(false)
             .frame(
                 egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(8)),
+                    .fill(crate::theme::surface())
+                    .stroke(egui::Stroke::new(1.0, crate::theme::border())),
             )
             .show(ui, |ui| {
-                // Footer first so a short window clips History, never the avatar
-                // (the avatar menu is the rail's only door to Settings).
                 egui::Panel::bottom("rail-footer")
                     .frame(egui::Frame::NONE)
                     .show_separator_line(false)
                     .exact_size(RAIL_FOOTER_H)
                     .show(ui, |ui| {
-                        if Self::cabin_avatar(ui, &chrome.name, photo.as_ref()).clicked() {
-                            self.settings_menu_open = !self.settings_menu_open;
-                            self.settings_menu_ignore = true;
+                        let settings = Self::icon_nav_row(
+                            ui,
+                            self.nav == Nav::Settings,
+                            crate::icons::RailIcon::Settings,
+                            "Settings",
+                        );
+                        if settings.clicked() {
+                            self.set_nav_id("settings");
                         }
                     });
                 let rest = ui.available_rect_before_wrap();
                 ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
-                let search =
-                    Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false);
-                {
-                    let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);
-                    let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
-                    let text_c = crate::theme::fg();
-                    let galley = ui
-                        .fonts_mut(|f| f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c));
-                    let size = galley.size() + pad * 2.0;
-                    let rect = egui::Rect::from_center_size(
-                        egui::pos2(
-                            search.rect.right() - 12.0 - size.x * 0.5,
-                            search.rect.center().y,
-                        ),
-                        size,
-                    );
-                    ui.painter().rect_filled(
-                        rect,
-                        crate::theme::RADIUS_SM,
-                        crate::theme::surface(),
-                    );
-                    ui.painter().galley(
-                        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
-                        galley,
-                        text_c,
-                    );
-                }
-                if search.clicked() {
-                    self.open_palette();
-                }
-                ui.add_space(crate::theme::SPACING_8);
                 let cur = self.nav_id();
-                for (id, label) in crate::theme::GROK_NAV {
-                    if Self::nav_row(
-                        ui,
-                        cur == *id,
-                        crate::icons::rail_icon_for(id),
-                        label,
-                        false,
-                    )
-                    .clicked()
-                    {
-                        self.set_nav_id(id);
+                for (id, label) in crate::theme::LOADOUT_NAV {
+                    let active = cur == *id;
+                    let resp =
+                        Self::icon_nav_row(ui, active, crate::icons::rail_icon_for(id), label);
+                    if resp.clicked() {
+                        match *id {
+                            "home" => self.open_mission_home(),
+                            "profile" => {
+                                self.settings_menu_open = !self.settings_menu_open;
+                                self.settings_menu_ignore = true;
+                            }
+                            // Chat rail restores the last-used tab. Tabs live under the title bar.
+                            "chat" => self.set_nav_id(id),
+                            _ => self.set_nav_id(id),
+                        }
                     }
                 }
-                ui.add_space(crate::theme::SPACING_12);
-                ui.horizontal(|ui| {
-                    rail_section_caption(ui, RichText::new("Projects"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let plus =
-                            crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
-                                .on_hover_text("New folder");
-                        if plus.clicked() {
-                            self.stage_new_folder();
-                        }
-                    });
-                });
-                let tree = visible_tree(&self.projects);
-                let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
-                let mut section_act: Option<TabAct> = None;
-                let live_empty = self.messages.is_empty();
-                // Snap to whole rows so the list never ends on a sliver of the next row's gutter.
-                let row_gap = ui.spacing().item_spacing.y;
-                let pitch = crate::theme::NAV_ROW_H + row_gap;
-                let raw_h = (ui.available_height() * 0.46).clamp(40.0, 320.0);
-                let proj_h =
-                    (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("rail-projects")
-                    .auto_shrink([false, true])
-                    .max_height(proj_h)
-                    .show(ui, |ui| {
-                        for (depth, idx) in tree {
-                            let kind = self.projects[idx].kind;
-                            let open = self.projects[idx].open;
-                            if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
-                                // Center the row so Name and Cancel share a top, bottom, and baseline.
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), 30.0),
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    |ui| {
-                                        crate::icons::paint_tree_gutter(ui, depth);
-                                        // Leave room for Cancel on the narrow rail. Name stays editable.
-                                        let cancel_w = 78.0;
-                                        let gap = ui.spacing().item_spacing.x;
-                                        let edit_w =
-                                            (ui.available_width() - cancel_w - gap).max(48.0);
-                                        // egui replaces hint color with weak_text_color. Pin that to muted.
-                                        {
-                                            let visuals = ui.visuals_mut();
-                                            visuals.weak_text_color = Some(crate::theme::muted());
-                                            visuals.text_cursor.stroke =
-                                                egui::Stroke::new(2.0_f32, crate::theme::fg());
-                                        }
-                                        let edit = ui.add(
-                                            egui::TextEdit::singleline(&mut self.proj_rename_buf)
-                                                .desired_width(edit_w)
-                                                .min_size(egui::vec2(edit_w, 30.0))
-                                                .frame(
-                                                    egui::Frame::NONE
-                                                        .fill(crate::theme::elevated())
-                                                        .corner_radius(15.0)
-                                                        .stroke(egui::Stroke::new(
-                                                            2.0_f32,
-                                                            crate::theme::fg(),
-                                                        ))
-                                                        .inner_margin(egui::Margin::symmetric(
-                                                            10, 6,
-                                                        )),
-                                                )
-                                                .hint_text(crate::theme::hint("Name"))
-                                                .font(egui::FontId::proportional(13.0))
-                                                .vertical_align(egui::Align::Center),
-                                        );
-                                        if self.proj_rename_focus {
-                                            edit.request_focus();
-                                            if edit.has_focus() {
-                                                self.proj_rename_focus = false;
-                                            }
-                                        }
-                                        if let Some(lock) = self.proj_rename_lock.clone() {
-                                            if self.proj_rename_buf == lock {
-                                                select_all_edit(ui, edit.id, &self.proj_rename_buf);
-                                            } else {
-                                                self.proj_rename_lock = None;
-                                            }
-                                        }
-                                        // The pill is narrower than cancel_w. Pin it to the slot's right
-                                        // edge so it meets the same inset as the Projects "+".
-                                        let cancel_clicked = ui
-                                            .allocate_ui_with_layout(
-                                                egui::vec2(cancel_w, 30.0),
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| crate::cards::ghost_pill(ui, "Cancel"),
-                                            )
-                                            .inner;
-                                        // Click wins over lost-focus commit: Cancel must not save the folder.
-                                        if cancel_clicked {
-                                            self.cancel_proj_rename();
-                                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                            drop_key(ui, egui::Key::Escape);
-                                            self.cancel_proj_rename();
-                                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                            || (edit.lost_focus() && !self.proj_rename_focus)
-                                        {
-                                            drop_key(ui, egui::Key::Enter);
-                                            self.finish_proj_rename();
-                                        }
-                                    },
-                                );
-                                continue;
-                            }
-                            let show_chats = match kind {
-                                ProjectKind::Folder => open,
-                                ProjectKind::Project => true,
-                            };
-                            let nid = self.projects[idx].id.clone();
-                            // A folder scrolled away still lists the chats nested under it.
-                            if !Self::reserve_offscreen_rail_row(ui) {
-                                let icon = match kind {
-                                    ProjectKind::Folder => crate::icons::RailIcon::Folder,
-                                    ProjectKind::Project => crate::icons::RailIcon::Chat,
-                                };
-                                let active = project_row_active(
-                                    self.project_sel.as_deref()
-                                        == Some(self.projects[idx].id.as_str()),
-                                    kind == ProjectKind::Project,
-                                    self.nav,
-                                );
-                                let painted = ui.horizontal(|ui| {
-                                    crate::icons::paint_tree_gutter(ui, depth);
-                                    if kind == ProjectKind::Folder {
-                                        crate::icons::paint_folder_caret(
-                                            ui,
-                                            open,
-                                            crate::theme::subtle(),
-                                        );
-                                    }
-                                    Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
-                                });
-                                let row = painted.inner;
-                                if row.double_clicked() {
-                                    self.begin_proj_rename(
-                                        self.projects[idx].id.clone(),
-                                        self.projects[idx].name.clone(),
-                                    );
-                                } else if row.clicked()
-                                    || (kind == ProjectKind::Folder
-                                        && painted.response.clicked()
-                                        && !painted.response.double_clicked())
-                                {
-                                    let id = self.projects[idx].id.clone();
-                                    self.activate_project_row(&id);
-                                }
-                                let row_pos = row.rect.left_bottom();
-                                row.context_menu(|ui| {
-                                    for a in project_menu_acts(kind) {
-                                        if ui.button(project_menu_label(*a)).clicked() {
-                                            proj_act = Some((nid.clone(), *a, row_pos));
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            }
-                            if show_chats {
-                                if let Some(act) = self.paint_section_chats(
-                                    ui,
-                                    &threads::project_section_chat_indices(
-                                        &self.threads,
-                                        &nid,
-                                        Some(self.thread_idx),
-                                        live_empty,
-                                    ),
-                                    depth.saturating_add(1),
-                                ) {
-                                    section_act = Some(act);
-                                }
-                            }
-                        }
-                    });
-                if let Some(act) = section_act {
-                    self.apply_tab_act(act);
-                }
-                if let Some((id, act, pos)) = proj_act {
-                    self.proj_menu_pos = pos;
-                    self.apply_project_menu(id, act);
-                }
-                ui.add_space(crate::theme::SPACING_8);
-                ui.horizontal(|ui| {
-                    rail_section_caption(ui, RichText::new("History"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if chip(ui, "See all", true, true).clicked() {
-                            self.nav = Nav::History;
-                        }
-                    });
-                });
-                card_frame(ui, CardVariant::Subtle, true, |ui| {
-                    crate::cards::search_bar(
-                        ui,
-                        &mut self.sidebar_q,
-                        "Filter chats…",
-                        (ui.available_width() - crate::theme::SPACING_8).max(80.0),
-                    );
-                    ui.add_space(crate::theme::SPACING_4);
-                    let hist_h = ui.available_height().max(0.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("rail-history")
-                        .auto_shrink([false, true])
-                        .max_height(hist_h)
-                        .show(ui, |ui| {
-                            let q = self.sidebar_q.to_ascii_lowercase();
-                            let live_empty = self.messages.is_empty();
-                            let listed = threads::chat_section_indices(
-                                &self.threads,
-                                Some(self.thread_idx),
-                                live_empty,
-                            );
-                            let listed: Vec<usize> = listed
-                                .into_iter()
-                                .filter(|&i| {
-                                    q.is_empty()
-                                        || self
-                                            .thread_rail_title(i)
-                                            .to_ascii_lowercase()
-                                            .contains(&q)
-                                })
-                                .collect();
-                            if listed.is_empty() {
-                                let filtered = !q.is_empty();
-                                if filtered {
-                                    if empty_state(
-                                        ui,
-                                        "No matches",
-                                        "Try another filter.",
-                                        Some("Clear"),
-                                    ) {
-                                        self.sidebar_q.clear();
-                                    }
-                                } else {
-                                    let _ = empty_state(
-                                        ui,
-                                        "No chats yet",
-                                        "Start a new chat from the rail.",
-                                        None,
-                                    );
-                                }
-                            } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
-                                self.apply_tab_act(act);
-                            }
-                        });
-                });
                 crate::theme::glide_aim(ui, "rail");
             });
     }
@@ -655,15 +551,21 @@ impl Cabin {
     }
 
     pub(super) fn nav_id(&self) -> &'static str {
+        if self.settings_menu_open {
+            return "profile";
+        }
         match self.page_nav() {
+            Nav::Home => "home",
             Nav::Chat => "chat",
             Nav::History => "history",
             Nav::Journal => "journal",
             Nav::Imagine => "imagine",
             Nav::Workboard => "workboard",
             Nav::Pulse => "pulse",
-            Nav::Settings => "chat",
+            Nav::Settings => "settings",
             Nav::Skills => "skills",
+            Nav::Library => "library",
+            Nav::Objectives => "objectives",
             Nav::Night => "automations",
             Nav::Command => "command",
             Nav::Agents => "queue",
@@ -682,7 +584,11 @@ impl Cabin {
             "workboard" => Nav::Workboard,
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
+            "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
+            "devices" => Nav::Devices,
+            "home" => Nav::Home,
             "chat" => Nav::Chat,
             _ => return,
         };
@@ -702,10 +608,12 @@ impl Cabin {
                 if self.nav != Nav::Settings {
                     self.settings_back = self.nav;
                 }
-                self.settings_sec = SettingsSec::Account;
+                self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Account);
                 Nav::Settings
             }
             "skills" => Nav::Skills,
+            "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "command" => Nav::Command,
             "queue" => Nav::Agents,
@@ -719,8 +627,17 @@ impl Cabin {
                 self.open_connectors();
                 Nav::Settings
             }
+            "home" => {
+                self.open_mission_home();
+                return;
+            }
+            "profile" => {
+                self.settings_menu_open = !self.settings_menu_open;
+                self.settings_menu_ignore = true;
+                return;
+            }
             "chat" => {
-                self.new_thread(false);
+                self.open_last_chat_tab();
                 Nav::Chat
             }
             _ => Nav::Chat,
@@ -746,6 +663,229 @@ impl Cabin {
         }
     }
 
+    pub(super) fn ui_projects_and_history(&mut self, ui: &mut egui::Ui, rail_w: f32) {
+        let _ = rail_w;
+        ui.horizontal(|ui| {
+            rail_section_caption(ui, RichText::new("Projects"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let plus = crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
+                    .on_hover_text("New folder");
+                if plus.clicked() {
+                    self.stage_new_folder();
+                }
+            });
+        });
+        let tree = visible_tree(&self.projects);
+        let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
+        let mut section_act: Option<TabAct> = None;
+        let live_empty = self.messages.is_empty();
+        let row_gap = ui.spacing().item_spacing.y;
+        let pitch = crate::theme::NAV_ROW_H + row_gap;
+        let raw_h = 200.0_f32;
+        let proj_h = (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
+        egui::ScrollArea::vertical()
+            .id_salt("rail-projects")
+            .auto_shrink([false, true])
+            .max_height(proj_h)
+            .show(ui, |ui| {
+                for (depth, idx) in tree {
+                    let kind = self.projects[idx].kind;
+                    let open = self.projects[idx].open;
+                    if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 30.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                crate::icons::paint_tree_gutter(ui, depth);
+                                let cancel_w = 78.0;
+                                let gap = ui.spacing().item_spacing.x;
+                                let edit_w = (ui.available_width() - cancel_w - gap).max(48.0);
+                                {
+                                    let visuals = ui.visuals_mut();
+                                    visuals.weak_text_color = Some(crate::theme::muted());
+                                    visuals.text_cursor.stroke =
+                                        egui::Stroke::new(2.0_f32, crate::theme::fg());
+                                }
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.proj_rename_buf)
+                                        .desired_width(edit_w)
+                                        .min_size(egui::vec2(edit_w, 30.0))
+                                        .frame(
+                                            egui::Frame::NONE
+                                                .fill(crate::theme::elevated())
+                                                .corner_radius(15.0)
+                                                .stroke(egui::Stroke::new(
+                                                    2.0_f32,
+                                                    crate::theme::fg(),
+                                                ))
+                                                .inner_margin(egui::Margin::symmetric(10, 6)),
+                                        )
+                                        .hint_text(crate::theme::hint("Name"))
+                                        .font(egui::FontId::proportional(13.0))
+                                        .vertical_align(egui::Align::Center),
+                                );
+                                if self.proj_rename_focus {
+                                    edit.request_focus();
+                                    if edit.has_focus() {
+                                        self.proj_rename_focus = false;
+                                    }
+                                }
+                                if let Some(lock) = self.proj_rename_lock.clone() {
+                                    if self.proj_rename_buf == lock {
+                                        select_all_edit(ui, edit.id, &self.proj_rename_buf);
+                                    } else {
+                                        self.proj_rename_lock = None;
+                                    }
+                                }
+                                let cancel_clicked = ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(cancel_w, 30.0),
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| crate::cards::ghost_pill(ui, "Cancel"),
+                                    )
+                                    .inner;
+                                if cancel_clicked {
+                                    self.cancel_proj_rename();
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    drop_key(ui, egui::Key::Escape);
+                                    self.cancel_proj_rename();
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    || (edit.lost_focus() && !self.proj_rename_focus)
+                                {
+                                    drop_key(ui, egui::Key::Enter);
+                                    self.finish_proj_rename();
+                                }
+                            },
+                        );
+                        continue;
+                    }
+                    let show_chats = match kind {
+                        ProjectKind::Folder => open,
+                        ProjectKind::Project => true,
+                    };
+                    let nid = self.projects[idx].id.clone();
+                    if !Self::reserve_offscreen_rail_row(ui) {
+                        let icon = match kind {
+                            ProjectKind::Folder => crate::icons::RailIcon::Folder,
+                            ProjectKind::Project => crate::icons::RailIcon::Chat,
+                        };
+                        let active = project_row_active(
+                            self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
+                            kind == ProjectKind::Project,
+                            self.nav,
+                        );
+                        let painted = ui.horizontal(|ui| {
+                            crate::icons::paint_tree_gutter(ui, depth);
+                            if kind == ProjectKind::Folder {
+                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
+                            }
+                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                        });
+                        let row = painted.inner;
+                        if row.double_clicked() {
+                            self.begin_proj_rename(
+                                self.projects[idx].id.clone(),
+                                self.projects[idx].name.clone(),
+                            );
+                        } else if row.clicked()
+                            || (kind == ProjectKind::Folder
+                                && painted.response.clicked()
+                                && !painted.response.double_clicked())
+                        {
+                            let id = self.projects[idx].id.clone();
+                            self.activate_project_row(&id);
+                        }
+                        let row_pos = row.rect.left_bottom();
+                        row.context_menu(|ui| {
+                            for a in project_menu_acts(kind) {
+                                if ui.button(project_menu_label(*a)).clicked() {
+                                    proj_act = Some((nid.clone(), *a, row_pos));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if show_chats {
+                        if let Some(act) = self.paint_section_chats(
+                            ui,
+                            &threads::project_section_chat_indices(
+                                &self.threads,
+                                &nid,
+                                Some(self.thread_idx),
+                                live_empty,
+                            ),
+                            depth.saturating_add(1),
+                        ) {
+                            section_act = Some(act);
+                        }
+                    }
+                }
+            });
+        if let Some(act) = section_act {
+            self.apply_tab_act(act);
+        }
+        if let Some((id, act, pos)) = proj_act {
+            self.proj_menu_pos = pos;
+            self.apply_project_menu(id, act);
+        }
+        ui.add_space(crate::theme::SPACING_8);
+        ui.horizontal(|ui| {
+            rail_section_caption(ui, RichText::new("History"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if chip(ui, "See all", true, true).clicked() {
+                    self.nav = Nav::History;
+                }
+            });
+        });
+        card_frame(ui, CardVariant::Subtle, true, |ui| {
+            crate::cards::search_bar(
+                ui,
+                &mut self.sidebar_q,
+                "Filter chats…",
+                (ui.available_width() - crate::theme::SPACING_8).max(80.0),
+            );
+            ui.add_space(crate::theme::SPACING_4);
+            let hist_h = 180.0_f32;
+            egui::ScrollArea::vertical()
+                .id_salt("rail-history")
+                .auto_shrink([false, true])
+                .max_height(hist_h)
+                .show(ui, |ui| {
+                    let q = self.sidebar_q.to_ascii_lowercase();
+                    let live_empty = self.messages.is_empty();
+                    let listed = threads::chat_section_indices(
+                        &self.threads,
+                        Some(self.thread_idx),
+                        live_empty,
+                    );
+                    let listed: Vec<usize> = listed
+                        .into_iter()
+                        .filter(|&i| {
+                            q.is_empty()
+                                || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
+                        })
+                        .collect();
+                    if listed.is_empty() {
+                        let filtered = !q.is_empty();
+                        if filtered {
+                            if empty_state(ui, "No matches", "Try another filter.", Some("Clear")) {
+                                self.sidebar_q.clear();
+                            }
+                        } else {
+                            let _ = empty_state(
+                                ui,
+                                "No chats yet",
+                                "Start a new chat from the rail.",
+                                None,
+                            );
+                        }
+                    } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
+                        self.apply_tab_act(act);
+                    }
+                });
+        });
+    }
+
     /// A rail row is `NAV_ROW_H` plus the item spacing a real `horizontal` leaves
     /// under itself. Off-screen rows keep that slot and the one parent auto-id
     /// `horizontal` would burn, and skip the icon, label, and click target.
@@ -761,7 +901,7 @@ impl Cabin {
     /// One sidebar chat list. The project section and the chat section both use this.
     /// A click switches, pins, renames, or deletes that chat. It does not take a project
     /// selection, so the other list stays as it was.
-    fn paint_section_chats(
+    pub(super) fn paint_section_chats(
         &mut self,
         ui: &mut egui::Ui,
         listed: &[usize],
@@ -778,15 +918,9 @@ impl Cabin {
             if threads::is_background_history_title(&title) {
                 continue;
             }
-            let t = &self.threads[i];
             rows.push(Row {
                 title,
-                key: threads::SessionSortKey {
-                    pinned: t.pinned,
-                    pinned_ms: t.pinned_ms,
-                    accessed_ms: t.accessed_ms,
-                    list_rank: 0,
-                },
+                key: threads::sort_key(&self.threads[i]),
                 idx: i,
             });
         }
@@ -823,6 +957,10 @@ impl Cabin {
             if resp.clicked() {
                 act = Some(TabAct::Switch(i));
             }
+            // Main has no Pin, Archive, Rename, or Delete.
+            if self.threads.get(i).is_some_and(|t| t.main) {
+                continue;
+            }
             if resp.double_clicked() {
                 act = Some(TabAct::StartRename(i));
             }
@@ -852,7 +990,7 @@ impl Cabin {
         act
     }
 
-    fn apply_tab_act(&mut self, act: TabAct) {
+    pub(super) fn apply_tab_act(&mut self, act: TabAct) {
         match act {
             TabAct::Switch(i) => {
                 self.switch_thread(i);
@@ -879,5 +1017,45 @@ impl Cabin {
             }
             TabAct::Delete(i) => self.delete_thread_at(i),
         }
+    }
+}
+
+#[cfg(test)]
+mod titlebar_pill_tests {
+    use eframe::egui;
+
+    #[test]
+    fn the_titlebar_pills_are_framed_and_never_touch() {
+        let _g = crate::config::hold_test_config();
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let root = crate::config::test_config_root("titlebar-pills");
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = super::Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        for _ in 0..2 {
+            let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| cabin.paint_loadout_titlebar_pills(ui));
+                });
+            });
+        }
+        let rect = |i: usize| {
+            ctx.read_response(egui::Id::new(("titlebar-pill", i)))
+                .expect("pill painted")
+                .rect
+        };
+        let (personality, sent) = (rect(0), rect(1));
+        assert!(
+            sent.left() - personality.right() >= super::TITLEBAR_PILL_GAP - 0.5,
+            "pills touch: {personality:?} then {sent:?}"
+        );
+        // The pill's frame holds its 11 pt text plus 3 px top and bottom.
+        assert!(sent.height() >= 17.0, "LOCAL chip has no frame: {sent:?}");
+        cabin.persist_svc.flush();
+        drop(cabin);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

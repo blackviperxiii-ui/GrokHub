@@ -171,7 +171,7 @@ fn decode_image_row(path: &Path) -> (Option<ColorImage>, Option<String>, Option<
     }
 }
 
-fn thumb_for_path(path: &Path) -> Option<ColorImage> {
+pub(super) fn thumb_for_path(path: &Path) -> Option<ColorImage> {
     let img = image::open(path).ok()?;
     let w = ((img.width() as f32) * 0.25).max(1.0) as u32;
     let h = ((img.height() as f32) * 0.25).max(1.0) as u32;
@@ -326,6 +326,21 @@ impl Cabin {
     }
 
     pub(super) fn stage_plus_ready_chat(&mut self, ready: PlusReady) {
+        let thumb = if ready.kind == AttachKind::Image {
+            thumb_for_path(Path::new(&ready.raw))
+        } else {
+            None
+        };
+        self.stage_plus_ready_chat_thumb(ready, thumb);
+    }
+
+    /// Stage a chat attachment whose thumbnail was already made, so a worker
+    /// can do the decode.
+    pub(super) fn stage_plus_ready_chat_thumb(
+        &mut self,
+        ready: PlusReady,
+        thumb: Option<ColorImage>,
+    ) {
         if self.attach_tray.len() >= PENDING_ATTACH_MAX {
             self.status = "too many attachments".into();
             return;
@@ -340,11 +355,6 @@ impl Cabin {
             self.status = "too many attachments".into();
             return;
         }
-        let thumb = if ready.kind == AttachKind::Image {
-            thumb_for_path(Path::new(&ready.raw))
-        } else {
-            None
-        };
         self.attach_tray.rows.push(AttachTrayRow {
             preparing: false,
             thumb,

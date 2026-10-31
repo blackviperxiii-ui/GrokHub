@@ -145,7 +145,15 @@ const COMMANDS = {
   list_automations: () => ({ ok: true, value: [] }),
   get_memory: () => ({
     ok: true,
-    value: { global: "", workspace: "", globalPath: "", workspacePath: "", amr: false },
+    value: {
+      global: "",
+      workspace: "",
+      globalPath: "",
+      workspacePath: "",
+      amr: false,
+      writesOn: false,
+      rows: [],
+    },
   }),
   list_connectors: () => ({ ok: true, value: [] }),
   get_pulse: () => ({ ok: true, value: pulsePage() }),
@@ -263,7 +271,7 @@ async function main() {
     check(STATE.loved, "Love never reached the desktop");
     console.log("pulse: post with its image shown, Love sent");
 
-    await page.getByRole("button", { name: "Ideas", exact: true }).click();
+    await page.getByRole("button", { name: "For You", exact: true }).click();
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
     await idea.getByRole("button", { name: "More" }).click();
     const items = await idea.getByRole("menuitem").allTextContents();
@@ -278,6 +286,15 @@ async function main() {
     check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
     check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
     console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
+
+    // Every view renders on what the desktop sends; a missing field here
+    // once blanked the whole page.
+    for (const view of ["Automations", "Connectors", "Memory"]) {
+      await page.locator("nav.tabs button", { hasText: view }).click();
+      await page.getByRole("button", { name: "Chat" }).waitFor({ timeout: 10000 });
+    }
+    await page.getByRole("textbox", { name: "New note" }).waitFor({ timeout: 10000 });
+    console.log("automations, memory and connectors render");
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();

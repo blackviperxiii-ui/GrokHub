@@ -105,10 +105,11 @@ lockfile in step, and `bump --check` fails if they drift.
 - Tray: Show GrokHub and Quit. A left click shows the window.
 - `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
   plain-http loopback URLs are accepted, so it cannot move real traffic.
-- Tests: `npm test` in `ui/` (vitest), `cargo test` and clippy in
-  `src-tauri/`, and `node ui/e2e/smoke.mjs <binary>`. The smoke test drives the
-  built shell through tauri-driver, sends a chat to a mock model and waits for
-  the reply. tauri-driver has no macOS backend, so macOS only builds.
+- Tests: `npm run lint` and `npm test` in `ui/` (ESLint and Vitest),
+  `cargo test` and clippy in `src-tauri/`, and
+  `node ui/e2e/smoke.mjs <binary>`. The smoke test drives the built shell
+  through tauri-driver, sends a chat to a mock model and waits for the reply.
+  `tauri-driver` has no macOS backend, so macOS only builds.
 
 Build locally (Linux needs `libwebkit2gtk-4.1-dev`,
 `libayatana-appindicator3-dev` and `librsvg2-dev`):
@@ -226,7 +227,7 @@ approve, the cabin's three permission modes.
 
 **3f, Pulse.** A Pulse page shows the cabin's Feed and Ideas from the same
 `updates.json`, ranked by the same rules (`grokhub_core::pulse`), with the
-MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
+Pulse ledger (`memory/pulse-ledger.md`) as input (`src-tauri/src/pulse.rs`).
 
 - Feed opens first, one column of cards, newest first, ten at a time with
   more as you scroll (`ui/src/FeedCard.tsx`). A card shows the topic emoji
@@ -258,7 +259,8 @@ MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
   open journal questions, interest topics, recent chats and recent feed
   posts. A written idea retires after 14 days unless it was edited.
 - Dismiss, Not this, Love and Accept write the cabin's one-line ledger entry
-  to the global MEMORY.md, so the next ranking learns from them. Snooze hides
+  to `memory/pulse-ledger.md` (older lines still in MEMORY.md are read too),
+  so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
 - Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its
@@ -371,8 +373,18 @@ origin, so there's no CORS.
 | Request | Auth | Reply |
 |---------|------|-------|
 | `GET /remote/v1/hello` | none | `{"kind": "grokhub-remote", "version": 1}` |
-| `POST /remote/v1/call/<command>`, a JSON body of the command's arguments (the same names as `invoke`) | `Authorization: Bearer <code>` | `{"ok": true, "value": …}` or `{"ok": false, "error": "<message>"}`; 401 for a wrong code |
-| `GET /remote/v1/events` | `Authorization: Bearer <code>` | `text/event-stream`; each frame is `data: {"event": "chat://event", "payload": …}` |
+| `POST /remote/v1/call/<command>`, a JSON body of the command's arguments (the same names as `invoke`) | `Authorization: Bearer <code>` | `{"ok": true, "value": …, "seq": N}` or `{"ok": false, "error": "<message>", "seq": N}`; 401 for a wrong code |
+| `GET /remote/v1/events`, optionally `Last-Event-ID: <id>` | `Authorization: Bearer <code>` | `text/event-stream`; each frame is `id: <n>` then `data: {"event": "chat://event", "payload": …}` |
+
+Event ids count up from 1. A new stream starts with an id-only frame naming
+the newest id. When a stream drops, the page reopens it every second with
+`Last-Event-ID` set to the last id it saw, and the desktop first sends every
+frame after that id from the last 4,096 it keeps. If the frames it needs are
+no longer kept, it sends one `remote://gap` event instead, and the chat says
+part of the reply may be missing. A call's `seq` is the newest id once the
+command ran, and the page holds the call's result until its stream has
+reached that id. So a turn's text is on screen before `send_chat` returns,
+even if the stream dropped during the turn.
 
 The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
@@ -386,7 +398,7 @@ Local AI and desktop control.
 report).
 
 - Turning it on serves `ui/dist` (the shell's own embedded UI) and the API
-  above on port 4620 of every interface, with a fresh 48-character pairing
+  above over HTTPS on port 4620 of every interface, with a fresh 48-character pairing
   code. Settings shows the LAN and localhost pairing links. The code is never
   saved, so turning web access off or quitting GrokHub ends every pairing,
   and the next start needs a new code.
@@ -410,9 +422,18 @@ report).
   model. The step checks that the web chat got no desktop tools while
   desktop control was on, that `set_api_key` is refused, and that turning
   it off stops the server.
-- Not yet: HTTPS. On the LAN the code and the chats travel as plain HTTP,
-  as the Settings note says, and a paired browser can approve file changes
-  and commands. Web access stays a Preview until it has HTTPS.
+- HTTPS on the LAN (`src-tauri/src/remote_tls.rs`). Port 4620 is TLS
+  (rustls, ring) with a self-signed certificate for `localhost`,
+  `127.0.0.1` and the LAN address. The certificate is made with rcgen,
+  saved under `{config}/web-access/` (the key is mode 0600), and reused
+  while the hosts stay the same, so a browser that accepted it once doesn't
+  warn again. Each TLS connection is decrypted and passed to the plain
+  server, which listens on a random loopback port only. Settings shows the
+  HTTPS LAN link, the loopback `http://127.0.0.1:<port>` link and the
+  certificate's SHA-256 fingerprint, so the user can check it against the
+  browser's certificate viewer before continuing past the warning. A paired
+  browser can still approve file changes and commands, so web access stays
+  a Preview.
 
 ## Phase 6 status
 

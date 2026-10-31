@@ -214,12 +214,16 @@ impl ProtectedSurface {
         // only its row name is matched against the protected words.
         let scanned = t.strip_prefix("policy:").unwrap_or(&t);
         if let Some(area) = protected_area(scanned) {
-            return Err(format!("GrokHub never changes {area} on its own"));
+            return Err(format!(
+                "{product} never changes {area} on its own",
+                product = crate::brand::product_name()
+            ));
         }
         if t.contains(".rs") || t.contains('/') || t.contains('\\') || t.contains("..") {
-            return Err(
-                "GrokHub never changes its own code or files outside its tunable areas".into(),
-            );
+            return Err(format!(
+                "{product} never changes its own code or files outside its tunable areas",
+                product = crate::brand::product_name()
+            ));
         }
         let Some((kind, name)) = t.split_once(':') else {
             return Err(NOT_ALLOWED.into());
@@ -257,7 +261,10 @@ impl ProtectedSurface {
         if base.is_some_and(|b| b.care == CRITICAL_CARE)
             && (new.care != CRITICAL_CARE || new.goal != CRITICAL_GOAL)
         {
-            return Err(format!("GrokHub never lowers the {key} row on its own"));
+            return Err(format!(
+                "{product} never lowers the {key} row on its own",
+                product = crate::brand::product_name()
+            ));
         }
         if new.key() != key {
             return Err(format!(
@@ -312,26 +319,29 @@ impl ProtectedSurface {
     }
 }
 
-/// The locks on a system-domain playbook (Repair Linux, Repair Windows).
+/// The locks on a system-domain playbook (Fix this PC).
 fn system_locks(base: &Playbook, new: &Playbook) -> Result<(), String> {
     let name = &base.name;
     if !new.applies_when.domain.iter().any(|d| d == SYSTEM_DOMAIN) {
         return Err(format!(
-            "GrokHub never moves {name} out of the system domain on its own"
+            "{product} never moves {name} out of the system domain on its own",
+            product = crate::brand::product_name()
         ));
     }
     if new.backup.trim().is_empty() || new.verify.trim().is_empty() {
         return Err(format!(
-            "GrokHub never empties the back-up or check of {name} on its own"
+            "{product} never empties the back-up or check of {name} on its own",
+            product = crate::brand::product_name()
         ));
     }
     for phase in &base.phases {
         let kept = new.phases.iter().find(|p| p.name == phase.name);
         if kept.is_some_and(|p| p.tier < phase.tier) {
             return Err(format!(
-                "GrokHub never lowers the care of {name} on its own: the \"{}\" phase was {}",
+                "{product} never lowers the care of {name} on its own: the \"{}\" phase was {}",
                 phase.name,
-                phase.tier.label().to_lowercase()
+                phase.tier.label().to_lowercase(),
+                product = crate::brand::product_name()
             ));
         }
     }
@@ -340,15 +350,17 @@ fn system_locks(base: &Playbook, new: &Playbook) -> Result<(), String> {
         match found {
             None if guarded_step(&phase.name, &step.name) => {
                 return Err(format!(
-                    "GrokHub never removes the \"{}\" step from {name} on its own",
-                    step.name
+                    "{product} never removes the \"{}\" step from {name} on its own",
+                    step.name,
+                    product = crate::brand::product_name()
                 ));
             }
             Some((p, s)) if s.tier_in(p) < step.tier_in(phase) => {
                 return Err(format!(
-                    "GrokHub never lowers the care of {name} on its own: \"{}\" was {}",
+                    "{product} never lowers the care of {name} on its own: \"{}\" was {}",
                     step.name,
-                    step.tier_in(phase).label().to_lowercase()
+                    step.tier_in(phase).label().to_lowercase(),
+                    product = crate::brand::product_name()
                 ));
             }
             _ => {}
@@ -419,35 +431,35 @@ mod tests {
         let refused = |t: &str| ProtectedSurface::check(t).unwrap_err();
         assert_eq!(
             refused("crates/grokhub-agent/src/harness/hard.rs"),
-            "GrokHub never changes the hard-class list on its own"
+            "Loadout never changes the hard-class list on its own"
         );
         assert_eq!(
             refused("approval.rs"),
-            "GrokHub never changes the gate on its own"
+            "Loadout never changes the gate on its own"
         );
         assert_eq!(
             refused("snippet:mindcheck-floor"),
-            "GrokHub never changes the MindCheck floor on its own"
+            "Loadout never changes the MindCheck floor on its own"
         );
         assert_eq!(
             refused("prompt_template.md"),
-            "GrokHub never changes the honesty rules on its own"
+            "Loadout never changes the honesty rules on its own"
         );
         assert_eq!(
             refused("canary.rs"),
-            "GrokHub never changes the evaluator and rollback on its own"
+            "Loadout never changes the evaluator and rollback on its own"
         );
         assert_eq!(
             refused("skill:approval-rules"),
-            "GrokHub never changes the gate on its own"
+            "Loadout never changes the gate on its own"
         );
         assert_eq!(
             refused("src/main.rs"),
-            "GrokHub never changes its own code or files outside its tunable areas"
+            "Loadout never changes its own code or files outside its tunable areas"
         );
         assert_eq!(
             refused("snippet:../app"),
-            "GrokHub never changes its own code or files outside its tunable areas"
+            "Loadout never changes its own code or files outside its tunable areas"
         );
         assert_eq!(refused("notes.md"), NOT_ALLOWED);
         assert_eq!(refused("theme:dark"), NOT_ALLOWED);
@@ -485,7 +497,7 @@ mod tests {
         );
     }
 
-    /// Repair Linux as shipped, with LF line endings.
+    /// Fix this PC as shipped, with LF line endings.
     fn linux() -> String {
         crate::playbook::BUILTIN[1].replace("\r\n", "\n")
     }
@@ -501,39 +513,39 @@ mod tests {
             Ok(TuneTarget::Policy("any × any".into()))
         );
         assert_eq!(
-            ProtectedSurface::check("playbook:Repair-Linux"),
-            Ok(TuneTarget::Playbook("repair-linux".into()))
+            ProtectedSurface::check("playbook:PC-Fix"),
+            Ok(TuneTarget::Playbook("pc-fix".into()))
         );
         let refused = |t: &str| ProtectedSurface::check(t).unwrap_err();
         assert_eq!(refused("policy:gossip-casual"), NOT_ALLOWED);
         assert_eq!(refused("playbook:repair linux"), NOT_ALLOWED);
         assert_eq!(
             refused("policy:approval-critical"),
-            "GrokHub never changes the gate on its own"
+            "Loadout never changes the gate on its own"
         );
         assert_eq!(
             refused("playbook:hard-class-steps"),
-            "GrokHub never changes the hard-class list on its own"
+            "Loadout never changes the hard-class list on its own"
         );
         assert_eq!(
             refused("playbook:honesty"),
-            "GrokHub never changes the honesty rules on its own"
+            "Loadout never changes the honesty rules on its own"
         );
         assert_eq!(
             refused("playbook:rollback"),
-            "GrokHub never changes the evaluator and rollback on its own"
+            "Loadout never changes the evaluator and rollback on its own"
         );
         assert_eq!(
             refused("policy:harness"),
-            "GrokHub never changes harness policy on its own"
+            "Loadout never changes harness policy on its own"
         );
         assert_eq!(
             refused("harness:policy"),
-            "GrokHub never changes harness policy on its own"
+            "Loadout never changes harness policy on its own"
         );
         assert_eq!(
             refused("skill:policy-notes"),
-            "GrokHub never changes harness policy on its own"
+            "Loadout never changes harness policy on its own"
         );
     }
 
@@ -552,12 +564,12 @@ mod tests {
         let lowered = with(&|r| r.care = "casual".into());
         assert_eq!(
             ProtectedSurface::check_policy_row(key, Some(&base), &lowered),
-            Err("GrokHub never lowers the repair × critical row on its own".into())
+            Err("Loadout never lowers the repair × critical row on its own".into())
         );
         let faster = with(&|r| r.goal = "speed".into());
         assert_eq!(
             ProtectedSurface::check_policy_row(key, Some(&base), &faster),
-            Err("GrokHub never lowers the repair × critical row on its own".into())
+            Err("Loadout never lowers the repair × critical row on its own".into())
         );
         let deeper = with(&|r| r.depth = "check ports before services".into());
         assert_eq!(
@@ -590,35 +602,35 @@ mod tests {
         assert!(text.contains(restore));
         assert_eq!(
             refused(text.replace(restore, "")),
-            "GrokHub never removes the \"Take a restore point before the first change\" step from Repair Linux on its own"
+            "Loadout never removes the \"Take a restore point before the first change\" step from Fix this PC on its own"
         );
         let recheck = "\n[[phase.step]]\nname = \"Re-check with the same probe\"\n";
         assert!(text.contains(recheck));
         assert_eq!(
             refused(text.replace(recheck, "\n")),
-            "GrokHub never removes the \"Re-check with the same probe\" step from Repair Linux on its own"
+            "Loadout never removes the \"Re-check with the same probe\" step from Fix this PC on its own"
         );
-        let reinstall = "name = \"Reinstall packages with missing files\"\n";
+        let reinstall = "name = \"On Arch: reinstall packages with missing files\"\n";
         assert_eq!(
             refused(text.replace(reinstall, &format!("{reinstall}tier = \"safe\"\n"))),
-            "GrokHub never lowers the care of Repair Linux on its own: \"Reinstall packages with missing files\" was risky, asks first"
+            "Loadout never lowers the care of Fix this PC on its own: \"On Arch: reinstall packages with missing files\" was risky, asks first"
         );
         assert_eq!(
             refused(text.replace("name = \"Bigger fixes\"\ntier = \"risky\"", "name = \"Bigger fixes\"\ntier = \"safe\"")),
-            "GrokHub never lowers the care of Repair Linux on its own: the \"Bigger fixes\" phase was risky, asks first"
+            "Loadout never lowers the care of Fix this PC on its own: the \"Bigger fixes\" phase was risky, asks first"
         );
         assert_eq!(
             refused(text.replace("domain = [\"system\"]", "domain = [\"files\"]")),
-            "GrokHub never moves Repair Linux out of the system domain on its own"
+            "Loadout never moves Fix this PC out of the system domain on its own"
         );
         let backup = text.lines().find(|l| l.starts_with("backup = ")).unwrap();
         assert_eq!(
             refused(text.replace(backup, "backup = \"\"")),
-            "GrokHub never empties the back-up or check of Repair Linux on its own"
+            "Loadout never empties the back-up or check of Fix this PC on its own"
         );
         assert_eq!(
-            refused(text.replace("id = \"repair-linux\"", "id = \"repair-other\"")),
-            "a tweak to Repair Linux keeps its id `repair-linux`"
+            refused(text.replace("id = \"pc-fix\"", "id = \"repair-other\"")),
+            "a tweak to Fix this PC keeps its id `pc-fix`"
         );
         // Moving the ports check first lowers nothing and keeps every guarded step.
         let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";

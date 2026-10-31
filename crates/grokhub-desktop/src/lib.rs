@@ -10,6 +10,7 @@ mod broker;
 mod capture;
 #[cfg(target_os = "linux")]
 mod fallback;
+pub mod game_guard;
 mod harness_gate;
 pub mod host;
 mod keys;
@@ -111,18 +112,56 @@ pub fn run_cua_stdio() -> i32 {
             flag: cfg.cua_driver,
             halted: halted(),
         };
-        if let Some(reply) = proxy.handle_line(&line, gate, &dir, &mut halted) {
+        if let Some(reply) = cua_line(
+            &mut proxy,
+            &line,
+            gate,
+            game_guard::current,
+            &dir,
+            &mut halted,
+        ) {
             emit(&reply);
         }
     }
     0
 }
 
+/// One Cua stdin line. A halt (which kills a running child) and the switch
+/// or flag being off are handled first; then, since the Cua driver is
+/// desktop control end to end, a call that would reach the child waits
+/// while the user is gaming or an anti-cheat runs.
+fn cua_line<C: grokhub_agent::harness::CuaChild>(
+    proxy: &mut grokhub_agent::harness::CuaProxy<C>,
+    line: &str,
+    gate: grokhub_agent::harness::CuaGate,
+    guard: impl FnOnce() -> game_guard::GameGuard,
+    dir: &std::path::Path,
+    halted: &mut dyn FnMut() -> bool,
+) -> Option<String> {
+    if gate.halted {
+        proxy.halt();
+    }
+    if gate.enabled && gate.flag && !proxy.is_halted() {
+        if let Some(reply) = guard_refusal_line(line, guard()) {
+            return Some(reply);
+        }
+    }
+    proxy.handle_line(line, gate, dir, halted)
+}
+
+/// The refusal for a `tools/call` line the game guard holds, or `None` for
+/// any other line or a clear guard.
+fn guard_refusal_line(line: &str, guard: game_guard::GameGuard) -> Option<String> {
+    let call = harness_gate::parse_call(line)?;
+    let msg = guard.blocks(game_guard::Guarded::DesktopControl)?;
+    Some(harness_gate::refusal_reply(&call.id, &msg))
+}
+
 /// Linux only, the pinned release only, from `cuaDriverPath` or PATH.
 fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
     use grokhub_agent::harness as hx;
     if !cfg!(target_os = "linux") {
-        return Err(hx::CUA_LINUX_ONLY_MSG.into());
+        return Err((*hx::CUA_LINUX_ONLY_MSG).into());
     }
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
@@ -230,6 +269,26 @@ pub fn resolve_bin(name: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// Move files to the trash (Linux) or the Recycle Bin (Windows). Refuses
+/// on Windows when a path's Recycle Bin is missing or turned off, where it
+/// would delete for good.
+pub fn trash_paths(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    trash_guarded(paths, apps::no_recycle_bin, apps::trash)
+}
+
+const NO_BIN_MSG: &str = "That drive's Recycle Bin is missing or turned off, so nothing was moved.";
+
+fn trash_guarded(
+    paths: &[std::path::PathBuf],
+    no_bin: impl Fn(&std::path::Path) -> bool,
+    trash: impl FnOnce(&[std::path::PathBuf]) -> Result<(), String>,
+) -> Result<(), String> {
+    if paths.iter().any(|p| no_bin(p)) {
+        return Err(NO_BIN_MSG.into());
+    }
+    trash(paths)
+}
+
 pub fn which(name: &str) -> bool {
     resolve_bin(name).is_some()
 }
@@ -257,11 +316,18 @@ pub(crate) fn publish_capture_backend(label: &str) {
         .unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
 }
 
+/// The Settings note under the desktop switch: the input and capture
+/// routes, plus a game guard line while something is paused or an always-on
+/// anti-cheat is installed. Never blocks.
 pub fn desktop_panel_lines() -> String {
-    grokhub_core::desktop_mcp::desktop_control_status(
+    let routes = grokhub_core::desktop_mcp::desktop_control_status(
         &active_input_label(),
         &active_capture_label(),
-    )
+    );
+    match game_guard::peek().panel_note() {
+        Some(line) => format!("{routes}\n{line}"),
+        None => routes,
+    }
 }
 
 fn active_input_label() -> String {
@@ -351,9 +417,14 @@ pub fn request_desktop_test(enabled: bool) -> String {
         set_desktop_enabled(false);
         return grokhub_core::desktop_mcp::OFF_MSG.to_string();
     }
-    if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
-        note_halt();
-        return grokhub_core::desktop_mcp::HALT_MSG.to_string();
+    let halted = read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()));
+    match desktop_test_hold(halted, game_guard::current) {
+        Some(TestHold::Halted) => {
+            note_halt();
+            return (*grokhub_core::desktop_mcp::HALT_MSG).to_string();
+        }
+        Some(TestHold::Guard(msg)) => return msg,
+        None => {}
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
@@ -363,6 +434,29 @@ pub fn request_desktop_test(enabled: bool) -> String {
     {
         "Desktop test did not open a session.".into()
     }
+}
+
+/// Why the desktop test does not run.
+#[derive(Debug, PartialEq, Eq)]
+enum TestHold {
+    Halted,
+    /// The game guard's message.
+    Guard(String),
+}
+
+/// A halt is checked first, so a Test after Halt is noted as a halt even
+/// while gaming; then the game guard, since the test moves the pointer on
+/// every monitor.
+fn desktop_test_hold(
+    halted: bool,
+    guard: impl FnOnce() -> game_guard::GameGuard,
+) -> Option<TestHold> {
+    if halted {
+        return Some(TestHold::Halted);
+    }
+    guard()
+        .blocks(game_guard::Guarded::DesktopControl)
+        .map(TestHold::Guard)
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -515,6 +609,10 @@ impl DesktopBackend for LiveBackend {
         apps::focus_window(title)
     }
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
+        // Reading every window's title sends each app (the game too) a message.
+        if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::WindowCheck) {
+            return Err(msg);
+        }
         apps::list_windows()
     }
     fn window_geometry(
@@ -531,12 +629,15 @@ impl DesktopBackend for LiveBackend {
         apps::set_window_geometry(title, geom)
     }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
-        apps::trash(paths)
+        trash_paths(paths)
     }
     // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
         crate::host::target_at(x, y)
+    }
+    fn game_guard(&mut self) -> game_guard::GameGuard {
+        game_guard::current()
     }
 }
 
@@ -585,6 +686,10 @@ impl grokhub_agent::DesktopOps for NativeDesktop {
     fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
         let mut hinted = args.clone();
         let mut server = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        // A held call reads no window or control first; `call` refuses it.
+        if server.guard_refusal(name).is_some() {
+            return hinted;
+        }
         harness_gate::add_hints(&mut server, name, &mut hinted);
         hinted
     }
@@ -637,6 +742,9 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
 pub fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
     let mut backend: Option<Box<dyn DesktopBackend>> = None;
     move || {
+        if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::ScreenRecording) {
+            return Err(msg);
+        }
         if backend.is_none() {
             backend = Some(connect_backend()?);
         }
@@ -683,14 +791,19 @@ fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
 
 /// COMPUTER_CMD hands on a [`DesktopBackend`]: click, double-click, move,
 /// type, key and scroll. `None` for the ops that read the screen instead
-/// (act, wait_for, tabs, cursor, move to a monitor).
+/// (act, wait_for, tabs, cursor, move to a monitor). Nothing is sent while
+/// `guard` holds desktop control.
 #[cfg(any(windows, test))]
 pub(crate) fn drive_hands<B: DesktopBackend>(
     b: &mut B,
     op: &grokhub_core::recipe::ComputerOp,
+    guard: game_guard::GameGuard,
 ) -> Option<Result<String, String>> {
     use grokhub_core::desktop_mcp::{parse_key_combo, MouseButton};
     use grokhub_core::recipe::ComputerOp;
+    if let Some(msg) = guard.blocks(game_guard::Guarded::DesktopControl) {
+        return Some(Err(msg));
+    }
     fn click<B: DesktopBackend>(b: &mut B, x: i32, y: i32, times: u8) -> Result<(), String> {
         b.move_abs(x, y)?;
         for _ in 0..times {
@@ -738,7 +851,11 @@ pub fn windows_primary_frame() -> Result<image::RgbaImage, String> {
 /// backend, since xdotool and ydotool are Linux tools.
 #[cfg(windows)]
 pub fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
-    drive_hands(&mut windows::WindowsBackend::new(), op)
+    drive_hands(
+        &mut windows::WindowsBackend::new(),
+        op,
+        game_guard::current(),
+    )
 }
 
 #[cfg(test)]
@@ -751,6 +868,36 @@ pub(crate) fn test_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_volume_without_a_usable_recycle_bin_moves_nothing() {
+        let paths = vec![
+            std::path::PathBuf::from(r"C:\Users\user\Downloads\a.zip"),
+            std::path::PathBuf::from(r"D:\Downloads\b.iso"),
+        ];
+        let mut called = false;
+        let got = trash_guarded(
+            &paths,
+            |p| p.to_string_lossy().starts_with('D'),
+            |_| {
+                called = true;
+                Ok(())
+            },
+        );
+        assert_eq!(got, Err(NO_BIN_MSG.to_string()));
+        assert!(!called, "nothing reaches the Recycle Bin call");
+        let mut moved = Vec::new();
+        let got = trash_guarded(
+            &paths,
+            |_| false,
+            |p| {
+                moved = p.to_vec();
+                Ok(())
+            },
+        );
+        assert_eq!(got, Ok(()));
+        assert_eq!(moved, paths);
+    }
 
     #[test]
     fn cua_proxy_is_wanted_only_with_the_flag_and_the_switch_on_linux() {
@@ -833,11 +980,18 @@ mod tests {
     fn desktop_entry_allows_kwin_screenshot2() {
         let text = include_str!("../../../packaging/grokhub.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
+        assert!(text.lines().any(|line| line == "Name=Loadout"));
         assert!(text.lines().any(|line| line == "Exec=grokhub"));
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
     }
+    const CLEAR: game_guard::GameGuard = game_guard::GameGuard {
+        anticheat: None,
+        gaming: false,
+        idle_anticheat: None,
+    };
+
     /// Records what COMPUTER_CMD hands sent to the backend.
     #[derive(Default)]
     struct Hands {
@@ -888,7 +1042,7 @@ mod tests {
     fn computer_cmd_hands_drive_the_desktop_backend() {
         use grokhub_core::recipe::ComputerOp;
         let mut b = Hands::default();
-        let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 });
+        let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 }, CLEAR);
         assert_eq!(got, Some(Ok("double-clicked 40,7".to_string())));
         assert_eq!(
             b.sent,
@@ -901,7 +1055,8 @@ mod tests {
                 &mut b,
                 &ComputerOp::Key {
                     name: "ctrl+l".into()
-                }
+                },
+                CLEAR
             ),
             Some(Ok("key ctrl+l".to_string()))
         );
@@ -910,12 +1065,13 @@ mod tests {
                 &mut b,
                 &ComputerOp::Type {
                     text: "héllo".into()
-                }
+                },
+                CLEAR
             ),
             Some(Ok("typed 5 chars".to_string()))
         );
         assert_eq!(
-            drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }),
+            drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }, CLEAR),
             Some(Ok("scrolled 3".to_string()))
         );
         assert_eq!(
@@ -928,15 +1084,195 @@ mod tests {
             &mut b,
             &ComputerOp::Key {
                 name: "nosuchkey".into()
-            }
+            },
+            CLEAR
         )
         .unwrap()
         .is_err());
         assert_eq!(
-            drive_hands(&mut b, &ComputerOp::Cursor),
+            drive_hands(&mut b, &ComputerOp::Cursor, CLEAR),
             None,
             "reads stay on the shared path"
         );
         assert!(b.sent.is_empty());
+    }
+
+    #[test]
+    fn computer_cmd_hands_send_nothing_while_the_game_guard_holds() {
+        use grokhub_core::recipe::ComputerOp;
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let faceit = game_guard::GameGuard {
+            anticheat: Some("FACEIT"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let ops = [
+            ComputerOp::Click { x: 1, y: 2 },
+            ComputerOp::DoubleClick { x: 1, y: 2 },
+            ComputerOp::Move { x: 1, y: 2 },
+            ComputerOp::Type { text: "hi".into() },
+            ComputerOp::Key {
+                name: "ctrl+l".into(),
+            },
+            ComputerOp::Scroll { dy: 3 },
+        ];
+        for op in &ops {
+            let mut b = Hands::default();
+            assert_eq!(
+                drive_hands(&mut b, op, gaming),
+                Some(Err("Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())),
+                "{op:?}"
+            );
+            assert_eq!(
+                drive_hands(&mut b, op, faceit),
+                Some(Err("Desktop control is blocked while FACEIT is running so it doesn't flag this PC.".to_string())),
+                "{op:?}"
+            );
+            assert!(b.sent.is_empty(), "{op:?} reached SendInput");
+        }
+    }
+
+    #[test]
+    fn a_held_cua_call_is_refused_and_other_lines_pass() {
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"click","arguments":{"x":1,"y":1}}}"#;
+        let reply: serde_json::Value =
+            serde_json::from_str(&guard_refusal_line(call, gaming).expect("refused")).unwrap();
+        assert_eq!(reply["id"], 4);
+        assert_eq!(reply["result"]["isError"], true);
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC."
+        );
+        assert_eq!(
+            guard_refusal_line(call, game_guard::GameGuard::default()),
+            None
+        );
+        let list = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
+        assert_eq!(guard_refusal_line(list, gaming), None);
+    }
+
+    /// A Cua child that answers `tools/list` and counts its requests and kills.
+    struct FakeCua {
+        requests: std::rc::Rc<std::cell::Cell<usize>>,
+        kills: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl grokhub_agent::harness::CuaChild for FakeCua {
+        fn request(&mut self, _line: &str, id: &serde_json::Value) -> Result<String, String> {
+            self.requests.set(self.requests.get() + 1);
+            Ok(serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}).to_string())
+        }
+        fn notify(&mut self, _line: &str) {}
+        fn kill(&mut self) {
+            self.kills.set(self.kills.get() + 1);
+        }
+    }
+
+    fn reply_text(reply: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(reply).unwrap();
+        v["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn a_halt_or_cua_off_is_handled_before_the_game_guard() {
+        use grokhub_agent::harness::{CuaGate, CuaProxy};
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let faceit = game_guard::GameGuard {
+            anticheat: Some("FACEIT"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let dir = test_root("cua-guard-order");
+        let requests = Rc::new(Cell::new(0));
+        let kills = Rc::new(Cell::new(0));
+        let (r, k) = (requests.clone(), kills.clone());
+        let mut proxy: CuaProxy<FakeCua> = CuaProxy::new(Box::new(move || {
+            Ok(FakeCua {
+                requests: r.clone(),
+                kills: k.clone(),
+            })
+        }));
+        let live = CuaGate {
+            enabled: true,
+            flag: true,
+            halted: false,
+        };
+        let mut never = || false;
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"click","arguments":{"x":1,"y":1}}}"#;
+        // A tools/list starts the child.
+        assert!(cua_line(&mut proxy, list, live, || faceit, &dir, &mut never).is_some());
+        assert_eq!(requests.get(), 1);
+
+        // Live and gaming: the game guard answers, the child is not asked.
+        let held = cua_line(&mut proxy, call, live, || faceit, &dir, &mut never).unwrap();
+        assert_eq!(
+            reply_text(&held),
+            "Desktop control is blocked while FACEIT is running so it doesn't flag this PC."
+        );
+        assert_eq!((requests.get(), kills.get()), (1, 0));
+
+        // The Cua flag off while gaming: the Cua-off answer, not the game's.
+        let off = CuaGate {
+            flag: false,
+            ..live
+        };
+        let reply = cua_line(&mut proxy, call, off, || faceit, &dir, &mut never).unwrap();
+        assert_eq!(reply_text(&reply), *grokhub_agent::harness::CUA_OFF_MSG);
+
+        // A halt while gaming kills the running child and says it halted.
+        let halted = CuaGate {
+            halted: true,
+            ..live
+        };
+        let reply = cua_line(
+            &mut proxy,
+            call,
+            halted,
+            || panic!("the guard is not read after a halt"),
+            &dir,
+            &mut || true,
+        )
+        .unwrap();
+        assert_eq!(reply_text(&reply), *grokhub_core::desktop_mcp::HALT_MSG);
+        assert_eq!(kills.get(), 1, "the halt killed the Cua child");
+        assert!(proxy.is_halted());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_desktop_test_after_halt_is_a_halt_even_while_gaming() {
+        let gaming = game_guard::GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        assert_eq!(
+            desktop_test_hold(true, || panic!("the guard is not read after a halt")),
+            Some(TestHold::Halted)
+        );
+        assert_eq!(
+            desktop_test_hold(false, || gaming),
+            Some(TestHold::Guard(
+                "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".into()
+            ))
+        );
+        assert_eq!(
+            desktop_test_hold(false, game_guard::GameGuard::default),
+            None
+        );
     }
 }

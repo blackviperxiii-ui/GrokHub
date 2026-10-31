@@ -8,7 +8,10 @@ use eframe::egui;
 
 #[test]
 fn health_opens_the_about_page() {
-    assert_eq!(super::health_settings_sec(), super::SettingsSec::About);
+    assert_eq!(
+        super::settings::health_settings_sec(),
+        super::SettingsSec::About
+    );
 }
 
 #[test]
@@ -103,8 +106,8 @@ fn palette_search_walks_nested_files_off_the_ui_thread() {
         "palette search walks the current place off the UI thread: {kick}"
     );
     assert!(
-        src.contains("RailIcon::Search") && src.contains("self.open_palette()"),
-        "Search stays the palette — no second search page"
+        src.contains("Search ({SEARCH_KEY_HINT})") && src.contains("self.open_palette()"),
+        "Search stays the palette (chat tab tools) — no second search page"
     );
 }
 
@@ -257,10 +260,20 @@ fn settings_drops_cabin_tabs() {
 }
 
 #[test]
-fn about_section_opens_update() {
+fn about_heading_opens_about_with_the_build() {
+    // QA: the About heading opened a panel titled "Update" with no version.
     assert_eq!(
         super::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::Update
+        super::SettingsSec::About
+    );
+    let about = include_str!("settings.rs")
+        .split("SettingsSec::About => {")
+        .nth(1)
+        .and_then(|s| s.split("SettingsSec::Defaults => {").next())
+        .expect("About arm");
+    assert!(
+        about.contains("crate::update::build_detail_line()"),
+        "About shows the version and build: {about}"
     );
 }
 
@@ -286,11 +299,11 @@ fn general_section_opens_account() {
 }
 
 #[test]
-fn settings_cabin_defaults_section() {
+fn settings_defaults_section() {
     let settings = include_str!("settings.rs");
     assert!(
-        settings.contains("(SettingsSec::Defaults, \"Cabin defaults\")"),
-        "Cabin defaults is a Settings section"
+        settings.contains("(SettingsSec::Defaults, \"Defaults\")"),
+        "Defaults is a Settings section"
     );
     let defaults = settings
         .split("SettingsSec::Defaults => {")
@@ -319,6 +332,21 @@ fn settings_cabin_defaults_section() {
         cards.contains("pub fn session_row(") && cards.contains("(\"always-approve\", \"Always\")"),
         "composer pills stay the live session controls, including Always"
     );
+}
+
+#[test]
+fn appearance_applies_without_a_save_action() {
+    assert!(!super::settings::settings_save_visible(
+        super::SettingsSec::Appearance
+    ));
+    assert!(super::settings::settings_save_visible(
+        super::SettingsSec::Account
+    ));
+}
+
+#[test]
+fn home_api_key_hint_points_to_defaults() {
+    assert!(include_str!("pages.rs").contains("or add an API key in Settings → Defaults."));
 }
 
 #[test]
@@ -471,11 +499,21 @@ fn set_nav_id_opens_each_page() {
     assert!(cabin.messages.is_empty());
     assert!(!cabin.running);
 
-    let draft = crate::threads::ChatThread::new("Chat", false);
-    let id = draft.id.clone();
-    cabin.threads.push(draft);
-    cabin.thread_idx = 0;
-    cabin.messages = std::sync::Arc::new(Vec::new());
+    let mut kept = crate::threads::ChatThread::new("Harbor", false);
+    kept.messages = std::sync::Arc::new(vec![("user".into(), "dock note".into())]);
+    kept.accessed_ms = 5_000;
+    let kept_id = kept.id.clone();
+    cabin.threads.push(kept);
+    cabin.thread_idx = cabin.threads.len() - 1;
+    cabin.messages = cabin.threads[cabin.thread_idx].messages.clone();
+    cabin.remember_last_chat_tab();
+    assert_eq!(cabin.cfg.last_chat_tab, kept_id);
+    cabin.open_fresh_home();
+    assert_eq!(
+        cabin.cfg.last_chat_tab, kept_id,
+        "Home must keep last_chat_tab"
+    );
+    assert!(cabin.messages.is_empty());
     let n = cabin.threads.len();
     let io = cabin.persist_io.clone();
     let block = io.lock().unwrap_or_else(|e| e.into_inner());
@@ -483,9 +521,9 @@ fn set_nav_id_opens_each_page() {
     drop(block);
     assert!(matches!(cabin.nav, super::Nav::Chat));
     assert_eq!(cabin.threads.len(), n);
-    assert_eq!(cabin.threads[0].id, id);
-    assert!(cabin.messages.is_empty());
-    assert_eq!(cabin.status, "New chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, kept_id);
+    assert_eq!(cabin.messages.len(), 1);
+    assert_eq!(cabin.messages[0].1, "dock note");
     assert!(!cabin.running);
 
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -577,7 +615,7 @@ fn settings_section_titles_match_the_page() {
     ));
     assert!(matches!(
         super::settings::settings_group_home(super::SettingsGroup::About),
-        super::SettingsSec::Update
+        super::SettingsSec::About
     ));
 }
 
@@ -811,15 +849,23 @@ fn palette_arrow_down_reveals_the_next_row_before_the_edge() {
 }
 
 #[test]
-fn motion_wave2e_pulse_header_control_unmoved() {
+fn pulse_header_has_both_actions_and_no_tab_switch() {
     let pulse = include_str!("pulse_ui.rs");
+    let header = pulse
+        .split("fn paint_pulse_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_source_status(").next())
+        .expect("paint_pulse_header");
     assert!(
-        pulse.contains("HEADER_SLOT_W") && pulse.contains("felt_segment"),
-        "Feed|Ideas must keep the fixed header slot"
+        header.contains("ghost_pill(ui, \"Feed instructions\")")
+            && header.contains("ghost_pill(ui, suggest_label(busy))"),
+        "the title row carries Suggest for you and Feed instructions: {header}"
     );
     assert!(
-        pulse.contains("pulse_tab_t") && pulse.contains("ideas_axis_x"),
-        "Pulse must use Wave 2E crossfade helpers"
+        !pulse.contains("PulseTab")
+            && !pulse.contains("pulse_header_tab")
+            && !pulse.contains("pulse_tab_t"),
+        "Pulse is one stream: no Feed | For You switch or crossfade"
     );
 }
 
@@ -970,6 +1016,17 @@ fn labs_beta_channel_toggle_is_wired() {
             && settings.contains("maybe_auto_off_beta_channel")
             && settings.contains("channel_auto_off_note"),
         "Labs must wire the Beta channel toggle, status line, Windows note, and auto-off"
+    );
+    assert!(
+        settings.contains("ui_labs_diagnostics"),
+        "Labs must paint the Diagnostics mode toggle"
+    );
+    let diag = include_str!("diagnostics_ui.rs");
+    assert!(
+        diag.contains("Diagnostics mode")
+            && diag.contains("save_chat_diagnostics")
+            && diag.contains("loadout-diagnostics"),
+        "Labs Diagnostics UI must wire the mode toggle and Desktop zip export"
     );
     let app = include_str!("mod.rs");
     assert!(

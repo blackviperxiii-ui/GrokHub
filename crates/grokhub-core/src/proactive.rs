@@ -255,6 +255,9 @@ pub struct ProactiveMeta {
     /// The step a Prepare card holds back ("send the reply to Sam").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_step: Option<String>,
+    /// Where the candidate came from: its category for learned reactions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CandidateSource>,
 }
 
 /// The card for a surfaced candidate, on the existing Pulse/Home surfaces.
@@ -293,6 +296,7 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
         tool: candidate.tool.clone(),
         hard: candidate.class == CandidateClass::Hard,
         final_step: (candidate.class == CandidateClass::Hard).then(|| candidate.action.clone()),
+        source: Some(candidate.source),
     });
     card
 }

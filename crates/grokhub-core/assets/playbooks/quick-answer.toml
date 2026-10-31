@@ -1,0 +1,35 @@
+# Loadout playbook: a plain question that needs an answer, not a task.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make Loadout skip an approval.
+
+id = "quick-answer"
+name = "Quick answer"
+summary = "Answer the question first in plain words. Do not offer tasks, plans, or follow-up work unless the user asks."
+
+checklist = ["answered first", "no task offered"]
+backup = "Nothing is changed: a quick answer only replies."
+verify = "The reply leads with the answer. It does not pitch a task, plan, or next step unless the user asked for one."
+rollback = "If a claim was wrong, correct it in one short follow-up and stop."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["question"]
+
+[[phase]]
+name = "Answer"
+tier = "read_only"
+
+[[phase.step]]
+name = "Answer the asked question first in plain words"
+
+[[phase.step]]
+name = "Stop; do not offer a task, plan, or next step unless asked"

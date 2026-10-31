@@ -14,6 +14,7 @@ pub mod credential;
 pub mod interests;
 pub mod journal;
 pub mod local_ai;
+pub mod local_engine;
 pub mod memory;
 pub mod permissions;
 pub mod personality;
@@ -22,6 +23,7 @@ pub mod plugins;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_tls;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -891,6 +893,37 @@ async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, St
 }
 
 #[tauri::command]
+fn start_local_engine_download(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<local_engine::EngineInfo, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::start_engine(app, state.config_dir.clone())
+}
+
+#[tauri::command]
+fn cancel_local_engine_download() -> Result<(), String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::cancel_engine()
+}
+
+#[tauri::command]
+fn start_local_drafter_download(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    target_id: String,
+) -> Result<Option<local_engine::DraftOffer>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::start_drafter(app, state.config_dir.clone(), target_id)
+}
+
+#[tauri::command]
+fn cancel_local_drafter_download() -> Result<(), String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::cancel_drafter()
+}
+
+#[tauri::command]
 fn get_web_access(web: State<'_, Arc<remote::WebAccess>>) -> remote::WebAccessView {
     web.view()
 }
@@ -908,6 +941,7 @@ fn set_web_access(
         web.stop();
         return Ok(web.view());
     }
+    let config_dir = app.state::<ShellState>().config_dir.clone();
     let dispatch_app = app.clone();
     let dispatch: remote::Dispatch =
         Arc::new(move |command, args| remote_call(&dispatch_app, command, &args));
@@ -919,6 +953,7 @@ fn set_web_access(
     web.start(
         std::net::Ipv4Addr::UNSPECIFIED.into(),
         remote::PORT,
+        Some(&config_dir),
         dispatch,
         assets,
     )
@@ -1331,6 +1366,10 @@ pub fn run() {
             pulse_image,
             get_local_ai,
             save_local_ai,
+            start_local_engine_download,
+            cancel_local_engine_download,
+            start_local_drafter_download,
+            cancel_local_drafter_download,
             reset_local_ai,
             check_model_file,
             run_local_speed_test,

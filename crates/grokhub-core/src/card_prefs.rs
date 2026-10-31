@@ -160,6 +160,31 @@ fn kind_key(kind: UpdateKind) -> &'static str {
     }
 }
 
+/// Kinds that report what happened rather than suggest something.
+const REPORT_KINDS: &[&str] = &[
+    "digest",
+    "self_change",
+    "automation_done",
+    "schedule_created",
+    "done_for_you",
+];
+
+/// Kind/group/topic deltas for one event. A report (digest, run report, self
+/// change) is read where it lands and closed: that is "seen", not "less of
+/// these", so closing one only counts for its kind. Live events and the
+/// signal-log rebuild both go through here so they agree.
+fn deltas_for(
+    kind: &str,
+    event: CardEvent,
+    after_open: Option<bool>,
+) -> (Option<Delta>, Option<Delta>, Option<Delta>) {
+    let (kind_delta, group_delta, topic_delta) = event_deltas(event, after_open);
+    let seen =
+        REPORT_KINDS.contains(&kind) && matches!(event, CardEvent::Dismissed | CardEvent::Rejected);
+    let kind_delta = if seen { Some(Delta::Count) } else { kind_delta };
+    (kind_delta, group_delta, topic_delta)
+}
+
 fn is_stop(word: &str) -> bool {
     STOP.contains(&word)
 }
@@ -346,7 +371,7 @@ pub fn apply_card_event(
     after_open: Option<bool>,
     now: u64,
 ) {
-    let (kind_delta, group_delta, topic_delta) = event_deltas(event, after_open);
+    let (kind_delta, group_delta, topic_delta) = deltas_for(kind_key(card.kind), event, after_open);
     if let Some(delta) = kind_delta {
         bump(&mut prefs.kinds, kind_key(card.kind), delta, now);
     }
@@ -434,10 +459,10 @@ pub fn already_done(card: &UpdateCard, prefs: &CardPrefs) -> bool {
 }
 
 fn apply_signal(prefs: &mut CardPrefs, signal: &CardSignal) {
-    let (kind_delta, group_delta, _) = event_deltas(signal.event, signal.after_open);
+    let kind = signal.kind.trim();
+    let (kind_delta, group_delta, _) = deltas_for(kind, signal.event, signal.after_open);
     let now = signal.ts;
     if let Some(delta) = kind_delta {
-        let kind = signal.kind.trim();
         if !kind.is_empty() {
             bump(&mut prefs.kinds, kind, delta, now);
         }
@@ -879,6 +904,51 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_report_unread_is_seen_not_less_of_its_kind() {
+        let digest = crate::update_feed::digest_card("digest:week", "Weekly digest", "body", 10);
+        let tip = crate::update_feed::suggestion_card("tip:1", "Try split panes", "body", 10);
+        let mut prefs = CardPrefs::default();
+        for event in [CardEvent::Dismissed, CardEvent::Rejected] {
+            apply_card_event(&mut prefs, &digest, event, Some(false), 10);
+            apply_card_event(&mut prefs, &tip, event, Some(false), 10);
+        }
+        // The digest kind only counts the closes.
+        let kind = weight_of(&prefs.kinds, "digest");
+        assert_eq!((kind.pos, kind.neg, kind.n), (0.0, 0.0, 2));
+        // Its own source still learns the close.
+        let group = weight_of(&prefs.groups, &signal_group(&digest));
+        assert!((group.neg - 4.0).abs() < 1e-12, "{}", group.neg);
+        // A suggestion closed unread is still "fewer of these".
+        let kind = weight_of(&prefs.kinds, "suggestion");
+        assert!((kind.neg - 2.5).abs() < 1e-12, "{}", kind.neg);
+    }
+
+    #[test]
+    fn a_rebuild_from_the_signal_log_keeps_report_closes_as_seen() {
+        let dir = std::env::temp_dir().join(format!("card-prefs-replay-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let line = |kind: &str, event: &str| {
+            format!(
+                r#"{{"ts":10,"card_id":"c","kind":"{kind}","group":"g:{kind}","source_id":"s","event":"{event}","after_open":false}}"#
+            )
+        };
+        let log = [
+            line("digest", "dismissed"),
+            line("digest", "rejected"),
+            line("suggestion", "rejected"),
+        ]
+        .join("\n");
+        fs::write(dir.join("card_signals.jsonl"), log).unwrap();
+        let prefs = load_card_prefs(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        let digest = weight_of(&prefs.kinds, "digest");
+        assert_eq!((digest.pos, digest.neg, digest.n), (0.0, 0.0, 2));
+        assert!(weight_of(&prefs.groups, "g:digest").neg > 0.0);
+        assert!(weight_of(&prefs.kinds, "suggestion").neg > 0.0);
+    }
+
+    #[test]
     fn topic_keywords_are_three_title_words_without_digits_or_times() {
         let words = topic_keywords("Run a 12:30 host snapshot 42 please ZephyrFourth");
         assert_eq!(
@@ -976,9 +1046,9 @@ mod tests {
             kind.neg,
             kind.n
         );
-        assert!(
-            (kind.neg - 1.0).abs() < 1e-9,
-            "dismiss without open is negative"
+        assert_eq!(
+            kind.neg, 0.0,
+            "a run report closed unopened is seen, the same as the live path"
         );
         let group = weight_of(&prefs.groups, "run:alpha");
         assert!((group.pos - 1.0).abs() < 1e-9);

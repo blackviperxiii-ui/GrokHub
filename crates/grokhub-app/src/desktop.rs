@@ -14,6 +14,7 @@ use grokhub_core::{
     DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
     IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
 };
+use grokhub_desktop::game_guard::{GameGuard, Guarded};
 use image::GenericImageView;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -33,7 +34,7 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct DeskScan {
     rows: Vec<AtspiRow>,
     lock: Vec<String>,
@@ -639,7 +640,22 @@ pub fn ensure_hands() -> HandsDown {
     hands_peek()
 }
 
+/// The shared window scan (AT-SPI, wmctrl) behind [`collect_rows`] and
+/// [`lock_titles`]. Reading other windows' titles waits while an anti-cheat
+/// runs: every caller then gets an empty scan and no helper is started.
 fn desk_scan() -> DeskScan {
+    desk_scan_under(crate::desktop_mcp::game_guard(), desk_scan_cached)
+}
+
+/// [`desk_scan`] with the game guard the caller read.
+fn desk_scan_under(guard: GameGuard, scan: impl FnOnce() -> DeskScan) -> DeskScan {
+    if guard.blocks(Guarded::WindowCheck).is_some() {
+        return DeskScan::default();
+    }
+    scan()
+}
+
+fn desk_scan_cached() -> DeskScan {
     if let Ok(g) = LAST_DESK_SCAN.lock() {
         if let Some((at, scan)) = g.as_ref() {
             if at.elapsed() < DESK_SCAN_TTL {
@@ -971,10 +987,19 @@ fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<St
 }
 
 pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
+    run_computer_op_under(op, cancel, crate::desktop_mcp::game_guard())
+}
+
+/// [`run_computer_op_cancel`] with the game guard the caller read. A held
+/// op reads no window titles and drives nothing.
+fn run_computer_op_under(op: &ComputerOp, cancel: Option<&AtomicBool>, guard: GameGuard) -> String {
     let started = Instant::now();
     let line = computer_cmd_line(op);
     if cancelled(cancel) {
         return hands_receipt(&line, started, false, "halted");
+    }
+    if let Some(msg) = guard.blocks(Guarded::DesktopControl) {
+        return hands_receipt(&line, started, false, &format!("blocked: {msg}"));
     }
     let titles = lock_titles();
     let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
@@ -1284,6 +1309,15 @@ fn rgba_frame_to_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    capture_jpeg_under(path, crate::desktop_mcp::game_guard())
+}
+
+/// [`capture_jpeg`] with the game guard the caller read. A held capture
+/// grabs no frame and writes no file.
+fn capture_jpeg_under(path: &Path, guard: GameGuard) -> Result<Vec<u8>, String> {
+    if let Some(msg) = guard.blocks(Guarded::ScreenCapture) {
+        return Err(msg);
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1384,10 +1418,39 @@ pub fn capture_data_url() -> Result<String, String> {
     Ok(jpeg_data_url(&bytes))
 }
 
+/// Make `dir` for this user alone: it must not exist yet, and on Unix only
+/// the owner can enter it. A shared temp folder lets anyone pre-create a
+/// fixed name and then read or swap what is written inside.
+pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(dir)
+    }
+}
+
+/// A file in this run's private temp folder, made on first use under a
+/// random name. Voice clips, pasted pictures and spoken replies go here
+/// rather than under a fixed name in the shared temp folder.
+pub(crate) fn private_temp(name: &str) -> Result<PathBuf, String> {
+    static DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("grokhub-{}", grokhub_core::new_token()));
+        create_private_dir(&dir)
+            .map(|()| dir)
+            .map_err(|e| format!("temp folder: {e}"))
+    });
+    dir.as_ref().map(|d| d.join(name)).map_err(Clone::clone)
+}
+
 pub const PLAYERS: &[&str] = &["ffplay", "mpv", "paplay"];
 
 pub fn record_once() -> Result<PathBuf, String> {
-    let wav = std::env::temp_dir().join("grokhub-voice.wav");
+    let wav = private_temp("voice.wav")?;
     record_wav(&wav)?;
     Ok(wav)
 }
@@ -1904,7 +1967,7 @@ fn wayland_display_for_tools() -> Option<String> {
 }
 
 pub fn clipboard_image() -> Option<PathBuf> {
-    let dest = std::env::temp_dir().join("grokhub-clip.png");
+    let dest = private_temp("clip.png").ok()?;
     #[cfg(windows)]
     {
         let png = crate::win_native::clipboard_image().and_then(|(bytes, is_png)| {
@@ -2008,6 +2071,38 @@ pub fn clipboard_once() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_private_dir_refuses_a_folder_that_already_exists() {
+        let dir = std::env::temp_dir().join(format!("gh-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        create_private_dir(&dir).expect("fresh folder");
+        let again = create_private_dir(&dir).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn private_temp_files_share_one_random_folder() {
+        let voice = private_temp("voice.wav").unwrap();
+        let clip = private_temp("clip.png").unwrap();
+        assert_eq!(voice.parent(), clip.parent());
+        assert_eq!(voice.file_name().unwrap(), "voice.wav");
+        let folder = voice.parent().unwrap();
+        assert_eq!(folder.parent().unwrap(), std::env::temp_dir());
+        let name = folder.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("grokhub-") && name.len() == "grokhub-".len() + 48,
+            "{name}"
+        );
+        assert!(folder.is_dir());
+    }
 
     fn png_crc(data: &[u8]) -> u32 {
         let mut crc = 0xffff_ffffu32;
@@ -2281,6 +2376,102 @@ mod tests {
             &ComputerOp::Click { x: 10, y: 20 },
             &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         ));
+    }
+
+    #[test]
+    fn the_game_guard_holds_every_computer_cmd_and_the_eyes_capture() {
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let ops = [
+            ComputerOp::Click { x: 10, y: 20 },
+            ComputerOp::Type { text: "hi".into() },
+            ComputerOp::Key {
+                name: "ctrl+l".into(),
+            },
+            ComputerOp::Act {
+                name: "Save".into(),
+            },
+            ComputerOp::Tab {
+                action: TabAction::List,
+                query: String::new(),
+            },
+            ComputerOp::Cursor,
+        ];
+        for op in &ops {
+            let started = Instant::now();
+            let out = run_computer_op_under(op, None, gaming);
+            assert!(out.contains("exit 1"), "{out}");
+            assert!(
+                out.ends_with("\nblocked: Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC."),
+                "{out}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{op:?} did work"
+            );
+        }
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let out = run_computer_op_under(&ComputerOp::Click { x: 1, y: 2 }, None, eac);
+        assert!(
+            out.ends_with("\nblocked: Desktop control is blocked while Easy Anti-Cheat is running so it doesn't flag this PC."),
+            "{out}"
+        );
+        let dir = std::env::temp_dir().join(format!("grokhub-guard-shot-{}", std::process::id()));
+        let path = dir.join("desk.jpg");
+        assert_eq!(
+            capture_jpeg_under(&path, eac),
+            Err("Screen capture is blocked while Easy Anti-Cheat is running so it doesn't flag this PC.".to_string())
+        );
+        assert_eq!(
+            capture_jpeg_under(&path, gaming),
+            Err("Screen capture is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())
+        );
+        assert!(!dir.exists(), "a held capture writes nothing");
+    }
+
+    #[test]
+    fn an_anticheat_stops_the_shared_window_scan_for_every_caller() {
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let seen = || DeskScan {
+            rows: vec![AtspiRow {
+                name: "Game".into(),
+                role: "frame".into(),
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }],
+            lock: vec!["Lock".into()],
+        };
+        let held = desk_scan_under(eac, || panic!("no window scan while an anti-cheat runs"));
+        assert!(held.rows.is_empty() && held.lock.is_empty());
+        // Gaming alone pauses desktop control, not window checks.
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        assert_eq!(desk_scan_under(gaming, seen).lock, ["Lock"]);
+        assert_eq!(desk_scan_under(GameGuard::default(), seen).rows.len(), 1);
+        // collect_rows and lock_titles share the guarded scan.
+        let src = include_str!("desktop.rs");
+        let scan = src
+            .split("\nfn desk_scan() -> DeskScan {")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("desk_scan");
+        assert!(scan.contains("desk_scan_under(crate::desktop_mcp::game_guard()"));
     }
 
     #[test]

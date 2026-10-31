@@ -603,12 +603,16 @@ fn legacy_reflect_and_note_never_create_amr() {
     cabin.mem_name = "MEMORY.md".into();
     cabin.live_mut().push((
         "user".into(),
-        "I prefer the harbor light on at night".into(),
+        "remember that the harbor light stays on at night".into(),
     ));
     cabin.run_reflect();
     wait_reflect(&mut cabin);
     assert_eq!(cabin.status, "Reflected MEMORY.md");
-    assert_eq!(cabin.mem_body, "I prefer the harbor light on at night\n");
+    let day = Cabin::local_day();
+    assert_eq!(
+        cabin.mem_body,
+        format!("# Memory\n\n- {day}: the harbor light stays on at night\n")
+    );
     cabin.run_slash(grokhub_core::Slash::MemoryNote(
         "the quay lantern is green".into(),
     ));
@@ -618,7 +622,9 @@ fn legacy_reflect_and_note_never_create_amr() {
     cabin.run_slash_line("/recall harbor");
     let body = wait_recall(&mut cabin);
     assert!(
-        body.contains("MEMORY.md:1: I prefer the harbor light on at night"),
+        body.contains(&format!(
+            "MEMORY.md:3: - {day}: the harbor light stays on at night"
+        )),
         "{body}"
     );
     assert!(!root.join("amr").exists(), "legacy must never create amr/");

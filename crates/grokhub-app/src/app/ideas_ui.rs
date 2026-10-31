@@ -1,7 +1,7 @@
-//! Pulse → Ideas. Each idea is a row (see `pulse_ui`). A click opens it in
-//! place with the details, the action Apply runs, and a chat with the agent
-//! about this card. Edits and the chat stay on the card when you close it,
-//! until it is applied or deleted.
+//! Pulse ideas. Each idea is a row in the Pulse stream (see `pulse_ui`). A
+//! click opens it in place with the details, the action Apply runs, and a
+//! chat with the agent about this card. Edits and the chat stay on the card
+//! when you close it, until it is applied or deleted.
 
 use super::*;
 use crate::ui_kit::{card_frame, CardVariant};
@@ -13,35 +13,15 @@ use grokhub_core::{
 
 const IDEA_GAP: f32 = 8.0;
 
-/// One frame of the Ideas list: what was pressed and hovered, and how many
-/// rows have entered so far (for the staggered enter motion).
-struct IdeasPass {
+/// One frame of idea rows: what was pressed and hovered, and how many rows
+/// have entered so far (for the staggered enter motion).
+pub(super) struct IdeasPass {
     pulse_act: Option<super::pulse_ui::PulseAct>,
     act: Option<IdeaAct>,
     hover: Option<String>,
     title_hover: Option<String>,
     row_i: usize,
-    tab_t: f32,
     reduced: bool,
-}
-
-/// The group mark: an amber diamond on Up next, a hollow one on categories.
-fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    let c = rect.center();
-    let r = 4.5;
-    let pts = vec![
-        c + egui::vec2(0.0, -r),
-        c + egui::vec2(r, 0.0),
-        c + egui::vec2(0.0, r),
-        c + egui::vec2(-r, 0.0),
-    ];
-    let shape = if filled {
-        egui::Shape::convex_polygon(pts, crate::theme::amber(), egui::Stroke::NONE)
-    } else {
-        egui::Shape::closed_line(pts, egui::Stroke::new(1.5_f32, crate::theme::muted()))
-    };
-    ui.painter().add(shape);
 }
 
 /// What the Ideas board remembers between frames. Drafts and chats live on the
@@ -102,59 +82,21 @@ fn type_line(ui: &mut egui::Ui, card: &UpdateCard) {
 }
 
 impl Cabin {
-    /// Pulse → Ideas: rows under an unlabeled top group, then one header per
-    /// category. A click on the bold line (or Open in ···) opens the card in
-    /// place with its details, the action, and its chat.
-    /// The Ideas groups: "Up next", then one per category. Rows tile `cols`
-    /// across (filled left to right) when the column is wide.
-    pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui, cols: usize) {
-        self.ensure_useful_ideas();
-        let groups = self.pulse_groups(now_ms());
-        if groups.is_empty() {
-            self.paint_pulse_silence(ui, false);
-            return;
-        }
-        let rows: Vec<String> = groups
-            .iter()
-            .flat_map(|(_, rows)| rows.iter().map(|r| r.id.clone()))
-            .collect();
-        let mut pass = IdeasPass {
-            pulse_act: self.pulse_keys(ui.ctx(), &rows),
+    /// Start a frame of idea rows. `rows` are the idea ids in stream order,
+    /// for the row keys.
+    pub(super) fn begin_ideas_pass(&mut self, ui: &egui::Ui, rows: &[String]) -> IdeasPass {
+        IdeasPass {
+            pulse_act: self.pulse_keys(ui.ctx(), rows),
             act: None,
             hover: None,
             title_hover: None,
             row_i: 0,
-            tab_t: self.pulse_view.tab_t,
             reduced: crate::motion::reduced_motion(ui),
-        };
-        for (cat, rows) in groups {
-            ui.add_space(if cat.is_some() { 18.0 } else { 4.0 });
-            // The top group is a ranking, not a category: it says so.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                paint_group_diamond(ui, cat.is_none());
-                ui.label(
-                    RichText::new(cat.map_or("Up next", |c| c.label()).to_uppercase())
-                        .size(crate::theme::TYPE_CAPTION)
-                        .strong()
-                        .extra_letter_spacing(1.5)
-                        .color(crate::theme::muted()),
-                );
-            });
-            ui.add_space(8.0);
-            if cols > 1 {
-                ui.spacing_mut().item_spacing.x = IDEA_GAP;
-                ui.columns(cols, |columns| {
-                    for (i, row) in rows.iter().enumerate() {
-                        self.paint_idea_slot(&mut columns[i % cols], row, &mut pass);
-                    }
-                });
-            } else {
-                for row in &rows {
-                    self.paint_idea_slot(ui, row, &mut pass);
-                }
-            }
         }
+    }
+
+    /// End the frame: keep the hovered row, then act on what was pressed.
+    pub(super) fn finish_ideas_pass(&mut self, ui: &egui::Ui, pass: IdeasPass) {
         if self.pulse_row_state_changed(&pass.hover, &pass.title_hover) {
             ui.ctx().request_repaint();
         }
@@ -165,12 +107,18 @@ impl Cabin {
         }
     }
 
-    /// One Ideas row (or the opened idea) with its enter motion, then the gap.
-    fn paint_idea_slot(&mut self, ui: &mut egui::Ui, row: &Ranked, pass: &mut IdeasPass) {
+    /// One idea row (or the opened idea) with its enter motion, then the gap.
+    pub(super) fn paint_idea_slot(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: &Ranked,
+        pass: &mut IdeasPass,
+    ) {
         let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
             return;
         };
-        let enter = crate::motion::ideas_row_enter(pass.tab_t, pass.row_i, pass.reduced);
+        // One stream, no tab crossfade: rows enter settled.
+        let enter = crate::motion::ideas_row_enter(1.0, pass.row_i, pass.reduced);
         pass.row_i = pass.row_i.saturating_add(1);
         if enter <= 0.001 {
             return;
@@ -187,7 +135,9 @@ impl Cabin {
                 self.paint_idea_open(ui, &card, &mut pass.act);
             } else {
                 let st = self.pulse_row_state(&card.id);
-                let (a, rect, on_title) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                let why = self.reaction_why(&card);
+                let (a, rect, on_title) =
+                    super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st, why.as_deref());
                 if a.is_some() {
                     pass.pulse_act = a;
                 }
@@ -202,7 +152,7 @@ impl Cabin {
         ui.add_space(IDEA_GAP);
     }
 
-    /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
+    /// "Suggest for you" in the Pulse header: ask the model now, or say how to sign in.
     pub(super) fn suggest_ideas_pressed(&mut self) {
         self.suggest_ideas_with(self.agent_ready());
     }
@@ -667,8 +617,13 @@ impl Cabin {
         Ok("Sent to chat".into())
     }
 
-    /// Delete on the Ideas board. The model hears it was turned down.
+    /// Delete an idea on Pulse. The model hears it was turned down unless
+    /// the card was already used (`turned_down` false).
     pub(super) fn delete_idea(&mut self, id: &str) {
+        self.delete_idea_with_feedback(id, true);
+    }
+
+    pub(super) fn delete_idea_with_feedback(&mut self, id: &str, turned_down: bool) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };
@@ -676,19 +631,26 @@ impl Cabin {
             self.persist_updates();
             // Without these a reworded copy, or the same skill from the nightly review, came back.
             grokhub_core::remember_dismissed_source(&mut self.cfg.feed_pulse, &card.source_id);
-            grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
-            self.persist_cfg();
-            if !card.title.is_empty() {
-                let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
-                self.engine_note("ideas", &key, &card.title);
+            if turned_down {
+                grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
+                if !card.title.is_empty() {
+                    let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
+                    self.engine_note("ideas", &key, &card.title);
+                }
             }
+            self.persist_cfg();
             self.drop_idea_thread(card.discuss_thread.as_deref());
-            self.status = "Idea deleted".into();
+            self.status = if turned_down {
+                "Idea deleted".into()
+            } else {
+                "Done.".into()
+            };
         }
         self.forget_idea_view(id);
     }
 
     /// A card's hidden chat goes with the card, along with its Grok Build session.
+    /// Hard-remove (no Recently deleted) — these are not user History chats.
     fn drop_idea_thread(&mut self, thread_id: Option<&str>) {
         let Some(idx) = thread_id.and_then(|tid| {
             self.threads
@@ -697,7 +659,7 @@ impl Cabin {
         }) else {
             return;
         };
-        self.delete_thread_at(idx);
+        self.hard_drop_thread_at(idx);
     }
 
     fn forget_idea_view(&mut self, id: &str) {

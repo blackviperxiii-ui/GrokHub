@@ -76,6 +76,20 @@ Reach for these coding skills at the matching moment (same practice by hand if a
 - **statechart** for multi-state flows (online/offline/degraded, intentions)
 - **make-pr-easy-to-review** when opening a PR
 
+## Require vstack
+Coding agents working on this repo use the [vstack](https://github.com/blackviperxiii-ui/vstack) skills; start with `viper-mode`. Do not copy vstack skills or rules into this repository.
+- Claude Code: `.claude/settings.json` adds the vstack marketplace and turns on `vstack@vstack`, so it loads once you trust the folder. If `/plugin` doesn't list it, run `/plugin marketplace add blackviperxiii-ui/vstack` and `/plugin install vstack@vstack`.
+- Cursor: import `blackviperxiii-ui/vstack` as a team marketplace; set it to Required and enable Auto Refresh.
+- Other agents (Codex, Copilot, Jules): run `npx skills add blackviperxiii-ui/vstack -g -y` before you start, so the skills install for your user and nothing lands in the repo.
+- The `blast-radius`, `tdd` and `statechart` cues above are vstack skills (`/vstack:blast-radius` and so on once the plugin loads).
+
+How to use vstack here:
+- Start nontrivial work with `viper-mode`. It routes to `how` and `why` before edits, `architect` for new modules, `blast-radius` before shared code, `tdd` for bugs and `interrogate` for reviews.
+- Issues and board cards: run `follow-through` from pickup to PR (start comment, blocked note, done with proof).
+- PR bodies and docs: `technical-writing`.
+- `ui/` TypeScript: `typescript-best-practices`. Multi-state flows: `statechart`. Before a beta to main promotion: `qa-walkthrough`.
+- No install? Read a skill straight from `https://github.com/blackviperxiii-ui/vstack/blob/main/skills/<name>/SKILL.md`.
+
 ## No personal info (hard rule)
 
 This is open-source work meant for anyone to use. Keep every file, commit, PR and issue generic.

@@ -19,6 +19,11 @@ pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
 }
 
+/// Loadout wordmark and titlebar pills (Chakra Petch, deck baseline).
+pub fn loadout_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("chakra-bold".into()))
+}
+
 /// Active paint set. Classic dark is the pre-Loadout Grok OLED look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -60,9 +65,9 @@ pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
 pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x16, 0x18, 0x1c);
 /// Citation / link only. Never chrome.
 pub const LINK: Color32 = Color32::from_rgb(0x1d, 0x9b, 0xf0);
-/// Send/on inverse fill.
-pub const SEND_ON: Color32 = Color32::WHITE;
-pub const SEND_ON_INK: Color32 = Color32::BLACK;
+/// Send/on fill: the deck's amber CTA (slide 07), with dark ink.
+pub const SEND_ON: Color32 = OPS_AMBER;
+pub const SEND_ON_INK: Color32 = OPS_VOID;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 /// Live on a light surface: `#22C55E` is ~2.3:1 on white; green-700 is ~5:1.
 pub const LIGHT_LIVE: Color32 = Color32::from_rgb(0x15, 0x80, 0x3d);
@@ -527,9 +532,28 @@ pub fn card_title_font() -> FontId {
     title_font(FONT_SECTION)
 }
 
-/// Composer pill hairline. Focus lifts to the strong border, never warning amber.
+/// Loadout composer / assistant rim width (matches `ui_kit::recipe::STROKE_W`).
+const LOADOUT_CHROME_STROKE_W: f32 = 1.5;
+/// Loadout composer corner (matches `ui_kit::recipe::CARD_RADIUS`).
+const LOADOUT_COMPOSER_RADIUS: f32 = 12.0;
+
+/// Composer chrome. Loadout uses the Signal Red rim (slide 02); classic keeps
+/// the quiet border, with focus lifting to the strong border, never amber.
 pub fn composer_chrome_stroke(focused: bool) -> Stroke {
-    Stroke::new(1.0_f32, if focused { border_strong() } else { border() })
+    if is_loadout_paint() {
+        Stroke::new(LOADOUT_CHROME_STROKE_W, signal_red())
+    } else {
+        Stroke::new(1.0_f32, if focused { border_strong() } else { border() })
+    }
+}
+
+/// Composer corner radius. Loadout hangs out as a rounded rect; classic stays a pill.
+pub fn composer_chrome_radius() -> f32 {
+    if is_loadout_paint() {
+        LOADOUT_COMPOSER_RADIUS
+    } else {
+        QUERY_RADIUS
+    }
 }
 
 #[cfg(test)]
@@ -670,7 +694,10 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
         .to_string()
 }
 
-pub const SIDEBAR_W: f32 = 260.0;
+/// Icon-only Loadout rail (deck slide 02 / 20).
+pub const SIDEBAR_W: f32 = 40.0;
+pub const RAIL_TILE: f32 = 32.0;
+pub const RAIL_TICK_W: f32 = 3.0;
 /// Centered composer / empty-home column (official Grok ~720–800). Chat text uses the pane.
 pub const CHAT_COL_W: f32 = 768.0;
 /// Soft chat-bubble radius. User and assistant share it. Thought has none.
@@ -834,7 +861,8 @@ pub const IMAGINE_TILE_TALL: f32 = 345.0;
 /// Cover GIF cycle — two stills crossfade like grok.com inspiration MP4s.
 pub const IMAGINE_FRAME_MS: u64 = 1600;
 
-/// Live grok.com primary rail. Settings is an avatar menu, not a row.
+/// Live grok.com primary rail (dock tabs). Settings is an avatar menu, not a row.
+#[allow(dead_code)]
 pub const GROK_NAV: &[(&str, &str)] = &[
     ("chat", "Chat"),
     ("imagine", "Imagine"),
@@ -842,6 +870,17 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("skills", "Skills"),
     ("workboard", "Workboards"),
     ("pulse", "Pulse"),
+];
+
+/// Loadout deck icon rail (slide 02). Settings sits in the footer row.
+pub const LOADOUT_NAV: &[(&str, &str)] = &[
+    ("home", "Home"),
+    ("chat", "Chat"),
+    ("objectives", "Objectives"),
+    ("pulse", "Pulse"),
+    ("library", "Library"),
+    ("devices", "PC"),
+    ("profile", "Profile"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
@@ -867,6 +906,36 @@ fn install_inter(ctx: &egui::Context) {
         Arc::new(FontData::from_static(include_bytes!(
             "../assets/fonts/Inter-SemiBold.ttf"
         ))),
+    );
+    fonts.font_data.insert(
+        "chakra-bold".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-Bold.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "chakra-medium".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-Medium.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "chakra-semibold".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-SemiBold.ttf"
+        ))),
+    );
+    fonts.families.insert(
+        FontFamily::Name("chakra-bold".into()),
+        vec!["chakra-bold".into()],
+    );
+    fonts.families.insert(
+        FontFamily::Name("chakra-medium".into()),
+        vec!["chakra-medium".into()],
+    );
+    fonts.families.insert(
+        FontFamily::Name("chakra-semibold".into()),
+        vec!["chakra-semibold".into()],
     );
     // The latin statics are subset (no →, ✓, ≥, Cyrillic). The full face backs them.
     fonts.font_data.insert(
@@ -1032,7 +1101,12 @@ pub fn apply_palette(ctx: &egui::Context, palette: PaintPalette) {
     visuals.widgets.active.expansion = PRESS_EXPANSION;
     visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
-    visuals.window_stroke = Stroke::new(1.0_f32, border());
+    let frame_stroke = if is_loadout_paint() {
+        signal_red()
+    } else {
+        border()
+    };
+    visuals.window_stroke = Stroke::new(1.0_f32, frame_stroke);
     visuals.window_corner_radius = MENU_RADIUS.into();
     visuals.menu_corner_radius = MENU_RADIUS.into();
     visuals.window_shadow = sheet_shadow();
@@ -1109,7 +1183,12 @@ pub fn animate_selection_secs(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) 
         .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
 
+/// One button feel channel. Reduced motion snaps it, so a hover still reads
+/// but nothing eases.
 fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    if !motion_ok(ui) {
+        return if on { 1.0 } else { 0.0 };
+    }
     ui.ctx()
         .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
@@ -1147,8 +1226,6 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
     );
     ui.painter().rect_filled(rect, 8.0, fill);
 }
-
-/// Remember a row item. Hover wins over the resting selection.
 pub fn glide_candidate(
     ui: &egui::Ui,
     group: &str,
@@ -1173,6 +1250,16 @@ pub fn glide_candidate(
     });
 }
 
+/// True when `rect` is the row the glide treats as selected this frame (the
+/// first selected candidate in `group`).
+pub fn glide_selected_is(ui: &egui::Ui, group: &str, rect: egui::Rect) -> bool {
+    let id = glide_id(group).with("pick");
+    ui.data(|d| d.get_temp::<GlidePick>(id))
+        .and_then(|p| p.selected)
+        == Some(rect)
+}
+
+/// Remember a row item. Hover wins over the resting selection.
 fn rect_gap(rect: egui::Rect, pointer: egui::Pos2) -> f32 {
     let dx = (rect.min.x - pointer.x)
         .max(pointer.x - rect.max.x)
@@ -1493,7 +1580,8 @@ fn feel_motion(
     let scale = feel_scale(hover_t, press_t) + 0.01 * focus_t;
     let mix = hover_mix(hover_t, press_t) + grokhub_core::FOCUS_WASH * focus_t;
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
-    let lift = if rise {
+    // Reduced motion: no rise at all.
+    let lift = if rise && motion_ok(ui) {
         feel_lift(hover_t, press_t)
     } else {
         0.0
@@ -1568,6 +1656,20 @@ pub fn veil_over(base: Color32, veil: Color32) -> Color32 {
     )
 }
 
+fn loadout_mark_image() -> &'static ColorImage {
+    static IMG: OnceLock<ColorImage> = OnceLock::new();
+    IMG.get_or_init(|| decode_mark_png(include_bytes!("../assets/loadout-mark-32.png")))
+}
+
+fn decode_mark_png(bytes: &'static [u8]) -> ColorImage {
+    let Ok(img) = image::load_from_memory(bytes) else {
+        return ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+    };
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+}
+
 fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
@@ -1592,9 +1694,42 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
     tex
 }
 
+pub fn loadout_mark(ctx: &egui::Context) -> TextureHandle {
+    let id = egui::Id::new("loadout-mark");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return tex;
+    }
+    let tex = ctx.load_texture(
+        "loadout-mark",
+        loadout_mark_image().clone(),
+        TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
+}
+
+/// Titlebar trust chip from the same 7-day egress log as Settings › Privacy.
+/// The log records calls, not sizes, so "0 B" is only claimed for no calls.
+pub fn titlebar_sent_label(calls: Option<u32>) -> String {
+    match calls {
+        Some(0) => "LOCAL · 0 B SENT".into(),
+        Some(1) => "LOCAL FIRST · 1 CALL SENT".into(),
+        Some(n) => format!("LOCAL FIRST · {n} CALLS SENT"),
+        None => "LOCAL FIRST".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sent_chip_only_says_zero_bytes_for_a_quiet_week() {
+        assert_eq!(titlebar_sent_label(Some(0)), "LOCAL · 0 B SENT");
+        assert_eq!(titlebar_sent_label(Some(1)), "LOCAL FIRST · 1 CALL SENT");
+        assert_eq!(titlebar_sent_label(Some(12)), "LOCAL FIRST · 12 CALLS SENT");
+        assert_eq!(titlebar_sent_label(None), "LOCAL FIRST");
+    }
 
     #[test]
     fn the_bundled_mark_decodes() {
@@ -1749,7 +1884,8 @@ mod tests {
         assert_eq!(MUTED, Color32::from_rgb(0x71, 0x76, 0x7b));
         assert_eq!(BORDER, Color32::from_rgb(0x2f, 0x33, 0x36));
         assert_eq!(LINK, Color32::from_rgb(0x1d, 0x9b, 0xf0));
-        assert_eq!(SEND_ON, Color32::WHITE);
+        assert_eq!(SEND_ON, OPS_AMBER);
+        assert_eq!(SEND_ON_INK, OPS_VOID);
         assert_eq!(GREET_HERO, 28.0);
         assert!(GREET_HERO > FONT_HEADING);
         assert!(GREET_HERO <= 28.0);
@@ -1815,6 +1951,13 @@ mod tests {
         set_paint_dark(true);
         assert_eq!(composer_chrome_stroke(false).color, border());
         assert_eq!(composer_chrome_stroke(true).color, border_strong());
+        assert_ne!(composer_chrome_stroke(true).color, always_amber());
+        assert_eq!(composer_chrome_radius(), QUERY_RADIUS);
+        set_paint_palette(PaintPalette::OpsDark);
+        assert_eq!(composer_chrome_stroke(false).color, signal_red());
+        assert_eq!(composer_chrome_stroke(true).color, signal_red());
+        assert_eq!(composer_chrome_stroke(false).width, LOADOUT_CHROME_STROKE_W);
+        assert_eq!(composer_chrome_radius(), LOADOUT_COMPOSER_RADIUS);
         assert_ne!(composer_chrome_stroke(true).color, always_amber());
         set_paint_dark(true);
         let dark_sheet = sheet_shadow();

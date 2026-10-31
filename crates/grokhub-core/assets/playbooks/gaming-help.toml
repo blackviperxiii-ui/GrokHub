@@ -1,0 +1,45 @@
+# Loadout playbook: in-game tips, settings, and mods for a title.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+
+id = "gaming-help"
+name = "Gaming help"
+summary = "Answer how-to questions for a named game: cite the patch version or date, give settings or mod steps, and skip story spoilers unless the user asks."
+
+checklist = [
+  "game and patch version noted",
+  "steps match the user's platform",
+  "no unrequested spoilers",
+  "sources or patch notes cited when used",
+]
+backup = "Read-only unless the user asks to change a config; then copy the file before editing."
+verify = "Ask whether the tip worked in-game or if a step needs adjusting."
+rollback = "Restore the backed-up config or undo the last change if something broke."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["question", "task"]
+domain = ["game-help"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Confirm the game title, platform, and patch or season when known"
+
+[[phase.step]]
+name = "Check official patch notes or docs dated to that version before recommending a setting or mod"
+
+[[phase]]
+name = "Answer"
+tier = "read_only"
+
+[[phase.step]]
+name = "Give concrete steps; skip story spoilers unless the user asked for them"

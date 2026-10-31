@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import {
+  cancelLocalDrafterDownload,
+  cancelLocalEngineDownload,
   checkModelFile,
   getLocalAi,
+  onLocalDrafterEvent,
+  onLocalEngineEvent,
   resetLocalAi,
   runLocalSpeedTest,
   saveLocalAi,
+  startLocalDrafterDownload,
+  startLocalEngineDownload,
   type LocalAiConfig,
   type LocalAiView,
+  type LocalDraftOffer,
+  type LocalDraftProgress,
+  type LocalEngineInfo,
   type LocalFileRow,
   type LocalManual,
   type LocalModelRow,
@@ -14,9 +23,9 @@ import {
 import { Toggle } from "./Toggle";
 import { PRODUCT_NAME } from "./brand";
 
-/** Shown once per file before a third-party or abliterated model is picked. */
+/** Shown once per file before a model from outside the catalog is picked. */
 export const MODEL_NOTICE =
-  `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party and abliterated models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads these models.`;
+  `This model isn't from ${PRODUCT_NAME}'s catalog. Third-party models can have their safety training removed. Check its license before you use it. You are responsible for what you do with it. ${PRODUCT_NAME} never recommends or downloads models from outside its catalog.`;
 
 const BACKENDS: [string, string][] = [
   ["auto", "Auto"],
@@ -100,9 +109,22 @@ function FileOption({
   );
 }
 
+const READY_ENGINE: LocalEngineInfo = {
+  state: "ready",
+  version: "",
+  sizeLabel: "",
+  hint: "",
+  button: "",
+  progress: null,
+  error: null,
+};
+
 export function LocalAi() {
   const [view, setView] = useState<LocalAiView | null>(null);
   const [draft, setDraft] = useState<LocalAiConfig | null>(null);
+  const [engine, setEngine] = useState<LocalEngineInfo>(READY_ENGINE);
+  const [draftOffer, setDraftOffer] = useState<LocalDraftOffer | null>(null);
+  const [draftProgress, setDraftProgress] = useState<LocalDraftProgress | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [filePath, setFilePath] = useState("");
   const [extraFiles, setExtraFiles] = useState<LocalFileRow[]>([]);
@@ -115,12 +137,59 @@ export function LocalAi() {
   function show(next: LocalAiView) {
     setView(next);
     setDraft(next.config);
+    setEngine(next.engine);
+    setDraftOffer(next.draftOffer);
+    setDraftProgress(next.draftProgress);
     setAllow(next.config.manual.allowApps.join("\n"));
     setDeny(next.config.manual.denyApps.join("\n"));
   }
 
   useEffect(() => {
     getLocalAi().then(show, (err) => setNote(String(err)));
+  }, []);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onLocalEngineEvent((event) => {
+      setEngine((now) => ({
+        ...now,
+        state: event.state,
+        progress: event.progress,
+        error: event.error,
+        button: event.state === "downloading" ? "Cancel" : now.button,
+      }));
+      if (event.message) setNote(event.message);
+      if (event.state === "ready" || event.state === "missing") {
+        void getLocalAi().then(show).catch(() => undefined);
+      }
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onLocalDrafterEvent((event) => {
+      setDraftProgress(event.progress);
+      if (event.message) setNote(event.message);
+      if (event.state === "done" || event.state === "error" || event.state === "cancelled") {
+        void getLocalAi().then(show).catch(() => undefined);
+      }
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
   }, []);
 
   if (!view || !draft) {
@@ -204,6 +273,32 @@ export function LocalAi() {
     }
   }
 
+  async function getEngine() {
+    try {
+      if (engine.state === "downloading") {
+        await cancelLocalEngineDownload();
+        setNote("Cancelled the engine download.");
+        return;
+      }
+      setEngine(await startLocalEngineDownload());
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
+
+  async function installDraft(targetId: string) {
+    try {
+      if (draftProgress) {
+        await cancelLocalDrafterDownload();
+        setNote("Cancelled the draft model download.");
+        return;
+      }
+      await startLocalDrafterDownload(targetId);
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
+
   const s = view.status;
   const status = [s.tier, s.model, `${s.state} (${s.reason})`, s.tokS, s.memory]
     .filter(Boolean)
@@ -217,6 +312,9 @@ export function LocalAi() {
     ...view.picker.onThisPc,
     ...extraFiles.filter((f) => !view.picker.onThisPc.some((o) => o.path === f.path)),
   ];
+  const selectedOffer =
+    view.draftOffers.find((o) => o.targetId === selected) ??
+    (draftOffer?.targetId === selected ? draftOffer : null);
 
   return (
     <section className="local-ai" aria-label="Local AI">
@@ -234,6 +332,17 @@ export function LocalAi() {
           </ul>
         </div>
       )}
+      <div className="local-engine" aria-label="Local engine">
+        <h3>Local engine</h3>
+        <p className="note">{engine.hint || "Checking the local engine…"}</p>
+        {engine.progress && <p className="note local-engine-progress">{engine.progress.line}</p>}
+        {engine.error && <p className="note local-engine-error">{engine.error}</p>}
+        {engine.button && (
+          <button type="button" className="quiet get-engine" onClick={() => void getEngine()}>
+            {engine.button}
+          </button>
+        )}
+      </div>
       <div className="local-mode" role="group" aria-label="Local AI mode">
         <button
           type="button"
@@ -331,6 +440,24 @@ export function LocalAi() {
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+          {(selectedOffer || draftProgress) && (
+            <div className="local-draft-offer" aria-label="Draft model offer">
+              <h3>Draft model</h3>
+              {selectedOffer && <p className="note">{selectedOffer.line}</p>}
+              {draftProgress && <p className="note">{draftProgress.line}</p>}
+              <button
+                type="button"
+                className="quiet install-draft"
+                onClick={() =>
+                  void installDraft(selectedOffer?.targetId ?? draftOffer?.targetId ?? selected)
+                }
+              >
+                {draftProgress
+                  ? "Cancel draft download"
+                  : (selectedOffer?.button ?? "Install and run draft model")}
+              </button>
             </div>
           )}
           <h3>Engine</h3>

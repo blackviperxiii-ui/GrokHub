@@ -101,7 +101,7 @@ pub fn keyring_name_for(os: KeyringOs) -> &'static str {
     match os {
         KeyringOs::Windows => "Windows Credential Manager",
         KeyringOs::MacOs => "macOS Keychain",
-        KeyringOs::Linux => "Secret Service keyring",
+        KeyringOs::Linux => "system password store",
     }
 }
 
@@ -113,30 +113,32 @@ impl Locked {
 
     /// [`Self::message`] as it reads on `os`.
     pub fn message_for(&self, os: KeyringOs) -> String {
-        let what = "GrokHub won't read or save grants, the send log or private memory until then, and never saves them as plain text.";
         let name = keyring_name_for(os);
         match self {
-            Self::Unavailable => format!("Private data is locked: GrokHub can't reach your {name}. {what}"),
+            Self::Unavailable => format!(
+                "Your private data is locked because {product} can't access your {name}. Nothing was deleted.",
+                product = grokhub_core::brand::product_name()
+            ),
             Self::Missing => {
-                format!("Private data is locked: its key is missing from your {name}. {what} Nothing was deleted.")
+                format!(
+                    "Your private data is locked because its key is missing from your {name}. Nothing was deleted."
+                )
             }
             Self::WrongKey => format!(
-                "Private data is locked: the key in your {name} doesn't match this data. {what} Nothing was deleted."
+                "Your private data is locked because the key in your {name} doesn't match. Nothing was deleted."
             ),
-            Self::Busy => "Private data is busy: another GrokHub window is setting up its key. Try again in a moment.".into(),
-            Self::Unwritable => {
-                "Private data wasn't saved: GrokHub couldn't write the file. Nothing was saved as plain text.".into()
-            }
+            Self::Busy => grokhub_core::brand::filled("Your private data is temporarily unavailable while another {product} window sets up access. Try again in a moment.").into(),
+            Self::Unwritable => grokhub_core::brand::filled("{product} couldn't save your private data because its folder isn't writable. Nothing was saved as plain text.").into(),
         }
     }
 
     /// Short form for a status line after a click.
     pub fn short(&self) -> &'static str {
         match self {
-            Self::Unavailable => "private data is locked (no keyring)",
-            Self::Missing => "private data is locked (key missing)",
-            Self::WrongKey => "private data is locked (wrong key)",
-            Self::Busy => "private data is busy, try again",
+            Self::Unavailable => "private data is locked (store unavailable)",
+            Self::Missing => "private data is locked (saved key is missing)",
+            Self::WrongKey => "private data is locked (saved key doesn't match)",
+            Self::Busy => "private data is temporarily unavailable",
             Self::Unwritable => "private data couldn't be written",
         }
     }
@@ -905,9 +907,12 @@ mod tests {
             vault.seal("a", "b").unwrap_err(),
             Locked::Unavailable.message()
         );
-        assert!(Locked::Unavailable
-            .message()
-            .starts_with("Private data is locked: GrokHub can't reach your "));
+        let message = Locked::Unavailable.message();
+        assert!(
+            message.starts_with("Your private data is locked because Loadout can't access your ")
+        );
+        assert!(message.contains("Nothing was deleted."));
+        assert!(!message.contains("keyring") && !message.contains("GrokHub"));
     }
 
     #[test]

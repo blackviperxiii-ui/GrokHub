@@ -526,7 +526,12 @@ fn no_keyring_pauses_and_writes_nothing() {
     use_key_store_for(&fx.cfg, fx.keys.clone());
     let mut sched = Scheduler::default();
     match sched.tick(&fx.env(NOW, false, &Power(false))) {
-        TickOutcome::Paused(why) => assert!(why.starts_with("Private data is locked"), "{why}"),
+        TickOutcome::Paused(why) => {
+            assert!(
+                why.starts_with("Your private data is locked because"),
+                "{why}"
+            )
+        }
         other => panic!("expected Paused, got {other:?}"),
     }
     assert_eq!(fx.nodes(), 0);
@@ -649,7 +654,7 @@ fn apps_index_desktop_entries_with_launch_counts() {
             .iter()
             .map(|f| f.line.as_str())
             .collect::<Vec<_>>(),
-        vec!["Installed app: Firefox · opened 2 times from GrokHub"]
+        vec!["Installed app: Firefox · opened 2 times from Loadout"]
     );
 }
 

@@ -85,11 +85,20 @@ static TIER: AtomicUsize = AtomicUsize::new(0);
 /// tick, so the Settings toggle takes effect without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
+    if !on {
+        // Off: nothing falls back to the device, so drop the chip and keep-warm.
+        note_fallback(false);
+    }
 }
 
 /// The Settings toggle alone, for the governor's sampler.
 pub fn switched_on() -> bool {
     ENABLED.load(Ordering::SeqCst)
+}
+
+/// [`switched_on`], or forced on for this test thread.
+pub(crate) fn toggle_on() -> bool {
+    switched_on() || test_on()
 }
 
 /// The route is live: the toggle is on, a runtime is [`installed`], and the
@@ -229,7 +238,7 @@ pub fn unavailable_reason() -> String {
 /// The chat line for an offline turn that waits for the network.
 pub fn offline_pause_text(reason: &str) -> String {
     format!(
-        "{OFFLINE_NO_LOCAL_MSG}: {reason}. GrokHub keeps your message and answers it once you're back online."
+        "{OFFLINE_NO_LOCAL_MSG}: {reason}. {product} keeps your message and answers it once you're back online.", product = grokhub_core::brand::product_name()
     )
 }
 
@@ -363,6 +372,30 @@ pub fn local_verify_failed() -> bool {
     LOCAL_VERIFY_FAILED.load(Ordering::SeqCst)
 }
 
+static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// What the cabin shows while online calls fall back to the device.
+pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
+
+/// Live path: the last routed call went to the device because no cloud model could take it.
+///
+/// A turn that started before Local AI was turned off can finish after it; its
+/// `true` is dropped then, so the chip and keep-warm stay off.
+pub fn note_fallback(active: bool) {
+    FALLBACK_ACTIVE.store(active && toggle_on(), Ordering::SeqCst);
+}
+
+pub fn fallback_active() -> bool {
+    FALLBACK_ACTIVE.load(Ordering::SeqCst) && toggle_on()
+}
+
+/// The model should be loaded ahead of time: offline, or online with no cloud
+/// model answering. Online with the cloud up, it loads on demand only.
+pub fn warm_wanted() -> bool {
+    super::connectivity::sync_from_core();
+    super::connectivity::state().prefer_local() || fallback_active()
+}
+
 /// What a route may do with the local model for one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalGate {
@@ -436,20 +469,6 @@ pub fn eligible_if_running(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bo
     eligible(&running, class, ctx_tokens)
 }
 
-/// Why online work that local could take goes to the cloud instead: the
-/// governor is throttling, or a heavy background step waits for RampUp.
-pub fn online_hold(gate: &LocalGate, class: &str, ctx_tokens: u64) -> Option<&'static str> {
-    if gate.offline || !eligible(gate, class, ctx_tokens) {
-        None
-    } else if !gate.capacity.background_ok() {
-        Some("local:throttled")
-    } else if heavy(class, ctx_tokens) && gate.capacity.level != Level::RampUp {
-        Some("local:heavy_waits")
-    } else {
-        None
-    }
-}
-
 /// Sensitive data with no cloud grant: the local route is the only route.
 pub fn privacy_only(gate: &LocalGate) -> bool {
     gate.enabled && gate.sensitive && !gate.cloud_grant
@@ -500,8 +519,8 @@ pub fn tier_meta(id: &str) -> ModelMeta {
         context_length: Some(ctx_cap().max(c.context)),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
-        // `serve` returns empty `calls` today — never claim tools from eval pass rate.
-        tool_calling: Some(false),
+        // Chat turns can return OpenAI-compatible tool_calls (web_search / web_fetch).
+        tool_calling: Some(true),
         prices: Prices {
             prompt: Some(0),
             cached: Some(0),
@@ -553,6 +572,32 @@ pub trait LocalRuntime: Send + Sync {
         let _ = (messages, on_delta);
         Err("local chat is not available on this runtime".into())
     }
+
+    /// Chat with function tools (cabin web_search / web_fetch). Default falls
+    /// back to plain [`chat_stream`] and returns no tool calls.
+    fn chat_tools(
+        &self,
+        req: &crate::client::ResponsesRequest,
+        cancel: &CancelToken,
+    ) -> Result<TurnOutput, String> {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        let (text, _) = super::live::last_user_text(&req.input);
+        let mut deltas = String::new();
+        let out = self.chat_stream(
+            &[ChatMessage {
+                role: "user".into(),
+                content: text,
+            }],
+            &mut |d| deltas.push_str(d),
+        )?;
+        let text = if out.is_empty() { deltas } else { out };
+        Ok(TurnOutput {
+            text,
+            ..Default::default()
+        })
+    }
 }
 
 /// The installed runtime: test fake, else HTTP client to a loopback sidecar.
@@ -571,15 +616,17 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
 /// flight for as long as it holds the runtime.
 fn ensure_production_runtime() -> Option<super::local_sidecar::Busy> {
     let dir = config_dir()?;
-    match super::local_sidecar::acquire(&dir) {
+    match super::local_sidecar::acquire_for_request(&dir) {
         Ok(busy) => {
             set_bootstrap_error(None);
             Some(busy)
         }
-        // A governor pause or the crash breaker isn't a broken install; both
-        // lift on their own.
+        // Turned off mid-request, a governor pause or the crash breaker isn't
+        // a broken install.
         Err(_)
-            if super::local_gov::paused()
+            if !toggle_on()
+                || super::local_sidecar::stop_pending()
+                || super::local_gov::paused()
                 || super::local_gov::may_start(super::local_sidecar::unix_ms()).is_err() =>
         {
             None
@@ -665,6 +712,38 @@ const CLASS_LABELS: &[&str] = &["routine", "needs_attention", "sensitive"];
 /// background step first waits (up to [`HEAVY_WAIT`]) for RampUp; Stop ends the wait.
 pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput, ClientError> {
     serve_within(class, text, HEAVY_WAIT, cancel)
+}
+
+/// Chat path that keeps function tools (cabin `web_search` / `web_fetch`) so the
+/// agent loop can run them and round-trip results. Background classes stay
+/// text-only via [`serve`].
+pub fn serve_request(
+    class: &str,
+    req: &crate::client::ResponsesRequest,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    let (text, _) = super::live::last_user_text(&req.input);
+    let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
+    if !matches!(class_norm, "chat:quick" | "chat:default" | "desktop:soft") {
+        return serve(class, &text, cancel);
+    }
+    let tokens = (text.len() as u64).div_ceil(4);
+    if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
+        match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
+            None => return Err(ClientError::Cancelled),
+            Some(Level::Unload) => {
+                return Err(ClientError::Protocol(LOCAL_PAUSED_MSG.into()));
+            }
+            Some(_) => {}
+        }
+    }
+    let Some(rt) = runtime() else {
+        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+    };
+    if req.tools.is_empty() {
+        return serve_within(class, &text, HEAVY_WAIT, cancel);
+    }
+    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
 }
 
 pub(crate) fn serve_within(

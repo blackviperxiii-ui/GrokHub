@@ -3,7 +3,8 @@
 //! (`ui/src/brand.ts`) all read that one file, so a rename is one line there.
 
 use serde::Deserialize;
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 /// Folder, keychain and app-id name. Never follows the brand, so a rename
 /// can't move anyone's settings, sign-ins or installed copy.
@@ -63,6 +64,25 @@ pub fn support_label() -> &'static str {
     &BRAND.support_label
 }
 
+/// `template` with each `{product}` replaced by the product name, for copy
+/// that has to stay `&'static str` (consts and static tables). Each template
+/// is filled once and kept for the life of the process.
+pub fn filled(template: &'static str) -> &'static str {
+    static FILLED: LazyLock<Mutex<HashMap<&'static str, &'static str>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    if !template.contains("{product}") {
+        return template;
+    }
+    let mut map = FILLED.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(template).or_insert_with(|| {
+        Box::leak(
+            template
+                .replace("{product}", product_name())
+                .into_boxed_str(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +125,14 @@ mod tests {
             parse(r#"{"productName":"p","tagline":"t","companionName":"c","supportLabel":""}"#),
             None
         );
+    }
+
+    #[test]
+    fn filled_names_the_product_and_reuses_one_copy() {
+        let a = filled("Open {product} again, {product}.");
+        assert_eq!(a, "Open Loadout again, Loadout.");
+        assert!(std::ptr::eq(a, filled("Open {product} again, {product}.")));
+        assert_eq!(filled("No name here."), "No name here.");
     }
 
     #[test]

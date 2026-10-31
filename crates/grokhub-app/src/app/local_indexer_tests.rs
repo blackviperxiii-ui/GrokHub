@@ -120,7 +120,7 @@ fn a_scope_ask_card_grants_on_a_click_only() {
     click_work_card(&ctx, &mut cabin, p.at("Allow"));
     assert_eq!(
         cabin.status,
-        "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time."
+        "Installed apps allowed. Loadout learns from it on this computer. Revoke it here any time."
     );
     assert!(hx::ConsentLedger::load(&root)
         .scope_grant(&hx::Scope::Apps)
@@ -205,24 +205,19 @@ fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
         "under its row"
     );
 
+    cabin.status.clear();
     click_at(&ctx, &mut cabin, p.at(super::indexer_ui::FORGET_THESE));
+    // Wait for the purge thread to report (it sets the status and the index
+    // together), not a fixed time: a busy Windows runner took over 4s.
     let start = std::time::Instant::now();
-    while cabin
-        .harness
-        .indexer
-        .index
-        .facts
-        .values()
-        .any(|v| !v.is_empty())
-        && start.elapsed() < std::time::Duration::from_secs(4)
-    {
+    while cabin.status.is_empty() && start.elapsed() < std::time::Duration::from_secs(30) {
         cabin.poll_forget();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(cabin.status, "Forgot 2 things learned from Files in Documents. It stays allowed; revoke it to stop reading.");
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     assert!(!p.has(super::indexer_ui::FORGET_THESE));
-    assert!(p.has("Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours."));
+    assert!(p.has("Nothing learned to show. Loadout reads it on a heartbeat, never on battery or in quiet hours."));
     assert!(
         hx::ConsentLedger::load(&root).scope_grant(&scope).is_some(),
         "forgetting is not revoking"

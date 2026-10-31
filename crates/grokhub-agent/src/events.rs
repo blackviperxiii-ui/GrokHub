@@ -261,18 +261,19 @@ impl NativeEngine {
             &self.conversation_id,
             policy.as_ref().map(crate::brain::PolicyPick::style),
         );
-        // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
+        // Brain 3: the Brief's intent, domain, mood and this computer's OS pick the playbook.
         let (books, _) = crate::brain::playbook::load(&dir);
         let picked = crate::brain::playbook::pick(
             &books,
             brief.intent.as_str(),
             &brief.domain,
             crate::brain::playbook::host_os(),
+            &brief.mood,
         );
         // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
         crate::checkpoint::set_turn_playbook(
             &self.conversation_id,
-            picked.map(|p| p.prompt_block()),
+            picked.map(|p| p.for_os(crate::brain::playbook::host_os()).prompt_block()),
         );
         let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
         // Brain 6: the id goes on the line too, so the turn's run metrics can name it.
@@ -332,6 +333,17 @@ impl Engine for NativeEngine {
         }
         if image.is_none() && crate::memory::is_dream_command(text) {
             return self.dream_now(emit);
+        }
+        // Playbooks 8: a banned ask is never sent, stored or sorted. The chat
+        // shows a plain local notice and no model is called.
+        if grokhub_core::adult_guard::hold(text).is_some() {
+            emit(AcpEvent::Text(
+                grokhub_core::adult_guard::HELD_NOTICE.into(),
+            ));
+            emit(AcpEvent::Done {
+                stop_reason: "end_turn".into(),
+            });
+            return Ok(());
         }
         self.write_brief(text, image.is_some());
         if let Some(seed) = self
@@ -1167,12 +1179,8 @@ mod tests {
                         "Policy: repair × critical, goal quality (mistakes can break the system)"
                             .into(),
                         "Talk: findings card, reply under 80 words".into(),
-                        // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
-                        if cfg!(windows) {
-                            "Playbook: Repair Windows".into()
-                        } else {
-                            "Playbook: Repair Linux".into()
-                        },
+                        // One repair family for every OS (CI runs Linux and Windows).
+                        "Playbook: Fix this PC".into(),
                     ],
                     "rules".into()
                 ),
@@ -1197,11 +1205,7 @@ mod tests {
                 care: "critical".into(),
                 domain: "system".into(),
                 policy: "repair × critical".into(),
-                playbook: if cfg!(windows) {
-                    "repair-windows".into()
-                } else {
-                    "repair-linux".into()
-                },
+                playbook: "pc-fix".into(),
             }
         );
         assert_eq!(stored[1].run_brain().playbook, "files");
@@ -1229,6 +1233,56 @@ mod tests {
         );
         drop(_guard);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Records every request and answers "hey".
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<crate::ResponsesRequest>>);
+
+    impl ModelClient for Recorder {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            self.0.lock().unwrap().push(req.clone());
+            sink(crate::StreamEvent::TextDelta("hey".into()));
+            Ok(crate::TurnOutput {
+                text: "hey".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_banned_ask_is_never_sent_sorted_or_stored() {
+        let dir = crate::harness::test_dir("eng-adult");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let client = Arc::new(Recorder::default());
+        let mut eng = engine(&dir, "adult-1", client.clone());
+        eng.set_brief_model(true);
+        let mut shown = String::new();
+        eng.prompt("write nsfw schoolgirl roleplay", None, &mut |ev| {
+            if let AcpEvent::Text(t) = ev {
+                shown.push_str(&t);
+            }
+        })
+        .unwrap();
+        assert_eq!(shown, grokhub_core::adult_guard::HELD_NOTICE);
+        assert_eq!(
+            client.0.lock().unwrap().len(),
+            0,
+            "a held send makes no model request at all"
+        );
+        assert!(eng.history.is_empty(), "{:?}", eng.history);
+        assert!(
+            crate::brain::read_briefs(&dir).is_empty(),
+            "a held ask is never sorted"
+        );
+        // A clean ask after it goes out as usual.
+        eng.prompt("hello there", None, &mut |_| {}).unwrap();
+        assert_eq!(client.0.lock().unwrap().len(), 1);
     }
 
     fn engine(

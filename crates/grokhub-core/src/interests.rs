@@ -50,6 +50,8 @@ pub enum InterestSource {
     Saved,
     /// Typed in Settings.
     Explicit,
+    /// A Know me tag from this computer (`know_me`).
+    KnowMe,
 }
 
 impl InterestSource {
@@ -59,6 +61,7 @@ impl InterestSource {
             Self::Chats => "From chats",
             Self::Saved => "From saved",
             Self::Explicit => "Added by you",
+            Self::KnowMe => "From your PC",
         }
     }
 
@@ -69,6 +72,7 @@ impl InterestSource {
             Self::Memory => 60,
             Self::Saved => 55,
             Self::Chats => 40,
+            Self::KnowMe => 45,
         }
     }
 }
@@ -379,6 +383,11 @@ impl InterestProfile {
             )
         {
             return true;
+        }
+        // Dismissed under where it started: chat evidence alone no longer
+        // brings it back, so a skipped topic stays skipped.
+        if t.weight < t.source.start_weight() {
+            return false;
         }
         if t.weight > InterestSource::Chats.start_weight() {
             return true;
@@ -885,7 +894,7 @@ pub fn topic_searchable(topic: &str) -> bool {
     if lower.contains(':') {
         return false;
     }
-    if CABIN_TOPIC_BLOCK.contains(&lower.as_str()) {
+    if CABIN_TOPIC_BLOCK.contains(&lower.as_str()) || is_small_talk(&lower) {
         return false;
     }
     let words: Vec<&str> = lower.split_whitespace().collect();
@@ -969,6 +978,39 @@ pub fn topics_in_memory(raw: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Greetings and check-ins: a chat titled "How are you" is small talk, not
+/// something to follow.
+const SMALL_TALK: &[&str] = &[
+    "how are you",
+    "how are you doing",
+    "how's it going",
+    "hows it going",
+    "how is it going",
+    "how was your day",
+    "what's up",
+    "whats up",
+    "sup",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "good night",
+    "hello there",
+    "hey there",
+    "hi there",
+    "thank you",
+    "thanks a lot",
+    "nice to meet you",
+    "how have you been",
+];
+
+/// `lower` (already lowercased) is a greeting or check-in, ignoring trailing
+/// punctuation and a name after a comma ("how are you, grok").
+fn is_small_talk(lower: &str) -> bool {
+    let head = lower.split(',').next().unwrap_or(lower);
+    let head = head.trim().trim_end_matches(['?', '!', '.']).trim();
+    SMALL_TALK.contains(&head)
 }
 
 /// Chat / Settings chrome titles that are never interests.
@@ -1461,6 +1503,42 @@ mod tests {
         assert!(noise.add("Background", InterestSource::Chats, 1));
         assert!(noise.add("Pulse", InterestSource::Chats, 1));
         assert!(noise.search_topics().is_empty());
+    }
+
+    #[test]
+    fn small_talk_titles_are_not_topics() {
+        assert!(!topic_searchable("How are you"));
+        assert!(!topic_searchable("how are you, grok?"));
+        assert!(!topic_searchable("Good morning!"));
+        assert!(!topic_searchable("What's up"));
+        // A real subject that starts like a greeting still counts.
+        assert!(topic_searchable("Good morning coffee"));
+        let mut p = InterestProfile::default();
+        p.observe_chat("c1", "How are you?", 1);
+        p.observe_chat("c2", "How are you?", 2);
+        assert!(p.graph.evidence.is_empty(), "{:?}", p.graph.evidence);
+    }
+
+    #[test]
+    fn a_skipped_chat_topic_stays_skipped_despite_more_chats() {
+        let mut p = InterestProfile::default();
+        assert!(p.add("Home espresso", InterestSource::Chats, 1));
+        p.observe_chat("c1", "Home espresso", 1);
+        p.observe_chat("c2", "Home espresso", 2);
+        let ready =
+            |p: &InterestProfile| p.find("Home espresso").is_some_and(|t| p.topic_is_ready(t));
+        assert!(ready(&p), "two chats of evidence at the start weight");
+        if let Some(t) = p.find_mut("Home espresso") {
+            t.weight = InterestSource::Chats.start_weight() - 1;
+        }
+        p.observe_chat("c3", "Home espresso", 3);
+        assert!(!ready(&p), "dismissed under its start weight");
+        // Same for a topic that started higher than chats do.
+        assert!(p.add("Bouldering", InterestSource::KnowMe, 1));
+        if let Some(t) = p.find_mut("Bouldering") {
+            t.weight = InterestSource::KnowMe.start_weight() - 2;
+        }
+        assert!(!p.find("Bouldering").is_some_and(|t| p.topic_is_ready(t)));
     }
 
     #[test]

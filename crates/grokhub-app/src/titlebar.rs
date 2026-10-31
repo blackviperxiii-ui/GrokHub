@@ -60,25 +60,56 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
     } else {
         crate::theme::muted()
     };
-    paint_chrome_glyph(ui, rect, kind, color);
+    let cue = crate::motion::icon::Cue::of(&resp, false);
+    let pose = crate::motion::icon::pose(ui, resp.id, cue, chrome_kick(kind));
+    paint_chrome_glyph(ui, rect, kind, color, pose);
     let name = titlebar_chrome_tip(kind, false);
     let enabled = resp.enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
     resp
 }
 
-fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: egui::Color32) {
+/// How each chrome glyph answers the pointer: the × turns a quarter (it
+/// lands looking the same), minimize dips, the others rise.
+fn chrome_kick(kind: ChromeBtn) -> crate::motion::icon::Kick {
+    use crate::motion::icon::Kick;
+    match kind {
+        ChromeBtn::Close => Kick::Turn(std::f32::consts::FRAC_PI_2),
+        ChromeBtn::Minimize => Kick::Nudge(egui::vec2(0.0, 1.0)),
+        ChromeBtn::Menu | ChromeBtn::Maximize | ChromeBtn::Restore => Kick::Lift,
+    }
+}
+
+fn paint_chrome_glyph(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    kind: ChromeBtn,
+    color: egui::Color32,
+    pose: crate::motion::icon::Pose,
+) {
     let painter = ui.painter();
     let stroke = egui::Stroke::new(1.25_f32, color);
     let side = 10.0_f32;
     let r = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+    let c = r.center();
+    let m = |p: egui::Pos2| pose.map(c, p);
+    // A square outline through the pose, so it turns and scales with the rest.
+    let square = |sq: egui::Rect| {
+        let pts = [
+            sq.left_top(),
+            sq.right_top(),
+            sq.right_bottom(),
+            sq.left_bottom(),
+        ];
+        pts.map(m).to_vec()
+    };
     match kind {
         ChromeBtn::Close => {
-            painter.line_segment([r.left_top(), r.right_bottom()], stroke);
-            painter.line_segment([r.right_top(), r.left_bottom()], stroke);
+            painter.line_segment([m(r.left_top()), m(r.right_bottom())], stroke);
+            painter.line_segment([m(r.right_top()), m(r.left_bottom())], stroke);
         }
         ChromeBtn::Maximize => {
-            painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
+            painter.add(egui::Shape::closed_line(square(r), stroke));
         }
         ChromeBtn::Restore => {
             let inset = 2.5_f32;
@@ -90,28 +121,34 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
                 egui::pos2(r.left(), r.top() + inset),
                 egui::pos2(r.right() - inset, r.bottom()),
             );
-            painter.rect_stroke(back, 0.0, stroke, egui::StrokeKind::Middle);
-            painter.rect_filled(front, 0.0, crate::theme::bg());
-            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Middle);
+            painter.add(egui::Shape::closed_line(square(back), stroke));
+            painter.add(egui::Shape::convex_polygon(
+                square(front),
+                crate::theme::bg(),
+                stroke,
+            ));
         }
         ChromeBtn::Minimize => {
             let y = r.center().y;
-            painter.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
+            painter.line_segment(
+                [m(egui::pos2(r.left(), y)), m(egui::pos2(r.right(), y))],
+                stroke,
+            );
         }
         ChromeBtn::Menu => {
             let y0 = r.top() + 1.0;
             let y1 = r.center().y;
             let y2 = r.bottom() - 1.0;
             painter.line_segment(
-                [egui::pos2(r.left(), y0), egui::pos2(r.right(), y0)],
+                [m(egui::pos2(r.left(), y0)), m(egui::pos2(r.right(), y0))],
                 stroke,
             );
             painter.line_segment(
-                [egui::pos2(r.left(), y1), egui::pos2(r.right(), y1)],
+                [m(egui::pos2(r.left(), y1)), m(egui::pos2(r.right(), y1))],
                 stroke,
             );
             painter.line_segment(
-                [egui::pos2(r.left(), y2), egui::pos2(r.right(), y2)],
+                [m(egui::pos2(r.left(), y2)), m(egui::pos2(r.right(), y2))],
                 stroke,
             );
         }
@@ -127,6 +164,66 @@ pub fn titlebar_chrome_tip(kind: ChromeBtn, hide_on_close: bool) -> &'static str
         ChromeBtn::Close if hide_on_close => "Hide to tray",
         ChromeBtn::Close => "Close",
         ChromeBtn::Menu => "Session menu",
+    }
+}
+
+/// How far in from the window edge a resize grab reaches, and how long the
+/// corner grabs run along each side.
+const EDGE_GRIP: f32 = 5.0;
+const CORNER_GRIP: f32 = 12.0;
+
+/// The undecorated cabin has no OS frame to drag, so these strips along its
+/// edges and corners start the OS resize instead.
+pub fn edge_grips(screen: egui::Rect) -> [(egui::ResizeDirection, egui::Rect); 8] {
+    use egui::ResizeDirection as D;
+    let (l, r, t, b) = (screen.left(), screen.right(), screen.top(), screen.bottom());
+    let (g, c) = (EDGE_GRIP, CORNER_GRIP);
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1))
+    };
+    [
+        (D::NorthWest, rect(l, t, l + c, t + c)),
+        (D::NorthEast, rect(r - c, t, r, t + c)),
+        (D::SouthWest, rect(l, b - c, l + c, b)),
+        (D::SouthEast, rect(r - c, b - c, r, b)),
+        (D::North, rect(l + c, t, r - c, t + g)),
+        (D::South, rect(l + c, b - g, r - c, b)),
+        (D::West, rect(l, t + c, l + g, b - c)),
+        (D::East, rect(r - g, t + c, r, b - c)),
+    ]
+}
+
+fn resize_cursor(dir: egui::ResizeDirection) -> egui::CursorIcon {
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    match dir {
+        D::North => C::ResizeNorth,
+        D::South => C::ResizeSouth,
+        D::East => C::ResizeEast,
+        D::West => C::ResizeWest,
+        D::NorthEast => C::ResizeNorthEast,
+        D::NorthWest => C::ResizeNorthWest,
+        D::SouthEast => C::ResizeSouthEast,
+        D::SouthWest => C::ResizeSouthWest,
+    }
+}
+
+/// Grabs along the window edges that resize it. Skipped while maximized, when
+/// the edges sit against the screen and a drag there should not shrink it.
+pub fn edge_resize(ctx: &egui::Context, maximized: bool) {
+    if maximized {
+        return;
+    }
+    for (dir, rect) in edge_grips(ctx.content_rect()) {
+        egui::Area::new(egui::Id::new(("edge-resize", format!("{dir:?}"))))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .show(ctx, |ui| {
+                let (_, resp) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
+                let resp = resp.on_hover_cursor(resize_cursor(dir));
+                if resp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                }
+            });
     }
 }
 
@@ -208,5 +305,27 @@ mod tests {
             src.contains("cfg(windows)") && src.contains("Visible(true)"),
             "Show from tray must still map the cloaked cabin: {src}"
         );
+    }
+
+    #[test]
+    fn the_window_edges_and_corners_each_resize_their_own_way() {
+        use egui::ResizeDirection as D;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let at = |x: f32, y: f32| {
+            let hits: Vec<_> = edge_grips(screen)
+                .into_iter()
+                .filter(|(_, r)| r.contains(egui::pos2(x, y)))
+                .map(|(d, _)| d)
+                .collect();
+            hits
+        };
+        assert_eq!(at(2.0, 2.0), vec![D::NorthWest]);
+        assert_eq!(at(998.0, 698.0), vec![D::SouthEast]);
+        assert_eq!(at(500.0, 2.0), vec![D::North]);
+        assert_eq!(at(500.0, 698.0), vec![D::South]);
+        assert_eq!(at(2.0, 350.0), vec![D::West]);
+        assert_eq!(at(998.0, 350.0), vec![D::East]);
+        assert!(at(500.0, 20.0).is_empty(), "the titlebar body still drags");
+        assert!(at(500.0, 350.0).is_empty());
     }
 }

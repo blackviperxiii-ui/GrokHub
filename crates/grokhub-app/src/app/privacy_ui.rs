@@ -15,7 +15,9 @@ use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
 pub(super) const RULES_HEAD: &str = "Command rules";
 /// Under "Leaving this computer" in Settings → Permissions.
-pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The grok CLI's own traffic, when a Google connector runs through it, is outside GrokHub. /privacy shows what left.";
+pub(super) static PRIVACY_NOTE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The Grok CLI's own traffic, when a Google connector runs through it, is outside {}. /privacy shows what left.", grokhub_core::brand::product_name())
+});
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
 /// The one user-facing name for the hub sync data (SY-02). Logs and files keep
 /// the scope ids (`chat`, `personal`).
@@ -115,11 +117,11 @@ pub(super) const TRY_AGAIN: &str = "Try again";
 /// SB-01: the hover on every disabled pill while private data is locked.
 pub(super) fn lock_hover(why: &hx::Locked) -> &'static str {
     match why {
-        hx::Locked::Unavailable => "Locked: keyring unavailable",
-        hx::Locked::Missing => "Locked: key missing from your keyring",
-        hx::Locked::WrongKey => "Locked: your keyring holds a different key",
-        hx::Locked::Busy => "Locked: another window is setting up the key",
-        hx::Locked::Unwritable => "Locked: the config folder can't be written",
+        hx::Locked::Unavailable => "Private data is unavailable",
+        hx::Locked::Missing => "Private data key is missing",
+        hx::Locked::WrongKey => "Private data key doesn't match",
+        hx::Locked::Busy => "Private data is being prepared",
+        hx::Locked::Unwritable => "Private data can't be saved",
     }
 }
 
@@ -130,17 +132,26 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
     let name = hx::keyring_name_for(os);
     match why {
         hx::Locked::Unavailable => match os {
-            hx::KeyringOs::Linux => "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again.".into(),
+            hx::KeyringOs::Linux => "Unlock or start your system password store, then choose Try again.".into(),
             hx::KeyringOs::Windows => {
-                "Turn on Windows Credential Manager (Services → Credential Manager), then Try again.".into()
+                "Turn on Windows Credential Manager (Services → Credential Manager), then choose Try again.".into()
             }
-            hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then Try again.".into(),
+            hx::KeyringOs::MacOs => "Unlock your macOS Keychain (Keychain Access → login), then choose Try again.".into(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("Put this data's GrokHub key back in your {name}, then Try again.")
+            // The key is filed under its stable keychain service, not the display brand.
+            format!(
+                "Restore this data's {} key (saved as {}) in your {name}, then choose Try again.",
+                grokhub_core::brand::product_name(),
+                hx::KEY_SERVICE
+            )
         }
-        hx::Locked::Busy => "Wait a moment for the other window, then Try again.".into(),
-        hx::Locked::Unwritable => "Check that GrokHub's config folder can be written, then Try again.".into(),
+        hx::Locked::Busy => "Wait a moment for the other window, then choose Try again.".into(),
+        hx::Locked::Unwritable => format!(
+            "Allow writing to the {} config folder (named {}), then choose Try again.",
+            grokhub_core::brand::product_name(),
+            grokhub_core::brand::INTERNAL_ID
+        ),
     }
 }
 
@@ -148,18 +159,24 @@ pub(super) fn lock_next_step(why: &hx::Locked, os: hx::KeyringOs) -> String {
 pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> String {
     let step = match why {
         hx::Locked::Unavailable => match os {
-            hx::KeyringOs::Linux => "unlock or start GNOME Keyring or KWallet".to_string(),
+            hx::KeyringOs::Linux => "unlock or start your system password store".to_string(),
             hx::KeyringOs::Windows => "turn on Windows Credential Manager".to_string(),
             hx::KeyringOs::MacOs => "unlock your macOS Keychain".to_string(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
             format!(
-                "put this data's GrokHub key back in your {}",
+                "restore this data's {} key (saved as {}) in your {}",
+                grokhub_core::brand::product_name(),
+                hx::KEY_SERVICE,
                 hx::keyring_name_for(os)
             )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
-        hx::Locked::Unwritable => "check that GrokHub's config folder can be written".to_string(),
+        hx::Locked::Unwritable => format!(
+            "allow writing to the {} config folder (named {})",
+            grokhub_core::brand::product_name(),
+            grokhub_core::brand::INTERNAL_ID
+        ),
     };
     format!("Next: {step}, then Try again in Settings → Permissions.")
 }
@@ -232,7 +249,7 @@ pub(super) fn privacy_report(
         out.push(format!("- Off: {}", off.join(" · ")));
     }
     out.push(format!(
-        "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults ({})",
+        "- Screen: \"Let Grok control the desktop\" in Settings → Defaults ({})",
         if desktop_control { "on" } else { "off" }
     ));
     if ledger.unreadable() > 0 {
@@ -310,7 +327,7 @@ pub(super) fn privacy_report(
         ));
     }
     out.push(String::new());
-    out.push("Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
+    out.push(format!("Not watched here: the Grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()));
     out.join("\n")
 }
 
@@ -415,7 +432,7 @@ impl Cabin {
         }
         self.harness.scope_note = None;
         self.harness.lock_retry_at = Some(now_ms());
-        self.status = "Checking your keyring…".into();
+        self.status = "Checking private data access…".into();
     }
 
     /// Paired computers the hub would serve a share to.
@@ -445,7 +462,8 @@ impl Cabin {
         // Spike-4b: a send that can't be logged doesn't go, so a locked or
         // still-opening ledger stops here with one plain line.
         if ledger.pending() {
-            self.status = "Sync waits for your keyring. Try /sync again in a moment.".into();
+            self.status =
+                "Sync is waiting for private data access. Try /sync again in a moment.".into();
             return;
         }
         if let Some(why) = private_lock(&crate::config::config_dir(), &ledger, false) {
@@ -519,7 +537,7 @@ impl Cabin {
     /// written (rule 4). Revoke is a ghost: it only takes access away (SY-05).
     pub(super) fn ui_privacy_rows(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_heading(ui, LEAVING_HEAD);
-        crate::cards::settings_note(ui, PRIVACY_NOTE);
+        crate::cards::settings_note(ui, PRIVACY_NOTE.as_str());
         // Spike-4b: said once, at the top, because it holds every row below.
         // SB-02: with one next step for this OS and a Try again that asks the
         // keyring again.
@@ -551,7 +569,7 @@ impl Cabin {
                 });
             });
             if checking {
-                crate::cards::settings_note(ui, "Checking your keyring…");
+                crate::cards::settings_note(ui, "Checking private data access…");
             } else if let Some(at) = self.harness.lock_retry_at {
                 let ago = grokhub_core::pulse::ago_label(at, now_ms());
                 crate::cards::settings_note(ui, &format!("Still locked. Checked {ago}."));
@@ -562,9 +580,9 @@ impl Cabin {
                 self.retry_keyring();
             }
         } else if checking {
-            crate::cards::settings_note(ui, "Checking your keyring…");
+            crate::cards::settings_note(ui, "Checking private data access…");
         } else if self.harness.lock_retry_at.take().is_some() {
-            self.status = "Your keyring answered. Private data is open again.".into();
+            self.status = "Private data is available again.".into();
         }
         let locked = lock.as_ref().map(lock_hover);
         let granted = self
@@ -713,7 +731,7 @@ pub(super) fn paint_privacy_revokes(
                 row,
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    ui.add_space(super::chat_ui::result_text_inset());
                     let r = ui.label(
                         RichText::new(&g.label)
                             .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
@@ -868,13 +886,13 @@ mod tests {
                 "",
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
-                "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
+                "- Screen: \"Let Grok control the desktop\" in Settings → Defaults (off)",
                 "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
                 "",
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
-                "Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
+                &format!("Not watched here: the Grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else {} sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.", grokhub_core::brand::product_name()),
             ]
             .join("\n")
         );
@@ -899,9 +917,7 @@ mod tests {
         assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(
-            got.contains(
-                "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (on)"
-            ),
+            got.contains("- Screen: \"Let Grok control the desktop\" in Settings → Defaults (on)"),
             "{got}"
         );
         assert!(
@@ -936,7 +952,12 @@ mod tests {
             assert!(compact.contains(HUB_SCOPE_LABEL), "{compact}");
             assert!(!compact.contains(HUB_SCOPE_PROSE), "{compact}");
         }
-        for user_text in [HUB_CARD_ACTION, HUB_CARD_NOTE, HUB_OFF, PRIVACY_NOTE] {
+        for user_text in [
+            HUB_CARD_ACTION,
+            HUB_CARD_NOTE,
+            HUB_OFF,
+            PRIVACY_NOTE.as_str(),
+        ] {
             assert!(!user_text.contains("chat, personal"), "{user_text}");
         }
         let src = include_str!("privacy_ui.rs");
@@ -971,10 +992,17 @@ mod tests {
             "Sends chats and memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
         );
         assert!(
-            PRIVACY_NOTE.contains("allowed for chats and memory."),
-            "{PRIVACY_NOTE}"
+            PRIVACY_NOTE
+                .as_str()
+                .contains("allowed for chats and memory."),
+            "{}",
+            *PRIVACY_NOTE
         );
-        assert!(!PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
+        assert!(
+            !PRIVACY_NOTE.as_str().contains("chats, memory"),
+            "{}",
+            *PRIVACY_NOTE
+        );
         assert!(!HUB_CARD_NOTE.contains("chats, memory"), "{HUB_CARD_NOTE}");
         let dir = crate::config::test_config_root("privacy-prose");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1066,6 +1094,8 @@ mod tests {
                     true,
                     grokhub_core::ThoughtFold::Expanded,
                     false,
+                    false,
+                    1,
                 );
                 let _ = paint_privacy_revokes(ui, &rows, None);
             });
@@ -1113,19 +1143,37 @@ mod tests {
         let u = hx::Locked::Unavailable;
         assert_eq!(
             lock_next_step(&u, Linux),
-            "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again."
+            "Unlock or start your system password store, then choose Try again."
         );
         assert_eq!(
             lock_next_step(&u, Windows),
-            "Turn on Windows Credential Manager (Services → Credential Manager), then Try again."
+            "Turn on Windows Credential Manager (Services → Credential Manager), then choose Try again."
         );
         assert_eq!(
             lock_next_step(&u, MacOs),
-            "Unlock your macOS Keychain (Keychain Access → login), then Try again."
+            "Unlock your macOS Keychain (Keychain Access → login), then choose Try again."
         );
         assert_eq!(
             lock_next_step_short(&u, Linux),
-            "Next: unlock or start GNOME Keyring or KWallet, then Try again in Settings → Permissions."
+            "Next: unlock or start your system password store, then Try again in Settings → Permissions."
+        );
+        for why in [hx::Locked::Missing, hx::Locked::WrongKey] {
+            assert_eq!(
+                lock_next_step(&why, Windows),
+                "Restore this data's Loadout key (saved as GrokHub) in your Windows Credential Manager, then choose Try again."
+            );
+            assert_eq!(
+                lock_next_step_short(&why, Windows),
+                "Next: restore this data's Loadout key (saved as GrokHub) in your Windows Credential Manager, then Try again in Settings → Permissions."
+            );
+        }
+        assert_eq!(
+            lock_next_step(&hx::Locked::Unwritable, Linux),
+            "Allow writing to the Loadout config folder (named GrokHub), then choose Try again."
+        );
+        assert_eq!(
+            lock_next_step_short(&hx::Locked::Unwritable, Linux),
+            "Next: allow writing to the Loadout config folder (named GrokHub), then Try again in Settings → Permissions."
         );
         assert_eq!(hx::keyring_name_for(Windows), "Windows Credential Manager");
         assert_eq!(hx::keyring_name_for(MacOs), "macOS Keychain");
@@ -1145,7 +1193,7 @@ mod tests {
             }
             for os in [Linux, Windows, MacOs] {
                 assert!(
-                    lock_next_step(why, os).ends_with("then Try again."),
+                    lock_next_step(why, os).ends_with("then choose Try again."),
                     "{os:?}: {why:?}"
                 );
                 assert!(lock_next_step_short(why, os)
@@ -1195,60 +1243,72 @@ mod tests {
     /// bubble's text inset, not at the row edge.
     #[test]
     fn privacy_revoke_rows_line_up_with_the_bubble_text() {
-        let view = grokhub_core::ChatView {
-            kind: grokhub_core::ChatKind::Result,
-            title: String::new(),
-            body: format!("{PRIVACY_HEAD}\n\nGrants"),
-        };
-        let rows = vec![PrivacyRevoke {
-            id: "g1".into(),
-            label: "Files in notes".into(),
-            detail: Some("/home/you/Documents/notes".into()),
-        }];
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts_on(&ctx);
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1000.0, 600.0),
-            )),
-            ..Default::default()
-        };
-        let out = crate::theme::test_pass(&ctx, input, |ui| {
-            egui::CentralPanel::default().show(ui, |ui| {
-                let _ = super::super::chat_ui::paint_chat_block_with(
-                    ui,
-                    &view,
-                    true,
-                    true,
-                    grokhub_core::ThoughtFold::Expanded,
-                    false,
-                );
-                let _ = paint_privacy_revokes(ui, &rows, None);
+        // Loadout outlines the bubble, which moves its text; pin each paint
+        // so the result never depends on which test set it last.
+        let _paint = crate::theme::hold_paint_test();
+        for palette in [
+            crate::theme::PaintPalette::ClassicDark,
+            crate::theme::PaintPalette::OpsDark,
+        ] {
+            crate::theme::set_paint_palette(palette);
+            let view = grokhub_core::ChatView {
+                kind: grokhub_core::ChatKind::Result,
+                title: String::new(),
+                body: format!("{PRIVACY_HEAD}\n\nGrants"),
+            };
+            let rows = vec![PrivacyRevoke {
+                id: "g1".into(),
+                label: "Files in notes".into(),
+                detail: Some("/home/you/Documents/notes".into()),
+            }];
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = super::super::chat_ui::paint_chat_block_with(
+                        ui,
+                        &view,
+                        true,
+                        true,
+                        grokhub_core::ThoughtFold::Expanded,
+                        false,
+                        false,
+                        1,
+                    );
+                    let _ = paint_privacy_revokes(ui, &rows, None);
+                });
             });
-        });
-        let mut lefts = std::collections::HashMap::new();
-        fn walk(shape: &egui::Shape, lefts: &mut std::collections::HashMap<String, f32>) {
-            match shape {
-                egui::Shape::Text(t) => {
-                    lefts.insert(t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x);
+            let mut lefts = std::collections::HashMap::new();
+            fn walk(shape: &egui::Shape, lefts: &mut std::collections::HashMap<String, f32>) {
+                match shape {
+                    egui::Shape::Text(t) => {
+                        lefts.insert(t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x);
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
+                    _ => {}
                 }
-                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
-                _ => {}
             }
+            for clipped in &out.shapes {
+                walk(&clipped.shape, &mut lefts);
+            }
+            let head = lefts.get(PRIVACY_HEAD).copied().expect("bubble head");
+            let row = lefts
+                .get("Files in notes")
+                .copied()
+                .expect("revoke row label");
+            assert!(
+                (head - row).abs() < 1.0,
+                "{palette:?}: bubble text at {head}, Revoke row at {row}"
+            );
         }
-        for clipped in &out.shapes {
-            walk(&clipped.shape, &mut lefts);
-        }
-        let head = lefts.get(PRIVACY_HEAD).copied().expect("bubble head");
-        let row = lefts
-            .get("Files in notes")
-            .copied()
-            .expect("revoke row label");
-        assert!(
-            (head - row).abs() < 1.0,
-            "bubble text at {head}, Revoke row at {row}"
-        );
+        crate::theme::set_paint_dark(true);
     }
 
     #[test]

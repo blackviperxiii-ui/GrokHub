@@ -454,7 +454,7 @@ mod tests {
             care: "critical".into(),
             domain: "system".into(),
             policy: "repair × critical".into(),
-            playbook: "repair-linux".into(),
+            playbook: "pc-fix".into(),
         };
         append_run(&d, &m, 90).unwrap();
         let raw = fs::read_to_string(runs_path(&d)).unwrap();
@@ -466,14 +466,14 @@ mod tests {
                 "care": "critical",
                 "domain": "system",
                 "policy": "repair × critical",
-                "playbook": "repair-linux"
+                "playbook": "pc-fix"
             })
         );
-        assert_eq!(read_runs(&d)[0].brain.playbook, "repair-linux");
+        assert_eq!(read_runs(&d)[0].brain.playbook, "pc-fix");
         assert!(m.brain.in_class("policy:repair × critical"));
-        assert!(m.brain.in_class("playbook:repair-linux"));
+        assert!(m.brain.in_class("playbook:pc-fix"));
         assert!(!m.brain.in_class("playbook:repair-windows"));
-        assert!(!m.brain.in_class("skill:repair-linux"));
+        assert!(!m.brain.in_class("skill:pc-fix"));
         assert!(!RunBrain::default().in_class("playbook:"));
         // A line from before Brain 6 has no `brain` and reads with it empty.
         let old = r#"{"run":"chat-a:1","class":"skill:weekly-report","result":"success","verified":true,"steps":3,"wall_ms":10,"tokens":{"in":1,"out":2},"cost_usd":0.0,"finished_at":5,"at":5}"#;

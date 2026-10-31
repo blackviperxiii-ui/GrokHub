@@ -55,6 +55,7 @@ const DESKTOP: &[&str] = &[
     "key",
 ];
 const WEB_FETCH: &str = "web_fetch";
+const WEB_SEARCH: &str = "web_search";
 const MEDIA: &[&str] = &[
     "image_generate",
     "image_edit",
@@ -198,6 +199,7 @@ pub fn is_known(name: &str) -> bool {
         || CONTROL.contains(&name)
         || is_desktop(name)
         || name == WEB_FETCH
+        || name == WEB_SEARCH
         || is_media(name)
         || crate::self_manage::self_tool(name).is_some()
 }
@@ -217,6 +219,8 @@ pub fn unattended_deny(name: &str) -> String {
         "bash"
     } else if name == WEB_FETCH {
         "web_fetch"
+    } else if name == WEB_SEARCH {
+        "web_search"
     } else {
         "edit"
     };
@@ -257,7 +261,9 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
         }
         match desk {
             None => return Decision::Refuse(OFF_MSG.to_string()),
-            Some(DeskFlags { halted: true, .. }) => return Decision::Refuse(HALT_MSG.to_string()),
+            Some(DeskFlags { halted: true, .. }) => {
+                return Decision::Refuse((*HALT_MSG).to_string())
+            }
             Some(DeskFlags { locked: true, .. }) => return Decision::Refuse(LOCK_MSG.to_string()),
             Some(_) => {}
         }
@@ -463,7 +469,7 @@ mod tests {
                     locked: false
                 })
             ),
-            Decision::Refuse(HALT_MSG.into())
+            Decision::Refuse((*HALT_MSG).into())
         );
         assert_eq!(
             decide(

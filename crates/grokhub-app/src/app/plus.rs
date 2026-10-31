@@ -474,13 +474,21 @@ impl Cabin {
                                 };
                                 let row = ui
                                     .horizontal(|ui| {
-                                        crate::icons::paint_rail_icon(
-                                            ui,
-                                            icon,
-                                            16.0,
-                                            crate::theme::muted(),
+                                        let (slot, _) = ui.allocate_exact_size(
+                                            egui::Vec2::splat(16.0),
+                                            egui::Sense::hover(),
                                         );
-                                        ui.selectable_label(false, name)
+                                        let row = ui.selectable_label(false, name);
+                                        // Painted after the row, so it can answer the row's hover.
+                                        let pose = crate::icons::rail_pose(ui, &row, icon, false);
+                                        crate::icons::paint_rail_icon_at(
+                                            ui.painter(),
+                                            slot,
+                                            icon,
+                                            crate::theme::muted(),
+                                            pose,
+                                        );
+                                        row
                                     })
                                     .inner;
                                 if row.clicked() {

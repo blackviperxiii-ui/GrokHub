@@ -41,25 +41,27 @@ fn palette_repaint_only_while_search_inflight() {
 }
 
 #[test]
-fn pulse_tab_repaint_only_while_crossfade_moves() {
+fn pulse_repaints_only_while_ideas_load() {
     let src = include_str!("pulse_ui.rs").replace("\r\n", "\n");
     let pulse = body(&src, "ui_pulse");
     assert!(
-        pulse.contains("motion_ok")
-            && pulse.contains("0.001 < tab_t")
-            && pulse.contains("tab_t < 0.999"),
-        "16 ms crossfade tick only while motion is on and t is mid-way: {pulse}"
+        !pulse.contains("request_repaint_after"),
+        "one stream, no crossfade: the page itself sets no short tick: {pulse}"
     );
     let silence = body(&src, "paint_pulse_silence");
     let loading_start = silence
-        .find("if !feed && self.ideas_rx.is_some()")
+        .find("if self.ideas_rx.is_some() {")
         .expect("ideas loading arm");
     let loading = &silence[loading_start..];
-    let loading_end = loading.find("\n        if feed {").unwrap_or(loading.len());
-    let loading = &loading[..loading_end];
+    let loading_end = loading.find("return;").expect("loading arm returns");
+    let (loading, rest) = loading.split_at(loading_end);
     assert!(
         loading.contains("request_repaint_after"),
         "250 ms silence tick stays inside the ideas-loading arm: {loading}"
+    );
+    assert!(
+        !rest.contains("request_repaint_after"),
+        "the empty state does not tick: {rest}"
     );
 }
 

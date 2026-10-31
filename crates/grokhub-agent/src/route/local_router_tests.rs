@@ -12,6 +12,7 @@ use grokhub_core::model_registry::{
 use serde_json::{json, Value};
 
 use super::local::{self, ForceOn, LocalGate, LocalRuntime, TierCaps};
+use super::spend::Spend;
 use super::table::RoutingTable;
 use super::{RouteInput, Router};
 
@@ -92,8 +93,8 @@ fn tier_meta_carries_bench_caps_without_claiming_tools() {
     });
     let m = local::tier_meta("local:small");
     assert_eq!(m.context_length, Some(8_192));
-    // Eval pass rate must not unlock tool_calling — serve returns empty calls.
-    assert_eq!(m.tool_calling, Some(false));
+    // Chat tools (cabin web_search) are offered; eval pass rate is unrelated.
+    assert_eq!(m.tool_calling, Some(true));
     let n = m.notice.expect("notice");
     assert!(
         n.text.contains("42.0") && n.text.contains("120") && n.text.contains("eval"),
@@ -204,5 +205,268 @@ fn escalate_note_names_both_models() {
     assert!(
         n.contains("local:small") && n.contains("grok-4.7") && n.contains("failed"),
         "{n}"
+    );
+}
+
+#[test]
+fn online_chat_uses_the_frontier_and_falls_back_to_local_only_when_no_cloud_model_can_answer() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let online = || {
+        let mut gate = LocalGate::now(false, false, false);
+        gate.offline = false;
+        gate
+    };
+    // The cloud answers: the frontier model takes chat and background work.
+    let up = fleet();
+    for class in ["chat:default", "background:summarize"] {
+        let r = Router::choose(&ask(class, online()), &up, &profiles, &table, 10);
+        assert_eq!(r.model, "grok-4.7", "{class}");
+    }
+    // Every cloud model down: the device takes chat too, and says so.
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let r = Router::choose(&ask("chat:default", online()), &down, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small");
+    assert!(
+        r.rule_ids.contains(&"local:cloud_down".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(r.reason.contains("using local"), "{}", r.reason);
+    // No sign-in or key: the device answers, and the note names why.
+    let mut no_keys = fleet();
+    no_keys.entitlement.credential = Credential::None;
+    for class in ["chat:default", "background:summarize"] {
+        let r = Router::choose(&ask(class, online()), &no_keys, &profiles, &table, 10);
+        assert_eq!(r.model, "local:small", "{class}");
+        assert!(
+            r.rule_ids.contains(&"local:no_keys".into()),
+            "{class}: {:?}",
+            r.rule_ids
+        );
+        assert!(r.reason.contains("sign-in or key"), "{}", r.reason);
+    }
+    // Hard work never falls back to the device.
+    let r = Router::choose(&ask("prepare:hard", online()), &down, &profiles, &table, 10);
+    assert_ne!(r.model, "local:small");
+}
+
+fn online() -> LocalGate {
+    let mut gate = LocalGate::now(false, false, false);
+    gate.offline = false;
+    gate
+}
+
+#[test]
+fn hard_chat_never_falls_back_to_local_with_the_cloud_down_or_no_keys() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let mut no_keys = fleet();
+    no_keys.entitlement.credential = Credential::None;
+    for (why, reg) in [("cloud down", &down), ("no keys", &no_keys)] {
+        let mut hard = ask("chat:default", online());
+        hard.d = 0.8;
+        let r = Router::choose(&hard, reg, &profiles, &table, 10);
+        assert_ne!(r.model, "local:small", "{why}: {:?}", r.rule_ids);
+        assert!(
+            !r.rule_ids.iter().any(|x| x.starts_with("local:")),
+            "{why}: {:?}",
+            r.rule_ids
+        );
+        if why == "cloud down" {
+            // Nothing answers: the turn pauses instead of going anywhere.
+            assert!(r.no_route, "{why}: {:?}", r.rule_ids);
+        } else {
+            // No sign-in: the turn keeps the no-sign-in path it had before
+            // Local AI, never a stand-in cloud model.
+            assert_eq!(r.model, "grok-4.7", "{why}: {:?}", r.rule_ids);
+            assert!(
+                r.rule_ids.contains(&"cost:not_included".into()),
+                "{why}: {:?}",
+                r.rule_ids
+            );
+        }
+    }
+}
+
+#[test]
+fn a_hard_step_that_failed_verify_never_goes_back_to_the_device_with_the_cloud_down() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(true);
+    let mut gate = online();
+    gate.local_verify_failed = true;
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut hard = ask("background:summarize", gate);
+    hard.d = 0.8;
+    let r = Router::choose(&hard, &down, &profiles, &table, 10);
+    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        !r.rule_ids.contains(&"local:cloud_down".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    local::note_local_verify_failed(false);
+}
+
+#[test]
+fn verify_escalation_with_no_keys_keeps_the_device() {
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(true);
+    let mut gate = online();
+    gate.local_verify_failed = true;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let r = Router::choose(&ask("chat:default", gate), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"local:no_keys".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        !r.rule_ids.contains(&"local:escalate_verify".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_eq!(r.provider, local::PROVIDER_LOCAL);
+    assert!(!local::local_verify_failed(), "flag cleared");
+}
+
+#[test]
+fn no_keys_with_a_granted_provider_routes_to_that_provider() {
+    const OR: &str = "openrouter/vendor/model";
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    reg.apply_refresh(
+        &[
+            Listing::new(SourceKind::XaiApi, vec![meta("grok-4.7")]),
+            Listing::new(
+                SourceKind::Local,
+                local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+            ),
+            Listing::new(SourceKind::OpenAiCompatible, vec![meta(OR)]),
+        ],
+        &[],
+        2,
+    );
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let granted = Spend {
+        providers: vec!["openrouter".into()],
+        ..Spend::default()
+    };
+    // Pinned to the provider: it answers on its own key.
+    let mut pinned = ask("chat:default", online());
+    pinned.current_model = OR;
+    pinned.pinned = true;
+    pinned.spend = granted.clone();
+    let r = Router::choose(&pinned, &reg, &profiles, &table, 10);
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str(), r.no_route),
+        ("openrouter", OR, false),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x.starts_with("local:")),
+        "{:?}",
+        r.rule_ids
+    );
+    // Picked in Settings: the same.
+    let mut picked = ask("chat:default", online());
+    picked.prefer = Some(OR);
+    picked.spend = granted.clone();
+    let r = Router::choose(&picked, &reg, &profiles, &table, 10);
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("openrouter", OR),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"provider:picked".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // With the verify flag set, it escalates there too.
+    local::note_local_verify_failed(true);
+    let mut verify = ask("chat:default", online());
+    verify.local.local_verify_failed = true;
+    verify.prefer = Some(OR);
+    verify.spend = granted;
+    let r = Router::choose(&verify, &reg, &profiles, &table, 10);
+    assert_eq!(r.model, OR, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"local:escalate_verify".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // No grant for it: no cloud route, so the device answers.
+    local::note_local_verify_failed(false);
+    let mut ungranted = ask("chat:default", online());
+    ungranted.prefer = Some(OR);
+    let r = Router::choose(&ungranted, &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"local:no_keys".into()),
+        "{:?}",
+        r.rule_ids
+    );
+}
+
+#[test]
+fn a_premium_model_over_the_ceiling_asks_for_an_ok_instead_of_going_local() {
+    let mut reg = Registry::default();
+    reg.entitlement.credential = Credential::ApiKey;
+    let mut pricey = meta("grok-4.7");
+    // $40/M output, over the default $15/M ceiling.
+    pricey.prices.completion = Some(400_000);
+    reg.apply_refresh(
+        &[
+            Listing::new(SourceKind::XaiApi, vec![pricey]),
+            Listing::new(
+                SourceKind::Local,
+                local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+            ),
+        ],
+        &[],
+        1,
+    );
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    for class in ["chat:default", "background:summarize"] {
+        let r = Router::choose(&ask(class, online()), &reg, &profiles, &table, 10);
+        assert_ne!(r.model, "local:small", "{class}: {:?}", r.rule_ids);
+        assert!(
+            !r.rule_ids.contains(&"local:cloud_down".into()),
+            "{class}: {:?}",
+            r.rule_ids
+        );
+        assert!(r.premium_ask.is_some(), "{class}: {:?}", r.rule_ids);
+    }
+    // The same model actually down: the device is the last resort.
+    reg.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    let r = Router::choose(&ask("chat:default", online()), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"local:cloud_down".into()),
+        "{:?}",
+        r.rule_ids
     );
 }

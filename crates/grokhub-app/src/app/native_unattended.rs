@@ -1125,7 +1125,7 @@ mod tests {
         assert_eq!(cabin.cfg.feed_instructions, after);
         assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 0);
         assert_eq!(say.calls.load(Ordering::SeqCst), 1);
-        let memory = crate::config::read_memory("MEMORY.md");
+        let memory = crate::config::read_memory(grokhub_core::pulse::LEDGER_FILE);
         for line in [
             "- [2026-10-04] pulse: liked \"Rust 1.92 ships\" reason=liked",
             "- [2026-10-04] pulse: dismissed \"Crypto prices jump\" reason=not-this",
@@ -1224,7 +1224,7 @@ mod tests {
         );
         let plain = cabin.chat_rules();
         assert!(
-            plain.starts_with("Personality: Default."),
+            plain.starts_with("Personality: Nyx."),
             "default voice is layered: {plain}"
         );
         assert!(
@@ -1246,7 +1246,7 @@ mod tests {
             !night.contains("Personality:"),
             "night jobs stay neutral: {night}"
         );
-        assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
+        assert!(night.contains(*grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
         assert!(
             night.contains("<dangerous_actions>"),
             "unattended keeps template safety: {night}"
@@ -1324,11 +1324,17 @@ mod tests {
             }
         }
         // config.rs only seeds a new install's pick (Nyx); it never reads it into a prompt.
-        let want: std::collections::BTreeSet<String> =
-            ["app/native_engine.rs", "app/personality_ui.rs", "config.rs"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+        // loadout_home.rs pins Viper (+ adults-only) for GROKHUB_DECK_SHOT seeds only —
+        // titlebar/proof shots; it never layers personality into a chat or night-job prompt.
+        let want: std::collections::BTreeSet<String> = [
+            "app/loadout_home.rs",
+            "app/native_engine.rs",
+            "app/personality_ui.rs",
+            "config.rs",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(readers, want);
     }
 }

@@ -37,6 +37,7 @@ keyring = { workspace = true }
 # SB-04: native folder picker. On Linux only the xdg-desktop-portal backend
 # (no GTK, no new system libraries); Windows and macOS use their own dialogs.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 
 [target.'cfg(unix)'.dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
@@ -86,6 +87,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
 ] }
+
+[dev-dependencies]
+# Diagnostics tests read the saved bundle back.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [features]
 default = ["fx"]

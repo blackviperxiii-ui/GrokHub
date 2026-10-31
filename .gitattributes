@@ -1,0 +1,8 @@
+# Union-merge append-only lists that no Rust compiler reads, so two changes
+# that each add a line both keep theirs. Never use this for source code.
+scripts/deck-shots.list.ps1 merge=union
+
+# The agent prompt ships through include_str!, so a CRLF checkout on Windows
+# would add a byte per line and push it past the prompt growth budget. Keep
+# it LF everywhere so both builds send the same prompt bytes.
+crates/grokhub-agent/src/prompt_template.md text eol=lf

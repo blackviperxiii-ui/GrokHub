@@ -1,7 +1,7 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
-    load_image_data_url, lock_titles, pick_file, play_audio, read_text_capped, record_once,
+    load_image_data_url, lock_titles, pick_file, read_text_capped, record_once,
     run_computer_op_cancel, transcribe_local,
 };
 use crate::helpers::{
@@ -44,45 +44,44 @@ use grokhub_core::{
     compose_imagine_prompt, composer_enter, composer_go, composer_go_tip, computer_cmd_line,
     context_fingerprint, context_percent, create_folder, create_project, daily_units_blocked,
     decode_tool_rows, dedicated_imagine_model, dedupe_hits, dedupe_suggestions,
-    default_openclaw_paths, delete_thread, devices_shows_pair_code, diagnostics_bundle,
-    digest_line_from, dismiss_accepted_auto, drop_node, drop_selected, drop_trailing_assistant,
-    due_automations, due_loops, encode_turn, ensure_automation_schedule, estimate_messages,
-    estimate_messages_from, extract_imagine_prompt, extract_insights, fact_candidates,
-    fact_candidates_from, filter_palette, filter_slash_hits, flush_visible_goal, folder_choices,
-    forbidden_reason, forget_topic, format_consult_reply, frame_bytes, greet_from_last_job,
-    greeting_fingerprint, greeting_name, grok_command_hits, halt_when_leaving_tab, has_auth,
-    heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route,
-    home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project, host_hour_blocked, host_risk,
-    host_status_line, hub_dispatch_ok, hub_kind_from_health, hub_pair_url, imagine_aspect_label,
-    imagine_aspect_name, imagine_image_resolution, imagine_ref_status, imagine_stage_h,
-    imagine_stage_visible, imagine_style_label, imagine_toolbox_dock, imagine_toolbox_shows_title,
-    imagine_toolbox_top, imagine_video_dur_label, imagine_video_duration_secs,
-    imagine_video_res_label, imagine_video_resolution, imagine_wall_bounds, import_memory_file,
-    inflight_card_title, inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
-    is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
-    is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
-    keep_last_rewinds, keep_loaded_thread, lan_bind_in_use, last_imagine_receipt, last_say,
-    last_user_scan, last_user_text, leftover_empty_thread, load_hub_state, local_greeting,
-    lock_blocks_hands, mark_automation_ran, mark_automation_skipped, mark_loop_ran,
-    mark_slash_result, match_skill, merge_hub_snapshots, merge_imported_memory,
-    merge_suggestion_store, merge_thinking_capped, mint_host_halt, mode_from_chip_value,
-    model_for_mode, nav_from_chip_value, new_loop, next_chat_image, next_heartbeat_wait_ms,
-    night_check_command, night_check_exit_code, night_check_may_fire, night_counts_run,
-    normalize_hm, now_ms, oauth_access_live, overlay_update_begin, overlay_update_finish,
-    pair_code_is_live, palette_file_shown, palette_forget_stale_walk, palette_row_action,
-    palette_search_is_saved, palette_shortcut, parse_computer_op, parse_fast_topics,
-    parse_hostname_i, parse_local_clock, parse_slash, parse_suggest_lines,
-    parse_suggest_skill_patches, parse_theme, parse_trajectory_jsonl, partition_suggestions,
-    patch_skill, perm_key, persist_user_turn, pick_fresh_seed, pick_greeting_against,
-    pick_lan_ipv4, plan_room, plus_empty_status, plus_menu_rows, prefer_patch,
-    presence_should_stream, project_menu_acts, project_menu_label, project_title_from_hint,
-    propose_skill_from_turn, prune_live_suggestions, ptt_after_speak, ptt_after_stt,
-    push_stream_capped, quiet_hours_active, quiet_hours_choice_label, quiet_hours_menu,
-    quote_for_reply, realtime_can_connect, recipe_from_cmds, record_turn, redact_held_secrets,
-    redact_secrets, redirect_prompt, refresh_last_stretch, refund_host_reserved,
-    release_inflight_card, remember_chip_click, remember_chip_dismiss, remember_chip_outcome,
-    remember_home_slash, remember_home_surface, remember_typed_prompt, rename_node,
-    replay_automation_target, replay_ops, resolve_bind_path, resolve_chat_model,
+    default_openclaw_paths, devices_shows_pair_code, diagnostics_bundle, digest_line_from,
+    dismiss_accepted_auto, drop_node, drop_selected, drop_trailing_assistant, due_automations,
+    due_loops, encode_turn, ensure_automation_schedule, estimate_messages, estimate_messages_from,
+    extract_imagine_prompt, extract_insights, fact_candidates, fact_candidates_from,
+    filter_palette, filter_slash_hits, flush_visible_goal, folder_choices, forbidden_reason,
+    forget_topic, format_consult_reply, frame_bytes, greet_from_last_job, greeting_fingerprint,
+    greeting_name, grok_command_hits, halt_when_leaving_tab, has_auth, heartbeat_acts,
+    heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route, home_slash_cmd,
+    home_surface_from_nav, host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line,
+    hub_dispatch_ok, hub_kind_from_health, hub_pair_url, imagine_aspect_label, imagine_aspect_name,
+    imagine_image_resolution, imagine_ref_status, imagine_stage_h, imagine_stage_visible,
+    imagine_style_label, imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
+    imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
+    imagine_video_resolution, imagine_wall_bounds, import_memory_file, inflight_card_title,
+    inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run, is_openclaw_workspace,
+    is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in, is_thinking_status, is_voice_error,
+    is_workload_user, job_error_goes_to_chat, job_is_scratch, keep_last_rewinds,
+    keep_loaded_thread, lan_bind_in_use, last_imagine_receipt, last_say, last_user_scan,
+    last_user_text, leftover_empty_thread, load_hub_state, local_greeting, lock_blocks_hands,
+    mark_automation_ran, mark_automation_skipped, mark_loop_ran, mark_slash_result, match_skill,
+    merge_hub_snapshots, merge_imported_memory, merge_suggestion_store, merge_thinking_capped,
+    mint_host_halt, mode_from_chip_value, model_for_mode, nav_from_chip_value, new_loop,
+    next_chat_image, next_heartbeat_wait_ms, night_check_command, night_check_exit_code,
+    night_check_may_fire, night_counts_run, normalize_hm, now_ms, oauth_access_live,
+    overlay_update_begin, overlay_update_finish, pair_code_is_live, palette_file_shown,
+    palette_forget_stale_walk, palette_row_action, palette_search_is_saved, palette_shortcut,
+    parse_computer_op, parse_fast_topics, parse_hostname_i, parse_local_clock, parse_slash,
+    parse_suggest_lines, parse_suggest_skill_patches, parse_theme, parse_trajectory_jsonl,
+    partition_suggestions, patch_skill, perm_key, persist_user_turn, pick_fresh_seed,
+    pick_greeting_against, pick_lan_ipv4, plan_room, plus_empty_status, plus_menu_rows,
+    prefer_patch, presence_should_stream, project_menu_acts, project_menu_label,
+    project_title_from_hint, propose_skill_from_turn, prune_live_suggestions, ptt_after_speak,
+    ptt_after_stt, push_stream_capped, quiet_hours_active, quiet_hours_choice_label,
+    quiet_hours_menu, quote_for_reply, realtime_can_connect, recipe_from_cmds, record_turn,
+    redact_held_secrets, redact_secrets, redirect_prompt, refresh_last_stretch,
+    refund_host_reserved, release_inflight_card, remember_chip_click, remember_chip_dismiss,
+    remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
+    rename_node, replay_automation_target, replay_ops, resolve_bind_path, resolve_chat_model,
     restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due, rewind_allowed,
     rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_snapshot_ready, roll_usage_day, route_schedule, save_hub_state, screen_from_extents,
@@ -94,33 +93,32 @@ use grokhub_core::{
     skill_follow_block, skill_from_suggestion, skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair, state_for_disk,
     stretch_saved_skill, strip_thinking, suggestions_from_sessions, summarize_trajectory,
-    summarize_write, surgical_memory_edit, take_ui_text, teachable_steps, theme_label,
-    thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
-    thought_shows_acts, thought_shows_label, thread_host_receipts, thread_host_receipts_from,
-    toggle_pin, token_delta, tool_display_title, tool_group_label, tool_status_failed,
-    tool_status_running, top_habit_labels, topics_from_turns, trajectory_jsonl_line,
-    transcribe_route, trim_result_bodies_in_place, turn_needs_timeline, uid, unified_diff_cite,
-    unknown_cabin_slash, update_check_due, update_chip_label, update_cmds_for_host_in,
-    update_wipes_config, upsert_assistant_turn, upsert_bound, upsert_inflight_card, usage_line,
-    user_pref_facts, verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
-    visible_tree, visible_turn_count, visible_turn_count_from, voice_mode_label,
-    voice_state_after_ptt_stt, voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict,
-    wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
-    BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
-    ChipThread, ComposerEnter, ComposerGo, DeleteOutcome, DeviceCodeStart, DigestLine,
-    GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
-    HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
-    ImagineWall, InhabitBundle, KanbanColumn, LearningState, LiveBlock, LiveKind, LocalClock,
-    MemoryEdit, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind, ProjectMenuAct,
-    ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord, ScheduleRoute,
-    SkillMd, Slash, SlashHit, SuggestionStore, ThoughtFold, ThreadReuseView, ThreadTab,
-    TranscribeRoute, UpdatePending, UsageDay, VerifyResult, VoiceState, WallGif, BUBBLE_PAD_X,
-    BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS, CHAT_TAIL_FRAMES,
-    CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FRAME_CAP, GOAL_DROP_AFTER,
-    HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES,
-    IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK,
-    SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY,
-    WALL_GIF_EVERY_MS, WALL_GIF_MAX,
+    summarize_write, take_ui_text, teachable_steps, theme_label, thought_body_key,
+    thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts,
+    thought_shows_label, thread_host_receipts, thread_host_receipts_from, toggle_pin, token_delta,
+    tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
+    top_habit_labels, topics_from_turns, trajectory_jsonl_line, transcribe_route,
+    trim_result_bodies_in_place, turn_needs_timeline, uid, unified_diff_cite, unknown_cabin_slash,
+    update_check_due, update_chip_label, update_cmds_for_host_in, update_wipes_config,
+    upsert_assistant_turn, upsert_bound, upsert_inflight_card, usage_line, user_pref_facts,
+    verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs, visible_tree,
+    visible_turn_count, visible_turn_count_from, voice_mode_label, voice_state_after_ptt_stt,
+    voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict, wall_gif_from_generation,
+    worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard, BoardStatus, ChatKind,
+    ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory, ChipThread,
+    ComposerEnter, ComposerGo, DeviceCodeStart, DigestLine, GreetingInput, GrokLoop, HeartbeatAct,
+    HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, HubSnapshot, HubState,
+    ImagineKind, ImagineSpec, ImagineToolboxDock, ImagineWall, InhabitBundle, KanbanColumn,
+    LearningState, LiveBlock, LiveKind, LocalClock, PermKey, PlusAct, PlusTarget, Policy,
+    PresenceFrame, ProjectKind, ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp,
+    ReviewDigest, RewindRecord, ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore,
+    ThoughtFold, ThreadReuseView, ThreadTab, TranscribeRoute, UpdatePending, UsageDay,
+    VerifyResult, VoiceState, WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
+    CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX,
+    CONTEXT_BUDGET_TOKENS, FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS,
+    IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS,
+    RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
+    TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
 #[cfg(test)]
 use grokhub_core::{chip_suggest_prompt, parse_llm_chips};
@@ -130,10 +128,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-
 mod acp;
 mod amr_memory;
 mod chat_kick;
+mod helper_offers_ui;
+mod learn_notes_ui;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;
@@ -142,31 +141,47 @@ mod persist;
 mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod achievements_ui;
+mod activity_dock;
+mod ask_offers_ui;
 mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
+mod backup_ui;
 mod board_ui;
 mod budget_ui;
 mod canary_ui;
 mod change_history_ui;
 mod change_undo;
+mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
+mod code_resume_ui;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
+mod day_brief_ui;
+mod desktop_anim;
+mod desktop_nyx;
+mod diagnostics_ui;
 mod dock_ui;
+mod downloads_tidy_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
 mod fix_it;
+mod focus_ui;
+mod game_companion_ui;
+mod game_watch_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
+mod hobby_paths_ui;
+mod home;
 mod ideas_ui;
 mod imagine;
 mod inbox_ui;
@@ -174,24 +189,35 @@ mod indexer_ui;
 mod interests_ui;
 mod jobs;
 mod journal_ui;
+mod knowme_ui;
+mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
+mod local_models_ui;
 mod local_pick_ui;
 mod local_probe;
 mod local_signals;
 mod marketplace_ui;
+mod memory_tidy;
+mod mission_page;
 mod mission_ui;
 mod model_download_ui;
+mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
+mod net_log_ui;
 mod night;
+mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;
+mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod print_alerts_ui;
+mod privacy_page;
 mod privacy_ui;
 mod proactive_auto;
 mod proactive_ui;
@@ -200,12 +226,17 @@ mod provider_ui;
 mod pulse;
 mod pulse_sources_ui;
 mod pulse_ui;
+mod reactions_ui;
+mod recap_ui;
+mod release_radar_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
+mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
+mod screenshot_offer_ui;
 #[cfg(test)]
 mod self_review_tests;
 mod self_review_ui;
@@ -221,25 +252,13 @@ mod systems_brief_ui;
 mod tests;
 mod threads_nav;
 mod voice;
-
+mod web_search_ui;
+mod week_recap_ui;
+mod wind_down_ui;
+mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;
 
-/// Title and body for a token budget warning.
-pub(super) fn token_budget_notice(
-    level: grokhub_core::BudgetLevel,
-    line: &str,
-    pauses: bool,
-) -> (&'static str, String) {
-    match level {
-        grokhub_core::BudgetLevel::Over if pauses => (
-            "Token budget used up",
-            format!("{line}. Scheduled work waits until tomorrow."),
-        ),
-        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
-        _ => ("Token budget at 80%", format!("{line}.")),
-    }
-}
 use confirm::*;
 #[cfg(test)]
 use feed_ui::*;
@@ -258,6 +277,8 @@ use sidebar::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
+    /// Modular Mission Control (rail Home). No chat tab bar.
+    Home,
     Chat,
     Devices,
     Memory,
@@ -265,6 +286,8 @@ enum Nav {
     Pulse,
     Imagine,
     Skills,
+    Library,
+    Objectives,
     Night,
     History,
     Journal,
@@ -273,9 +296,10 @@ enum Nav {
     Settings,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
+    Privacy,
     Appearance,
     Behavior,
     Update,
@@ -298,21 +322,9 @@ enum SettingsGroup {
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
-fn mode_status_line(mode: &str, pinned_model: &str) -> String {
-    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
-        return "Mode auto — routes Fast / Balance / Think / Max".into();
-    }
-    let model = resolve_chat_model(mode, pinned_model);
-    match grokhub_core::reasoning_effort_for_mode(mode) {
-        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
-        None => format!("Mode {mode} → {model}"),
-    }
-}
-
 /// How long a History query sits still before it runs. Every keystroke walks every
 /// thread, so the cabin waits for the typing to settle.
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
-const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -342,7 +354,7 @@ fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
     }
 }
 
-enum TabAct {
+pub(super) enum TabAct {
     Switch(usize),
     Pin(usize),
     Archive(usize),
@@ -431,6 +443,8 @@ pub struct Cabin {
     /// Bumped by `live_mut` but not `live_tail_mut`: an edit before the last message.
     messages_body_rev: u64,
     status: String,
+    /// Draft Brave Search API key for Settings → Web search (never persisted).
+    web_search_key_draft: String,
     running: bool,
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
@@ -447,7 +461,12 @@ pub struct Cabin {
     mem_name: String,
     mem_body: String,
     mem_cache_at: [u64; 3],
+    /// Saves of the memory files just left (`open_memory_file`) still
+    /// running; exit waits for them so typing right before a quit is not lost.
+    mem_leave_saves: Vec<std::thread::JoinHandle<()>>,
     mem_cache_body: [String; 3],
+    /// Old chat lines in the open MEMORY.md (`memory_tidy`), worked out once per open.
+    mem_raw_lines: Option<Vec<String>>,
     last_persist: Instant,
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
@@ -478,6 +497,9 @@ pub struct Cabin {
     hands_attach: bool,
     eyes_attach: bool,
     speak_next: bool,
+    /// A send was refused while signed out: the composer kept the text and
+    /// the inline sign-in card shows until a sign-in or a sent turn.
+    signin_card: bool,
     verify_ok_turn: bool,
     verify_chip: String,
     reflect_diff: String,
@@ -579,6 +601,10 @@ pub struct Cabin {
     situation_ping: Option<(String, String)>,
     /// True until a frame reports the cabin window is away. Tests stay silent.
     window_focused: bool,
+    /// Focus help: the app the user was just in (opt-in).
+    focus: focus_ui::FocusState,
+    pc_health: pc_health_ui::PcHealthState,
+    print_alerts: print_alerts_ui::PrintAlertsState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -622,7 +648,11 @@ pub struct Cabin {
     presence_ring: Vec<(u64, String)>,
     voice_state: VoiceState,
     voice_ready_at: Option<Instant>,
+    /// Labs: the companion's own desktop window, while she is popped out.
+    desktop_nyx: Option<desktop_nyx::DesktopNyx>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
+    /// The reply being spoken, for the desktop companion's mouth.
+    lips: crate::lipsync::LipSlot,
     cmd_line: String,
     cmd_hist: Vec<String>,
     agents: Vec<AgentJob>,
@@ -641,7 +671,6 @@ pub struct Cabin {
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
     hotkey_halt: u32,
-    sidebar_q: String,
     rename_idx: Option<usize>,
     rename_buf: String,
     rename_focus: bool,
@@ -684,6 +713,7 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
+    sidebar_q: String,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -849,7 +879,13 @@ pub struct Cabin {
     recall_rx: Option<mpsc::Receiver<String>>,
     sync_rx: Option<mpsc::Receiver<(String, Vec<HubMemoryFile>)>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
-    reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
+    reflect_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
+    /// The USER/SOUL/MEMORY lines a finished turn is writing.
+    learn_rx: Option<mpsc::Receiver<learn_notes_ui::LearnWrites>>,
+    /// Turn notes waiting for the write or reflect in flight to finish.
+    learn_pending: Vec<grokhub_core::learn_notes::Note>,
+    /// A reflect asked for while a turn's notes were being written.
+    reflect_after_learn: bool,
     /// The one-time AMR import ran this session (AMR mode only).
     amr_imported: bool,
     /// The local day the AMR dream ran or was skipped (Halt), this session.
@@ -875,6 +911,14 @@ pub struct Cabin {
     toasts: egui_notify::Toasts,
     /// Last `status` already mirrored into `toasts` (dedupe).
     status_toasted: status_toasts::StatusToastState,
+    /// Activity Dock (running / waiting / recent), titlebar chrome.
+    activity: activity_dock::DockState,
+    /// Labs Diagnostics: the preview waiting for Save, and the last zip.
+    diagnostics: diagnostics_ui::DiagnosticsState,
+    /// Modular Home slot layout (`home_layout.json` v2).
+    home_layout: grokhub_core::home::HomeLayout,
+    /// Edit Home modules dialog draft (`None` = closed).
+    home_edit: Option<home::HomeEditDraft>,
 }
 
 #[cfg(test)]
@@ -939,18 +983,15 @@ impl Cabin {
             }
             let user_chat =
                 |t: &ChatThread| !t.background && !threads::is_background_history_title(&t.title);
+            // Main is the default: a first run, or a saved chat that is gone, opens it.
+            parked_learn |= threads::main_thread_index(&threads).is_none();
+            let main_idx = threads::ensure_main_thread(&mut threads);
+            let main_id = threads[main_idx].id.clone();
             let keep_id = threads
                 .iter()
                 .find(|t| t.id == cfg.current_thread && user_chat(t))
                 .map(|t| t.id.clone())
-                .or_else(|| {
-                    threads
-                        .iter()
-                        .filter(|t| user_chat(t))
-                        .max_by_key(|t| (t.accessed_ms, t.id.clone()))
-                        .map(|t| t.id.clone())
-                })
-                .or_else(|| threads.first().map(|t| t.id.clone()));
+                .or(Some(main_id));
             let before = threads.len();
             threads.retain(|t| {
                 let has_session = t
@@ -958,7 +999,7 @@ impl Cabin {
                     .as_deref()
                     .is_some_and(|s| !s.trim().is_empty());
                 keep_loaded_thread(
-                    keep_id.as_deref() == Some(t.id.as_str()),
+                    t.main || keep_id.as_deref() == Some(t.id.as_str()),
                     t.pinned,
                     &t.title,
                     t.scratch,
@@ -969,9 +1010,6 @@ impl Cabin {
                     !t.goal.label.trim().is_empty(),
                 )
             });
-            if threads.is_empty() {
-                threads.push(ChatThread::new("Chat", false));
-            }
             let dropped_leftover = adopted_n > 0 || threads.len() != before || parked_learn;
             let thread_idx = threads
                 .iter()
@@ -1006,6 +1044,7 @@ impl Cabin {
                 cfg.current_thread = id;
             }
         }
+        threads::seed_last_chat_tab(&mut cfg.last_chat_tab, &threads, thread_idx);
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
@@ -1064,6 +1103,7 @@ impl Cabin {
             messages_rev: 0,
             messages_body_rev: 0,
             status: String::new(),
+            web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),
@@ -1077,7 +1117,9 @@ impl Cabin {
             mem_name,
             mem_body,
             mem_cache_at,
+            mem_leave_saves: Vec::new(),
             mem_cache_body,
+            mem_raw_lines: None,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
@@ -1108,6 +1150,7 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
+            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),
@@ -1194,6 +1237,9 @@ impl Cabin {
             digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
+            focus: Default::default(),
+            pc_health: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1228,7 +1274,9 @@ impl Cabin {
             presence_ring: vec![],
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            desktop_nyx: None,
             voice_hold_rx: None,
+            lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: vec![],
             agents: vec![],
@@ -1247,7 +1295,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
             rename_focus: false,
@@ -1287,6 +1334,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
+            sidebar_q: String::new(),
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1295,7 +1343,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            picker: Default::default(),
+            picker: personality_ui::first_picker(),
             playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
@@ -1417,6 +1465,9 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -1436,6 +1487,10 @@ impl Cabin {
             dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
+            activity: Default::default(),
+            diagnostics: Default::default(),
+            home_layout: home::ensure_home_layout(&crate::config::config_dir()),
+            home_edit: None,
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1458,7 +1513,9 @@ impl Cabin {
             grokhub_core::proc_util::silence_windows_hard_errors();
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
-            c.open_fresh_home();
+            c.open_launch_page();
+            c.apply_deck_shot_seed();
+            c.apply_web_search_shot_seed();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
             steps.mark("startup:new:home");
@@ -1532,6 +1589,7 @@ impl Cabin {
             messages_rev: 0,
             messages_body_rev: 0,
             status: String::new(),
+            web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),
@@ -1545,7 +1603,9 @@ impl Cabin {
             mem_name: String::new(),
             mem_body: String::new(),
             mem_cache_at: [0, 0, 0],
+            mem_leave_saves: Vec::new(),
             mem_cache_body: [String::new(), String::new(), String::new()],
+            mem_raw_lines: None,
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
@@ -1571,6 +1631,7 @@ impl Cabin {
             hands_attach: false,
             eyes_attach: false,
             speak_next: false,
+            signin_card: false,
             verify_ok_turn: false,
             verify_chip: String::new(),
             reflect_diff: String::new(),
@@ -1653,6 +1714,9 @@ impl Cabin {
             digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
+            focus: Default::default(),
+            pc_health: Default::default(),
+            print_alerts: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
@@ -1687,7 +1751,9 @@ impl Cabin {
             presence_ring: Vec::new(),
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            desktop_nyx: None,
             voice_hold_rx: None,
+            lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: Vec::new(),
             agents: Vec::new(),
@@ -1706,7 +1772,6 @@ impl Cabin {
             hotkeys: None,
             hotkey_hey: 0,
             hotkey_halt: 0,
-            sidebar_q: String::new(),
             rename_idx: None,
             rename_buf: String::new(),
             rename_focus: false,
@@ -1746,6 +1811,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
+            sidebar_q: String::new(),
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
@@ -1873,6 +1939,9 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            learn_rx: None,
+            learn_pending: Vec::new(),
+            reflect_after_learn: false,
             amr_imported: false,
             dream_day: None,
             amr_prune: amr_memory::AmrPrune::default(),
@@ -1892,6 +1961,10 @@ impl Cabin {
             dock_state: dock_ui::default_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
+            activity: Default::default(),
+            diagnostics: Default::default(),
+            home_layout: grokhub_core::home::HomeLayout::default(),
+            home_edit: None,
         }
     }
 
@@ -2259,6 +2332,7 @@ impl Cabin {
             grokhub_core::note_part(&mut self.learning, "chat", &key, &learned.why);
             noted = true;
         }
+        let mut user_facts = Vec::new();
         for line in assistant.lines() {
             let Some(fact) = line.trim().strip_prefix("USER_FACT:") else {
                 continue;
@@ -2266,8 +2340,10 @@ impl Cabin {
             let fact = fact.trim();
             if (8..200).contains(&fact.len()) && !grokhub_core::echoes_source(fact, &user) {
                 facts.push(fact.to_string());
+                user_facts.push(fact.to_string());
             }
         }
+        self.learn_from_turn(&user, &user_facts);
         if facts.is_empty() && !noted {
             return;
         }
@@ -2969,23 +3045,6 @@ impl Cabin {
         Some(cmd)
     }
 
-    fn doctor_text(&self) -> String {
-        self.doctor_checks()
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
-        let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
-        lines.extend(grokhub_core::doctor_extras(
-            self.last_receipt_ok,
-            self.skill_list.len(),
-        ));
-        lines
-    }
-
     /// `/health` from what this session already knows: the last update probe,
     /// the doctor checks, failing automations, MCP servers and the newest dream.
     fn health_input(&self) -> grokhub_core::health::HealthInput {
@@ -3243,8 +3302,7 @@ impl Cabin {
         });
     }
 
-    /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
-    /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
+    /// The composer pills survive a restart: Chat/Plan and Ask/Auto/Always are preferences.
     pub(super) fn set_session_mode(&mut self, mode: SessionMode) {
         self.session_mode = mode;
         self.cfg.session_mode = mode.as_str().to_string();
@@ -3281,6 +3339,9 @@ impl Cabin {
     fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
         self.cfg.permission_mode = crate::config::persistable_permission_mode(mode.as_str());
+        if mode == PermissionMode::AlwaysApprove {
+            self.cfg.always_confirmed = true;
+        }
         self.persist_cfg();
     }
 
@@ -3322,7 +3383,8 @@ impl Cabin {
             return;
         };
         let line = grokhub_core::budget_line(&self.usage, cap);
-        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        let (title, body) =
+            budget_ui::token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
         self.status = format!("{title} — {body}");
         if crate::notify::allow_ping(self.quiet_now()) {
             crate::notify::ping(title, &body);
@@ -3502,11 +3564,8 @@ impl Cabin {
             }
             match act {
                 HeartbeatAct::Housekeep => {
-                    self.roll_today();
-                    self.release_situation_ping();
-                    if self.last_persist.elapsed() > Duration::from_secs(2) {
-                        self.persist_bg();
-                    }
+                    self.tick_housekeep();
+                    self.tick_day_brief();
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
                 // Everything that is not your turn runs from the governor's one queue.
@@ -4207,6 +4266,7 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
+        self.note_activity_chat_end(false, err);
         self.note_no_route_turn(err);
         if grokhub_core::proc_util::is_sigterm_status(err) {
             return "Stopped".into();
@@ -4255,7 +4315,7 @@ impl Cabin {
             return;
         }
         self.persist();
-        self.status = "Restarting GrokHub…".into();
+        self.status = format!("Restarting {}…", grokhub_core::brand::product_name());
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
                 if let Some(tray) = self.tray.take() {
@@ -4325,17 +4385,18 @@ impl Cabin {
         self.start_overlay_update(cmds);
     }
 
-    fn touch(&mut self) {
-        self.last_activity = Instant::now();
-        self.reflected_idle = false;
-    }
-
     fn run_reflect(&mut self) {
         if self.scratch() {
             self.status = "Scratch — no reflect".into();
             return;
         }
         if self.reflect_rx.is_some() {
+            self.status = "Reflecting…".into();
+            return;
+        }
+        if self.learn_rx.is_some() {
+            // A turn's notes are being written; reflect on top of them.
+            self.reflect_after_learn = true;
             self.status = "Reflecting…".into();
             return;
         }
@@ -4364,19 +4425,16 @@ impl Cabin {
         }
         let name = self.mem_name.clone();
         let body = self.mem_body.clone();
-        std::thread::spawn(move || {
-            if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
-                let _ = config::write_memory(&name, &body);
-            }
-        });
         if self.amr_on() {
+            std::thread::spawn(move || {
+                if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
+                    let _ = config::write_memory(&name, &body);
+                }
+            });
             // Single write: the facts become nodes, not insights or MEMORY.md lines.
             self.run_reflect_amr(&facts);
             return;
         }
-        let mem_name = self.mem_name.clone();
-        let mem_body = self.mem_body.clone();
-        let writes_user = self.policy().writes_user_md() && !self.cfg.dream_model;
         let propose_user = self.policy().writes_user_md() && self.cfg.dream_model;
         let prefs = if propose_user {
             user_pref_facts(&facts)
@@ -4388,21 +4446,25 @@ impl Cabin {
         } else {
             None
         };
+        // Only what the chat teaches is written: facts about the user, the
+        // agent's corrections, and asks to remember. With the dream model on,
+        // user facts are proposed for review instead of written.
+        let user_ok = self.policy().writes_user_md() && !propose_user;
+        let notes: Vec<_> = learn_notes_ui::notes_from(&facts, &[])
+            .into_iter()
+            .filter(|n| user_ok || n.file != grokhub_core::learn_notes::NoteFile::User)
+            .collect();
+        let day = Self::local_day();
         let chat_source = format!("chat:{vis}");
         let (tx, rx) = mpsc::channel();
         self.reflect_rx = Some(rx);
         self.status = "Reflecting…".into();
         std::thread::spawn(move || {
-            let current = if mem_name == "MEMORY.md" {
-                mem_body.clone()
-            } else {
-                config::read_memory("MEMORY.md")
-            };
-            let edit = surgical_memory_edit(&current, &facts);
-            if !edit.diff.is_empty() {
-                let next = edit.next.clone();
-                let _ = config::write_memory("MEMORY.md", &next);
+            // Save the open SOUL editor first, so the notes land on top of it.
+            if name != "MEMORY.md" && name != "USER.md" && config::read_memory(&name) != body {
+                let _ = config::write_memory(&name, &body);
             }
+            let writes = learn_notes_ui::write_notes(&notes, &day, Some((name, body)));
             if let Some(store) = propose_store {
                 for pref in &prefs {
                     let _ = grokhub_core::amr::stage_core_line(
@@ -4420,29 +4482,7 @@ impl Cabin {
                     );
                 }
             }
-            let user_edit = if writes_user {
-                let prefs = user_pref_facts(&facts);
-                if prefs.is_empty() {
-                    None
-                } else {
-                    let user = if mem_name == "USER.md" {
-                        mem_body
-                    } else {
-                        config::read_memory("USER.md")
-                    };
-                    let ue = surgical_memory_edit(&user, &prefs);
-                    if ue.diff.is_empty() {
-                        None
-                    } else {
-                        let next = ue.next.clone();
-                        let _ = config::write_memory("USER.md", &next);
-                        Some(ue)
-                    }
-                }
-            } else {
-                None
-            };
-            let _ = tx.send((edit, user_edit));
+            let _ = tx.send(writes);
         });
     }
 
@@ -4451,58 +4491,46 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok((edit, user_edit)) => {
-                let mut wrote = !edit.diff.is_empty();
-                // AMR reflect sends an empty `next`: the lines went to the memory repo.
-                let amr = wrote && edit.next.is_empty();
-                if amr {
-                    self.reflect_diff = edit.diff;
-                } else if wrote {
-                    self.reflect_diff = edit.diff;
-                    if let Some(i) = Self::mem_file_idx("MEMORY.md") {
-                        self.mem_cache_at[i] = config::memory_updated_at("MEMORY.md");
-                        if self.mem_name == "MEMORY.md" {
-                            self.mem_cache_body[i] = edit.next.clone();
-                            self.mem_body = edit.next;
-                        } else {
-                            self.mem_cache_body[i] = edit.next;
-                        }
-                    } else if self.mem_name == "MEMORY.md" {
-                        self.mem_body = edit.next;
+            Ok(writes) => {
+                if let Some(diff) = writes.amr_diff {
+                    let wrote = !diff.is_empty();
+                    if wrote {
+                        self.reflect_diff = diff;
                     }
+                    self.status = if wrote {
+                        "Reflected into the memory repo".into()
+                    } else {
+                        "Reflect: nothing new".into()
+                    };
+                    return;
                 }
-                if let Some(ue) = user_edit {
-                    if self.reflect_diff.is_empty() {
-                        self.reflect_diff = ue.diff;
-                    }
-                    if let Some(i) = Self::mem_file_idx("USER.md") {
-                        self.mem_cache_at[i] = config::memory_updated_at("USER.md");
-                        if self.mem_name == "USER.md" {
-                            self.mem_cache_body[i] = ue.next.clone();
-                            self.mem_body = ue.next;
-                        } else {
-                            self.mem_cache_body[i] = ue.next;
-                        }
-                    } else if self.mem_name == "USER.md" {
-                        self.mem_body = ue.next;
-                    }
-                    wrote = true;
-                }
-                self.status = if amr {
-                    "Reflected into the memory repo".into()
-                } else if wrote {
-                    "Reflected MEMORY.md".into()
-                } else {
+                let names: Vec<&str> = writes.files.iter().map(|(n, _)| *n).collect();
+                self.status = if names.is_empty() {
                     "Reflect: nothing new".into()
+                } else {
+                    format!("Reflected {}", names.join(", "))
                 };
+                let diffs: Vec<String> = writes
+                    .files
+                    .iter()
+                    .map(|(n, e)| format!("{n}\n{}", e.diff))
+                    .collect();
+                if !diffs.is_empty() {
+                    self.reflect_diff = diffs.join("\n");
+                }
+                for (name, edit) in writes.files {
+                    self.adopt_memory_write(name, edit.next);
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.reflect_rx = Some(rx);
+                return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.status = "Reflect failed".into();
             }
         }
+        self.start_learn_write();
     }
 
     fn run_skill_verify(&mut self) {
@@ -4699,12 +4727,10 @@ impl Cabin {
         } else {
             None
         };
+        let lips = self.lips.clone();
         std::thread::spawn(move || {
             if let Ok(bytes) = grok_tts(&key, &text, voice) {
-                let path = std::env::temp_dir().join("grokhub-speak.mp3");
-                if std::fs::write(&path, bytes).is_ok() {
-                    let _ = play_audio(&path);
-                }
+                crate::lipsync::speak_mp3(bytes, &lips);
             }
             if let Some(tx) = tx {
                 let _ = tx.send(());
@@ -4970,7 +4996,7 @@ impl Cabin {
             .input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma) && !i.modifiers.shift)
         {
             self.palette_open = false;
-            self.nav = Nav::Settings;
+            self.set_nav_id("settings");
         }
         if ctx.input(|i| {
             i.modifiers.command
@@ -5037,6 +5063,7 @@ impl Cabin {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
             Some(crate::tray::TrayCmd::Halt) => self.halt_everything("Stopped"),
             Some(crate::tray::TrayCmd::Quit) => self.quit_from_tray(ctx),
+            Some(crate::tray::TrayCmd::DesktopNyx) => self.toggle_desktop_nyx(),
             None => {}
         }
     }
@@ -5087,6 +5114,12 @@ impl Cabin {
 }
 
 impl eframe::App for Cabin {
+    /// Clear to nothing: the cabin's panels paint every pixel of the root
+    /// window, and the companion's desktop window needs a see-through frame.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
@@ -5101,6 +5134,16 @@ impl eframe::App for Cabin {
         // persist_io: the process exits right after this, and two writers of
         // app.json share one temp file.
         self.persist_svc.flush();
+        // Memory files just left may still be saving; give them up to 2s.
+        let until = Instant::now() + Duration::from_secs(2);
+        while self.mem_leave_saves.iter().any(|s| !s.is_finished()) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for save in std::mem::take(&mut self.mem_leave_saves) {
+            if save.is_finished() {
+                let _ = save.join();
+            }
+        }
         {
             let _io = self.persist_io.lock();
             let mut cfg = self.cfg.clone();
@@ -5119,6 +5162,9 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
+        // The process-wide sidecar is a static, so nothing drops it at exit: stop
+        // llama-server here or it keeps the model loaded after the cabin is gone.
+        grokhub_agent::route::local_sidecar::stop_global();
         // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 
@@ -5150,7 +5196,7 @@ impl eframe::App for Cabin {
         }
         self.poll_digest_lookup();
         self.poll_source_fetch();
-        self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+        self.read_window_focus(ctx);
         self.poll_greeting();
         self.poll_ideas();
         self.poll_pulse_rewrite();
@@ -5160,6 +5206,7 @@ impl eframe::App for Cabin {
         self.refresh_greeting();
         self.drain_inbox();
         self.poll_tray(ctx);
+        self.tick_desktop_nyx(ctx);
         self.poll_voice_hold();
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());
@@ -5183,6 +5230,7 @@ impl eframe::App for Cabin {
         self.poll_sync();
         self.poll_inhabit();
         self.poll_reflect();
+        self.poll_learn();
         self.poll_session_show();
         self.poll_import_openclaw();
         self.poll_single();
@@ -5295,6 +5343,7 @@ impl eframe::App for Cabin {
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
+                || self.learn_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
                 || self.grok_p_rx.is_some()
@@ -5362,18 +5411,34 @@ impl eframe::App for Cabin {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
+        self.publish_shown_personality(&ctx);
+        crate::titlebar::edge_resize(
+            &ctx,
+            maximized_now(ctx.input(|i| i.viewport().maximized), self.win_max)
+                || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)),
+        );
         self.ui_titlebar(ui);
+        Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
+            // The rail goes first so it runs the full height on every page and
+            // its icons don't move when the Chat tab strip appears.
             self.ui_sidebar(ui);
+            // Chat tabs only in Chat — never on modular Home.
+            if self.page_nav() == Nav::Chat {
+                self.ui_chat_tabs(ui);
+            }
             self.ui_settings_menu(&ctx);
+            self.ui_personality_sheet(&ctx);
+            self.ui_diagnostics_preview(&ctx);
 
             if self.cfg.dock_panels && self.dock_covers_page() {
                 self.ui_docked_main(ui);
             } else {
                 match self.page_nav() {
+                    Nav::Home => self.ui_home_mission(ui),
                     Nav::Chat => {
-                        self.paint_native_badge(ui);
+                        self.sync_native_usage(ui);
                         self.ui_loadout_dock(ui);
                         self.ui_chat(ui);
                     }
@@ -5383,6 +5448,8 @@ impl eframe::App for Cabin {
                     Nav::Pulse => self.ui_pulse(ui),
                     Nav::Imagine => self.ui_imagine(ui),
                     Nav::Skills => self.ui_skills(ui),
+                    Nav::Library => self.ui_library(ui),
+                    Nav::Objectives => self.ui_mission_control(ui),
                     Nav::Night => self.ui_night(ui),
                     Nav::History => self.ui_history(ui),
                     Nav::Journal => self.ui_journal(ui),
@@ -5398,6 +5465,9 @@ impl eframe::App for Cabin {
         if self.nav == Nav::Settings {
             self.ui_settings(&ctx);
         }
+        if self.home_edit.is_some() {
+            self.ui_home_edit(&ctx);
+        }
         if self.palette_open {
             self.ui_palette(&ctx);
         }
@@ -5407,6 +5477,8 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.paint_focus_overlays(&ctx);
+        self.paint_tidy_review(&ctx);
         self.tick_setup_wizard();
         self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);
@@ -5538,7 +5610,6 @@ fn tool_header_text(label: &str, running: bool) -> String {
         label.to_string()
     }
 }
-
 fn tool_header_color(failed: bool) -> Color32 {
     if failed {
         crate::cards::chip_tone_color(crate::cards::ChipTone::Offline)
@@ -5771,10 +5842,6 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
 
 fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
     selected && is_project
-}
-
-fn health_settings_sec() -> SettingsSec {
-    SettingsSec::About
 }
 
 fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {

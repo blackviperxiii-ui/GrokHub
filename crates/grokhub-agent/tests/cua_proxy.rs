@@ -93,7 +93,7 @@ fn fake_child_gets_the_bounded_env_one_soft_click_and_nothing_after_a_halt() {
             &mut || false,
         )
         .unwrap();
-    assert!(out.contains(grokhub_core::desktop_mcp::HALT_MSG), "{out}");
+    assert!(out.contains(*grokhub_core::desktop_mcp::HALT_MSG), "{out}");
 
     let log = child_log(&dir);
     let head = &log[0];

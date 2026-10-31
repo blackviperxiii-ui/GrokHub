@@ -84,6 +84,9 @@ mod persist_tests;
 #[path = "home_feed_tests.rs"]
 mod home_feed_tests;
 
+#[path = "home_mission_tests.rs"]
+mod home_mission_tests;
+
 #[path = "chat_threads_tests.rs"]
 mod chat_threads_tests;
 
@@ -122,6 +125,7 @@ fn cabin_src() -> String {
         include_str!("imagine.rs"),
         include_str!("night.rs"),
         include_str!("chat_ui.rs"),
+        include_str!("chat_tabs.rs"),
         include_str!("sidebar.rs"),
         include_str!("pages.rs"),
         include_str!("connectors_ui.rs"),
@@ -1260,10 +1264,24 @@ fn open_memory_file_flushes_the_editor_you_left() {
         !cabin.mem_body.contains("typed soul line"),
         "switching tabs must not wipe the unsaved line into the next file"
     );
-    wait_for("leaving SOUL must flush the unsaved typing", || {
-        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch")
-    });
-    assert_eq!(cabin.mem_name, "USER.md");
+    // Wait for that save itself: a fixed poll ran out on a busy Windows runner.
+    // Leave USER too: both saves stay tracked, not only the newest.
+    cabin.mem_body = "typed user line for the switch".into();
+    cabin.open_memory_file("SOUL.md");
+    let saves = std::mem::take(&mut cabin.mem_leave_saves);
+    assert_eq!(saves.len(), 2, "each tab you left keeps its save handle");
+    for save in saves {
+        save.join().unwrap();
+    }
+    assert!(
+        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch"),
+        "leaving SOUL must flush the unsaved typing"
+    );
+    assert!(
+        crate::config::read_memory("USER.md").contains("typed user line for the switch"),
+        "leaving USER must flush its unsaved typing too"
+    );
+    assert_eq!(cabin.mem_name, "SOUL.md");
     quiet.settle();
 }
 
@@ -1946,6 +1964,7 @@ fn quiet_cabin() -> Cabin {
         messages_rev: 0,
         messages_body_rev: 0,
         status: String::new(),
+        web_search_key_draft: String::new(),
         running: false,
         turn_retried: false,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1959,7 +1978,9 @@ fn quiet_cabin() -> Cabin {
         mem_name: String::new(),
         mem_body: String::new(),
         mem_cache_at: [0, 0, 0],
+        mem_leave_saves: Vec::new(),
         mem_cache_body: [String::new(), String::new(), String::new()],
+        mem_raw_lines: None,
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),
         persist_rx: None,
@@ -1985,6 +2006,7 @@ fn quiet_cabin() -> Cabin {
         hands_attach: false,
         eyes_attach: false,
         speak_next: false,
+        signin_card: false,
         verify_ok_turn: false,
         verify_chip: String::new(),
         reflect_diff: String::new(),
@@ -2067,6 +2089,9 @@ fn quiet_cabin() -> Cabin {
         digest_interests: String::new(),
         situation_ping: None,
         window_focused: true,
+        focus: Default::default(),
+        pc_health: Default::default(),
+        print_alerts: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
@@ -2101,7 +2126,9 @@ fn quiet_cabin() -> Cabin {
         presence_ring: Vec::new(),
         voice_state: grokhub_core::VoiceState::Idle,
         voice_ready_at: None,
+        desktop_nyx: None,
         voice_hold_rx: None,
+        lips: Default::default(),
         cmd_line: String::new(),
         cmd_hist: Vec::new(),
         agents: Vec::new(),
@@ -2120,7 +2147,6 @@ fn quiet_cabin() -> Cabin {
         hotkeys: None,
         hotkey_hey: 0,
         hotkey_halt: 0,
-        sidebar_q: String::new(),
         rename_idx: None,
         rename_buf: String::new(),
         rename_focus: false,
@@ -2160,6 +2186,7 @@ fn quiet_cabin() -> Cabin {
         board_link: false,
         settings_menu_open: false,
         settings_menu_ignore: false,
+        sidebar_q: String::new(),
         win_max: false,
         geom_dirty: false,
         geom_applied: false,
@@ -2287,6 +2314,9 @@ fn quiet_cabin() -> Cabin {
         sync_rx: None,
         inhabit_rx: None,
         reflect_rx: None,
+        learn_rx: None,
+        learn_pending: Vec::new(),
+        reflect_after_learn: false,
         amr_imported: false,
         dream_day: None,
         amr_prune: amr_memory::AmrPrune::default(),
@@ -2306,6 +2336,10 @@ fn quiet_cabin() -> Cabin {
         dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),
+        activity: Default::default(),
+        diagnostics: Default::default(),
+        home_layout: grokhub_core::home::HomeLayout::default(),
+        home_edit: None,
     }
 }
 

@@ -121,8 +121,9 @@ pub fn activate(dir: &Path, m: &LocalModel) -> Result<Installed, String> {
 pub fn remove(dir: &Path, m: &LocalModel) -> Result<(), String> {
     if installed(dir).is_some_and(|rec| rec.file == m.file) {
         return Err(format!(
-            "{} is the model GrokHub runs. Switch to another one first.",
-            m.name
+            "{} is the model {product} runs. Switch to another one first.",
+            m.name,
+            product = crate::brand::product_name()
         ));
     }
     let _ = fs::remove_file(part_path(dir, m));
@@ -202,8 +203,8 @@ pub fn download(
         Ok(h) if h == m.sha256 => {}
         Ok(_) => {
             return Outcome::Failed(format!(
-                "Hugging Face now lists a different file for {} than the one GrokHub pinned, so it wasn't downloaded.",
-                m.name
+                "Hugging Face now lists a different file for {} than the one {product} pinned, so it wasn't downloaded.",
+                m.name, product = crate::brand::product_name()
             ))
         }
         Err(e) => {
@@ -544,7 +545,7 @@ mod tests {
         assert_eq!(
             out,
             Outcome::Failed(
-                "Hugging Face now lists a different file for Test Model than the one GrokHub pinned, so it wasn't downloaded.".into()
+                "Hugging Face now lists a different file for Test Model than the one Loadout pinned, so it wasn't downloaded.".into()
             )
         );
         assert!(srv.opens.lock().unwrap().is_empty());
@@ -583,11 +584,11 @@ mod tests {
         assert_eq!(sha256_from_tree(tree, "README.md"), None, "no lfs entry");
         assert_eq!(sha256_from_tree(tree, "missing.gguf"), None);
         assert_eq!(sha256_from_tree("not json", "x"), None);
-        let m = crate::local_setup::model_by_id("gemma-4-e4b-it-q4_k_m").unwrap();
-        assert_eq!(download_url(m), "https://huggingface.co/lmstudio-community/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf");
+        let m = crate::local_setup::model_by_id("gemma-4-e4b-it-abliterated-q4_k").unwrap();
+        assert_eq!(download_url(m), "https://huggingface.co/huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF/resolve/main/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf");
         assert_eq!(
             tree_url(m.repo),
-            "https://huggingface.co/api/models/lmstudio-community/gemma-4-E4B-it-GGUF/tree/main"
+            "https://huggingface.co/api/models/huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF/tree/main"
         );
         assert_eq!(
             progress_line(2_202_009_600, Some(4_907_335_680)),
@@ -618,6 +619,9 @@ mod tests {
             .collect();
         let (a, b) = (all[0], all[1]);
         assert_eq!(ids(&dir), Vec::<&str>::new());
+        // A stock Gemma 4 file from an older catalog is not a catalog download.
+        fs::write(dir.join("gemma-4-31B-it-Q4_K_M.gguf"), b"stock").unwrap();
+        assert_eq!(ids(&dir), Vec::<&str>::new());
         fs::write(final_path(&dir, a), b"aaaa").unwrap();
         fs::write(final_path(&dir, b), b"bbbbbb").unwrap();
         assert_eq!(ids(&dir), vec![a.id, b.id]);
@@ -628,7 +632,7 @@ mod tests {
         assert_eq!(
             remove(&dir, b),
             Err(format!(
-                "{} is the model GrokHub runs. Switch to another one first.",
+                "{} is the model Loadout runs. Switch to another one first.",
                 b.name
             ))
         );

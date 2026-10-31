@@ -2,8 +2,13 @@
 
 use super::*;
 
+/// The card after a send was refused while signed out.
+const SEND_SIGNIN_TITLE: &str = "Sign in to send this message";
+const SEND_SIGNIN_HINT: &str =
+    "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
-const NATIVE_SIGNIN_NOTE: &str = "Sign in with Grok in Settings → Account, or add an API key.";
+const NATIVE_SIGNIN_NOTE: &str =
+    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
 
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
@@ -513,10 +518,22 @@ impl Cabin {
                         );
                     });
                 ui.add_space(8.0);
-                if crate::cards::white_pill(ui, "Send a task home") {
-                    let t = std::mem::take(&mut self.task_prompt);
-                    self.nav = Nav::Chat;
-                    self.send_chat(t);
+                if self.has_key() {
+                    if crate::cards::white_pill(ui, "Send a task home") {
+                        let t = std::mem::take(&mut self.task_prompt);
+                        self.nav = Nav::Chat;
+                        self.send_chat(t);
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        crate::cards::settings_note(
+                            ui,
+                            "Sign in with Grok in Settings → Account, or add an API key.",
+                        );
+                        if crate::cards::ghost_pill(ui, "Sign in") {
+                            self.set_nav_id("settings");
+                        }
+                    });
                 }
             });
     }
@@ -573,6 +590,16 @@ impl Cabin {
                         }
                     });
                 });
+                if self.mem_name != "MEMORY.md"
+                    && grokhub_core::learn_notes::is_placeholder(&self.mem_body)
+                {
+                    ui.add_space(8.0);
+                    crate::cards::settings_note(
+                        ui,
+                        "Still the starter template. The cabin fills this in as you chat, or write it here.",
+                    );
+                }
+                self.ui_memory_raw_tidy(ui);
                 if !self.reflect_diff.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
@@ -620,7 +647,15 @@ impl Cabin {
 
     /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
     pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
-        if self.has_key() || self.imagine_native.tokens.is_some() || self.ui_wants_get_started() {
+        if self.has_key() || self.imagine_native.tokens.is_some() {
+            self.signin_card = false;
+            return;
+        }
+        if self.signin_card {
+            self.ui_send_signin_card(ui);
+            return;
+        }
+        if super::loadout_home::proof_shot_requested() || self.ui_wants_get_started() {
             return;
         }
         ui.horizontal(|ui| {
@@ -628,6 +663,34 @@ impl Cabin {
             if crate::cards::ghost_pill(ui, "Settings") {
                 self.nav = Nav::Settings;
             }
+        });
+    }
+
+    /// Shown after a send was refused for want of a sign-in. The typed text
+    /// stays in the composer, so signing in here and pressing Enter sends it.
+    fn ui_send_signin_card(&mut self, ui: &mut egui::Ui) {
+        let busy = self.oauth_start_rx.is_some() || self.oauth_poll_rx.is_some();
+        let pending = self
+            .oauth_pending
+            .as_ref()
+            .map(|p| format!("Approve {} at {}", p.user_code, p.verification_uri));
+        crate::ui_kit::card_frame(ui, crate::ui_kit::CardVariant::Signal, true, |ui| {
+            ui.label(
+                RichText::new(SEND_SIGNIN_TITLE)
+                    .size(crate::theme::FONT_BODY)
+                    .strong()
+                    .color(crate::theme::fg()),
+            );
+            crate::cards::settings_note(ui, pending.as_deref().unwrap_or(SEND_SIGNIN_HINT));
+            ui.horizontal(|ui| {
+                if pending.is_none() && !busy && crate::cards::white_pill(ui, "Sign in") {
+                    self.start_oauth();
+                }
+                if crate::cards::ghost_pill(ui, "Add an API key") {
+                    self.nav = Nav::Settings;
+                    self.settings_sec = SettingsSec::Account;
+                }
+            });
         });
     }
 
@@ -680,6 +743,9 @@ impl Cabin {
                 self.delete_all_history();
             }
             ui.add_space(8.0);
+            // Projects + History list (moved off the Chat rail drawer).
+            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
                 ui.horizontal_wrapped(|ui| {
@@ -759,15 +825,7 @@ impl Cabin {
                 let mut del: Option<usize> = None;
                 let keys: Vec<threads::SessionSortKey> = shown
                     .iter()
-                    .map(|&i| {
-                        let t = &self.threads[i];
-                        threads::SessionSortKey {
-                            pinned: t.pinned,
-                            pinned_ms: t.pinned_ms,
-                            accessed_ms: t.accessed_ms,
-                            list_rank: 0,
-                        }
-                    })
+                    .map(|&i| threads::sort_key(&self.threads[i]))
                     .collect();
                 let order = threads::session_list_order(&keys);
                 for pos in order {
@@ -776,13 +834,20 @@ impl Cabin {
                     if threads::is_background_history_title(&title) {
                         continue;
                     }
-                    let kind = if keys[pos].pinned { "Pinned" } else { "Chat" };
+                    let main = self.threads[i].main;
+                    let kind = if main {
+                        "Main"
+                    } else if keys[pos].pinned {
+                        "Pinned"
+                    } else {
+                        "Chat"
+                    };
                     match crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Chat,
                         &title,
                         kind,
-                        Some("Delete"),
+                        (!main).then_some("Delete"),
                         false,
                     ) {
                         crate::cards::TileHit::Body => open = Some(i),
@@ -1362,6 +1427,55 @@ impl Cabin {
                 });
             }
             ui.add_space(16.0);
+            crate::cards::section_label(ui, "Built-in skills");
+            crate::cards::help_text(
+                ui,
+                "Shipped with Loadout (vstack QA, AV QA, verify, follow-through). Use in chat sends /name.",
+            );
+            ui.add_space(8.0);
+            let builtins: Vec<_> = self
+                .native_skills
+                .iter()
+                .filter(|s| s.source == grokhub_agent::SkillSource::Builtin)
+                .filter(|s| {
+                    q.is_empty()
+                        || s.name.to_ascii_lowercase().contains(&q)
+                        || s.description.to_ascii_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect();
+            if builtins.is_empty() {
+                ui.label(
+                    RichText::new(if q.is_empty() {
+                        "Built-ins load with the native engine."
+                    } else {
+                        "None matched."
+                    })
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+                );
+            } else {
+                crate::cards::tile_row(ui, builtins.len(), |ui, i| {
+                    let s = &builtins[i];
+                    let body = if s.description.is_empty() {
+                        "builtin".to_string()
+                    } else {
+                        format!("builtin · {}", s.description)
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::icon_for_label(&s.name),
+                        &s.name,
+                        &body,
+                        Some("Use in chat"),
+                        false,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        use_skill = Some(s.name.clone());
+                    }
+                });
+            }
+            ui.add_space(16.0);
             crate::cards::section_label(ui, "Project and user skills");
             crate::cards::help_text(
                 ui,
@@ -1371,6 +1485,7 @@ impl Cabin {
             let skills: Vec<_> = self
                 .native_skills
                 .iter()
+                .filter(|s| s.source != grokhub_agent::SkillSource::Builtin)
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)
@@ -1588,14 +1703,16 @@ impl Cabin {
             // Capture the config directory now, like the other scheduled saves:
             // looking it up when the thread runs can land in another directory.
             let dir = config::config_dir();
-            std::thread::spawn(move || {
+            self.mem_leave_saves.retain(|s| !s.is_finished());
+            self.mem_leave_saves.push(std::thread::spawn(move || {
                 let _pin = pin_scheduled_dir(dir);
                 if config::read_memory(&leaving) != body {
                     let _ = config::write_memory(&leaving, &body);
                 }
-            });
+            }));
         }
         self.mem_name = name.into();
+        self.mem_raw_lines = None;
         let at = config::memory_updated_at(name);
         let Some(i) = Self::mem_file_idx(name) else {
             self.mem_body = config::read_memory(name);

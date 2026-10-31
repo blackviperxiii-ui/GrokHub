@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use grokhub_core::interests::InterestSignal;
 use grokhub_core::pulse::{self as pc, LedgerReason};
 use grokhub_core::pulse_writer::TasteKind;
+use grokhub_core::reactions::{self, Outcome};
 use grokhub_core::{CardReaction, UpdateCard, UpdateKind};
 
 use crate::pulse_feed;
@@ -144,28 +145,37 @@ fn save(config_dir: &Path, cards: &[UpdateCard]) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
+/// The Pulse ledger's own file beside MEMORY.md, shared with the cabin.
+fn ledger_path() -> PathBuf {
+    grokhub_agent::global_memory_path().with_file_name(pc::LEDGER_FILE)
+}
+
+/// The ledger file, with any lines an older build left in MEMORY.md in front.
+/// The cabin moves those over; the shell only reads them.
 fn ledger() -> Vec<pc::LedgerEntry> {
-    let text = std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default();
-    pc::parse_ledger(&text)
+    let own = std::fs::read_to_string(ledger_path()).unwrap_or_default();
+    let notes = std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default();
+    let (_, older) = pc::split_ledger(&notes);
+    pc::parse_ledger(&pc::merge_ledger(&own, &older))
 }
 
 /// Appends one ledger line through a temp file and a rename, so a crash never
-/// leaves MEMORY.md half written. A line that would carry a secret is left
+/// leaves the ledger half written. A line that would carry a secret is left
 /// out, as the cabin's `append_memory` does; the card action still goes on.
 fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     let line = pc::ledger_line(date, title, reason);
     if !grokhub_core::is_plain_text(&line) {
         return Ok(());
     }
-    let path = grokhub_agent::global_memory_path();
+    let path = ledger_path();
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(format!(
-            "MEMORY.md is a link to another file. {} does not follow it.",
+            "The Pulse ledger is a link to another file. {} does not follow it.",
             grokhub_core::brand::product_name()
         ));
     }
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > NOTES_CAP) {
-        return Err("MEMORY.md is too large to add to. Nothing was changed.".into());
+        return Err("The Pulse ledger is too large to add to. Nothing was changed.".into());
     }
     let mut body = std::fs::read_to_string(&path).unwrap_or_default();
     if !body.is_empty() && !body.ends_with('\n') {
@@ -173,9 +183,13 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     }
     body.push_str(&line);
     body.push('\n');
-    let parent = path.parent().ok_or("MEMORY.md has no folder.")?;
+    let parent = path.parent().ok_or("The Pulse ledger has no folder.")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = parent.join(format!("MEMORY.md.shell-{}.tmp", std::process::id()));
+    let tmp = parent.join(format!(
+        "{}.shell-{}.tmp",
+        pc::LEDGER_FILE,
+        std::process::id()
+    ));
     std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -265,11 +279,43 @@ fn idea(card: &UpdateCard) -> Idea {
     }
 }
 
+fn reactions_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(reactions::FILE_NAME)
+}
+
+/// Note what the person did with a card in what Pulse learned. `shift` is
+/// More (`Some(true)`) or Less (`Some(false)`) like this on top of the outcome.
+fn react(config_dir: &Path, card: &UpdateCard, outcome: Outcome, shift: Option<bool>, now_ms: u64) {
+    let Some((category, tag)) = reactions::card_category_tag(card) else {
+        return;
+    };
+    let path = reactions_path(config_dir);
+    let mut learned = reactions::load(&path);
+    learned.record(outcome, &category, &tag, now_ms);
+    match shift {
+        Some(true) => learned.more(&category),
+        Some(false) => learned.less(&category),
+        None => {}
+    }
+    if let Err(e) = reactions::save(&path, &learned) {
+        eprintln!("pulse: {e}");
+    }
+}
+
 fn page(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Page {
     let ledger = ledger();
+    let mut learned = reactions::load(&reactions_path(config_dir));
+    let before = learned.clone();
+    learned.sweep_ignored(cards, now_ms);
+    if learned != before {
+        if let Err(e) = reactions::save(&reactions_path(config_dir), &learned) {
+            eprintln!("pulse: {e}");
+        }
+    }
     let inputs = pc::PulseInputs {
         ledger: &ledger,
         now_ms,
+        reactions: Some(&learned),
         ..Default::default()
     };
     let by_id = |id: &str| cards.iter().find(|c| c.id == id);
@@ -317,6 +363,22 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     let Some(card) = cards.iter().find(|c| c.id == id).cloned() else {
         return Err("That card is gone. The page now shows what is left.".into());
     };
+    let dismiss = if matches!(act, Act::Dismiss) {
+        Some(pc::dismiss_kind(&card, 0))
+    } else {
+        None
+    };
+    let (outcome, shift) = match act {
+        Act::Dismiss if dismiss == Some(pc::DismissKind::UsedDone) => {
+            // Used / liked / discussed then dismissed: no negative reaction.
+            (None, None)
+        }
+        Act::Dismiss | Act::Delete => (Some(Outcome::Dismissed), None),
+        Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
+        Act::Love | Act::Accept => (Some(Outcome::Accepted), None),
+        Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
+        Act::Snooze => (Some(Outcome::Snoozed), None),
+    };
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
             grokhub_core::dismiss_idea(cards, id)
@@ -326,7 +388,10 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     };
     let changed = match act {
         Act::Dismiss => {
-            note(&card.title, LedgerReason::Dismiss, &day.date)?;
+            let reason = dismiss
+                .unwrap_or(pc::DismissKind::NotInterested)
+                .ledger_reason();
+            note(&card.title, reason, &day.date)?;
             remove(&mut cards)
         }
         Act::NotThis => {
@@ -374,6 +439,11 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             remove(&mut cards)
         }
     };
+    // After the ledger note: a refused note must leave taste learning alone
+    // too, so "Nothing was changed" stays true.
+    if let Some(outcome) = outcome {
+        react(config_dir, &card, outcome, shift, now_ms);
+    }
     if changed {
         save(config_dir, &cards)?;
     }
@@ -406,6 +476,7 @@ fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
 /// Discuss: the chat seed carrying the post. Counts as engagement and taste.
 pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
     let card = find(config_dir, id)?;
+    react(config_dir, &card, Outcome::Tapped, None, now_ms);
     pulse_feed::with_state(config_dir, |s| {
         s.note_engaged(now_ms);
         s.note_taste(TasteKind::Discuss, &card.title, now_ms);
@@ -413,10 +484,15 @@ pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, Strin
     Ok(grokhub_core::pulse_writer::discuss_seed(&card))
 }
 
-/// Why this post is in the feed: the writer's line, else the interest it matched.
+/// Why this post is in the feed: the writer's line, else the interest it
+/// matched, then what Pulse learned about its kind.
 pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
     let card = find(config_dir, id)?;
-    Ok(card
+    let learned = reactions::card_category_tag(&card).map(|(category, tag)| {
+        let state = reactions::load(&reactions_path(config_dir));
+        reactions::why_line(&state, &category, &tag)
+    });
+    let because = card
         .why
         .clone()
         .or_else(|| {
@@ -425,7 +501,11 @@ pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
                 .clone()
                 .map(|b| format!("It matched your interest in {b}."))
         })
-        .unwrap_or_else(|| "It came from your Pulse sources.".into()))
+        .unwrap_or_else(|| "It came from your Pulse sources.".into());
+    Ok(match learned {
+        Some(line) => format!("{because} {line}."),
+        None => because,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -516,7 +596,13 @@ mod tests {
         }
     }
 
+    /// The Pulse ledger file.
     fn memory() -> String {
+        std::fs::read_to_string(ledger_path()).unwrap_or_default()
+    }
+
+    /// MEMORY.md itself.
+    fn notes() -> String {
         std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap_or_default()
     }
 
@@ -612,6 +698,26 @@ mod tests {
     }
 
     #[test]
+    fn acts_teach_pulse_and_why_says_what_it_learned() {
+        let d = dirs("learn", &sample());
+        act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("more");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        // Accepted (+2) and More like this (+3).
+        assert_eq!(learned.score("productivity ideas"), 5, "{learned:?}");
+        assert_eq!(
+            why(&d.config, "idea-1").expect("why"),
+            "It came from your Pulse sources. From Pulse ideas · productivity ideas +5."
+        );
+        act(&d.config, "idea-1", Act::Snooze, &day(), NOW).expect("snooze");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        assert_eq!(learned.score("productivity ideas"), 4);
+        // A post Pulse has no category for leaves nothing behind.
+        act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        assert_eq!(learned.log.len(), 2);
+    }
+
+    #[test]
     fn not_this_writes_the_ledger_and_takes_the_idea_away() {
         let d = dirs("not", &sample());
         let page = act(&d.config, "idea-1", Act::NotThis, &day(), NOW).expect("act");
@@ -623,6 +729,25 @@ mod tests {
         let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
         assert!(!saved.contains("idea-1"), "{saved}");
         assert!(saved.contains("post-1"), "{saved}");
+    }
+
+    #[test]
+    fn a_refused_ledger_note_leaves_taste_learning_and_the_card_alone() {
+        let d = dirs("refused", &sample());
+        let path = ledger_path();
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("mkdir");
+        std::fs::write(&path, vec![b'-'; NOTES_CAP as usize + 1]).expect("big ledger");
+        let err = act(&d.config, "idea-1", Act::NotThis, &day(), NOW).expect_err("refused");
+        assert_eq!(
+            err,
+            "The Pulse ledger is too large to add to. Nothing was changed."
+        );
+        assert!(
+            !reactions_path(&d.config).exists(),
+            "a refused note must not score the card"
+        );
+        let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
+        assert!(saved.contains("idea-1"), "{saved}");
     }
 
     #[test]
@@ -645,7 +770,13 @@ mod tests {
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
-        assert!(memory().ends_with("pulse: dismissed \"Board\" reason=dismiss\n"));
+        // Liked then dismissed is used/done, not a bury (#969 / #972).
+        // Compare on LF: Windows checkouts may leave CRLF in the ledger.
+        let mem = memory().replace("\r\n", "\n");
+        assert!(
+            mem.ends_with("pulse: used \"Board\" reason=used\n"),
+            "{mem:?}"
+        );
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
             Err("That card is gone. The page now shows what is left.".to_string())
@@ -670,26 +801,46 @@ mod tests {
         let d = dirs("secret", &cards);
         std::fs::create_dir_all(grokhub_agent::global_memory_path().parent().unwrap())
             .expect("memory dir");
-        std::fs::write(grokhub_agent::global_memory_path(), "- earlier note").expect("seed");
+        std::fs::write(
+            grokhub_agent::global_memory_path(),
+            "- earlier note\n- [2026-10-24] pulse: liked \"Old board\" reason=liked\n",
+        )
+        .expect("seed");
         let page = act(&d.config, "post-1", Act::Dismiss, &day(), NOW).expect("dismiss");
         assert!(page.feed.is_empty(), "{page:?}");
-        assert_eq!(memory(), "- earlier note");
+        assert_eq!(memory(), "");
 
         act(&d.config, "idea-1", Act::Accept, &day(), NOW).expect("accept");
         assert_eq!(
             memory(),
-            "- earlier note\n- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
+            "- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
+        );
+        assert_eq!(
+            notes(),
+            "- earlier note\n- [2026-10-24] pulse: liked \"Old board\" reason=liked\n",
+            "the shell never rewrites MEMORY.md"
+        );
+        let titles: Vec<String> = ledger().into_iter().map(|e| e.title).collect();
+        assert_eq!(
+            titles,
+            ["Old board", "Tidy the workboard"],
+            "a line still in MEMORY.md reads in front"
         );
         let dir = grokhub_agent::global_memory_path()
             .parent()
             .unwrap()
             .to_path_buf();
-        let left: Vec<_> = std::fs::read_dir(&dir)
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
             .expect("dir")
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left, vec!["MEMORY.md".to_string()], "no temp file is left");
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["MEMORY.md".to_string(), pc::LEDGER_FILE.to_string()],
+            "no temp file is left"
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub mod mcp;
 mod memory;
 mod models;
 pub mod perm;
+mod plan_skills;
 pub mod plugins;
 mod prefix_cache;
 pub mod prefix_guard;
@@ -89,6 +90,12 @@ pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
+pub use plan_skills::{
+    is_av_change, is_multi_step, is_ship_or_release, moments_for,
+    prompt_block as plan_skills_prompt, skills_for, skills_for_context,
+    standing_reminder as plan_skills_standing, PlanSkillCtx, SkillMoment, AV_QA_WALKTHROUGH,
+    CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
+};
 pub use prefix_cache::{
     enabled as prefix_cache_enabled, settings as prefix_cache_settings,
     Settings as PrefixCacheSettings,
@@ -118,7 +125,9 @@ pub use session::{
     HistoryRow, RunGuard, SessionInfo,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
-pub use skills::{discover as discover_skills, Skill, SkillSource};
+pub use skills::{
+    builtin_names, discover as discover_skills, Skill, SkillSource, BUILTIN_SKILL_BODIES,
+};
 pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
@@ -128,9 +137,9 @@ pub use tasks::{
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
-    deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute, is_readonly,
-    public_only_resolve, schemas_for, schemas_for_job, tool_schemas, tool_set_for_kind,
-    tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet, READ_ONLY_PHASE,
-    TOOL_SET_OUTSIDE,
+    brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
+    is_readonly, public_only_resolve, schemas_for, schemas_for_job, seal_brave_key, tool_schemas,
+    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet,
+    WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

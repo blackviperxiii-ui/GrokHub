@@ -250,8 +250,15 @@ pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32
         kept_topics.push(topic);
         kept_unseen.push(unseen);
     }
+    // Tab titles want a few context words (2–4), not only the newest topic.
+    let label = kept_topics
+        .iter()
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
     ThreadGoal {
-        label: kept_topics.first().cloned().unwrap_or_default(),
+        label,
         topics: kept_topics,
         unseen: kept_unseen,
         step: prev.step,
@@ -309,7 +316,10 @@ pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
         .rev()
         .take(8)
         .rev()
-        .map(|(role, content)| format!("{role}: {}", content.chars().take(400).collect::<String>()))
+        .map(|(role, content)| {
+            let content = crate::turn_timeline::strip_turn_labels(content);
+            format!("{role}: {}", content.chars().take(400).collect::<String>())
+        })
         .collect::<Vec<_>>()
         .join("\n");
     format!(
@@ -1107,10 +1117,10 @@ If this fails, tell me your distro.";
         assert_eq!(porn.label, "porn");
         assert_eq!(porn.topics, vec!["porn".to_string()]);
         let both = blend_thread_goal(&porn, &["comics".into()], GOAL_DROP_AFTER);
-        assert_eq!(both.label, "porn");
+        assert_eq!(both.label, "porn comics");
         assert_eq!(both.topics, vec!["porn".to_string(), "comics".to_string()]);
         let stay = blend_thread_goal(&both, &["comics".into()], GOAL_DROP_AFTER);
-        assert_eq!(stay.label, "porn");
+        assert_eq!(stay.label, "porn comics");
         let dropped = blend_thread_goal(&stay, &["comics".into()], GOAL_DROP_AFTER);
         assert_eq!(dropped.label, "comics");
         assert_eq!(dropped.topics, vec!["comics".to_string()]);
@@ -1267,5 +1277,20 @@ If this fails, tell me your distro.";
         assert!(load_intentions(Path::new("/no/such/config"), "chat-1")
             .items
             .is_empty());
+    }
+
+    #[test]
+    fn the_goal_prompt_never_shows_the_model_turn_labels() {
+        let msgs = vec![
+            ("user".to_string(), "fix my stutter".to_string()),
+            (
+                "assistant".to_string(),
+                "TURN_THOUGHT:\ncheck the driver\nTURN_TOOL: done\tRead\tlog.txt\nTURN_SAY:\nCleared the shader cache.".to_string(),
+            ),
+        ];
+        let prompt = thread_goal_prompt(&msgs);
+        assert!(prompt.ends_with("user: fix my stutter\nassistant: Cleared the shader cache."));
+        assert!(!prompt.contains("TURN_"));
+        assert!(!prompt.contains("check the driver"));
     }
 }

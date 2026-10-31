@@ -283,8 +283,9 @@ fn assistant_bubble_sits_flush_and_keeps_inner_pad() {
         speech.contains("inner_margin(egui::Margin::ZERO)")
             && speech.contains("add_space(BUBBLE_PAD_Y)")
             && speech.contains("add_space(BUBBLE_PAD_X)")
-            && speech.contains("allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W)")
-            && include_str!("chat_ui.rs").contains("const REPLY_MARK_W: f32 = 16.0;"),
+            && (speech.contains("allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W)")
+                || speech.contains("paint_companion_face(ui, REPLY_MARK_W)"))
+            && include_str!("chat_ui.rs").contains("const REPLY_MARK_W: f32 = 28.0;"),
         "bubble pad must sit inside the fill, not get clipped by rounded inner_margin: {speech}"
     );
 }
@@ -713,13 +714,13 @@ fn chat_blocks_offer_copy_and_reply() {
         "a measured-height lock clips markdown: {bubble_fn}"
     );
     let assistant = src
-        .split("// Assistant row: the mark sits at the top left")
+        .split("// Assistant row: the companion face sits at the top left")
         .nth(1)
         .and_then(|s| s.split("fn paint_msg_acts").next())
         .expect("assistant bubble");
     assert!(
         assistant.contains("horizontal_top"),
-        "assistant mark must sit at the top of multi-line replies: {assistant}"
+        "assistant face must sit at the top of multi-line replies: {assistant}"
     );
     assert!(
         !assistant.contains("ui.horizontal("),
@@ -734,11 +735,46 @@ fn chat_blocks_offer_copy_and_reply() {
         speech.contains("bubble_assistant()") && speech.contains("USER_BUBBLE_RADIUS"),
         "assistant replies must sit in a bubble: {speech}"
     );
+    assert!(
+        speech.contains("signal_red()") && speech.contains("is_loadout_paint()"),
+        "Hangout assistant bubbles take a Signal Red outline under Loadout: {speech}"
+    );
+    let hangout = src
+        .split("fn paint_hangout_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_chat(").next())
+        .expect("paint_hangout_header");
+    assert!(
+        hangout.contains("Hangout")
+            && hangout.contains("TALK")
+            && hangout.contains("TYPE")
+            && hangout.contains("listen_voice")
+            && hangout.contains("leave_voice"),
+        "Hangout header wires TALK/TYPE to voice: {hangout}"
+    );
     let chat = src
         .split("fn ui_chat(")
         .nth(1)
         .and_then(|s| s.split("fn ui_empty_home(").next())
         .expect("ui_chat");
+    assert!(
+        chat.contains("paint_hangout_header"),
+        "ui_chat paints the Hangout header: {chat}"
+    );
+    let stack = src
+        .split("fn composer_stack_slots(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn empty_home_side_gap(").next())
+        .expect("composer_stack_slots");
+    assert!(
+        stack.contains("hangout_composer_stack_order") && stack.contains("hangout_composer_layout"),
+        "Loadout Hangout moves chips above the composer and hides the session row: {stack}"
+    );
+    assert!(
+        src.contains("fn apply_composer_session_row(")
+            && src.contains("hangout_composer_layout(self.messages.is_empty())"),
+        "Hangout skips Chat/Plan/Use and Ask/Auto/Always under the composer"
+    );
     assert!(
         chat.contains("available_width") && chat.contains("set_max_width(pane)"),
         "thread uses the CentralPanel pane: {chat}"

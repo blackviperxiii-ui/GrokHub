@@ -104,6 +104,13 @@ pub fn build_version_line() -> String {
     )
 }
 
+/// Settings › About, under the version: `Build 2.13.1-beta.3 (beta @ abc1234)`.
+pub fn build_detail_line() -> String {
+    let line = build_version_line();
+    let detail = line.split_once(' ').map_or(line.as_str(), |(_, rest)| rest);
+    format!("Build {detail}")
+}
+
 /// Labs line for the Beta channel toggle: receipt channel + build branch/SHA.
 pub fn channel_labs_status() -> String {
     channel_status_line(
@@ -207,7 +214,8 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
             hint => hint.to_string(),
         };
         return Some(format!(
-            "Beta caught up to main, but GrokHub couldn't switch back to stable: {why}"
+            "Beta caught up to main, but {} couldn't switch back to stable: {why}",
+            grokhub_core::brand::product_name()
         ));
     }
     write_installed_channel(Channel::Stable).ok()?;
@@ -655,6 +663,23 @@ mod tests {
         assert_eq!(installed_channel(), Channel::Stable);
         drop(_pin);
         let _ = fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn about_build_line_drops_the_old_product_name() {
+        let line = build_detail_line();
+        assert_eq!(
+            line,
+            format!(
+                "Build {}",
+                build_version_line().trim_start_matches("GrokHub ")
+            )
+        );
+        assert!(
+            line.starts_with(&format!("Build {}", build_version_label())),
+            "{line}"
+        );
+        assert!(!line.contains("GrokHub"), "{line}");
     }
 
     #[test]
@@ -1320,7 +1345,7 @@ mod tests {
         } else {
             assert_eq!(
                 msg.as_deref(),
-                Some("Beta caught up to main, but GrokHub couldn't switch back to stable: Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
+                Some("Beta caught up to main, but Loadout couldn't switch back to stable: Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
             );
         }
         assert_eq!(receipt_channel(), Channel::Beta);
@@ -1412,16 +1437,16 @@ mod tests {
         let dirty = "$ bash install.sh --user --channel stable\nexit 1 · 9ms\nerror: /src has uncommitted changes; commit or stash them before --channel stable";
         assert_eq!(
             update_failure_status(dirty, true, log),
-            "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again. Details: /home/u/.config/GrokHub/update.log"
+            "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again. Details: /home/u/.config/GrokHub/update.log"
         );
         let rustc = "exit 101 · 3s\nerror: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer";
         assert_eq!(
             update_failure_status(rustc, false, log),
-            "GrokHub needs a newer Rust to build. Run rustup update, then try again. Details: /home/u/.config/GrokHub/update.log"
+            "Loadout needs a newer Rust to build. Run rustup update, then try again. Details: /home/u/.config/GrokHub/update.log"
         );
         let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
         assert!(update_failure_status(on_main, false, log)
-            .starts_with("Your GrokHub source folder is on stable, but Labs Beta is on."));
+            .starts_with("Your Loadout source folder is on stable, but Labs Beta is on."));
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
             "Update failed. Details: /home/u/.config/GrokHub/update.log"

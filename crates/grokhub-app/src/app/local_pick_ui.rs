@@ -35,26 +35,45 @@ pub(super) fn choice_label(m: &LocalModel, suggested: Option<&LocalModel>) -> St
     line
 }
 
+/// The dropdown's closed line: short, so it fits beside the arrow.
+pub(super) fn choice_short(m: &LocalModel, suggested: Option<&LocalModel>) -> String {
+    let mut line = format!("{} · {}", m.name, ls::size_label(m.download_mb));
+    if suggested.is_some_and(|s| s.id == m.id) {
+        line.push_str(" · recommended");
+    }
+    line
+}
+
 /// The model the dropdown starts on: the one picked this session, the one
-/// running, the hardware's suggestion, then the first catalog entry.
+/// running, the hardware's suggestion, then the smallest model, never the
+/// biggest one just because the catalog lists it first. A CPU that can't run
+/// any local model (`cpu_runs_local` false: no AVX) gets no fallback at all.
 pub(super) fn default_choice(
     picked: Option<&str>,
     installed: Option<&Installed>,
     suggested: Option<&'static LocalModel>,
+    cpu_runs_local: bool,
 ) -> Option<&'static LocalModel> {
     picked
         .or(installed.map(|r| r.id.as_str()))
         .and_then(ls::model_by_id)
         .filter(|m| !m.is_drafter)
         .or(suggested)
-        .or_else(|| choices().into_iter().next())
+        .or_else(|| {
+            if cpu_runs_local {
+                grokhub_core::local_picker::smallest()
+            } else {
+                None
+            }
+        })
 }
 
 impl Cabin {
-    fn suggested_model(&self) -> Option<&'static LocalModel> {
+    pub(super) fn suggested_model(&self) -> Option<&'static LocalModel> {
         self.setup
             .hw
             .as_ref()
+            .filter(|hw| !super::setup_wizard::hw_unknown(hw))
             .and_then(|hw: &Hardware| ls::suggest(hw))
     }
 
@@ -65,11 +84,12 @@ impl Cabin {
             self.setup.choice.as_deref(),
             self.setup.installed.as_ref(),
             suggested,
+            ls::CpuSimd::detect() != ls::CpuSimd::NoAvx,
         )?;
         let all = choices();
         let labels: Vec<String> = all.iter().map(|m| choice_label(m, suggested)).collect();
-        let shown = choice_label(current, suggested);
-        let hint = "Pick before you download. You can switch later in Settings without reinstalling GrokHub.";
+        let shown = choice_short(current, suggested);
+        let hint = "Pick before you download. You can switch later in Settings without reinstalling Loadout.";
         if let Some(i) = crate::cards::settings_dropdown(ui, "Local model", hint, &shown, &labels) {
             self.setup.choice = Some(all[i].id.to_string());
             return Some(all[i]);
@@ -80,14 +100,18 @@ impl Cabin {
     /// Download, Use or the running note for `m`, then the other downloaded models.
     pub(super) fn ui_model_pick_rows(&mut self, ui: &mut egui::Ui, m: &'static LocalModel) {
         let running = self.setup.installed.as_ref().is_some_and(|r| r.id == m.id);
+        let on_disk = md::final_path(&models_dir(), m).is_file();
         if running {
             self.ui_model_download(ui, m);
         } else if self.setup.dl.is_some() {
             self.ui_download_progress(ui);
-        } else if md::final_path(&models_dir(), m).is_file() {
+        } else if on_disk {
             if crate::cards::white_pill(ui, &format!("Use {}", m.name)) {
                 self.switch_local_model(m);
             }
+            // Picking a Gemma with its GGUF already on disk still offers
+            // the paired draft model, even before this row is the active one.
+            self.ui_drafter_offer_for(ui, m.file);
         } else {
             self.ui_download_button(ui, m);
         }
@@ -164,25 +188,46 @@ mod tests {
             bytes: 1,
         };
         assert_eq!(
-            default_choice(None, Some(&running), Some(a)).map(|m| m.id),
+            default_choice(None, Some(&running), Some(a), true).map(|m| m.id),
             Some(b.id)
         );
         assert_eq!(
-            default_choice(Some(a.id), Some(&running), None).map(|m| m.id),
+            default_choice(Some(a.id), Some(&running), None, true).map(|m| m.id),
             Some(a.id)
         );
         assert_eq!(
-            default_choice(None, None, Some(b)).map(|m| m.id),
+            default_choice(None, None, Some(b), true).map(|m| m.id),
             Some(b.id)
         );
-        assert_eq!(default_choice(None, None, None).map(|m| m.id), Some(a.id));
+        // No hardware suggestion: the smallest model, not the catalog's first.
+        let small = grokhub_core::local_picker::smallest().unwrap();
+        assert_eq!(
+            default_choice(None, None, None, true).map(|m| m.id),
+            Some(small.id)
+        );
+        assert!(small.run_mb < a.run_mb, "{} vs {}", small.name, a.name);
+        // No AVX: nothing local can run, so nothing is offered.
+        assert_eq!(default_choice(None, None, None, false).map(|m| m.id), None);
+        assert_eq!(
+            default_choice(Some(a.id), None, None, false).map(|m| m.id),
+            Some(a.id),
+            "a model picked by hand still shows"
+        );
+        assert_eq!(
+            choice_short(a, Some(a)),
+            format!(
+                "{} · {} · recommended",
+                a.name,
+                ls::size_label(a.download_mb)
+            )
+        );
         // A file the catalog no longer lists falls through to the suggestion.
         let old = Installed {
             id: "retired-model".into(),
             ..running
         };
         assert_eq!(
-            default_choice(None, Some(&old), Some(b)).map(|m| m.id),
+            default_choice(None, Some(&old), Some(b), true).map(|m| m.id),
             Some(b.id)
         );
     }

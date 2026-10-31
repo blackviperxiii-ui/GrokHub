@@ -1,4 +1,5 @@
-# GrokHub playbook: how a kind of work is done, step by step.
+# Loadout playbook: slim fallback for tasks and repairs when no specialist fits.
+# Desktop and files keep their own playbooks; this one is the general catch-all.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
@@ -7,15 +8,15 @@
 # Phases go from read-only (look), to safe (reversible changes), to risky.
 # A step that runs a hard-class command (money, send, delete, credentials,
 # irreversible system actions) must be risky, and it still asks you first.
-# A playbook can never make GrokHub skip an approval.
+# A playbook can never make Loadout skip an approval.
 
 id = "task-general"
 name = "Any task"
-summary = "Look first, change in small reversible steps, check each change, and stop only when truly blocked."
+summary = "Fallback for tasks and repairs only: look once, one reversible change, check it. Specialists own code, files, desktop and the rest."
 
 checklist = ["the asked change is made", "result checked"]
 backup = "Before changing a file or setting, keep a copy of how it was (a .bak next to it, or note the old value)."
-verify = "After each change, look again: re-read the file, run the tests or build, or check the setting took."
+verify = "After the change, look again: re-read the file, run the tests or build, or check the setting took."
 rollback = "If a check fails, put the copy back and say what went wrong."
 give_up = [
   "a hard approval was refused",
@@ -25,6 +26,8 @@ give_up = [
 
 [applies_when]
 intent = ["task", "repair"]
+# Small talk never gets a task playbook, even in a copy that names no intent.
+exclude = ["chat"]
 
 [[phase]]
 name = "Look"
@@ -38,7 +41,7 @@ name = "Change"
 tier = "safe"
 
 [[phase.step]]
-name = "Make one small change at a time, with its copy kept"
+name = "Make one small change, with its copy kept"
 
 [[phase.step]]
 name = "Check the change before the next one"

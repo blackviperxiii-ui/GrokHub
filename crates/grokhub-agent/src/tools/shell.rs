@@ -47,7 +47,7 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
         return ToolOutput::err("command is required");
     }
     if crate::sudo_pass::names_helper(&command) {
-        return ToolOutput::err(crate::sudo_pass::HELPER_REFUSAL);
+        return ToolOutput::err(*crate::sudo_pass::HELPER_REFUSAL);
     }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
@@ -237,7 +237,7 @@ pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, Stri
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     if crate::sudo_pass::names_helper(command) {
-        return Err(crate::sudo_pass::HELPER_REFUSAL.to_string());
+        return Err((*crate::sudo_pass::HELPER_REFUSAL).to_string());
     }
 
     let mut child = bash(cwd, command)
@@ -612,12 +612,12 @@ mod tests {
             &|| false,
         );
         assert!(out.failed);
-        assert_eq!(out.text, crate::sudo_pass::HELPER_REFUSAL);
+        assert_eq!(out.text, *crate::sudo_pass::HELPER_REFUSAL);
         assert_eq!(
             super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"")
                 .err()
                 .as_deref(),
-            Some(crate::sudo_pass::HELPER_REFUSAL)
+            Some(*crate::sudo_pass::HELPER_REFUSAL)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -688,37 +688,43 @@ mod tests {
         let worker = std::thread::spawn(move || {
             run(
                 &tree_job,
-                &json!({"command": "sleep 30 & echo $! > child.pid; wait", "timeout": 20000}),
+                &json!({"command": "sleep 30 & echo \"$$ $!\" > child.pid; wait", "timeout": 20000}),
                 &|| flag.load(Ordering::SeqCst),
             )
         });
         let pidfile = tree.join("child.pid");
         let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pgid = 0i32;
         let mut pid = 0i32;
         while Instant::now() < deadline {
             if let Ok(text) = std::fs::read_to_string(&pidfile) {
-                if let Ok(n) = text.trim().parse::<i32>() {
-                    if n > 1 {
-                        pid = n;
-                        break;
-                    }
+                let mut pids = text
+                    .split_whitespace()
+                    .map(|value| value.parse::<i32>().unwrap_or(0));
+                pgid = pids.next().unwrap_or(0);
+                pid = pids.next().unwrap_or(0);
+                if pgid > 1 && pid > 1 {
+                    break;
                 }
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(pid > 1, "child pid was not written");
+        assert!(pgid > 1 && pid > 1, "process ids were not written");
         let own = unsafe { libc::getpgrp() };
-        assert_ne!(own, pid, "refusing to signal the test process group");
+        assert_ne!(own, pgid, "refusing to signal the test process group");
         stop.store(true, Ordering::SeqCst);
         let output = worker.join().expect("shell thread");
         assert!(output.failed, "{}", output.text);
         assert!(output.text.contains("killed"), "{}", output.text);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while process_alive(pid) && Instant::now() < deadline {
+        while (process_group_alive(pgid) || process_alive(pid)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(!process_alive(pid), "child {pid} still alive");
-        assert!(process_alive(own), "test process group was killed");
+        assert!(
+            !process_group_alive(pgid),
+            "process group {pgid} still has a live member"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&tree);
     }
@@ -729,6 +735,18 @@ mod tests {
             return false;
         }
         let rc = unsafe { libc::kill(pid, 0) };
+        if rc == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    #[cfg(unix)]
+    fn process_group_alive(pgid: i32) -> bool {
+        if pgid <= 0 {
+            return false;
+        }
+        let rc = unsafe { libc::kill(-pgid, 0) };
         if rc == 0 {
             return true;
         }

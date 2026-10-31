@@ -16,8 +16,8 @@ fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_c
     c
 }
 
-/// A window narrow enough for the compact page (one view behind the switch).
-const COMPACT_W: f32 = 640.0;
+/// A window under 720: idea rows keep Run at rest.
+const NARROW_W: f32 = 640.0;
 
 fn pulse_texts(cabin: &mut super::Cabin, h: f32) -> Vec<String> {
     pulse_texts_w(cabin, 1400.0, h)
@@ -46,7 +46,7 @@ fn pulse_texts_w(cabin: &mut super::Cabin, w: f32, h: f32) -> Vec<String> {
 }
 
 fn pulse_memory() -> String {
-    crate::config::read_memory("MEMORY.md")
+    crate::config::read_memory(grokhub_core::pulse::LEDGER_FILE)
 }
 
 fn pulse_ids(cabin: &mut super::Cabin, now: u64) -> Vec<(String, i64, &'static str)> {
@@ -64,7 +64,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert!(crate::theme::GROK_NAV.contains(&("pulse", "Pulse")));
     assert!(crate::theme::GROK_NAV
         .iter()
-        .all(|(id, label)| *id != "ideas" && *label != "Ideas"));
+        .all(|(id, label)| *id != "ideas" && *label != "For You"));
     assert_eq!(super::Cabin::nav_from_id("pulse"), super::Nav::Pulse);
     assert_eq!(
         super::Cabin::nav_from_id("ideas"),
@@ -103,18 +103,27 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
             .any(|t| t == "What I'd do next, from how you use the cabin."),
         "{texts:?}"
     );
+    // One stream: no Feed | For You switch, the two actions sit in the header.
     assert!(
-        texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
+        !texts.iter().any(|t| t == "For You" || t == "Feed"),
         "{texts:?}"
     );
-    // Pulse opens on Feed; its empty line says how to steer it (link is separate).
-    assert!(
+    for want in ["Suggest for you", "Feed instructions"] {
+        assert_eq!(
+            texts.iter().filter(|t| t.as_str() == want).count(),
+            1,
+            "{want:?} in {texts:?}"
+        );
+    }
+    // Nothing yet: one empty line for the whole page, then the silence line.
+    assert_eq!(
         texts
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in "),
+            .filter(|t| t.as_str() == grokhub_core::pulse::PULSE_EMPTY)
+            .count(),
+        1,
         "{texts:?}"
     );
-    assert!(texts.iter().any(|t| t == "Feed instructions"), "{texts:?}");
     assert!(
         texts.iter().any(|t| t == "No pulse yet. Nothing to do."),
         "{texts:?}"
@@ -191,11 +200,10 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             (Some("Productivity"), vec!["idea-auto".to_string()]),
             (Some("Shopping"), vec!["idea-stand".to_string()]),
             (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
-            (Some("More ideas"), vec!["idea-photos".to_string()]),
+            (Some("More for you"), vec!["idea-photos".to_string()]),
         ],
         "the three strongest lead, then the categories in their fixed order"
     );
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let texts = pulse_texts(cabin, 2400.0);
     let at = |needle: &str| {
         texts
@@ -203,26 +211,28 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             .position(|t| t == needle)
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
+    // The stream keeps that rank order with no section headers between rows.
     let order = [
-        at("UP NEXT"),
         at("I can pay your TXU bill before Friday"),
         at("I can draft your standup"),
         at("I can plan a dinner with family"),
-        at("PRODUCTIVITY"),
         at("I can summarize the workboard automatically"),
-        at("SHOPPING"),
-        at("HEALTH & FITNESS"),
-        at("MORE IDEAS"),
         at("I can sort the vacation photos"),
     ];
     assert!(
         order.windows(2).all(|w| w[0] < w[1]),
         "{order:?} in {texts:?}"
     );
-    assert!(
-        !texts.iter().any(|t| t == "FINANCIAL MANAGEMENT"),
-        "the bill sits in the top group: {texts:?}"
-    );
+    for header in [
+        "UP NEXT",
+        "PRODUCTIVITY",
+        "SHOPPING",
+        "HEALTH & FITNESS",
+        "MORE FOR YOU",
+        "FINANCIAL MANAGEMENT",
+    ] {
+        assert!(!texts.iter().any(|t| t == header), "{header}: {texts:?}");
+    }
     assert!(
         texts.iter().any(|t| t == "AUTOMATE") && texts.iter().any(|t| t == "DO"),
         "{texts:?}"
@@ -345,7 +355,7 @@ fn pulse_snooze_dismiss_and_not_this_change_the_page_and_the_ledger() {
     );
     assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 1);
 
-    // Dismiss: the card is removed and the ledger says so.
+    // Dismiss unused: the card is removed and the ledger says so (negative).
     cabin.pulse_dismiss("idea-c", "2026-10-04");
     assert!(!cabin.updates.iter().any(|c| c.id == "idea-c"));
     assert!(pulse_memory().contains("- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss"));
@@ -358,6 +368,85 @@ fn pulse_snooze_dismiss_and_not_this_change_the_page_and_the_ledger() {
         vec![("idea-b".to_string(), -250, "Quiet")]
     );
     assert!(cabin.pulse_groups(now).is_empty());
+}
+
+#[test]
+fn used_idea_dismiss_and_liked_feed_dismiss_are_not_negative() {
+    let mut quiet = QuietCabin::boot("pulse-used-dismiss");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    cabin.sources.reactions = Some(grokhub_core::reactions::Reactions::default());
+
+    let mut used = pulse_idea("idea-used", "Tidy the workboard", "tidy the workboard", 20);
+    used.status = UpdateStatus::Opened;
+    cabin.updates.push(used);
+    cabin.updates.push(pulse_idea(
+        "idea-fresh",
+        "Draft a packing list",
+        "draft a packing list",
+        21,
+    ));
+    let mut liked = grokhub_core::digest_card("src-liked", "Rust 1.95 ships", "Notes.", 30);
+    liked.id = "feed-liked".into();
+    liked.reaction = Some(grokhub_core::CardReaction::Up);
+    cabin.updates.push(liked);
+    let mut discussed = grokhub_core::digest_card("src-talk", "NFL scores", "Notes.", 31);
+    discussed.id = "feed-talk".into();
+    discussed.discuss_thread = Some("thr-nfl".into());
+    cabin.updates.push(discussed);
+    let mut fresh = grokhub_core::digest_card("src-fresh", "Nightly backup", "Notes.", 32);
+    fresh.id = "feed-fresh".into();
+    cabin.updates.push(fresh);
+
+    // Used For You card: ledger reason=used, no Dismissed reaction.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("idea-used".into()));
+    cabin.pulse_dismiss("idea-used", "2026-10-28");
+    assert!(
+        pulse_memory().contains("- [2026-10-28] pulse: used \"Tidy the workboard\" reason=used"),
+        "{}",
+        pulse_memory()
+    );
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-used"));
+    assert!(
+        cabin.reactions_now().log.is_empty(),
+        "used+dismissed must not record a negative reaction: {:?}",
+        cabin.reactions_now().log
+    );
+
+    // Unused For You dismiss stays negative in the ledger and reactions.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("idea-fresh".into()));
+    cabin.pulse_dismiss("idea-fresh", "2026-10-28");
+    assert!(pulse_memory()
+        .contains("- [2026-10-28] pulse: dismissed \"Draft a packing list\" reason=dismiss"));
+    assert!(
+        cabin
+            .reactions_now()
+            .log
+            .iter()
+            .any(|r| r.outcome == grokhub_core::reactions::Outcome::Dismissed),
+        "unused dismiss records Dismissed: {:?}",
+        cabin.reactions_now().log
+    );
+
+    // Liked / discussed Feed then dismiss: used (never a bury in the ledger).
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-liked".into()));
+    cabin.pulse_dismiss("feed-liked", "2026-10-28");
+    assert!(
+        pulse_memory().contains("- [2026-10-28] pulse: used \"Rust 1.95 ships\" reason=used"),
+        "{}",
+        pulse_memory()
+    );
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-talk".into()));
+    cabin.pulse_dismiss("feed-talk", "2026-10-28");
+    assert!(pulse_memory().contains("- [2026-10-28] pulse: used \"NFL scores\" reason=used"));
+
+    // Untouched Feed dismiss: dismiss.
+    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-fresh".into()));
+    cabin.pulse_dismiss("feed-fresh", "2026-10-28");
+    assert!(pulse_memory()
+        .contains("- [2026-10-28] pulse: dismissed \"Nightly backup\" reason=dismiss"));
 }
 
 #[test]
@@ -485,7 +574,9 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
     image::RgbaImage::from_pixel(8, 4, image::Rgba([200, 80, 40, 255]))
         .save_with_format(&fixture, image::ImageFormat::Png)
         .expect("fixture png");
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    pulse_texts(cabin, 1200.0);
+    // The thumb decodes off-thread; on a busy runner it can miss the second pass.
+    super::pulse_ui::wait_pulse_decodes();
     let texts = pulse_texts(cabin, 1200.0);
     for want in [
         "Rust 1.92 ships",
@@ -512,7 +603,16 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         posts,
         vec!["Rust 1.92 ships".to_string(), "Backup ran".to_string()]
     );
-    let tex = cabin.pulse_view_texture_size("https://www.rust-lang.org/static/og.png");
+    // The thumb decodes off the UI thread; a slow runner needs more frames.
+    let og = "https://www.rust-lang.org/static/og.png";
+    for _ in 0..250 {
+        if cabin.pulse_view_texture_size(og).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pulse_texts(cabin, 1200.0);
+    }
+    let tex = cabin.pulse_view_texture_size(og);
     assert_eq!(tex, Some([8, 4]), "the cached source image is drawn");
     assert_eq!(
         cabin.pulse_view_texture_size("https://cdn.example.com/missing.jpg"),
@@ -545,7 +645,6 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
 fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
     let mut quiet = QuietCabin::boot("pulse-sheet");
     let cabin = &mut quiet.cabin;
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
     cabin.open_feed_instructions();
     assert_eq!(
         cabin.pulse_view.sheet.as_deref(),
@@ -643,18 +742,9 @@ fn pulse_key_event(key: egui::Key) -> egui::Event {
 }
 
 #[test]
-fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
-    assert_eq!(
-        super::pulse_ui::PulseView::default().tab,
-        super::pulse_ui::PulseTab::Feed
-    );
-    let mut quiet = QuietCabin::boot("pulse-tabs");
+fn pulse_header_shows_both_actions_and_no_tabs_at_every_width() {
+    let mut quiet = QuietCabin::boot("pulse-header");
     let cabin = &mut quiet.cabin;
-    assert_eq!(cabin.pulse_view.tab, super::pulse_ui::PulseTab::Feed);
-    assert_eq!(
-        super::pulse_ui::PulseTab::ORDER.map(|t| t.label()),
-        ["Feed", "Ideas"]
-    );
     let x = |texts: &[(String, f32)], needle: &str| {
         texts
             .iter()
@@ -662,21 +752,21 @@ fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
             .map(|(_, x)| *x)
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
-    let feed = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
-    let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "Ideas"));
-    assert!(feed_x < ideas_x, "Feed sits left of Ideas: {feed:?}");
-    assert!(feed.iter().any(|(t, _)| t == "Feed instructions"));
-    // The switch stays put when the tab's action changes (one fixed slot).
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let ideas = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
-    assert_eq!(
-        (x(&ideas, "Feed"), x(&ideas, "Ideas")),
-        (feed_x, ideas_x),
-        "the Feed | Ideas switch does not move between tabs"
-    );
-    assert!(ideas.iter().any(|(t, _)| t == "Suggest ideas"));
-    assert!(!ideas.iter().any(|(t, _)| t == "Feed instructions"));
-    assert_eq!(super::pulse_ui::HEADER_SLOT_W, 150.0);
+    for w in [2560.0, 1100.0, NARROW_W, 400.0] {
+        let texts = pulse_text_at_w(cabin, w, 900.0, Vec::new());
+        let title = x(&texts, "Pulse");
+        let (suggest, steer) = (x(&texts, "Suggest for you"), x(&texts, "Feed instructions"));
+        assert!(
+            title < suggest && suggest < steer && steer < w,
+            "Suggest then Feed instructions, right of the title, on screen at {w}: {texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|(t, _)| t == "Feed" || t == "For You" || t == "FROM YOUR FEED"),
+            "no tab switch or feed heading at {w}: {texts:?}"
+        );
+    }
 }
 
 #[test]
@@ -704,7 +794,6 @@ fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row()
         "save the city guide",
         12,
     ));
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let rows: Vec<String> = cabin
         .pulse_groups(now_ms())
         .into_iter()
@@ -786,28 +875,33 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let empty = pulse_texts_w(cabin, COMPACT_W, 900.0);
-    assert!(
-        empty
-            .iter()
-            .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
+    let count = |texts: &[String], needle: &str| texts.iter().filter(|t| *t == needle).count();
+    let empty = pulse_texts_w(cabin, NARROW_W, 900.0);
+    // No ideas and no posts: one empty state, not one per kind.
+    assert_eq!(
+        count(&empty, grokhub_core::pulse::PULSE_EMPTY),
+        1,
         "{empty:?}"
     );
-    // Empty Ideas keeps one inline Suggest ideas. The header hides its duplicate.
-    let suggest_n = empty
-        .iter()
-        .filter(|t| t.as_str() == "Suggest ideas")
-        .count();
     assert_eq!(
-        suggest_n, 1,
-        "expected one Suggest ideas, got {suggest_n}: {empty:?}"
+        count(&empty, "No pulse yet. Nothing to do."),
+        1,
+        "{empty:?}"
     );
+    assert!(
+        !empty
+            .iter()
+            .any(|t| t.starts_with("Nothing for you yet") || t.starts_with("No posts yet")),
+        "{empty:?}"
+    );
+    // The header carries the only Suggest for you and Feed instructions.
+    assert_eq!(count(&empty, "Suggest for you"), 1, "{empty:?}");
+    assert_eq!(count(&empty, "Feed instructions"), 1, "{empty:?}");
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);
     assert!(cabin.pulse_view.signin_note);
     assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
-    let signed_out = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let signed_out = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(
         cabin.pulse_view.signin_note,
         "note stays until Account/native signs in"
@@ -820,12 +914,12 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     }
     // PI-05: once signed in, the amber line clears without another press.
     cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
-    let _ = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let _ = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(!cabin.pulse_view.signin_note);
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
-    let loading = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    let loading = pulse_texts_w(cabin, NARROW_W, 900.0);
     assert!(
         loading
             .iter()
@@ -836,25 +930,33 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     assert!(
         !loading
             .iter()
-            .any(|t| t.starts_with("No ideas yet") || t.ends_with("Nothing to do.")),
+            .any(|t| t == grokhub_core::pulse::PULSE_EMPTY || t.ends_with("Nothing to do.")),
         "{loading:?}"
     );
+    // Loading with posts on the page: the placeholder rows, then the posts.
+    let now = now_ms();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now - 60_000,
+    ));
+    let both = pulse_text_at_w(cabin, NARROW_W, 900.0, Vec::new());
+    let at = |needle: &str| {
+        both.iter()
+            .position(|(t, _)| t == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {both:?}"))
+    };
+    assert!(at("Looking for ideas in your recent work…") < at("Rust 1.92 ships"));
     cabin.ideas_rx = None;
-
-    // Feed empty: lead + clickable "Feed instructions" + silence line.
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
-    let feed = pulse_texts_w(cabin, COMPACT_W, 900.0);
+    // Only posts, no ideas: the posts with no empty panel above them.
+    let posts_only = pulse_texts_w(cabin, NARROW_W, 900.0);
+    assert!(posts_only.iter().any(|t| t == "Rust 1.92 ships"));
     assert!(
-        feed.iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in "),
-        "{feed:?}"
-    );
-    assert!(feed.iter().any(|t| t == "Feed instructions"), "{feed:?}");
-    assert!(
-        !feed
+        !posts_only
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
-        "empty Feed paints the link separately: {feed:?}"
+            .any(|t| t == grokhub_core::pulse::PULSE_EMPTY || t.ends_with("Nothing to do.")),
+        "{posts_only:?}"
     );
 }
 
@@ -899,41 +1001,97 @@ fn pulse_opened_idea_heading_matches_row_type() {
 }
 
 #[test]
-fn pulse_layout_reflows_like_the_deck_breakpoints() {
-    use super::pulse_ui::{post_thumb_count, pulse_layout, PulseFit};
-    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
-    // Ultra-wide: Ideas 3fr, Feed 2fr, both tile 2-up.
-    let wide = pulse_layout(2440.0);
-    assert_eq!(wide.fit, PulseFit::Split);
-    assert!(near(wide.gap, 30.0) && near(wide.ideas_w, 1446.0) && near(wide.feed_w, 964.0));
-    assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
-    // The 60/40 split starts at 1500.
-    let edge = pulse_layout(1500.0);
-    assert!(near(edge.gap, 19.5) && near(edge.ideas_w, 888.3) && near(edge.feed_w, 592.2));
-    assert_eq!((edge.ideas_cols, edge.feed_cols), (1, 1));
-    // Laptop: 1.35fr to 1fr, one card across.
-    let laptop = pulse_layout(1300.0);
-    assert_eq!(laptop.fit, PulseFit::Split);
-    assert!(near(laptop.ideas_w, 737.1) && near(laptop.feed_w, 546.0));
-    assert_eq!((laptop.ideas_cols, laptop.feed_cols), (1, 1));
-    // The split starts at 1100 with the 16 px minimum gap.
-    let tight = pulse_layout(1100.0);
-    assert_eq!(tight.fit, PulseFit::Split);
-    assert!(near(tight.gap, 16.0) && near(tight.feed_w, 461.3) && near(tight.ideas_w, 622.7));
-    assert_eq!(pulse_layout(1099.0).fit, PulseFit::Stacked);
-    // Small window: one column, the feed 2-up underneath.
-    let small = pulse_layout(900.0);
-    assert_eq!(small.fit, PulseFit::Stacked);
-    assert_eq!((small.ideas_w, small.feed_cols), (900.0, 2));
-    assert_eq!(pulse_layout(720.0).fit, PulseFit::Stacked);
-    // Below 720: the switch, one centered column up to 680.
-    let phone = pulse_layout(719.0);
-    assert_eq!(phone.fit, PulseFit::Compact);
-    assert_eq!(phone.ideas_w, 680.0);
-    assert_eq!(pulse_layout(552.0).ideas_w, 552.0);
+fn pulse_is_one_centered_column_at_every_width() {
+    use super::pulse_ui::{post_thumb_count, pulse_column, STREAM_MAX_W};
+    // Page widths, padding included: one column, capped, narrow under 720.
+    for (page_w, width, narrow) in [
+        (2560.0, STREAM_MAX_W, false),
+        (1600.0, STREAM_MAX_W, false),
+        (1100.0, STREAM_MAX_W, false),
+        (720.0, 672.0, false),
+        (400.0, 352.0, true),
+    ] {
+        let col = pulse_column(page_w);
+        assert_eq!((col.width, col.narrow), (width, narrow), "at {page_w}");
+    }
+    assert!(pulse_column(719.0).narrow);
+    assert_eq!(pulse_column(0.0).width, 0.0);
     // Posts under 560 show two source images, not three.
     assert_eq!(post_thumb_count(559.0), 2);
     assert_eq!(post_thumb_count(560.0), 3);
+    assert_eq!(post_thumb_count(STREAM_MAX_W), 3);
+}
+
+#[test]
+fn the_painted_stream_is_centered_and_never_wider_than_its_cap() {
+    use super::pulse_ui::STREAM_MAX_W;
+    let mut quiet = QuietCabin::boot("pulse-center");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let now = now_ms();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now - 60_000,
+    ));
+    for w in [2560.0_f32, 1600.0, 1100.0, 720.0, 400.0] {
+        let texts = pulse_text_pos(cabin, w);
+        let title = texts
+            .iter()
+            .find(|(t, _)| t == "Pulse")
+            .map(|(_, p)| p.x)
+            .unwrap_or_else(|| panic!("no title at {w}: {texts:?}"));
+        let post = texts
+            .iter()
+            .find(|(t, _)| t == "Rust 1.92 ships")
+            .map(|(_, p)| p.x)
+            .unwrap_or_else(|| panic!("no post at {w}: {texts:?}"));
+        let left = ((w - STREAM_MAX_W) * 0.5).max(24.0);
+        assert!(
+            (title - left).abs() < 12.0,
+            "title {title} near the column's left edge {left} at {w}"
+        );
+        assert!(
+            title < post && post < title + 80.0,
+            "the post sits in the same column at {w}: {texts:?}"
+        );
+    }
+}
+
+#[test]
+fn suggest_label_says_when_it_is_busy() {
+    use super::pulse_ui::suggest_label;
+    assert_eq!(suggest_label(false), "Suggest for you");
+    assert_eq!(suggest_label(true), "Suggesting…");
+}
+
+/// Deck-match 6: Pulse header/cards follow slides 13 and 15 chrome.
+#[test]
+fn pulse_deck_match_6_chrome_tokens() {
+    let _paint = crate::theme::hold_paint_test();
+    crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+    let pulse = include_str!("pulse_ui.rs");
+    let ideas = include_str!("ideas_ui.rs");
+    assert!(
+        pulse.contains("recipe::STROKE_W") && pulse.contains("signal_red()"),
+        "idea icon tiles must use the signal-red recipe rim"
+    );
+    assert!(
+        ideas.contains("paint_pulse_row(") && ideas.contains("self.paint_idea_open("),
+        "ideas in the stream keep their row and opened-card painters"
+    );
+    assert_eq!(
+        super::pulse_ui::type_color(grokhub_core::pulse::PulseType::Automate),
+        crate::theme::amber(),
+        "AUTOMATE tag is amber on the deck"
+    );
+    assert!(
+        pulse.contains("Quick::Primary")
+            && pulse.contains("Quick::Outline")
+            && pulse.contains("Quick::Quiet"),
+        "Run / Snooze / Dismiss keep the Loadout button styles"
+    );
 }
 
 /// Text shapes with their top-left corner.
@@ -962,8 +1120,8 @@ fn pulse_text_pos(cabin: &mut super::Cabin, w: f32) -> Vec<(String, egui::Pos2)>
 }
 
 #[test]
-fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
-    let mut quiet = QuietCabin::boot("pulse-fluid");
+fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
+    let mut quiet = QuietCabin::boot("pulse-stream");
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
@@ -980,6 +1138,18 @@ fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
         "sort the beach photos",
         11,
     ));
+    let now = now_ms();
+    for (i, title) in ["Rust 1.92 ships", "egui 0.33 lands", "Steam sale starts"]
+        .iter()
+        .enumerate()
+    {
+        cabin.updates.push(grokhub_core::digest_card(
+            &format!("digest-{i}"),
+            title,
+            "Two lines about it.",
+            now - (i as u64 + 1) * 60 * 60 * 1000,
+        ));
+    }
     let at = |texts: &[(String, egui::Pos2)], needle: &str| {
         texts
             .iter()
@@ -991,53 +1161,194 @@ fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
         texts.iter().filter(|(t, _)| t == needle).count()
     };
 
-    // Laptop window: Ideas on the left, the feed column on the right, and
-    // each column keeps its own action. Rows rest without inline actions.
-    let split = pulse_text_pos(cabin, 1400.0);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Split);
-    let (ideas, feed) = (at(&split, "UP NEXT"), at(&split, "FROM YOUR FEED"));
+    // An idea, two posts, the next idea, then the post that is left.
+    let wide = pulse_text_pos(cabin, 1400.0);
+    assert!(!cabin.pulse_view.narrow);
+    let order = [
+        at(&wide, "I can sort the beach photos"),
+        at(&wide, "Rust 1.92 ships"),
+        at(&wide, "egui 0.33 lands"),
+        at(&wide, "I can print the trail map"),
+        at(&wide, "Steam sale starts"),
+    ];
     assert!(
-        ideas.x + 500.0 < feed.x,
-        "feed sits right of ideas: {split:?}"
+        order.windows(2).all(|w| w[0].y < w[1].y),
+        "one list, top to bottom: {wide:?}"
     );
-    assert_eq!(count(&split, "Suggest ideas"), 1, "{split:?}");
-    assert_eq!(
-        count(&split, "Feed instructions"),
-        2,
-        "pill and empty-feed link: {split:?}"
-    );
-    assert_eq!((count(&split, "Run"), count(&split, "Snooze")), (0, 0));
-    assert_eq!(count(&split, "···"), 2);
+    let (min_x, max_x) = order.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+        (lo.min(p.x), hi.max(p.x))
+    });
+    assert!(max_x - min_x < 80.0, "one column, not two: {wide:?}");
+    for gone in ["UP NEXT", "FROM YOUR FEED", "Feed", "For You"] {
+        assert_eq!(count(&wide, gone), 0, "{gone}: {wide:?}");
+    }
+    // Rows rest without inline actions; every idea and post keeps its ···.
+    assert_eq!((count(&wide, "Run"), count(&wide, "Snooze")), (0, 0));
+    assert_eq!(count(&wide, "···"), 5);
+    assert_eq!(count(&wide, "Like"), 3);
 
-    // Small window: one column, the feed below the ideas.
-    let stacked = pulse_text_pos(cabin, 900.0);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Stacked);
-    let (ideas, feed) = (at(&stacked, "UP NEXT"), at(&stacked, "FROM YOUR FEED"));
-    assert!(ideas.y < feed.y && feed.x < ideas.x, "{stacked:?}");
-    assert!(at(&stacked, "I can sort the beach photos").y < feed.y);
-
-    // Compact: one view behind the switch. Run stays on every row; Snooze
-    // and Dismiss wait in ···.
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let compact = pulse_text_pos(cabin, COMPACT_W);
-    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Compact);
-    assert_eq!(count(&compact, "FROM YOUR FEED"), 0, "{compact:?}");
+    // Narrow: Run stays on every idea row; Snooze and Dismiss wait in ···.
+    let narrow = pulse_text_pos(cabin, NARROW_W);
+    assert!(cabin.pulse_view.narrow);
     assert_eq!(
         (
-            count(&compact, "Run"),
-            count(&compact, "Snooze"),
-            count(&compact, "Dismiss"),
-            count(&compact, "···")
+            count(&narrow, "Run"),
+            count(&narrow, "Snooze"),
+            count(&narrow, "Dismiss"),
+            count(&narrow, "···")
         ),
-        (2, 0, 0, 2),
-        "{compact:?}"
+        (2, 0, 0, 5),
+        "{narrow:?}"
     );
-    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
-    let compact_feed = pulse_text_pos(cabin, COMPACT_W);
-    assert_eq!(count(&compact_feed, "UP NEXT"), 0, "{compact_feed:?}");
+    assert!(at(&narrow, "I can sort the beach photos").y < at(&narrow, "Rust 1.92 ships").y);
+
+    // Keys walk the idea rows in stream order and skip the posts.
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::ArrowDown)]);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-beach"));
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::J)]);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-trail"));
+}
+
+#[test]
+fn pulse_source_note_waits_behind_details() {
+    assert!(!super::pulse_ui::PulseView::default().sources_open);
+    let mut quiet = QuietCabin::boot("pulse-source-note");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds.",
+        now_ms() - 60_000,
+    ));
+    let note = "Checked 15 sources (15 from the network). Failed: Reddit: HTTP 403 and 2 more.";
+    cabin.sources.note = note.into();
+    let shut = pulse_texts(cabin, 900.0);
+    assert!(shut.iter().any(|t| t == "1 post on Pulse"), "{shut:?}");
+    assert!(shut.iter().any(|t| t == "Details"), "{shut:?}");
+    assert!(
+        !shut.iter().any(|t| t.contains("Failed")),
+        "the check note stays tucked away: {shut:?}"
+    );
+    cabin.pulse_view.sources_open = true;
+    let open = pulse_texts(cabin, 900.0);
+    assert!(open.iter().any(|t| t == note), "{open:?}");
+    assert!(open.iter().any(|t| t == "Hide details"), "{open:?}");
+    // No note: just the count, nothing to open.
+    cabin.sources.note.clear();
+    let plain = pulse_texts(cabin, 900.0);
+    assert!(plain.iter().any(|t| t == "1 post on Pulse"), "{plain:?}");
+    assert!(
+        !plain.iter().any(|t| t == "Details" || t == "Hide details"),
+        "{plain:?}"
+    );
+}
+
+#[test]
+fn pulse_offers_the_off_helpers_once_each() {
+    use super::helper_offers_ui::HelperOffer;
+    let mut quiet = QuietCabin::boot("pulse-helper-offers");
+    let cabin = &mut quiet.cabin;
+    // Fresh profile: both helpers are off, so Pulse offers both.
+    assert!(!cabin.cfg.downloads_tidy);
     assert_eq!(
-        count(&compact_feed, "Feed instructions"),
-        2,
-        "{compact_feed:?}"
+        cabin.helper_offers(),
+        vec![HelperOffer::WindDown, HelperOffer::Tidy]
     );
+    let texts = pulse_texts(cabin, 900.0);
+    for ask in [
+        "Offer to sleep the PC late at night?",
+        "Suggest Downloads cleanups?",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == ask),
+            "{ask:?} not on Pulse: {texts:?}"
+        );
+    }
+    assert_eq!(
+        texts.iter().filter(|t| *t == "Turn on").count(),
+        2,
+        "{texts:?}"
+    );
+
+    // Turn on: the helper is on and the offer goes away.
+    cabin.answer_helper_offer(HelperOffer::Tidy, true);
+    assert!(cabin.cfg.downloads_tidy);
+    assert_eq!(
+        cabin.status,
+        "Downloads cleanups are on. Turn them off in Settings › Behavior."
+    );
+    assert_eq!(cabin.helper_offers(), vec![HelperOffer::WindDown]);
+
+    // Not now: still off, never offered again.
+    cabin.answer_helper_offer(HelperOffer::WindDown, false);
+    assert!(!cabin.wind_down_on());
+    assert_eq!(
+        cabin.cfg.helper_offers_dismissed,
+        vec!["wind_down".to_string()]
+    );
+    // It survives a restart: the saved config has it.
+    cabin.persist_svc.flush();
+    assert_eq!(
+        crate::config::load().helper_offers_dismissed,
+        vec!["wind_down".to_string()]
+    );
+    assert_eq!(cabin.helper_offers(), Vec::<HelperOffer>::new());
+    let texts = pulse_texts(cabin, 900.0);
+    assert!(
+        !texts.iter().any(|t| t == "Turn on" || t == "Not now"),
+        "{texts:?}"
+    );
+
+    // Turning wind-down on from the offer flips the same switch as Settings.
+    cabin.cfg.helper_offers_dismissed.clear();
+    cabin.answer_helper_offer(HelperOffer::WindDown, true);
+    assert!(cabin.wind_down_on());
+    assert_eq!(
+        cabin.status,
+        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+    );
+    cabin.set_wind_on(false);
+
+    // A wind-down switch that can't be saved never claims to be on.
+    let file = crate::config::config_dir().join(grokhub_core::wind_down::FILE_NAME);
+    let _ = std::fs::remove_file(&file);
+    std::fs::create_dir_all(&file).unwrap();
+    cabin.status.clear();
+    cabin.answer_helper_offer(HelperOffer::WindDown, true);
+    assert!(!cabin.status.is_empty());
+    assert_ne!(
+        cabin.status,
+        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+    );
+    // The switch rolls back, so the offer and Settings still read it as off.
+    assert!(!cabin.wind_down_on());
+    std::fs::remove_dir_all(&file).unwrap();
+    cabin.set_wind_on(false);
+    quiet.settle();
+}
+
+#[test]
+fn behavior_settings_list_the_pc_helpers_first() {
+    let src = include_str!("settings.rs");
+    let behavior = src
+        .split("SettingsSec::Behavior => {")
+        .nth(1)
+        .expect("Behavior section");
+    let helpers = behavior.find("\"PC helpers\"").expect("PC helpers header");
+    let tray = behavior
+        .find("\"Tray & wall\"")
+        .expect("Tray & wall header");
+    let wind = behavior
+        .find("ui_wind_down_row(ui)")
+        .expect("wind-down row");
+    let tidy = behavior
+        .find("ui_downloads_tidy_row(ui)")
+        .expect("tidy row");
+    assert!(
+        helpers < wind && wind < tidy && tidy < tray,
+        "helpers come first"
+    );
+    assert_eq!(src.matches("ui_wind_down_row(ui)").count(), 1);
+    assert_eq!(src.matches("ui_downloads_tidy_row(ui)").count(), 1);
 }

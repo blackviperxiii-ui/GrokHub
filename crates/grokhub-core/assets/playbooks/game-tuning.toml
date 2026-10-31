@@ -1,0 +1,68 @@
+# Loadout playbook: tune a game to this computer.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make Loadout skip an approval.
+
+id = "game-tuning"
+name = "Game tuning"
+summary = "Read this PC's hardware and the game's install first, agree the goal and target FPS, then recommend and apply settings that fit this machine—never guess the GPU or driver."
+
+checklist = [
+  "hardware read from this PC",
+  "game install and config found",
+  "goal and target FPS agreed",
+  "settings fit this GPU",
+  "change verified or user confirmed",
+]
+backup = "Before editing a game config, driver panel or power plan, copy the original file next to it (or note the old values) so one click can put them back."
+verify = "After each change, check a frame-time or FPS reading when tools allow it, or ask how it feels; keep the tuning in memory for that game and PC."
+rollback = "Put the backed-up config or noted values back, say what was reverted, and stop changing more until that works again."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task", "repair", "question"]
+domain = ["gaming"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Read CPU, GPU and driver version, RAM, display resolution and refresh rate, storage type, OS and power plan with local tools—never guess"
+
+[[phase.step]]
+name = "Find the game's installed version and launcher (Steam library link when available) and its config file or in-game settings path"
+
+[[phase.step]]
+name = "Ask for the goal (top FPS, stable frame times, visuals, or quiet and cool) and the target frame rate unless already said"
+
+[[phase]]
+name = "Recommend"
+tier = "safe"
+
+[[phase.step]]
+name = "Recommend the upscaler this GPU supports (DLSS, FSR or XeSS), the settings that cost the most FPS, VRAM headroom, and a frame cap or VRR—one short line per change"
+
+[[phase.step]]
+name = "Cite official game, GPU vendor or driver docs for any tweak beyond the in-game menu; no registry hacks or unsigned tools"
+
+[[phase.step]]
+name = "Stay conversational in hangout tone; do not rush the user through the plan"
+
+[[phase]]
+name = "Apply"
+tier = "risky"
+
+[[phase.step]]
+name = "Change a game config file only after approval, with the backup already made, and offer a one-click revert"
+
+[[phase.step]]
+name = "Change a driver setting or the power plan only after approval, with the old value noted for revert"

@@ -426,7 +426,7 @@ mod tests {
         let index = index_of(&stable);
         assert!(!index.contains("skill_list —"), "{index}");
         assert!(
-            index.contains("automation_create — Create a GrokHub automation\n"),
+            index.contains("automation_create — Create a Loadout automation\n"),
             "{index}"
         );
         let out = run_load_tool_schema(&json!({"name": "skill_list"}));
@@ -488,7 +488,10 @@ mod tests {
     /// `defs.rs`, rerun this test, and put the new size and the reason in the PR.
     /// The deferred `local_ai_status` / `local_ai_selftest` index lines added
     /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask. The deferred
-    /// `pulse_steam` index line added 53 to Chat/Agent and background.
+    /// `pulse_steam` index line added 53 to Chat/Agent and background, and the
+    /// eager read `know_me_tags` (the agent's only view of Know me) 184.
+    /// Eager `web_search` (OpenRouter / local always see the schema) added 472
+    /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -498,20 +501,20 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_319,
+                10_975,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_319,
+                10_975,
             ),
             ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_139,
+                9_795,
             ),
         ];
         for (label, gate, set, budget) in cases {
@@ -544,6 +547,7 @@ mod tests {
                 "write",
                 "search_replace",
                 "run_terminal_command",
+                "web_search",
                 "todo_write",
                 "ask_user_question",
                 "report_findings",
@@ -553,6 +557,7 @@ mod tests {
                 "skill_list",
                 "connection_list",
                 "automation_list",
+                "know_me_tags",
                 LOAD_TOOL_SCHEMA,
             ]
         );
@@ -581,7 +586,7 @@ mod tests {
         assert_eq!(lines, sorted);
         assert_eq!(
             lines.first(),
-            Some(&"automation_create — Create a GrokHub automation")
+            Some(&"automation_create — Create a Loadout automation")
         );
         assert!(lines.contains(&"scheduler_list — List scheduled automations"));
         assert!(lines.contains(&"screenshot — Capture the desktop screen"));

@@ -875,6 +875,7 @@ mod tests {
     fn inbox_adds_no_nav_variant_or_page() {
         fn page(nav: Nav) -> &'static str {
             match nav {
+                Nav::Home => "home",
                 Nav::Chat => "chat",
                 Nav::Devices => "devices",
                 Nav::Memory => "memory",
@@ -882,6 +883,8 @@ mod tests {
                 Nav::Pulse => "pulse",
                 Nav::Imagine => "imagine",
                 Nav::Skills => "skills",
+                Nav::Library => "library",
+                Nav::Objectives => "objectives",
                 Nav::Night => "night",
                 Nav::History => "history",
                 Nav::Journal => "journal",
@@ -891,6 +894,7 @@ mod tests {
             }
         }
         let all = [
+            Nav::Home,
             Nav::Chat,
             Nav::Devices,
             Nav::Memory,
@@ -898,6 +902,8 @@ mod tests {
             Nav::Pulse,
             Nav::Imagine,
             Nav::Skills,
+            Nav::Library,
+            Nav::Objectives,
             Nav::Night,
             Nav::History,
             Nav::Journal,
@@ -905,7 +911,7 @@ mod tests {
             Nav::Agents,
             Nav::Settings,
         ];
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 16);
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
         let cards: Vec<_> = [
             InboxKey::Hard(0),

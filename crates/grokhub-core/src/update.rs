@@ -180,7 +180,9 @@ pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree".into());
     }
-    let (ok, _) = git_stdout(
+    // Tip fetch is not a Settings probe — allow longer than git_probe_timeout
+    // so a busy Windows nextest / Defender pass does not flake the check.
+    let (ok, _) = git_stdout_within(
         source,
         &[
             "fetch",
@@ -190,6 +192,7 @@ pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
             "+refs/heads/beta:refs/remotes/origin/beta",
             "+refs/heads/main:refs/remotes/origin/main",
         ],
+        Duration::from_secs(30),
     )?;
     if !ok {
         return Err("git fetch origin beta main failed".into());
@@ -353,9 +356,11 @@ fn resolve_channel_tip(source: &Path, channel: Channel) -> Result<String, String
 /// name, or `None` when a plain fast-forward is enough.
 pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option<String>, String> {
     if !is_grokhub_source(source) {
-        return Err(
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
-        );
+        return Err(format!(
+            "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
+            product = crate::brand::product_name(),
+            id = crate::brand::INTERNAL_ID
+        ));
     }
     let want = channel.branch();
     let branch = git_head_branch(source)?;
@@ -476,9 +481,11 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// test can still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
-        return Err(
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
-        );
+        return Err(format!(
+            "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
+            product = crate::brand::product_name(),
+            id = crate::brand::INTERNAL_ID
+        ));
     }
     let want = channel.branch();
     let branch = git_head_branch(source)?;
@@ -698,7 +705,7 @@ pub fn parse_github_latest_tag(body: &str) -> Option<String> {
 
 pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     format!(
-        "GrokHub {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart."
+        "{product} {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart.", product = crate::brand::product_name()
     )
 }
 
@@ -762,9 +769,9 @@ pub fn pending_for_manual_update(_pending: UpdatePending) -> UpdatePending {
 /// `update_hint` stays the pending-state / `grokhub --update` copy.
 pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
     match pending {
-        UpdatePending::None => {
-            "GrokHub looks current. Update still overlays so a missed probe can land."
-        }
+        UpdatePending::None => crate::brand::filled(
+            "{product} looks current. Update still overlays so a missed probe can land.",
+        ),
         other => update_hint(other),
     }
 }
@@ -773,7 +780,7 @@ pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
 pub fn update_hint(pending: UpdatePending) -> &'static str {
     match pending {
         UpdatePending::Cabin => "Updates the cabin, then Restart.",
-        UpdatePending::None => "GrokHub is current.",
+        UpdatePending::None => crate::brand::filled("{product} is current."),
     }
 }
 
@@ -934,7 +941,15 @@ pub fn overlay_update_progress(
 
 pub fn overlay_update_finish(ok: bool, last_pct: u8) -> OverlayUpdateView {
     if ok {
-        overlay_view(100, "Update finished — restart GrokHub".into(), false, true)
+        overlay_view(
+            100,
+            format!(
+                "Update finished — restart {product}",
+                product = crate::brand::product_name()
+            ),
+            false,
+            true,
+        )
     } else {
         overlay_view(last_pct, "Update failed".into(), false, false)
     }
@@ -1455,11 +1470,11 @@ mod tests {
         assert_eq!(update_chip_label(None), Option::None);
         assert_eq!(update_chip_label(Cabin), Some("Update cabin"));
         assert_eq!(settings_update_label(None), "Update");
-        assert_eq!(update_hint(None), "GrokHub is current.");
+        assert_eq!(update_hint(None), "Loadout is current.");
         assert_eq!(update_hint(Cabin), "Updates the cabin, then Restart.");
         assert_eq!(
             settings_update_hint(None),
-            "GrokHub looks current. Update still overlays so a missed probe can land."
+            "Loadout looks current. Update still overlays so a missed probe can land."
         );
     }
 

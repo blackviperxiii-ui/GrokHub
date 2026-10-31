@@ -76,12 +76,36 @@ pub(crate) fn unix_ms() -> u64 {
 /// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
+/// Unix seconds when the last request finished. Idle time counts from the
+/// later of this and the last start, so a long request doesn't end idle.
+static LAST_DONE_SECS: AtomicU64 = AtomicU64::new(0);
+
+/// Unix seconds when the model was last needed as the fallback (offline, or no
+/// cloud model answering). Idle time counts from this too, so it unloads only
+/// [`super::local_perf::IDLE_UNLOAD_SECS`] after the cloud is back.
+static LAST_NEEDED_SECS: AtomicU64 = AtomicU64::new(0);
+/// A keep-warm load is running on its own thread.
+static WARMING: AtomicBool = AtomicBool::new(false);
+/// Set when Local AI is turned off while a request runs: the sidecar stops as
+/// soon as the last request in flight finishes instead of after the idle timeout.
+static STOP_PENDING: AtomicBool = AtomicBool::new(false);
+/// Bumped by every stop (see [`retire`]). A keep-warm load started before a
+/// stop sees the change under the slot lock and loads nothing.
+static WARM_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// Held for the length of one request (see [`busy`]).
 pub struct Busy(());
 
 impl Drop for Busy {
     fn drop(&mut self) {
-        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
+        if IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 && STOP_PENDING.load(Ordering::SeqCst) {
+            // Never block a request's teardown on the slot; if it's busy, the
+            // next idle tick does the pending stop.
+            if let Ok(mut slot) = global_slot().try_lock() {
+                stop_pending_locked(&mut slot);
+            }
+        }
     }
 }
 
@@ -198,16 +222,12 @@ pub fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
-/// Command line for llama-server: host locked to loopback, API key required,
-/// plus hardware-aware perf flags from [`super::local_perf`].
-pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
-    llama_args_with_perf(
-        model,
-        host,
-        port,
-        token,
-        &super::local_perf::current_defaults(),
-    )
+/// Command line for llama-server: host locked to loopback, plus
+/// hardware-aware perf flags from [`super::local_perf`]. The API key never
+/// goes on the command line: `llama_command` passes it as `LLAMA_API_KEY`
+/// in the child's environment, out of the process list.
+pub fn llama_args(model: &Path, host: &str, port: u16) -> Vec<String> {
+    llama_args_with_perf(model, host, port, &super::local_perf::current_defaults())
 }
 
 /// Same as [`llama_args`] with an explicit [`super::local_perf::RuntimeDefaults`].
@@ -215,15 +235,14 @@ pub fn llama_args_with_perf(
     model: &Path,
     host: &str,
     port: u16,
-    token: &str,
     perf: &super::local_perf::RuntimeDefaults,
 ) -> Vec<String> {
-    let mut args = base_args(model, host, port, token);
+    let mut args = base_args(model, host, port);
     args.extend(super::local_perf::llama_perf_args(perf));
     args
 }
 
-fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
+fn base_args(model: &Path, host: &str, port: u16) -> Vec<String> {
     vec![
         "-m".into(),
         model.display().to_string(),
@@ -231,8 +250,6 @@ fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
         host.into(),
         "--port".into(),
         port.to_string(),
-        "--api-key".into(),
-        token.into(),
     ]
 }
 
@@ -241,10 +258,9 @@ pub fn llama_args_with_launch(
     model: &Path,
     host: &str,
     port: u16,
-    token: &str,
     launch: &LaunchArgs,
 ) -> Vec<String> {
-    let mut args = base_args(model, host, port, token);
+    let mut args = base_args(model, host, port);
     args.extend(launch.to_args());
     args
 }
@@ -252,6 +268,13 @@ pub fn llama_args_with_launch(
 /// Where the server's load log goes, next to the binary (read for out-of-memory).
 pub fn server_log_path(binary: &Path) -> PathBuf {
     binary.with_file_name("llama-server.log")
+}
+
+fn llama_command(binary: &Path, args: &[String], token: &str) -> Command {
+    let mut cmd = Command::new(binary);
+    // llama-server reads this from its child environment, not the process list.
+    cmd.args(args).env("LLAMA_API_KEY", token);
+    cmd
 }
 
 fn spawn_llama(
@@ -288,18 +311,15 @@ fn spawn_llama(
         }
     }
     let args = match launch {
-        Some(l) => llama_args_with_launch(model, host, port, token, l),
-        None => llama_args(model, host, port, token),
+        Some(l) => llama_args_with_launch(model, host, port, l),
+        None => llama_args(model, host, port),
     };
     // The load log names out-of-memory failures; without a file it is dropped.
     let log = std::fs::File::create(server_log_path(binary))
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
-    let mut cmd = Command::new(binary);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(log);
+    let mut cmd = llama_command(binary, &args, token);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("could not start local model server: {e}"))
@@ -491,8 +511,12 @@ pub fn runtime(config_dir: &Path) -> Runtime {
         return Runtime::Error(e);
     }
     match global_slot().try_lock() {
-        Ok(slot) if slot.is_some() => Runtime::Running,
-        Ok(_) => Runtime::Ready,
+        // `alive` asks the OS (and reaps a child that already exited), so a
+        // stopped or killed server never reads as running.
+        Ok(slot) => match slot.as_ref() {
+            Some(side) if side.alive() => Runtime::Running,
+            _ => Runtime::Ready,
+        },
         Err(_) => Runtime::Loading,
     }
 }
@@ -593,6 +617,18 @@ pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
     acquire(config_dir).map(drop)
 }
 
+/// Who is asking [`load`] for the sidecar.
+#[derive(Clone, Copy)]
+enum Want {
+    /// Tests and [`ensure_global`]: start it whatever the toggle says.
+    Any,
+    /// A routed request: refused once Local AI is off or a stop is pending, so
+    /// a request that checked the toggle before it went off starts nothing.
+    Request,
+    /// A keep-warm load started under this [`WARM_GEN`].
+    Warm(u64),
+}
+
 /// [`ensure_global`] for one request: the [`Busy`] guard is taken while the
 /// slot is still locked, so the governor can't stop the sidecar between the
 /// start and the request.
@@ -602,6 +638,19 @@ pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
 /// request is in flight; a crash-loop breaker refuses starts after 3 failures
 /// and drops a dead sidecar from the slot.
 pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
+    load(config_dir, Want::Any)
+}
+
+/// [`acquire`] for a routed request: refused when Local AI was turned off
+/// since the request checked the toggle (a request already holding its
+/// [`Busy`] still finishes).
+pub fn acquire_for_request(config_dir: &Path) -> Result<Busy, String> {
+    load(config_dir, Want::Request)
+}
+
+/// [`acquire`]; a keep-warm load passes the [`WARM_GEN`] it started under and
+/// gives up when Local AI was turned off or the sidecar stopped since.
+fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
     tick_idle_unload();
     if local_gov::paused() {
         tick_governor();
@@ -619,9 +668,12 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
         _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing))?,
     };
     let mut slot = global_slot().lock().expect("sidecar global");
+    if let Some(why) = refused(want) {
+        return Err(why.into());
+    }
     if local_gov::restart_due() && in_flight() == 0 {
         if let Some(side) = slot.take() {
-            side.stop();
+            retire(side);
         }
         local_gov::clear_restart();
     }
@@ -629,7 +681,7 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
         if !side.alive() {
             if let Err(e) = local_gov::may_start(unix_ms()) {
                 if let Some(dead) = slot.take() {
-                    dead.stop();
+                    retire(dead);
                 }
                 return Err(e);
             }
@@ -675,7 +727,7 @@ pub fn tick_governor() {
         return;
     }
     if let Some(side) = slot.take() {
-        side.stop();
+        retire(side);
         health::log("stop", Some("the governor paused or restarted it"));
     }
     local_gov::clear_restart();
@@ -703,26 +755,134 @@ pub fn touch_global() {
 }
 
 /// Stop the sidecar when it has been idle longer than its unload timeout.
+///
+/// Idle means no request in flight and none started or finished within the
+/// timeout, so a long request is never cut off and the next one doesn't
+/// reload a model that was just stopped.
 pub fn tick_idle_unload() {
+    if in_flight() > 0 {
+        return;
+    }
     let mut slot = global_slot().lock().expect("sidecar global");
+    if stop_pending_locked(&mut slot) {
+        return;
+    }
     let Some(side) = slot.as_ref() else {
         return;
     };
-    let last = side.last_used_secs.load(Ordering::SeqCst);
+    // A request may have taken its guard while this waited for the lock.
+    if in_flight() > 0 {
+        return;
+    }
+    let last = side
+        .last_used_secs
+        .load(Ordering::SeqCst)
+        .max(LAST_DONE_SECS.load(Ordering::SeqCst))
+        .max(LAST_NEEDED_SECS.load(Ordering::SeqCst));
     if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
         if let Some(side) = slot.take() {
-            side.stop();
+            retire(side);
             health::log("stop", Some("idle"));
         }
     }
+}
+
+/// Keep warm only when needed: while the model covers for the cloud (`needed`),
+/// load it ahead of the next request and keep it loaded. Once it isn't needed,
+/// the idle rule unloads it [`super::local_perf::IDLE_UNLOAD_SECS`] later.
+/// The load runs on its own thread; a governor pause or the crash breaker
+/// still refuses it.
+pub fn tick_keep_warm(config_dir: &Path, needed: bool) {
+    if !needed {
+        return;
+    }
+    LAST_NEEDED_SECS.store(unix_secs(), Ordering::SeqCst);
+    if local_gov::paused() || STARTING.load(Ordering::SeqCst) {
+        return;
+    }
+    let loaded = global_slot()
+        .lock()
+        .expect("sidecar global")
+        .as_ref()
+        .is_some_and(Sidecar::alive);
+    if loaded || WARMING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let dir = config_dir.to_path_buf();
+    let generation = WARM_GEN.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        if load(&dir, Want::Warm(generation)).is_ok() {
+            health::log_to(&dir, "warm", Some("covering for the cloud"), None);
+        }
+        WARMING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Why [`load`] refuses `want` now, checked under the slot lock: a keep-warm
+/// load is out of date once a stop came since it started or Local AI is off;
+/// a request is refused once Local AI is off or a stop is pending.
+fn refused(want: Want) -> Option<&'static str> {
+    let off = !super::local::toggle_on();
+    match want {
+        Want::Any => None,
+        Want::Request if off || STOP_PENDING.load(Ordering::SeqCst) => Some("Local AI is off"),
+        Want::Request => None,
+        Want::Warm(g) if off || g != WARM_GEN.load(Ordering::SeqCst) => {
+            Some("the warm-up was cancelled")
+        }
+        Want::Warm(_) => None,
+    }
+}
+
+/// Stops a sidecar taken from the slot. Every stop goes through here so it
+/// bumps [`WARM_GEN`] and cancels a keep-warm load started before it.
+fn retire(side: Sidecar) {
+    WARM_GEN.fetch_add(1, Ordering::SeqCst);
+    side.stop();
+}
+
+/// A stop asked for by [`stop_when_idle`] is waiting on a request in flight.
+pub fn stop_pending() -> bool {
+    STOP_PENDING.load(Ordering::SeqCst)
+}
+
+/// Stop the sidecar now, or right after the requests in flight finish.
+///
+/// Checked under the slot lock that [`acquire`] holds while it takes a
+/// request's [`Busy`] guard, so a request can't start between the check and
+/// the stop.
+pub fn stop_when_idle() {
+    let mut slot = global_slot().lock().expect("sidecar global");
+    WARM_GEN.fetch_add(1, Ordering::SeqCst);
+    STOP_PENDING.store(true, Ordering::SeqCst);
+    stop_pending_locked(&mut slot);
+}
+
+/// Drop a stop asked for by [`stop_when_idle`] (Local AI turned back on).
+pub fn cancel_pending_stop() {
+    STOP_PENDING.store(false, Ordering::SeqCst);
+}
+
+/// Does a pending stop when nothing is in flight; the caller holds the slot.
+fn stop_pending_locked(slot: &mut Option<Sidecar>) -> bool {
+    if !STOP_PENDING.load(Ordering::SeqCst) || in_flight() > 0 {
+        return false;
+    }
+    STOP_PENDING.store(false, Ordering::SeqCst);
+    if let Some(side) = slot.take() {
+        retire(side);
+        health::log("stop", Some("local AI turned off"));
+    }
+    true
 }
 
 /// Stop the global sidecar (tests / quit).
 pub fn stop_global() {
     set_last_error(None);
     let mut slot = global_slot().lock().expect("sidecar global");
+    WARM_GEN.fetch_add(1, Ordering::SeqCst);
     if let Some(side) = slot.take() {
-        side.stop();
+        retire(side);
         health::log("stop", Some("switched model, new engine or quit"));
     }
 }
@@ -974,19 +1134,289 @@ pub mod fake_server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
+    fn idle_child_sidecar(idle_unload_secs: u64, last_used_secs: u64) -> Sidecar {
+        #[cfg(windows)]
+        let child = Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        Sidecar {
+            child: Mutex::new(child),
+            host: "127.0.0.1".into(),
+            port: 9,
+            token: "t".into(),
+            binary: PathBuf::from("llama-server"),
+            model: PathBuf::from("m.gguf"),
+            restarts: AtomicU64::new(0),
+            last_used_secs: AtomicU64::new(last_used_secs),
+            idle_unload_secs,
+            launch: None,
+        }
+    }
+
+    #[test]
+    fn a_server_that_exited_reads_ready_and_is_reaped() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-dead-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
+        std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        stop_global();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        assert_eq!(runtime(&dir), Runtime::Running);
+        // Killed from outside (a shell `kill`, a crash): the OS has it as exited
+        // but nobody has waited on it yet.
+        {
+            let slot = global_slot().lock().unwrap();
+            let mut child = slot.as_ref().unwrap().child.lock().unwrap();
+            child.kill().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            #[cfg(unix)]
+            {
+                let pid = child.id();
+                while std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .is_ok_and(|st| !st.contains(") Z "))
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+            let _ = deadline;
+        }
+        // Windows ends a killed process asynchronously, so give it a moment to exit.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runtime(&dir) == Runtime::Running && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(runtime(&dir), Runtime::Ready);
+        #[cfg(target_os = "linux")]
+        {
+            let pid = global_pid().unwrap();
+            assert!(
+                std::fs::metadata(format!("/proc/{pid}")).is_err(),
+                "the status read must reap the exited child, not leave it defunct"
+            );
+        }
+        stop_global();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The tests below share the process-wide slot; `cargo test` runs them on threads.
+    static SLOT_TESTS: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn keep_warm_holds_the_model_while_needed_and_unloads_after_the_timeout() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-warm-{}", std::process::id()));
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        // Online with the cloud up: nothing to keep warm.
+        LAST_NEEDED_SECS.store(0, Ordering::SeqCst);
+        tick_keep_warm(&dir, false);
+        assert_eq!(LAST_NEEDED_SECS.load(Ordering::SeqCst), 0);
+        // Offline or the cloud down: the loaded model stays, however long it sat idle.
+        tick_keep_warm(&dir, true);
+        assert!(
+            !WARMING.load(Ordering::SeqCst),
+            "already loaded: no second load"
+        );
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "needed as the fallback, so it stays loaded"
+        );
+        // The cloud is back: it stays for the timeout, counted from then.
+        tick_keep_warm(&dir, false);
+        tick_idle_unload();
+        assert!(global_pid().is_some(), "unloads only after the timeout");
+        LAST_NEEDED_SECS.store(now - 1_000, Ordering::SeqCst);
+        tick_idle_unload();
+        assert_eq!(
+            global_pid(),
+            None,
+            "idle past the timeout once it isn't needed"
+        );
+        LAST_NEEDED_SECS.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn idle_unload_waits_for_requests_in_flight_and_counts_from_the_last_one_done() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        let held = busy();
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "a request in flight is never cut off by the idle rule"
+        );
+        drop(held);
+        tick_idle_unload();
+        assert!(
+            global_pid().is_some(),
+            "a request that just finished keeps the model warm for the timeout"
+        );
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        tick_idle_unload();
+        assert_eq!(global_pid(), None, "idle past the timeout unloads");
+    }
+
+    #[test]
+    fn turning_local_ai_off_stops_now_or_right_after_the_request_in_flight() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        stop_when_idle();
+        assert_eq!(global_pid(), None, "off with nothing in flight stops now");
+
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        let held = busy();
+        stop_when_idle();
+        assert!(
+            global_pid().is_some(),
+            "off never cuts off a request in flight"
+        );
+        drop(held);
+        assert_eq!(
+            global_pid(),
+            None,
+            "the stop happens as soon as the last request finishes, not after the idle timeout"
+        );
+
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        let held = busy();
+        stop_when_idle();
+        cancel_pending_stop();
+        drop(held);
+        assert!(global_pid().is_some(), "turning it back on keeps the model");
+        stop_global();
+    }
+
+    #[test]
+    fn a_keep_warm_load_started_before_a_stop_loads_nothing() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        assert_eq!(
+            refused(Want::Any),
+            None,
+            "tests and ensure_global always load"
+        );
+        let started = WARM_GEN.load(Ordering::SeqCst);
+        stop_when_idle();
+        assert!(
+            refused(Want::Warm(started)).is_some(),
+            "Local AI turned off after the warm-up began"
+        );
+        let started = WARM_GEN.load(Ordering::SeqCst);
+        stop_global();
+        assert!(
+            refused(Want::Warm(started)).is_some(),
+            "model switched or app quitting"
+        );
+
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(1, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        LAST_NEEDED_SECS.store(0, Ordering::SeqCst);
+        let started = WARM_GEN.load(Ordering::SeqCst);
+        tick_idle_unload();
+        assert_eq!(global_pid(), None, "idle past the timeout unloads");
+        assert!(
+            refused(Want::Warm(started)).is_some(),
+            "an idle unload cancels a warm-up started before it too"
+        );
+    }
+
+    #[test]
+    fn a_request_that_checked_the_toggle_before_it_went_off_starts_nothing() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now));
+        let held = busy();
+        stop_when_idle();
+        assert_eq!(
+            refused(Want::Request),
+            Some("Local AI is off"),
+            "a new request waits out the pending stop instead of joining it"
+        );
+        assert_eq!(
+            refused(Want::Any),
+            None,
+            "only routed requests check the toggle"
+        );
+        drop(held);
+        assert_eq!(
+            global_pid(),
+            None,
+            "the request in flight finished, so it stopped"
+        );
+        cancel_pending_stop();
+    }
     use crate::route::local::LocalRuntime;
     use fake_server::FakeServer;
 
     #[test]
-    fn llama_args_pin_loopback_and_api_key() {
-        let args = llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711, "tok");
+    fn llama_args_pin_loopback_without_api_key() {
+        let args = llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711);
         assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
         assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
-        assert!(args.windows(2).any(|w| w == ["--api-key", "tok"]));
+        assert!(!args.iter().any(|a| a.contains("--api-key")));
         assert!(args.windows(2).any(|w| w == ["-m", "/m.gguf"]));
         // Perf defaults (PR C) ride along even with the CPU floor.
         assert!(args.windows(2).any(|w| w[0] == "-ngl"));
         assert!(args.iter().any(|a| a == "--cache-prompt"));
+    }
+
+    #[test]
+    fn llama_command_passes_api_key_only_in_child_environment() {
+        let launch = LaunchArgs {
+            backend: grokhub_core::local_profile::Backend::Cpu,
+            ngl: 0,
+            all_layers: 1,
+            n_cpu_moe: None,
+            ctx: 4096,
+            kv: autoconfig::KvType::Q8,
+            threads: 2,
+            threads_batch: None,
+            flash_attn: false,
+            mlock: false,
+            tensor_split: None,
+            draft: None,
+        };
+        for args in [
+            llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),
+            llama_args_with_launch(Path::new("/m.gguf"), "127.0.0.1", 4711, &launch),
+        ] {
+            let cmd = llama_command(Path::new(llama_server_name()), &args, "fake-local-token");
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert!(!args.iter().any(|a| a.contains("fake-local-token")));
+            assert!(
+                !args
+                    .iter()
+                    .any(|a| *a == "--api-key" || a.starts_with("--api-key=")),
+                "{args:?}"
+            );
+            assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
+            assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
+            let key = cmd
+                .get_envs()
+                .find(|(k, _)| *k == std::ffi::OsStr::new("LLAMA_API_KEY"))
+                .and_then(|(_, v)| v);
+            assert_eq!(key, Some(std::ffi::OsStr::new("fake-local-token")));
+        }
     }
 
     #[test]
@@ -997,7 +1427,7 @@ mod tests {
             ram_mb: 32_768,
             free_disk_mb: 100_000,
         });
-        let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, "tok", &perf);
+        let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, &perf);
         assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
         assert!(args.windows(2).any(|w| w == ["-c", "16384"]));
         assert!(args.windows(2).any(|w| w == ["--flash-attn", "on"]));

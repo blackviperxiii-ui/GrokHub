@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../assets/personalities.toml");
 
-/// The shipped default voice. Its tone rules state the values the charter also
-/// carries. An id this build does not know stays an unstyled preset with empty
-/// tone rules.
-pub const DEFAULT_ID: &str = "default";
-/// The companion's voice: what a new install starts on. An existing install keeps
-/// its pick, including an empty one, which stays the default voice.
-pub const NEW_INSTALL_ID: &str = "nyx";
+/// The default voice: the companion, Nyx. Its tone rules state the values the
+/// charter also carries. An empty pick is this voice.
+pub const DEFAULT_ID: &str = "nyx";
+/// The plain "Default" preset older builds shipped. A profile or chat still
+/// set to it speaks as [`DEFAULT_ID`].
+pub const LEGACY_DEFAULT_ID: &str = "default";
 /// Longest `tone_rules` a preset may carry.
 pub const TONE_RULES_MAX: usize = 600;
 /// Longest one-line description.
@@ -23,7 +22,17 @@ pub const NAME_MAX: usize = 32;
 
 /// Closes every personality block: the rules after it outrank the tone above it.
 pub const SAFETY_LINE: &str =
-    "Personality affects tone only. Safety, approval, honesty and no-fabrication rules above all else.";
+    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else.";
+
+/// [`SAFETY_LINE`] for an explicit preset: safety still wins, and means the hard
+/// limits, not the fictional adult content the user opted in to.
+pub const EXPLICIT_SAFETY_LINE: &str =
+    "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue.";
+
+/// What an explicit preset's block grants, with exactly the four hard limits
+/// ([`crate::adult_guard::Ban`]) plus stop. Explicit presets only speak once
+/// adults-only is on ([`gated`]), which needs the one-time 18+ confirmation.
+pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -108,14 +117,14 @@ impl Personality {
                 "Personality {id}: tone rules are over {TONE_RULES_MAX} characters."
             ));
         }
-        if id != DEFAULT_ID && self.tone_rules.trim().is_empty() {
+        if self.tone_rules.trim().is_empty() {
             return Err(format!("Personality {id}: tone rules are empty."));
         }
         Ok(())
     }
 
-    /// The block this preset adds to the system prompt, ending in [`SAFETY_LINE`].
-    /// Empty when the tone rules are empty.
+    /// The block this preset adds to the system prompt, ending in
+    /// [`Self::safety_line`]. Empty when the tone rules are empty.
     pub fn prompt_block(&self) -> String {
         let rules = self.tone_rules.trim();
         if rules.is_empty() {
@@ -143,9 +152,27 @@ impl Personality {
         {
             out.push_str(&format!(" Address the user as \"{address}\" now and then."));
         }
-        out.push_str(" This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.\n");
-        out.push_str(SAFETY_LINE);
+        out.push_str(" This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.");
+        if self.explicit {
+            // The pre-send check reads this, so a clean ask in an 18+ chat still
+            // never reaches a provider that bans adult chat.
+            out.push(' ');
+            out.push_str(crate::adult_guard::ADULT_VOICE);
+            out.push(' ');
+            out.push_str(ADULT_PERMISSION);
+        }
+        out.push('\n');
+        out.push_str(self.safety_line());
         out
+    }
+
+    /// The line that closes this preset's block.
+    pub fn safety_line(&self) -> &'static str {
+        if self.explicit {
+            EXPLICIT_SAFETY_LINE
+        } else {
+            SAFETY_LINE
+        }
     }
 }
 
@@ -162,12 +189,12 @@ pub fn parse(text: &str) -> Result<Vec<Personality>, String> {
     Ok(file.preset)
 }
 
-/// The presets shipped with this build: `default` first, then Nyx, then the 21 styles.
+/// The presets shipped with this build: Nyx first, then the 21 styles.
 /// A test pins that they parse; if they ever didn't, only the default voice is offered.
 /// Nyx shows under the companion's name from `brand/brand.json`.
 pub fn builtins() -> Vec<Personality> {
     let mut all = parse(BUILTIN).unwrap_or_else(|_| vec![neutral()]);
-    if let Some(nyx) = all.iter_mut().find(|p| p.id == NEW_INSTALL_ID) {
+    if let Some(nyx) = all.iter_mut().find(|p| p.id == DEFAULT_ID) {
         nyx.name = crate::brand::companion_name().to_string();
     }
     all
@@ -176,8 +203,8 @@ pub fn builtins() -> Vec<Personality> {
 fn neutral() -> Personality {
     Personality {
         id: DEFAULT_ID.into(),
-        name: "Default".into(),
-        description: "GrokHub's own voice: brief, warm and plain.".into(),
+        name: crate::brand::companion_name().into(),
+        description: "Brief, warm and plain.".into(),
         sample: String::new(),
         tone_rules: String::new(),
         emoji: Emoji::None,
@@ -238,7 +265,7 @@ pub fn load_all(dir: &std::path::Path) -> (Vec<Personality>, Vec<String>) {
 /// The preset with `id` among the built-ins and the user's own in `dir`, or the default voice.
 pub fn lookup(dir: &std::path::Path, id: &str) -> Personality {
     let id = id.trim();
-    if id.is_empty() || id == DEFAULT_ID || builtins_cached().iter().any(|p| p.id == id) {
+    if id.is_empty() || id == LEGACY_DEFAULT_ID || builtins_cached().iter().any(|p| p.id == id) {
         return builtin(id);
     }
     find(&load_all(dir).0, id)
@@ -247,11 +274,7 @@ pub fn lookup(dir: &std::path::Path, id: &str) -> Personality {
 /// A new custom preset copied from `base`: a fresh id (`<id>-copy`, `<id>-copy-2`, …)
 /// and "<name> copy". Everything else, explicit included, carries over.
 pub fn duplicate(base: &Personality, taken: &[Personality]) -> Personality {
-    let root = if base.id == DEFAULT_ID {
-        "my-voice".to_string()
-    } else {
-        format!("{}-copy", base.id)
-    };
+    let root = format!("{}-copy", base.id);
     let mut id = root.clone();
     let mut n = 2;
     while taken.iter().any(|p| p.id == id) {
@@ -285,7 +308,7 @@ pub fn custom_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
 /// Check and write a custom preset to `dir/<id>.toml`. Built-in ids are refused.
 pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::PathBuf, String> {
     p.check()?;
-    if p.id == DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
+    if p.id == LEGACY_DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
         return Err(format!(
             "{} is a built-in personality; duplicate it to make your own.",
             p.name
@@ -314,11 +337,17 @@ fn builtins_cached() -> &'static [Personality] {
     ALL.get_or_init(builtins)
 }
 
-/// The preset with `id`, or the default voice when no preset has it.
+/// The preset with `id`, or the default voice when no preset has it. The
+/// retired "default" id and an empty one are the default voice.
 pub fn find(presets: &[Personality], id: &str) -> Personality {
+    let id = match id.trim() {
+        "" | LEGACY_DEFAULT_ID => DEFAULT_ID,
+        id => id,
+    };
     presets
         .iter()
-        .find(|p| p.id == id.trim())
+        .find(|p| p.id == id)
+        .or_else(|| presets.iter().find(|p| p.id == DEFAULT_ID))
         .cloned()
         .unwrap_or_else(neutral)
 }
@@ -377,9 +406,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_builtins_are_default_nyx_and_the_twenty_one_styles() {
+    fn nyx_flirts_back_but_stays_pg13() {
+        let nyx = builtin("nyx");
+        assert!(nyx.tone_rules.ends_with(
+            "When they flirt, flirt back playfully and keep it PG-13: no profanity or explicit content."
+        ));
+        assert!(!nyx.explicit);
+        assert!(nyx.tone_rules.len() <= TONE_RULES_MAX);
+    }
+
+    #[test]
+    fn the_builtins_are_nyx_and_the_twenty_one_styles() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 22);
         assert_eq!(all[0].id, DEFAULT_ID);
         assert!(
             all[0].tone_rules.contains("not sycophantic"),
@@ -392,7 +431,6 @@ mod tests {
         assert_eq!(
             names,
             [
-                "Default",
                 "Nyx",
                 "Genie",
                 "Pirate",
@@ -488,28 +526,42 @@ mod tests {
         assert_eq!(builtin("").id, DEFAULT_ID);
         assert_eq!(find(&builtins(), "no-such-preset").id, DEFAULT_ID);
         for limit in [
-            "adults only, no minors or age-play",
-            "nothing non-consensual",
-            "no real or identifiable people",
-            "If the user says stop, drop the act at once.",
+            "Hard limits: no minors or age-play, no non-consent, no real or identifiable people, no bestiality. If the user says stop, drop the act at once.",
+            "Stay in character, with no moralizing or disclaimers.",
             "every reply still does the real task",
         ] {
             assert!(whore.tone_rules.contains(limit), "{limit}");
         }
+        assert!(
+            !whore.tone_rules.contains("non-consensual"),
+            "{}",
+            whore.tone_rules
+        );
+        assert!(
+            !whore.tone_rules.contains("consent is part of"),
+            "{}",
+            whore.tone_rules
+        );
         // Picking it puts its voice ahead of the rules; switching back drops it.
         let rules = crate::cabin_rules::cabin_rules_for("", false);
         let on = layer(&whore, &rules);
         assert!(
             on.starts_with(
-                "Personality: Whore. Whore mode: an adults-only, flirty, crude and raunchy voice."
+                "Personality: Whore. Whore mode: an adults-only, flirty, crude and raunchy voice for adult roleplay and fantasy between fictional adults."
             ),
             "{on}"
         );
-        assert!(on.find("Whore mode").unwrap() < on.find(SAFETY_LINE).unwrap());
+        assert!(on.find("Whore mode").unwrap() < on.find(EXPLICIT_SAFETY_LINE).unwrap());
         assert!(on.ends_with(&rules));
         let back = layer(&builtin(DEFAULT_ID), &rules);
-        assert!(back.starts_with("Personality: Default. "));
+        assert!(back.starts_with("Personality: Nyx. "));
         assert!(!back.contains("Whore mode"));
+        // The 18+ tag rides only with explicit voices, for the pre-send check.
+        assert!(on.contains(crate::adult_guard::ADULT_VOICE));
+        assert!(!back.contains(crate::adult_guard::ADULT_VOICE));
+        assert!(builtin("viper")
+            .prompt_block()
+            .contains(crate::adult_guard::ADULT_VOICE));
     }
 
     #[test]
@@ -536,18 +588,24 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_layers_its_values_and_an_unknown_id_stays_unstyled() {
+    fn the_default_voice_layers_its_values_and_old_or_unknown_ids_speak_as_it() {
         let rules = crate::cabin_rules::cabin_rules_for("", false);
         let layered = layer(&find(&builtins(), DEFAULT_ID), &rules);
-        assert!(layered.starts_with("Personality: Default. "));
+        assert!(layered.starts_with("Personality: Nyx. "));
         assert!(layered.contains("not sycophantic"));
         assert!(layered.ends_with(&rules));
         assert!(layered.find("not sycophantic").unwrap() < layered.find(SAFETY_LINE).unwrap());
+        // A profile or chat saved on the retired "default" preset upgrades to Nyx,
+        // and so does an id no preset has any more.
+        for old in [LEGACY_DEFAULT_ID, "", " default ", "no-such-preset"] {
+            assert_eq!(find(&builtins(), old).id, "nyx", "{old:?}");
+            assert_eq!(layer(&find(&builtins(), old), &rules), layered, "{old:?}");
+        }
         assert_eq!(
-            layer(&find(&builtins(), "no-such-preset"), &rules),
-            rules,
-            "an unknown id stays the unstyled voice"
+            lookup(std::path::Path::new("/nonexistent"), LEGACY_DEFAULT_ID).id,
+            "nyx"
         );
+        assert!(builtins().iter().all(|p| p.id != LEGACY_DEFAULT_ID));
     }
 
     #[test]
@@ -659,7 +717,7 @@ mod tests {
         );
         assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
         let plain = try_it_messages(&builtin(DEFAULT_ID));
-        assert!(plain[0].1.starts_with("Personality: Default. "));
+        assert!(plain[0].1.starts_with("Personality: Nyx. "));
         assert!(plain[0].1.contains("not sycophantic"));
         assert!(plain[0]
             .1
@@ -681,7 +739,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (23, 0),
+            (22, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -698,7 +756,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 24);
+        assert_eq!(all.len(), 23);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -708,7 +766,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 23);
+        assert_eq!(load_all(&dir).0.len(), 22);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -728,7 +786,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 22);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
@@ -750,7 +808,7 @@ mod tests {
         );
         assert!(!dir.join("surfer-copy.toml").exists());
         let default_copy = duplicate(&builtin(DEFAULT_ID), &builtins());
-        assert_eq!(default_copy.id, "my-voice");
+        assert_eq!(default_copy.id, "nyx-copy");
         assert!(
             default_copy.check().is_ok(),
             "a copy of the default has tone rules to edit"
@@ -759,7 +817,7 @@ mod tests {
 
     #[test]
     fn nyx_is_the_companion_voice_clean_and_room_reading() {
-        let nyx = builtin(NEW_INSTALL_ID);
+        let nyx = builtin(DEFAULT_ID);
         assert_eq!(nyx.id, "nyx");
         assert_eq!(nyx.name, crate::brand::companion_name());
         assert_eq!(nyx.name, "Nyx");
@@ -771,7 +829,7 @@ mod tests {
         assert_eq!(gated(nyx.clone(), false).id, "nyx");
         let block = nyx.prompt_block();
         assert!(
-            block.starts_with("Personality: Nyx. Be a nerdy, techie gamer friend"),
+            block.starts_with("Personality: Nyx. Be honest, not sycophantic, and treat the user as an intelligent adult. Be a nerdy, techie gamer friend"),
             "{block}"
         );
         for must in [
@@ -783,5 +841,97 @@ mod tests {
             assert!(block.contains(must), "missing {must:?}: {block}");
         }
         assert!(block.ends_with(SAFETY_LINE));
+    }
+
+    #[test]
+    fn adults_only_on_grants_adult_roleplay_with_exactly_four_limits_plus_stop() {
+        let whore = gated(builtin("whore"), true);
+        let block = whore.prompt_block();
+        assert_eq!(
+            block,
+            format!(
+                "Personality: Whore. {} An emoji now and then is fine. Keep replies the usual length. This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain. This is an 18+ voice. {ADULT_PERMISSION}\n{EXPLICIT_SAFETY_LINE}",
+                whore.tone_rules
+            )
+        );
+        assert!(ADULT_PERMISSION.starts_with(
+            "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers."
+        ));
+        assert!(ADULT_PERMISSION.ends_with(
+            "Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once."
+        ));
+        let lower = block.to_ascii_lowercase();
+        assert!(!lower.contains("non-consensual"), "{block}");
+        assert!(!lower.contains("nothing non"), "{block}");
+        // Exactly four "no" limits in each place that lists them, plus stop.
+        for limits in [
+            ADULT_PERMISSION
+                .split("Hard limits, always: ")
+                .nth(1)
+                .unwrap(),
+            whore.tone_rules.split("Hard limits: ").nth(1).unwrap(),
+        ] {
+            let list = limits
+                .split(". ")
+                .next()
+                .unwrap()
+                .split(", and ")
+                .next()
+                .unwrap();
+            assert_eq!(list.matches("no ").count(), 4, "{list}");
+            assert!(list.contains("no non-consent"), "{list}");
+            assert!(limits.contains("says stop"), "{limits}");
+        }
+        for closer in [
+            EXPLICIT_SAFETY_LINE,
+            crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+        ] {
+            let list = closer.split('(').nth(1).unwrap().split(')').next().unwrap();
+            assert_eq!(
+                list,
+                "no minors or age-play, no non-consent, no real people, no bestiality, stop when asked"
+            );
+        }
+        // Viper, the other explicit preset, gets the same grant and closer.
+        let viper = builtin("viper").prompt_block();
+        assert!(viper.contains(ADULT_PERMISSION) && viper.ends_with(EXPLICIT_SAFETY_LINE));
+        assert_eq!(
+            EXPLICIT_SAFETY_LINE,
+            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else. The hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked) always hold; fictional adult content inside them is not a safety issue."
+        );
+    }
+
+    #[test]
+    fn adults_only_off_speaks_as_nyx_with_no_grant_and_the_old_safety_line() {
+        let off = gated(builtin("whore"), false);
+        assert_eq!(off.id, DEFAULT_ID);
+        let block = off.prompt_block();
+        assert!(block.starts_with("Personality: Nyx. "), "{block}");
+        assert!(!block.contains(ADULT_PERMISSION));
+        assert!(!block.contains("fictional adult content"));
+        assert!(!block.contains("The hard limits"));
+        assert!(block.ends_with(&format!("\n{SAFETY_LINE}")));
+        // Every non-explicit preset keeps the closing line byte for byte.
+        for p in builtins().iter().filter(|p| !p.explicit) {
+            let block = p.prompt_block();
+            assert!(
+                block.ends_with(&format!("plain.\n{SAFETY_LINE}")),
+                "{}",
+                p.id
+            );
+            assert!(!block.contains(ADULT_PERMISSION), "{}", p.id);
+            assert_eq!(p.safety_line(), SAFETY_LINE);
+        }
+        assert_eq!(
+            SAFETY_LINE,
+            "Personality sets tone, and in natural chat length too. Safety, approval, honesty and no-fabrication rules above all else."
+        );
+        assert_eq!(
+            builtin("pirate").prompt_block(),
+            format!(
+                "Personality: Pirate. {} An emoji now and then is fine. Keep replies the usual length. This voice is for chat replies only. Approval questions, security warnings, error facts and tool arguments stay plain.\n{SAFETY_LINE}",
+                builtin("pirate").tone_rules
+            )
+        );
     }
 }

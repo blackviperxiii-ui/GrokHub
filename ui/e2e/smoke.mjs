@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,7 +161,11 @@ function pulseFixture(req, res) {
   const kind = url.pathname.slice("/pulse/".length);
   let type = "text/html";
   let body = null;
-  if (kind === "source" && asked.includes("hn.algolia.com")) {
+  let askedHost = "";
+  try {
+    askedHost = new URL(asked).hostname;
+  } catch {}
+  if (kind === "source" && (askedHost === "hn.algolia.com" || askedHost.endsWith(".hn.algolia.com"))) {
     type = "application/json";
     body = JSON.stringify({
       hits: [
@@ -274,6 +279,24 @@ async function shot(s, name) {
   writeFileSync(join(dir, `${name}.png`), Buffer.from(png, "base64"));
 }
 
+/** Grow the window so Settings → Local AI fits Get engine + draft offer. */
+async function setWindowSize(s, width, height) {
+  await wd("POST", `${s}/window/rect`, { x: 0, y: 0, width, height }).catch(() => undefined);
+}
+
+async function scrollIntoView(s, css) {
+  const id = await find(s, css);
+  await wd("POST", `${s}/execute/sync`, {
+    script: "arguments[0].scrollIntoView({block:'start', inline:'nearest'});",
+    args: [{ [ELEMENT]: id }],
+  }).catch(() => undefined);
+}
+
+/** True when this run should capture Windows Local AI engine-install proof. */
+function windowsEngineProof() {
+  return Boolean(process.env.SMOKE_SHOTS) && process.platform === "win32";
+}
+
 // Automations: add one from plain text, check it lands in the cabin's
 // automations.json, then Run now and wait for the mocked reply on its row.
 async function automations(s, config) {
@@ -372,7 +395,7 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// Ideas. Love on the post writes the ledger line to the global MEMORY.md.
+// For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
 // opens in the lightbox. Delete takes the first post away. After the post
@@ -416,9 +439,9 @@ async function pulse(s, config) {
     const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
     return (await wd("GET", `${s}/element/${el}/attribute/aria-pressed`)) === "true";
   });
-  const ledger = readFileSync(join(config, "memory", "MEMORY.md"), "utf8");
+  const ledger = readFileSync(join(config, "memory", "pulse-ledger.md"), "utf8");
   if (!ledger.includes('pulse: liked "Smoke board summary" reason=liked')) {
-    throw new Error(`MEMORY.md says ${JSON.stringify(ledger)}`);
+    throw new Error(`pulse-ledger.md says ${JSON.stringify(ledger)}`);
   }
   console.log(`ledger line: ${JSON.stringify(ledger.trim())}`);
 
@@ -480,7 +503,7 @@ async function pulse(s, config) {
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
+    value: "//div[@aria-label='Pulse view']/button[normalize-space()='For You']",
   });
   await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
   // The idea writer ran after the feed post: its idea leads, with no header.
@@ -520,19 +543,26 @@ async function pulse(s, config) {
   });
   console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
 
-  const run = await waitFor("the idea row", async () => {
+  // The rows stay disabled until More like this has returned, and the kept
+  // file is written before it does, so a click right away can land on a
+  // disabled row and do nothing.
+  const run = await waitFor("the idea row, enabled", async () => {
     const el = await wd("POST", `${s}/element`, {
       using: "xpath",
       value: "//li[contains(@aria-label,'smoke workboard')]//button[contains(@class,'idea-main')]",
     });
-    return el[ELEMENT];
+    return (await wd("GET", `${s}/element/${el[ELEMENT]}/enabled`)) ? el[ELEMENT] : null;
   });
   const calls = mockSeen.length;
   await wd("POST", `${s}/element/${run}/click`, {});
   const box = await waitFor("the chat box", () => find(s, "textarea[aria-label='Message']"));
+  let seen;
   const filled = await waitFor("the filled chat box", async () => {
-    const v = await wd("GET", `${s}/element/${box}/property/value`);
-    return v === PULSE_ACTION ? v : null;
+    seen = await wd("GET", `${s}/element/${box}/property/value`);
+    return seen === PULSE_ACTION ? seen : null;
+  }).catch((err) => {
+    const held = seen === undefined ? "could not be read" : `held ${JSON.stringify(seen)}`;
+    throw new Error(`${err.message}; the box ${held}`);
   });
   await sleep(1000);
   if (mockSeen.length !== calls) throw new Error("Let's do it sent the idea without the person");
@@ -633,7 +663,7 @@ async function usePersonality(s, config, name) {
     return t === "In use" ? t : null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
-  const id = name === "Default" ? "" : name.toLowerCase();
+  const id = name === "Nyx" ? "" : name.toLowerCase();
   if (saved.personality !== id) throw new Error(`shell.json holds personality ${JSON.stringify(saved.personality)}`);
   await shot(s, `settings-personality-${name.toLowerCase()}`);
   console.log(`personality: ${name} in use`);
@@ -677,9 +707,10 @@ async function plan(s, workspace) {
   console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, chip back on Chat`);
 }
 
-// Settings → Local AI: the Auto status line renders, Manual takes a model
-// file whose name says its safety training was removed only after the
-// notice is read, and Reset to Auto puts local_ai.json back.
+// Settings → Local AI: on Windows smoke, capture Get engine → progress →
+// ready → Gemma 4 12B draft offer (PR proof). Then Manual takes a model file whose
+// name says its safety training was removed only after the notice is read,
+// and Reset to Auto puts local_ai.json back.
 async function localAi(s, config) {
   const settingsTab = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -692,6 +723,130 @@ async function localAi(s, config) {
     return /^T\d/.test(t) ? t : null;
   });
   console.log(`local AI status: ${JSON.stringify(status)}`);
+
+  if (windowsEngineProof()) {
+    await setWindowSize(s, 1280, 900);
+    await scrollIntoView(s, ".local-ai .local-engine");
+    const engineHint = await waitFor("the local engine hint", async () => {
+      const t = await textOf(s, ".local-ai .local-engine .note");
+      return t.includes("llama") || t.includes("Runtime missing") ? t : null;
+    });
+    console.log(`local engine: ${JSON.stringify(engineHint)}`);
+
+    // 1) Get engine (before install), when the pinned Windows build is missing.
+    const getEngine = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: ".local-ai button.get-engine",
+    });
+    if (getEngine.length > 0) {
+      await scrollIntoView(s, ".local-ai button.get-engine");
+      await shot(s, "settings-local-ai-get-engine");
+      console.log("shot Get engine before install");
+
+      await wd("POST", `${s}/element/${getEngine[0][ELEMENT]}/click`, {});
+      // 2) Progress / verifying while the pinned zip downloads.
+      const progress = await waitFor(
+        "engine download progress",
+        async () => {
+          try {
+            const t = await textOf(s, ".local-ai .local-engine-progress");
+            return /Downloading engine|checking/i.test(t) ? t : null;
+          } catch {
+            return null;
+          }
+        },
+        60000,
+      );
+      await scrollIntoView(s, ".local-ai .local-engine");
+      await shot(s, "settings-local-ai-engine-progress");
+      console.log(`shot engine progress: ${JSON.stringify(progress)}`);
+
+      // 3) Installed + ready after the checksum lands the binary. If the live
+      // download stalls or errors, cancel, plant a stub exe, and re-open the
+      // panel so the ready UI still ships as Windows proof.
+      let ready = null;
+      const readyDeadline = Date.now() + 120000;
+      while (Date.now() < readyDeadline && !ready) {
+        try {
+          const errEls = await wd("POST", `${s}/elements`, {
+            using: "css selector",
+            value: ".local-ai .local-engine-error",
+          });
+          if (errEls.length > 0) {
+            const err = await wd("GET", `${s}/element/${errEls[0][ELEMENT]}/text`);
+            if (err) throw new Error(err);
+          }
+          const t = await textOf(s, ".local-ai .local-engine .note");
+          if (/llama-server is ready/i.test(t)) ready = t;
+        } catch (err) {
+          console.log(`live engine install did not finish: ${err.message}`);
+          break;
+        }
+        if (!ready) await sleep(250);
+      }
+      if (!ready) {
+        const cancel = await wd("POST", `${s}/elements`, {
+          using: "xpath",
+          value: "//div[contains(@class,'local-engine')]//button[normalize-space()='Cancel']",
+        });
+        if (cancel.length > 0) {
+          await wd("POST", `${s}/element/${cancel[0][ELEMENT]}/click`, {});
+          await sleep(500);
+        }
+        const bin = join(config, "bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, "llama-server.exe"), "MZ smoke stub\n");
+        await section(s, "Appearance");
+        await section(s, "Local AI");
+        ready = await waitFor("llama-server ready after stub", async () => {
+          const t = await textOf(s, ".local-ai .local-engine .note");
+          return /llama-server is ready/i.test(t) ? t : null;
+        });
+      }
+      await scrollIntoView(s, ".local-ai .local-engine");
+      await shot(s, "settings-local-ai-engine-ready");
+      console.log(`shot engine ready: ${JSON.stringify(ready)}`);
+    } else {
+      // Binary already on PATH / GROKHUB_LLAMA_SERVER — still prove ready.
+      await shot(s, "settings-local-ai-engine-ready");
+      console.log("Get engine absent; shot ready state only");
+    }
+
+    // 4) Gemma 4 12B → Install and run draft model offer (E2B not on disk).
+    await click(s, ".local-ai button.mode-manual");
+    const showAll = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: ".local-ai button.link",
+    });
+    for (const el of showAll) {
+      const label = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
+      if (/Show all/i.test(label)) {
+        await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+        break;
+      }
+    }
+    const gemma = await waitFor("Gemma 4 12B in the picker", async () => {
+      const el = await wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: "//li[contains(@class,'local-model')][@aria-label='Gemma 4 12B']//input",
+      });
+      return el[ELEMENT];
+    });
+    await wd("POST", `${s}/element/${gemma}/click`, {});
+    const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
+      const t = await textOf(s, ".local-ai .local-draft-offer");
+      return /Install and run draft model/i.test(t) && /Gemma 4 E2B/i.test(t) ? t : null;
+    });
+    await scrollIntoView(s, ".local-ai .local-draft-offer");
+    await shot(s, "settings-local-ai-gemma-draft-offer");
+    console.log(`shot Gemma draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
+
+    await click(s, ".local-ai button.reset-local");
+    await waitFor("the reset note after the draft offer", async () => {
+      const t = await textOf(s, ".local-ai .local-note");
+      return t === "Back to Auto." ? t : null;
+    });
+  }
 
   const modelFile = join(config, "Llama-3-8B-abliterated.Q4_K_M.gguf");
   writeFileSync(modelFile, "GGUF");
@@ -787,11 +942,13 @@ async function labs(s, config) {
 async function playbooks(s, config) {
   await tab(s, "Settings");
   await section(s, "Playbooks");
+  // Prefer an enabled button: Save writes the file before React clears
+  // `busy`, and a disabled Remove click is a no-op on Windows EdgeDriver.
   const button = async (card, label) => {
     const el = await waitFor(`${card}'s ${label}`, async () => {
       const found = await wd("POST", `${s}/element`, {
         using: "xpath",
-        value: `//ul[@aria-label='All playbooks']/li[@aria-label='${card}']//button[normalize-space()='${label}']`,
+        value: `//ul[@aria-label='All playbooks']/li[@aria-label='${card}']//button[normalize-space()='${label}' and not(@disabled)]`,
       });
       return found[ELEMENT];
     });
@@ -874,7 +1031,7 @@ async function permissions(s, config) {
   console.log("permissions: rule removed");
 }
 
-// Settings → Appearance: Dark pins the dark colors on the page right away
+// Settings → Appearance: Ops Dark pins Loadout colors on the page right away
 // and saves in shell.json; System hands them back to the OS.
 async function appearance(s, config) {
   await tab(s, "Settings");
@@ -895,20 +1052,24 @@ async function appearance(s, config) {
         "return [document.documentElement.dataset.theme || '', getComputedStyle(document.body).backgroundColor];",
       args: [],
     });
-  await pick("Dark");
-  const [theme, bg] = await waitFor("the dark page", async () => {
+  await pick("Ops Dark");
+  const [theme, bg] = await waitFor("the ops-dark page", async () => {
     const seen = await look();
-    return seen[0] === "dark" ? seen : null;
+    return seen[0] === "ops-dark" ? seen : null;
   });
-  if (bg !== "rgb(20, 20, 19)") throw new Error(`dark theme painted ${bg}`);
+  if (bg !== "rgb(11, 11, 13)") throw new Error(`ops-dark theme painted ${bg}`);
   const saved = await waitFor("the saved theme", async () => {
     const t = JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).theme;
-    return t === "dark" ? t : null;
+    return t === "ops-dark" ? t : null;
   });
-  await shot(s, "settings-appearance-dark");
+  await shot(s, "settings-appearance-ops-dark");
   console.log(`appearance: ${theme} on the page (${bg}), ${saved} in shell.json`);
   await pick("System");
   await waitFor("the system theme", async () => ((await look())[0] === "" ? true : null));
+  await pick("Ops Dark");
+  await waitFor("ops-dark after system", async () =>
+    (await look())[0] === "ops-dark" ? true : null,
+  );
 }
 
 async function main() {
@@ -916,7 +1077,7 @@ async function main() {
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
   const workspace = join(config, "work");
   mkdirSync(workspace);
-  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace }));
+  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace, theme: "ops-dark" }));
   const modelCalls = () => mock.seen.filter((c) => c.path === "/v1/responses");
   const native = process.env.SMOKE_NATIVE_DRIVER;
   const driver = spawn("tauri-driver", native ? ["--native-driver", native] : [], {
@@ -938,6 +1099,7 @@ async function main() {
     });
     session = created.sessionId;
     const s = `/session/${session}`;
+    if (windowsEngineProof()) await setWindowSize(s, 1280, 900);
 
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
@@ -1022,7 +1184,7 @@ async function main() {
     await palette(s);
     await usePersonality(s, config, "Pirate");
     await plan(s, workspace);
-    await usePersonality(s, config, "Default");
+    await usePersonality(s, config, "Nyx");
     await localAi(s, config);
     await labs(s, config);
     await playbooks(s, config);
@@ -1143,6 +1305,7 @@ async function web(s) {
   const link = texts.find((t) => t.startsWith("http://127.0.0.1:"));
   if (!link || !link.endsWith(`#code=${code}`)) throw new Error(`no localhost pairing link: ${texts}`);
   console.log(`web access on: ${texts.length} link(s), a ${code.length}-character code`);
+  await shot(s, "settings-web-access");
   const origin = new URL(link).origin;
 
   const browser = await chromium.launch();
@@ -1181,6 +1344,23 @@ async function web(s) {
       throw new Error(`set_api_key from the web: ${JSON.stringify(refused)}`);
     }
     console.log(`the web can't set the key: ${JSON.stringify(refused.paired.error)}`);
+
+    // Port 4620 is HTTPS with the certificate whose fingerprint Settings shows.
+    const shown = await textOf(s, "[aria-label='Certificate fingerprint']");
+    const served = await new Promise((done, fail) => {
+      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, rejectUnauthorized: false }, () => {
+        done(sock.getPeerCertificate().fingerprint256);
+        sock.end();
+      });
+      sock.on("error", fail);
+    });
+    if (served !== shown) throw new Error(`HTTPS certificate ${served}, Settings shows ${shown}`);
+    // A browser that accepted the certificate pairs and loads the app over HTTPS.
+    const secure = await browser.newContext({ ignoreHTTPSErrors: true });
+    const tlsPage = await secure.newPage();
+    await tlsPage.goto(`https://127.0.0.1:4620/#code=${code}`);
+    await tlsPage.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
+    console.log(`web access over HTTPS: paired, certificate ${shown.slice(0, 11)}… matches Settings`);
   } finally {
     await browser.close();
   }

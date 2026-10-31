@@ -235,6 +235,18 @@ pub fn provider(config_dir: &Path, id: &str) -> Option<Provider> {
         .find(|p| p.id == id.trim())
 }
 
+/// Playbooks 8: which provider a `provider/model` id goes to, for the pre-send check.
+pub fn dest(config_dir: &Path, model: &str) -> grokhub_core::adult_guard::Dest {
+    use grokhub_core::adult_guard::{dest_of, Dest};
+    let Some(p) = split_provider_model(model).and_then(|(pid, _)| provider(config_dir, pid)) else {
+        return Dest::Other;
+    };
+    match p.kind {
+        ProviderKind::Anthropic => Dest::Anthropic,
+        ProviderKind::OpenAiCompatible => dest_of(&p.base_url),
+    }
+}
+
 /// Settings → "Add a provider": the key goes into the keyring first; only if
 /// that worked is the provider (no key) saved. Adding sends nothing: the
 /// destination is allowed separately, on a hard send card.
@@ -596,6 +608,18 @@ pub trait ProviderTransport: Send + Sync {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<HttpReply, String>;
+    /// `post` that gives up after `limit` (the request's `call_timeout`).
+    /// Fakes that never block can keep this default.
+    fn post_within(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpReply, String> {
+        let _ = limit;
+        self.post(url, headers, body)
+    }
 }
 
 /// The real wire. Every call reaches it only after [`guard_provider`].
@@ -655,7 +679,20 @@ impl ProviderTransport for UreqTransport {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<HttpReply, String> {
+        self.post_within(url, headers, body, None)
+    }
+
+    fn post_within(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpReply, String> {
         let mut req = agent().post(url);
+        if let Some(limit) = limit {
+            req = req.timeout(limit);
+        }
         for (k, v) in headers {
             req = req.set(k, v);
         }
@@ -1090,6 +1127,20 @@ pub fn call_model(
         .ok_or_else(|| ClientError::Protocol(format!("`{model}` is not a provider model")))?;
     let p = provider(config_dir, pid)
         .ok_or_else(|| ClientError::Protocol(format!("no provider `{pid}`")))?;
+    // Playbooks 8, the last line: a caller that skipped the router still never
+    // sends a banned ask, or an 18+ chat to a provider that bans adult chat.
+    let mut req = std::borrow::Cow::Borrowed(req);
+    super::adult::scrub(&mut req.to_mut().input);
+    if let Some(held) = super::adult::held_reply(&req.input) {
+        return Ok(held);
+    }
+    let to = dest(config_dir, model);
+    if super::adult::to_xai(&req.input, to) {
+        return Err(ClientError::Protocol(format!(
+            "18+ chats go only to xAI or this computer's model, so this chat was not sent to {}",
+            grokhub_core::adult_guard::dest_name(to)
+        )));
+    }
     let key = key(config_dir, &p.id)
         .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();
@@ -1110,10 +1161,14 @@ pub fn call_model(
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
-    let body = request_body(p.kind, wire_model, effort, req, max_output).to_string();
+    let body = request_body(p.kind, wire_model, effort, &req, max_output).to_string();
     let r = transport_for(config_dir)
-        .post(&url, &p.headers(&key), &body)
+        .post_within(&url, &p.headers(&key), &body, req.call_timeout)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    // Cancelled while on the wire (a replaced or timed-out request): drop the reply.
+    if cancel.is_cancelled() {
+        return Err(ClientError::Cancelled);
+    }
     if !(200..300).contains(&r.status) {
         return Err(error_of(r.status, &r.body));
     }

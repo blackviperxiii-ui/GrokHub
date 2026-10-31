@@ -33,9 +33,13 @@ impl Approvals {
 
 /// Settings → Appearance. A value this build does not know reads as System.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Theme {
+    /// Legacy id; same tokens as Ops Dark.
     Dark,
+    OpsDark,
+    OledBlack,
+    SoftCharcoal,
     Light,
     /// Follows the OS (serde wants the fallback last).
     #[default]
@@ -86,11 +90,11 @@ pub fn path(config_dir: &Path) -> PathBuf {
 pub fn load(config_dir: &Path) -> ShellSettings {
     if !path(config_dir).exists() && !config_dir.join("app.json").exists() {
         return ShellSettings {
-            personality: grokhub_core::personality::NEW_INSTALL_ID.to_string(),
+            personality: grokhub_core::personality::DEFAULT_ID.to_string(),
             ..ShellSettings::default()
         };
     }
-    std::fs::read_to_string(path(config_dir))
+    let mut settings = std::fs::read_to_string(path(config_dir))
         .ok()
         .and_then(|raw| serde_json::from_str::<ShellSettings>(&raw).ok())
         .map(|mut s| {
@@ -99,7 +103,13 @@ pub fn load(config_dir: &Path) -> ShellSettings {
             }
             s
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // The plain "Default" preset is gone; a shell still on it speaks as Nyx.
+    if settings.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
+        settings.personality = grokhub_core::personality::DEFAULT_ID.to_string();
+        let _ = save(config_dir, &settings);
+    }
+    settings
 }
 
 /// Writes through a temp file and a rename, so a crash never leaves half a file.
@@ -166,6 +176,12 @@ mod tests {
         };
         save(&dir, &fresh).expect("save");
         assert_eq!(load(&dir).personality, "nyx");
+        // A shell still on the retired "default" preset upgrades to Nyx on disk.
+        std::fs::write(path(&dir), r#"{"personality":"default"}"#).expect("write");
+        assert_eq!(load(&dir).personality, "nyx");
+        let raw = std::fs::read_to_string(path(&dir)).expect("read");
+        assert!(raw.contains("\"personality\": \"nyx\""), "{raw}");
+        assert!(!raw.contains("\"default\""), "{raw}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

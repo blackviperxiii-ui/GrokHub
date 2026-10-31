@@ -3,7 +3,12 @@
 use super::*;
 
 /// Workflows ran inside the Grok Build CLI, which GrokHub no longer uses.
-const WORKFLOWS_GONE: &str = "Workflows were a grok CLI feature and are not in GrokHub";
+static WORKFLOWS_GONE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Workflows were a grok CLI feature and are not in {}",
+        grokhub_core::brand::product_name()
+    )
+});
 /// `--worktree` was a Grok Build CLI flag; the engine works in the bound folder.
 const WORKTREE_GONE: &str =
     "Worktrees were a grok CLI feature; chats run in the bound project folder";
@@ -252,7 +257,7 @@ impl Cabin {
             | Slash::WorkflowCtl { .. }
             | Slash::WorkflowUsage
             | Slash::GrokWorkflows => {
-                self.status = WORKFLOWS_GONE.into();
+                self.status = WORKFLOWS_GONE.as_str().into();
             }
             Slash::Worktree => {
                 self.status = WORKTREE_GONE.into();
@@ -293,6 +298,14 @@ impl Cabin {
                 {
                     self.nav = Nav::Chat;
                     self.send_chat(skill_use_in_chat_prompt(&s.slash, &s.name));
+                } else if let Some(s) = self.native_skills.iter().find(|s| {
+                    s.name == name
+                        || s.name.eq_ignore_ascii_case(&name)
+                        || format!("/{}", s.name) == name
+                }) {
+                    // Built-in / project / user skills discovered for the engine.
+                    self.nav = Nav::Chat;
+                    self.send_chat(skill_use_in_chat_prompt(&format!("/{}", s.name), &s.name));
                 } else {
                     self.status = format!("No skill {name}");
                 }
@@ -357,7 +370,10 @@ impl Cabin {
             Slash::Sh(cmd) => self.queue_sh(cmd),
             Slash::HostStatus => {
                 self.status = if self.agent_ready() {
-                    "GrokHub's own engine is ready".into()
+                    format!(
+                        "{}'s own engine is ready",
+                        grokhub_core::brand::product_name()
+                    )
                 } else {
                     self.no_agent_note().into()
                 };
@@ -408,7 +424,7 @@ impl Cabin {
             Slash::Fix => {
                 self.halt_work("Stopped");
                 self.nav = Nav::Settings;
-                self.settings_sec = health_settings_sec();
+                self.settings_sec = settings::health_settings_sec();
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
@@ -785,7 +801,11 @@ impl Cabin {
         };
         let dest = self.export_dest(format.file_name());
         let status_path = dest.display().to_string();
-        let footer = format!("Exported from GrokHub {}", env!("CARGO_PKG_VERSION"));
+        let footer = format!(
+            "Exported from {} {}",
+            grokhub_core::brand::product_name(),
+            env!("CARGO_PKG_VERSION")
+        );
         let now = now_ms();
         std::thread::spawn(move || {
             let msgs = t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
@@ -875,7 +895,7 @@ impl Cabin {
             | Slash::WorkflowCtl { .. }
             | Slash::WorkflowUsage
             | Slash::GrokWorkflows => {
-                self.status = WORKFLOWS_GONE.into();
+                self.status = WORKFLOWS_GONE.as_str().into();
                 true
             }
             _ => false,
@@ -1063,4 +1083,15 @@ fn one_line(text: &str, max_chars: usize) -> String {
     let mut out: String = flat.chars().take(max_chars).collect();
     out.push('…');
     out
+}
+
+pub(super) fn mode_status_line(mode: &str, pinned_model: &str) -> String {
+    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
+        return "Mode auto — routes Fast / Balance / Think / Max".into();
+    }
+    let model = resolve_chat_model(mode, pinned_model);
+    match grokhub_core::reasoning_effort_for_mode(mode) {
+        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
+        None => format!("Mode {mode} → {model}"),
+    }
 }

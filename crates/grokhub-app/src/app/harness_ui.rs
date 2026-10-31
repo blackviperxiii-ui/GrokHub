@@ -261,6 +261,8 @@ pub(super) struct HarnessState {
     pub pending_findings: Option<String>,
     /// Findings bubbles whose pills were tapped or dismissed (by body).
     pub findings_dismissed: Vec<String>,
+    /// Findings bubbles whose Do all ran: only the fixes it left out keep a pill.
+    pub findings_batched: Vec<String>,
     /// Undo rows under the newest `/connections changes` or `/automations
     /// changes` bubble, for that kind. `None` means read it again.
     pub change_rows: Option<(hx::ChangeKind, Vec<super::change_undo::ChangeRow>)>,
@@ -792,8 +794,12 @@ impl Cabin {
             }
             ParkSource::Proactive(_) => {
                 if approve {
-                    self.harness.next_origin = Some(hx::Origin::Proactive);
-                    self.start_oneshot(&park.action, None);
+                    if park.tool == grokhub_core::CONTROL_TOOL {
+                        self.execute_print_control(&park.action);
+                    } else {
+                        self.harness.next_origin = Some(hx::Origin::Proactive);
+                        self.start_oneshot(&park.action, None);
+                    }
                 }
             }
             ParkSource::Egress(dest) => {
@@ -2430,7 +2436,7 @@ mod tests {
         cabin.harness_turn_end("I clicked Save and it worked.", turn);
         let repair = cabin.harness.repair.clone().expect("retry turn queued");
         assert!(
-            repair.starts_with("GrokHub's check: `click` changed nothing on screen"),
+            repair.starts_with("Loadout's check: `click` changed nothing on screen"),
             "{repair}"
         );
         assert!(
@@ -2628,8 +2634,8 @@ mod tests {
         );
         assert_eq!(perm_card_eyebrow(&ask("bash", "ls")), "Tool");
         assert_eq!(
-            super::super::settings::DESKTOP_CONTROL_HINT,
-            "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask."
+            super::super::settings::DESKTOP_CONTROL_HINT.as_str(),
+            "Grok can see the screen and use the mouse and keyboard through Loadout. Ask still asks first. Deletes, sends, money and credentials always ask."
         );
         assert_eq!(
             crate::motion::CURSOR_OUTLINE,

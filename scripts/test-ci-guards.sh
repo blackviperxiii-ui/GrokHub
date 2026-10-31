@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail-closed regression tests for scripts/ci-guards.sh.
+# Fail-closed regression tests for scripts/ci-guards.sh and scripts/ci-guards.d/.
 # Builds a throwaway origin + clone, runs the guard script in PR mode against
 # crafted bad inputs, and asserts it exits non-zero (never skip-passes).
 set -euo pipefail
@@ -23,6 +23,7 @@ chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 W="$TMP/work"
 mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
+cp -r "$SRC/scripts/ci-guards.d" "$W/scripts/ci-guards.d"
 for f in crates/grokhub-app/src/app/mod.rs crates/grokhub-app/src/cards.rs \
   crates/grokhub-core/src/slash/mod.rs crates/grokhub-app/src/app/tests.rs \
   crates/grokhub-app/src/app/persist.rs crates/grokhub-app/src/app/projects.rs \
@@ -33,6 +34,10 @@ printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"
 printf 'name = "grokhub-app"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf 'assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");\n' >"$W/crates/grokhub-app/src/cli.rs"
 printf '1.0.0\n' >"$W/VERSION"
+mkdir -p "$W/.github/workflows"
+SHA=0123456789abcdef0123456789abcdef01234567
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v4\n      - uses: ./.github/actions/local\n' "$SHA" \
+  >"$W/.github/workflows/ci.yml"
 "$REAL_GIT" -C "$W" add -A
 "$REAL_GIT" -C "$W" commit -q -m base
 "$REAL_GIT" -C "$W" push -q origin HEAD:beta
@@ -123,6 +128,85 @@ fresh_pr
 rm "$W/crates/grokhub-app/src/app/persist.rs"
 commit_pr
 run_guard fail "missing raw-io guarded file fails"
+
+fresh_pr
+printf '      - uses: actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "workflow action pinned to a tag fails"
+
+fresh_pr
+printf '      - uses: attacker/action@main # uses: ./local\n      - uses: attacker/action@v1 # uses: actions/checkout@%s\n' "$SHA" \
+  >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "a trailing comment can't make an unpinned action look pinned"
+
+fresh_pr
+printf '      - {uses: actions/cache@v4}\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action in a flow-style step fails"
+
+fresh_pr
+printf '  b:\n    steps: [{name: x, uses: actions/cache@v4}]\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action in a flow-style list fails"
+
+fresh_pr
+printf '      - uses:\n          actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "a uses: value on the next line fails"
+
+fresh_pr
+printf '      - {uses: actions/cache@%s}\n' "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard pass "pinned action in a flow-style step passes"
+
+fresh_pr
+printf '      - uses: docker://alpine@%s\n' "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "docker action with a 40-hex tag instead of a sha256 digest fails"
+
+fresh_pr
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/cache@main\n' >"$W/.github/workflows/other.yaml"
+commit_pr
+run_guard fail "unpinned action in a .yaml workflow fails"
+
+fresh_pr
+mkdir -p "$W/.github/actions/setup"
+printf 'runs:\n  using: composite\n  steps:\n    - uses: foo/bar@v3\n' >"$W/.github/actions/setup/action.yml"
+commit_pr
+run_guard fail "unpinned action in a composite action fails"
+
+fresh_pr
+mkdir -p "$W/.github/actions/setup"
+printf 'runs:\n  using: composite\n  steps:\n    - uses: "foo/bar@%s" # v3\n' "$SHA" >"$W/.github/actions/setup/action.yml"
+commit_pr
+run_guard pass "pinned action in a composite action passes"
+
+fresh_pr
+printf '      - uses: docker://alpine:3.20\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "docker action without a digest fails"
+
+fresh_pr
+printf '      - uses: docker://alpine@sha256:%s%s\n' "$SHA" "0123456789abcdef01234567" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard pass "docker action with a digest passes"
+
+fresh_pr
+mkdir -p "$W/.github/workflows/unreadable.yml"
+run_guard fail "unreadable workflow file fails"
+rmdir "$W/.github/workflows/unreadable.yml"
+
+fresh_pr
+"$REAL_GIT" -C "$W" rm -q "$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "no workflows at all fails"
+
+# A missing guard directory must fail, never pass with zero guards.
+fresh_pr
+mv "$W/scripts/ci-guards.d" "$TMP/guards.bak"
+run_guard fail "empty guard directory fails"
+mv "$TMP/guards.bak" "$W/scripts/ci-guards.d"
 
 fresh_pr
 "$REAL_GIT" -C "$W" remote remove origin

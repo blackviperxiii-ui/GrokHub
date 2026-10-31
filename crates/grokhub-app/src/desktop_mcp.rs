@@ -9,6 +9,13 @@ pub(crate) use grokhub_desktop::{
 #[cfg(windows)]
 pub(crate) use grokhub_desktop::{windows_hands, windows_primary_frame};
 
+/// The game guard now (cached 2 s): desktop control, the eyes' capture and
+/// window checks wait while the user is gaming or an anti-cheat runs.
+pub(crate) fn game_guard() -> grokhub_desktop::game_guard::GameGuard {
+    install_host();
+    grokhub_desktop::game_guard::current()
+}
+
 /// Before any desktop call. The first install wins, so this is cheap to repeat.
 fn install_host() {
     grokhub_desktop::host::install(grokhub_desktop::host::Host {

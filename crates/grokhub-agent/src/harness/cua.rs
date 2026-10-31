@@ -85,15 +85,27 @@ pub const CUA_APPS: &[&str] = &[
 /// Typed placeholder for a credential. The model sees only this.
 pub const PASSWORD_SLOT: &str = "%password%";
 
-pub const CUA_OFF_MSG: &str =
-    "Cua Driver is off. GrokHub only uses it while the cuaDriver spike flag is on.";
-pub const CUA_LINUX_ONLY_MSG: &str = "Cua Driver runs on Linux only in this GrokHub build.";
+pub static CUA_OFF_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled(
+        "Cua Driver is off. {product} only uses it while the cuaDriver spike flag is on.",
+    )
+});
+pub static CUA_LINUX_ONLY_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("Cua Driver runs on Linux only in this {product} build.")
+});
 pub const CUA_MISSING_MSG: &str =
     "Cua Driver is not installed. Install cua-driver-rs 0.34.0, or set cuaDriverPath in app.json.";
-pub const CUA_NOT_IN_MANIFEST: &str =
-    "That Cua tool is not in GrokHub's Cua manifest, so it was not run.";
-pub const CUA_NO_PASSWORD_MSG: &str =
-    "GrokHub has no saved password for that field, so nothing was typed. Type it yourself.";
+pub static CUA_NOT_IN_MANIFEST: std::sync::LazyLock<&'static str> =
+    std::sync::LazyLock::new(|| {
+        grokhub_core::brand::filled(
+            "That Cua tool is not in {product}'s Cua manifest, so it was not run.",
+        )
+    });
+pub static CUA_NO_PASSWORD_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(
+    || {
+        grokhub_core::brand::filled("{product} has no saved password for that field, so nothing was typed. Type it yourself.")
+    },
+);
 
 /// How long the proxy waits for the child's answer to one request.
 const REPLY_WAIT: Duration = Duration::from_secs(60);
@@ -153,7 +165,7 @@ pub fn check_cua_version(output: &str) -> Result<(), String> {
     let lower = output.to_ascii_lowercase();
     if lower.contains("agpl") || lower.contains("perception") {
         return Err(format!(
-            "This Cua Driver build includes the AGPL perception extension. GrokHub only runs the {CUA_DRIVER_LICENSE} Driver."
+            "This Cua Driver build includes the AGPL perception extension. {product} only runs the {CUA_DRIVER_LICENSE} Driver.", product = grokhub_core::brand::product_name()
         ));
     }
     let found = output
@@ -169,9 +181,9 @@ pub fn check_cua_version(output: &str) -> Result<(), String> {
     match found {
         Some(v) if v == CUA_DRIVER_VERSION => Ok(()),
         Some(v) => Err(format!(
-            "Cua Driver {v} is installed, but GrokHub only runs the pinned {CUA_DRIVER_VERSION} ({CUA_DRIVER_TAG}). Install that release."
+            "Cua Driver {v} is installed, but {product} only runs the pinned {CUA_DRIVER_VERSION} ({CUA_DRIVER_TAG}). Install that release.", product = grokhub_core::brand::product_name()
         )),
-        None => Err("GrokHub could not read the Cua Driver version, so it did not start it.".into()),
+        None => Err(format!("{product} could not read the Cua Driver version, so it did not start it.", product = grokhub_core::brand::product_name())),
     }
 }
 
@@ -200,9 +212,12 @@ pub fn verify_cua_driver(bin: &Path) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("GrokHub could not run Cua Driver: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        format!(
+            "{product} could not run Cua Driver: {e}",
+            product = grokhub_core::brand::product_name()
+        )
+    })?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -210,12 +225,18 @@ pub fn verify_cua_driver(bin: &Path) -> Result<(), String> {
             Ok(None) if start.elapsed() > VERSION_WAIT => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(
-                    "Cua Driver did not answer --version, so GrokHub did not start it.".into(),
-                );
+                return Err(format!(
+                    "Cua Driver did not answer --version, so {product} did not start it.",
+                    product = grokhub_core::brand::product_name()
+                ));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(e) => return Err(format!("GrokHub could not run Cua Driver: {e}")),
+            Err(e) => {
+                return Err(format!(
+                    "{product} could not run Cua Driver: {e}",
+                    product = grokhub_core::brand::product_name()
+                ))
+            }
         }
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
@@ -318,16 +339,25 @@ pub struct StdioChild {
 /// Write the manifest and start `cua-driver mcp` with the bounded env.
 pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, String> {
     let dir = cua_dir(config_dir);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("GrokHub could not make {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "{product} could not make {}: {e}",
+            dir.display(),
+            product = grokhub_core::brand::product_name()
+        )
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
     let manifest = cua_manifest_path(config_dir);
-    std::fs::write(&manifest, cua_manifest())
-        .map_err(|e| format!("GrokHub could not write the Cua manifest: {e}"))?;
+    std::fs::write(&manifest, cua_manifest()).map_err(|e| {
+        format!(
+            "{product} could not write the Cua manifest: {e}",
+            product = grokhub_core::brand::product_name()
+        )
+    })?;
     let mut cmd = Command::new(bin);
     cmd.args(cua_spawn_args(&cua_socket_path(config_dir)))
         .envs(cua_spawn_env(&manifest))
@@ -338,9 +368,12 @@ pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, Stri
         cmd.env_remove(k);
     }
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("GrokHub could not start Cua Driver: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        format!(
+            "{product} could not start Cua Driver: {e}",
+            product = grokhub_core::brand::product_name()
+        )
+    })?;
     let stdin = child.stdin.take().ok_or("Cua Driver has no stdin")?;
     let stdout = child.stdout.take().ok_or("Cua Driver has no stdout")?;
     let (tx, rx) = mpsc::channel();
@@ -424,6 +457,11 @@ impl<C: CuaChild> CuaProxy<C> {
         }
     }
 
+    /// Halted in this process: no call reaches a child again.
+    pub fn is_halted(&self) -> bool {
+        self.halted
+    }
+
     fn child(&mut self) -> Result<&mut C, String> {
         if self.child.is_none() {
             if let Some(e) = &self.start_err {
@@ -453,7 +491,9 @@ impl<C: CuaChild> CuaProxy<C> {
                 }
             }
         }
-        self.child.as_mut().ok_or_else(|| CUA_OFF_MSG.to_string())
+        self.child
+            .as_mut()
+            .ok_or_else(|| (*CUA_OFF_MSG).to_string())
     }
 
     /// One stdin line from Grok Build. Returns what to print, if anything.
@@ -512,11 +552,11 @@ impl<C: CuaChild> CuaProxy<C> {
 
     fn off_reason(&self, gate: CuaGate) -> String {
         if self.halted {
-            grokhub_core::desktop_mcp::HALT_MSG.into()
+            (*grokhub_core::desktop_mcp::HALT_MSG).into()
         } else if !gate.enabled {
             grokhub_core::desktop_mcp::OFF_MSG.into()
         } else {
-            CUA_OFF_MSG.into()
+            (*CUA_OFF_MSG).into()
         }
     }
 
@@ -588,7 +628,7 @@ impl<C: CuaChild> CuaProxy<C> {
             return refuse(&self.off_reason(gate), None);
         }
         if !in_manifest {
-            return refuse(CUA_NOT_IN_MANIFEST, None);
+            return refuse(*CUA_NOT_IN_MANIFEST, None);
         }
         let mut parked = None;
         match decide(Step::Desk {
@@ -624,7 +664,7 @@ impl<C: CuaChild> CuaProxy<C> {
             .is_some_and(|t| t.contains(PASSWORD_SLOT))
         {
             // No credential store yet: never type the slot or a guessed value.
-            return refuse(CUA_NO_PASSWORD_MSG, parked);
+            return refuse(*CUA_NO_PASSWORD_MSG, parked);
         }
         let sent = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":tool,"arguments":args}}).to_string();
         let reply = match self.child().and_then(|c| c.request(&sent, &id)) {
@@ -956,7 +996,7 @@ mod tests {
                 &mut || false,
             )
             .unwrap();
-        assert_eq!(text_of(&out), CUA_OFF_MSG);
+        assert_eq!(text_of(&out), *CUA_OFF_MSG);
         let list = p
             .handle_line(
                 r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
@@ -1182,7 +1222,7 @@ mod tests {
                 false
             })
             .unwrap();
-        assert_eq!(text_of(&after), grokhub_core::desktop_mcp::HALT_MSG);
+        assert_eq!(text_of(&after), *grokhub_core::desktop_mcp::HALT_MSG);
         assert!(
             fake.got.borrow().is_empty(),
             "the child received nothing: {:?}",
@@ -1252,7 +1292,7 @@ mod tests {
             .unwrap();
         let req = waiter.join().unwrap().expect("slot parks as credentials");
         assert_eq!(req.class, "credentials");
-        assert_eq!(text_of(&out), CUA_NO_PASSWORD_MSG);
+        assert_eq!(text_of(&out), *CUA_NO_PASSWORD_MSG);
         assert_eq!(sent_tools(&fake), vec!["press_key"]);
         // Floor and manifest refusals never reach the child either.
         let out = p
@@ -1272,7 +1312,7 @@ mod tests {
                 &mut || false,
             )
             .unwrap();
-        assert_eq!(text_of(&out), CUA_NOT_IN_MANIFEST);
+        assert_eq!(text_of(&out), *CUA_NOT_IN_MANIFEST);
         assert_eq!(sent_tools(&fake), vec!["press_key"]);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1540,15 +1580,15 @@ mod tests {
         );
         assert_eq!(
             check_cua_version("cua-driver 0.33.4"),
-            Err("Cua Driver 0.33.4 is installed, but GrokHub only runs the pinned 0.34.0 (cua-driver-rs-v0.34.0). Install that release.".into())
+            Err("Cua Driver 0.33.4 is installed, but Loadout only runs the pinned 0.34.0 (cua-driver-rs-v0.34.0). Install that release.".into())
         );
         assert_eq!(
             check_cua_version("cua-driver 0.34.0 +perception (AGPL-3.0-only)"),
-            Err("This Cua Driver build includes the AGPL perception extension. GrokHub only runs the MIT Driver.".into())
+            Err("This Cua Driver build includes the AGPL perception extension. Loadout only runs the MIT Driver.".into())
         );
         assert_eq!(
             check_cua_version("hello"),
-            Err("GrokHub could not read the Cua Driver version, so it did not start it.".into())
+            Err("Loadout could not read the Cua Driver version, so it did not start it.".into())
         );
         assert_eq!(CUA_LINUX_SHA256.len(), 64);
         assert_eq!(CUA_LINUX_ASSET, "cua-driver-rs-0.34.0-linux-x86_64.tar.gz");

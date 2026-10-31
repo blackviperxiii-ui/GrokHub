@@ -1,42 +1,120 @@
 :root {
+  /* Light (classic) defaults; dark OS / data-theme swaps to Loadout. */
   --bg: #f6f6f4;
   --panel: #ffffff;
+  --raised: #ffffff;
   --text: #1c1c1a;
   --muted: #6b6b66;
+  --steel: #6b6b66;
   --accent: #1c1c1a;
   --accent-text: #ffffff;
+  --amber: #ffb000;
   --user: #e9e9e4;
   --border: #dcdcd6;
+  --hover: #ececea;
+  --selected: #e0e0dc;
   --danger: #a3261c;
+  --signal: #d7263d;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-/* Settings → Appearance sets data-theme; without it the OS decides. */
+/* Ops Dark — Loadout baseline (slides 07–08). Also the OS-dark default. */
+:root,
+:root[data-theme="dark"],
+:root[data-theme="ops-dark"] {
+  --ops-void: #0a0a0b;
+  --ops-bg: #0b0b0d;
+  --ops-surface: #121215;
+  --ops-raised: #18191c;
+  --ops-hover: #2a2b2f;
+  --ops-selected: #3a3b40;
+  --ops-steel: #c9cbd1;
+  --ops-bright: #f2f2f4;
+  --ops-muted: #8a8c94;
+  --ops-line: #232428;
+  --ops-signal: #d7263d;
+  --ops-amber: #ffb000;
+  --ops-red-dim: #5e1a25;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #141413;
-    --panel: #1d1d1b;
-    --text: #ececea;
-    --muted: #9a9a94;
-    --accent: #ececea;
-    --accent-text: #141413;
-    --user: #2a2a27;
-    --border: #33332f;
-    --danger: #ff8a7a;
+    --bg: var(--ops-bg);
+    --panel: var(--ops-surface);
+    --raised: var(--ops-raised);
+    --text: var(--ops-bright);
+    --muted: var(--ops-muted);
+    --steel: var(--ops-steel);
+    --accent: var(--ops-amber);
+    --accent-text: var(--ops-void);
+    --amber: var(--ops-amber);
+    --user: var(--ops-raised);
+    --border: var(--ops-line);
+    --hover: var(--ops-hover);
+    --selected: var(--ops-selected);
+    --danger: var(--ops-signal);
+    --signal: var(--ops-signal);
   }
 }
 
-:root[data-theme="dark"] {
-  --bg: #141413;
-  --panel: #1d1d1b;
-  --text: #ececea;
-  --muted: #9a9a94;
-  --accent: #ececea;
-  --accent-text: #141413;
-  --user: #2a2a27;
-  --border: #33332f;
-  --danger: #ff8a7a;
+:root[data-theme="dark"],
+:root[data-theme="ops-dark"] {
+  --bg: var(--ops-bg);
+  --panel: var(--ops-surface);
+  --raised: var(--ops-raised);
+  --text: var(--ops-bright);
+  --muted: var(--ops-muted);
+  --steel: var(--ops-steel);
+  --accent: var(--ops-amber);
+  --accent-text: var(--ops-void);
+  --amber: var(--ops-amber);
+  --user: var(--ops-raised);
+  --border: var(--ops-line);
+  --hover: var(--ops-hover);
+  --selected: var(--ops-selected);
+  --danger: var(--ops-signal);
+  --signal: var(--ops-signal);
+  color-scheme: dark;
+}
+
+/* OLED Black */
+:root[data-theme="oled-black"] {
+  --bg: #000000;
+  --panel: #050506;
+  --raised: #0a0a0b;
+  --text: #f2f2f4;
+  --muted: #8a8c94;
+  --steel: #c9cbd1;
+  --accent: #ffb000;
+  --accent-text: #0a0a0b;
+  --amber: #ffb000;
+  --user: #0a0a0b;
+  --border: #151619;
+  --hover: #25262a;
+  --selected: #34353a;
+  --danger: #d7263d;
+  --signal: #d7263d;
+  color-scheme: dark;
+}
+
+/* Soft Charcoal */
+:root[data-theme="soft-charcoal"] {
+  --bg: #17181b;
+  --panel: #1d1e22;
+  --raised: #232428;
+  --text: #f2f2f4;
+  --muted: #8a8c94;
+  --steel: #c9cbd1;
+  --accent: #ffb000;
+  --accent-text: #0a0a0b;
+  --amber: #ffb000;
+  --user: #232428;
+  --border: #2e2f34;
+  --hover: #2f3035;
+  --selected: #3f4046;
+  --danger: #c8304a;
+  --signal: #c8304a;
   color-scheme: dark;
 }
 
@@ -482,6 +560,8 @@ button.danger {
 .automations .add input:not([type="checkbox"]),
 .memory .add input:not([type="checkbox"]) {
   flex: 1;
+  /* A text input's intrinsic width otherwise pushes the button off a phone. */
+  min-width: 0;
 }
 
 .memory-file label {
@@ -773,6 +853,10 @@ button.danger {
 .web-access .links {
   margin: 0;
   padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.web-access .fingerprint {
   overflow-wrap: anywhere;
 }
 

@@ -294,7 +294,7 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
         "Do not say the cabin is ready. Do not say welcome. Do not quote USER.md or MEMORY.md.".into(),
         "Do not repeat a sentence from USER.md, MEMORY.md, Insights, or Last night.".into(),
         "If an insight says what they were doing, greet them as someone who already knows. Use your own words.".into(),
-        "Do not mention the machine, hostname, or GrokHub.".into(),
+        format!("Do not mention the machine, hostname, or {product}.", product = crate::brand::product_name()),
         "If a last project is set, offer it once, lightly. First run is a start. Returning is picking up.".into(),
         "Reply with only the line.".into(),
         String::new(),

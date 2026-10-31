@@ -254,10 +254,15 @@ fn a_scheduled_run_ends_on_follow_up_and_never_touches_your_chat() {
         .unwrap()
         .1
         .contains("Disk at 91% on /home."));
+    let main = crate::threads::main_thread_index(&cabin.threads).expect("Main chat");
+    assert_eq!(
+        cabin.threads[main].messages.last().map(|m| m.1.as_str()),
+        Some("**Background task done** · Host snapshot\n\n## Host snapshot\nDisk at 91% on /home.")
+    );
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
-        vec![0],
-        "History lists only your chat"
+        vec![0, main],
+        "History lists your chat and Main, never the background ones"
     );
     let bg = cabin.threads.iter().find(|t| t.id == bg_id).unwrap();
     assert!(
@@ -805,7 +810,8 @@ fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
         cabin.card_prefs.groups["run:cold-src"].neg, 3.0,
         "closed unopened"
     );
-    assert_eq!(cabin.card_prefs.kinds["automation_done"].neg, 1.5);
+    // A run report closed unread is "seen": its group learns, its kind doesn't sink.
+    assert_eq!(cabin.card_prefs.kinds["automation_done"].neg, 0.0);
     let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
     let events: Vec<String> = signals
         .lines()

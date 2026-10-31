@@ -138,8 +138,10 @@ pub(super) fn memory_dream_text(config_dir: &std::path::Path) -> String {
     use grokhub_core::what_changed as wc;
     match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
         Some((_, text)) => wc::with_block(&wc::from_dream(&text), &text),
-        None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode."
-            .into(),
+        None => format!(
+            "No dream yet. {} dreams once a night after the review, in memory repo mode.",
+            grokhub_core::brand::product_name()
+        ),
     }
 }
 
@@ -281,7 +283,7 @@ impl Cabin {
     }
 
     /// AMR reflect: one node per new fact, no MEMORY.md or USER.md line. The
-    /// edit sent back has an empty `next`, which `poll_reflect` reads as AMR.
+    /// result carries only `amr_diff`.
     pub(super) fn run_reflect_amr(&mut self, facts: &[String]) {
         let Some(added) = self.amr_remember_facts(facts, "reflect") else {
             self.status = "Scratch — no reflect".into();
@@ -292,13 +294,10 @@ impl Cabin {
         self.status = "Reflecting…".into();
         std::thread::spawn(move || {
             let diff = added.recv().unwrap_or_default().join("\n");
-            let _ = tx.send((
-                MemoryEdit {
-                    next: String::new(),
-                    diff,
-                },
-                None,
-            ));
+            let _ = tx.send(super::learn_notes_ui::LearnWrites {
+                amr_diff: Some(diff),
+                files: Vec::new(),
+            });
         });
     }
 

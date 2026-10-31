@@ -390,8 +390,7 @@ fn reflect_poll_reports_a_drop() {
     assert_eq!(cabin.status, "Harbor");
     assert!(cabin.reflect_rx.is_none());
 
-    let (tx, rx) =
-        std::sync::mpsc::channel::<(grokhub_core::MemoryEdit, Option<grokhub_core::MemoryEdit>)>();
+    let (tx, rx) = std::sync::mpsc::channel::<super::learn_notes_ui::LearnWrites>();
     cabin.reflect_rx = Some(rx);
     cabin.poll_reflect();
     assert!(cabin.reflect_rx.is_some());

@@ -32,6 +32,13 @@ pub(super) fn status_toast_kind(status: &str) -> Option<StatusToastKind> {
     if t.is_empty() {
         return None;
     }
+    // The internet drop log (`net_log_ui`): the line shows on every page.
+    if t.starts_with("Offline since ") {
+        return Some(StatusToastKind::Error);
+    }
+    if t.starts_with("Back online.") {
+        return Some(StatusToastKind::Success);
+    }
     if is_saved(t) {
         return Some(StatusToastKind::Success);
     }
@@ -150,6 +157,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_internet_drop_and_its_return_raise_toasts_on_every_page() {
+        assert_eq!(
+            status_toast_kind("Offline since 02:01: neither public resolver answered."),
+            Some(StatusToastKind::Error)
+        );
+        assert_eq!(
+            status_toast_kind(
+                "Back online. The internet dropped at 02:01 for 5 min; it's in the drop log."
+            ),
+            Some(StatusToastKind::Success)
+        );
+    }
+
+    #[test]
     fn saved_and_saved_path_are_success() {
         assert_eq!(status_toast_kind("Saved"), Some(StatusToastKind::Success));
         assert_eq!(
@@ -169,7 +190,7 @@ mod tests {
             Some(StatusToastKind::Success)
         );
         assert_eq!(
-            status_toast_kind("Channel switch finished — restart GrokHub"),
+            status_toast_kind("Channel switch finished — restart Loadout"),
             Some(StatusToastKind::Success)
         );
     }

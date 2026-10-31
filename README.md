@@ -1,6 +1,6 @@
-# GrokHub
+# Loadout
 
-GrokHub is a desktop assistant powered by Grok, for Windows and Linux. It runs on your computer, works in your files and apps with your permission, and keeps going in the background from the system tray.
+Loadout (formerly GrokHub) is a desktop assistant powered by Grok, for Windows and Linux. It runs on your computer, works in your files and apps with your permission, and keeps going in the background from the system tray.
 
 ## What it does
 
@@ -16,7 +16,7 @@ GrokHub is a desktop assistant powered by Grok, for Windows and Linux. It runs o
 - **Windows:** download the `GrokHub-Setup` installer from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest) and run it.
 - **Linux (Arch / CachyOS):** grab the Linux download from the [latest release](https://github.com/blackviperxiii-ui/GrokHub/releases/latest).
 
-On first launch, sign in with your SuperGrok account and you're ready. GrokHub keeps itself up to date.
+On first launch, sign in with your SuperGrok account and you're ready. Loadout keeps itself up to date.
 
 ## Beta
 

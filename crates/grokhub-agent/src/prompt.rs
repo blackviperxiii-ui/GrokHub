@@ -390,7 +390,7 @@ pub(crate) const PROMPT_GROWTH_BUDGET: usize = 1536;
 /// Bytes this charter and the default voice add over [`TEMPLATE_BYTES_BEFORE`].
 pub(crate) fn prompt_prefix_growth() -> usize {
     let template = template_body().len().saturating_sub(TEMPLATE_BYTES_BEFORE);
-    let voice = grokhub_core::personality::builtin("default")
+    let voice = grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID)
         .prompt_block()
         .len();
     template + voice
@@ -403,7 +403,7 @@ pub(crate) fn template_body() -> String {
         .and_then(|rest| rest.split_once("-->"))
         .map(|(_, body)| body.trim_start())
         .unwrap_or(text);
-    text.to_string()
+    text.replace("{product}", grokhub_core::brand::product_name())
 }
 
 fn agents_paths(workspace: &Path, home: Option<&Path>) -> Vec<PathBuf> {
@@ -570,12 +570,24 @@ mod tests {
         assert!(rules.contains("When the next step is obvious, reversible and inside what the user asked, do it in this turn"));
         assert!(rules.contains("call ask_user_question with 2 to 4 concrete options and mark exactly one `recommended`"));
         assert!(rules.contains("A suggestion or a chosen option never replaces it."));
+        // The chat paints this block as the recap card, so the heading must match.
+        assert!(
+            rules.contains(&format!(
+                "End multi-step work with {}: Done:, Partly done: or Not done: per task",
+                grokhub_core::recap::RECAP_HEAD
+            )),
+            "{rules}"
+        );
         assert!(
             text.contains("Don't be sycophantic"),
             "the charter keeps the honesty line"
         );
         assert!(text.contains("intelligent adult"));
         assert!(text.contains("real goal"));
+        assert!(
+            text.starts_with("You are Grok inside Loadout. Help with the user's real goal."),
+            "the prompt names the brand, not a placeholder"
+        );
         assert!(
             template_body().len() >= TEMPLATE_BYTES_BEFORE,
             "template shrank below the charter baseline"
@@ -764,7 +776,7 @@ mod tests {
     #[test]
     fn background_prompt_at_least_30_percent_smaller_than_chat() {
         let dir = fixture_workspace("size");
-        let rules = grokhub_core::cabin_rules::CABIN_DESKTOP_RULES;
+        let rules = *grokhub_core::cabin_rules::CABIN_DESKTOP_RULES;
         let chat = system_prompt_with(PromptProfile::Chat, rules, "", &dir, PromptNeed::FULL);
         let background =
             system_prompt_with(PromptProfile::Background, rules, "", &dir, PromptNeed::NONE);

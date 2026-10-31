@@ -3,10 +3,12 @@ import { getWebAccess, setWebAccess, type WebAccess as Shape } from "./api";
 import { PRODUCT_NAME } from "./brand";
 
 export const PREVIEW_TIP =
-  "A preview: it works, but it runs over plain HTTP and has no sign-in beyond the pairing code.";
+  "A preview: it works over HTTPS with a certificate made on this computer, and has no sign-in beyond the pairing code.";
 
 export const WEB_NOTE =
-  `A browser on your network can use ${PRODUCT_NAME} here once it has the pairing code. Chats from the web can't control the desktop, and settings and the API key stay here. A paired browser can approve file changes and commands on this computer, and it's plain HTTP, so use it only on a network you trust.`;
+  `A browser on your network can use ${PRODUCT_NAME} here once it has the pairing code. Chats from the web can't control the desktop, and settings and the API key stay here. A paired browser can approve file changes and commands on this computer, so pair only browsers you trust.`;
+export const CERT_NOTE =
+  `The browser warns that the connection isn't private the first time, because ${PRODUCT_NAME} made the certificate itself. Check that the certificate's SHA-256 fingerprint in the browser matches this one, then continue:`;
 export const WEB_OFF_NOTE =
   `Web access ends when you turn it off or quit ${PRODUCT_NAME}. After 30 minutes with no browser using it, the code changes and browsers pair again.`;
 /** How often Settings re-reads the code, so a renewed one shows here. */
@@ -58,6 +60,16 @@ export function WebAccess() {
             Or open the address without <code>#code=…</code> and enter the pairing code{" "}
             <code aria-label="Pairing code">{web.code}</code>.
           </p>
+          {web.fingerprint && (
+            <>
+              <p className="note">{CERT_NOTE}</p>
+              <p>
+                <code className="fingerprint" aria-label="Certificate fingerprint">
+                  {web.fingerprint}
+                </code>
+              </p>
+            </>
+          )}
           <p className="note">{WEB_OFF_NOTE}</p>
           <button type="button" className="quiet" onClick={() => void turn(false)}>
             Turn off web access

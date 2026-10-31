@@ -3,6 +3,9 @@
 use super::*;
 use crate::ui_kit::{setting_row, SettingRowControl};
 
+/// Status line when an action would archive, delete, pin, or rename Main.
+pub(super) const MAIN_STAYS: &str = "Main is your permanent chat and always stays put";
+
 impl Cabin {
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
@@ -82,6 +85,7 @@ impl Cabin {
             }
         }
         self.composer_want_focus = true;
+        self.remember_last_chat_tab();
     }
 
     /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
@@ -101,12 +105,64 @@ impl Cabin {
         self.threads.len() - 1
     }
 
+    /// The permanent Main chat, added back if it is missing.
+    pub(super) fn main_thread_idx(&mut self) -> usize {
+        threads::ensure_main_thread(&mut self.threads)
+    }
+
     pub(super) fn stamp_current_access(&mut self) {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             let now = now_ms();
             t.accessed_ms = now;
             t.last_active_ms = now;
         }
+    }
+
+    /// Persist the open tab for Chat-rail restore (Home parking must not clear it).
+    /// Kept after `stamp_current_access` so source scans of apply_switch_thread stay clean.
+    pub(super) fn remember_last_chat_tab(&mut self) {
+        let Some(t) = self.threads.get(self.thread_idx) else {
+            return;
+        };
+        if !threads::is_live_chat_tab(t) {
+            return;
+        }
+        if self.cfg.last_chat_tab != t.id {
+            self.cfg.last_chat_tab = t.id.clone();
+        }
+    }
+
+    /// Chat rail / palette: last used tab, else next live, else a fresh draft.
+    pub(super) fn open_last_chat_tab(&mut self) {
+        self.pin_chat_tail();
+        let remembered = self.cfg.last_chat_tab.clone();
+        if !remembered.is_empty() {
+            if let Some(idx) = self
+                .threads
+                .iter()
+                .position(|t| t.id == remembered && threads::is_live_chat_tab(t))
+            {
+                if idx != self.thread_idx {
+                    self.switch_thread(idx);
+                } else {
+                    self.stamp_current_access();
+                    self.composer_want_focus = true;
+                    self.remember_last_chat_tab();
+                }
+                return;
+            }
+        }
+        if let Some(idx) = threads::last_used_live_chat_index(&self.threads) {
+            if idx != self.thread_idx {
+                self.switch_thread(idx);
+            } else {
+                self.stamp_current_access();
+                self.composer_want_focus = true;
+                self.remember_last_chat_tab();
+            }
+            return;
+        }
+        self.new_thread(false);
     }
 
     /// Opening a chat counts as activity for auto-archive without moving History order.
@@ -155,6 +211,10 @@ impl Cabin {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
         };
+        if t.main {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         let title = t.title.clone();
         let id = t.id.clone();
         if !threads::archive_thread(t, now_ms()) {
@@ -272,7 +332,103 @@ impl Cabin {
             return;
         }
         self.chat_archive_day = Some(today.to_string());
-        let _ = self.run_auto_archive(now_ms());
+        let now = now_ms();
+        let _ = self.run_auto_archive(now);
+        self.purge_expired_deleted_chats(now);
+    }
+
+    /// Permanently drop trash older than [`threads::TRASH_RETAIN_MS`].
+    pub(super) fn purge_expired_deleted_chats(&mut self, now: u64) {
+        let purged =
+            threads::purge_expired_deleted(&mut self.threads, now, threads::TRASH_RETAIN_MS);
+        if purged.is_empty() {
+            return;
+        }
+        if self.thread_idx >= self.threads.len() {
+            self.thread_idx = self.threads.len().saturating_sub(1);
+        }
+        if self.threads.is_empty() {
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+        } else if self
+            .threads
+            .get(self.thread_idx)
+            .is_none_or(threads::is_deleted)
+        {
+            self.land_after_soft_delete();
+        }
+        for gone in &purged {
+            self.drop_bg_runs_for(&gone.id);
+            self.hard_purge_thread_sessions(gone);
+        }
+        self.rename_idx = None;
+        self.persist();
+    }
+
+    pub(super) fn restore_deleted_thread_at(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        if !threads::restore_deleted_thread(t) {
+            self.status = format!("{title} is not in Recently deleted");
+            return;
+        }
+        t.last_active_ms = now_ms();
+        self.status = format!("Restored {title}");
+        self.persist();
+    }
+
+    fn hard_purge_thread_sessions(&mut self, gone: &ChatThread) {
+        let grok_id = gone
+            .grok_session
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &gone.retired_sessions);
+        if gone.native
+            && self
+                .acp
+                .as_ref()
+                .is_some_and(|handle| ids.iter().any(|id| id == &handle.session_id))
+        {
+            self.halt_in_flight();
+            self.acp = None;
+        }
+        for id in &ids {
+            if gone.native || id.starts_with("native-") {
+                let _ = grokhub_agent::delete_session(id);
+            }
+        }
+        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+    }
+
+    /// After soft-delete of the open chat: switch to another live tab or open a draft.
+    fn land_after_soft_delete(&mut self) {
+        let live_empty = self.messages.is_empty();
+        let listed =
+            threads::chat_section_indices(&self.threads, Some(self.thread_idx), live_empty);
+        let next = {
+            let keys: Vec<threads::SessionSortKey> = listed
+                .iter()
+                .map(|&i| threads::sort_key(&self.threads[i]))
+                .collect();
+            let order = threads::session_list_order(&keys);
+            order.first().map(|&pos| listed[pos])
+        };
+        if let Some(next) = next {
+            self.apply_switch_thread(next);
+        } else {
+            self.threads.push(ChatThread::new("Chat", false));
+            let next = self.threads.len() - 1;
+            self.apply_switch_thread(next);
+        }
+        self.drop_leaving_thread_chrome();
     }
 
     /// Settings → Behavior → Auto-archive idle chats.
@@ -323,18 +479,25 @@ impl Cabin {
                 .threads
                 .iter()
                 .enumerate()
-                .map(|(i, t)| ThreadReuseView {
-                    title: t.title.as_str(),
-                    scratch: t.scratch,
-                    empty: if i == self.thread_idx {
-                        self.messages.is_empty()
-                    } else {
-                        t.messages.is_empty()
-                    },
-                    has_session: t
-                        .grok_session
-                        .as_deref()
-                        .is_some_and(|s| !s.trim().is_empty()),
+                .map(|(i, t)| {
+                    let buried = threads::is_deleted(t) || threads::is_archived(t);
+                    ThreadReuseView {
+                        title: t.title.as_str(),
+                        scratch: t.scratch,
+                        // Trash / archive must not be reused as a fresh draft.
+                        empty: !buried
+                            && if i == self.thread_idx {
+                                self.messages.is_empty()
+                            } else {
+                                t.messages.is_empty()
+                            },
+                        // Main is never handed out as a fresh draft.
+                        has_session: buried
+                            || t.main
+                            || t.grok_session
+                                .as_deref()
+                                .is_some_and(|s| !s.trim().is_empty()),
+                    }
                 })
                 .collect();
             reuse_empty_thread_idx(&views, self.thread_idx, scratch).filter(|&idx| {
@@ -362,6 +525,7 @@ impl Cabin {
                 "New chat".into()
             };
             self.composer_want_focus = true;
+            self.remember_last_chat_tab();
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -387,12 +551,15 @@ impl Cabin {
         self.stamp_current_access();
         self.persist();
         self.composer_want_focus = true;
+        self.remember_last_chat_tab();
     }
 
     /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
     /// The previous transcript and pin stay on that thread in History.
     /// A reply that is still running stays on the thread that started it.
     pub(super) fn open_fresh_home(&mut self) {
+        // Home's empty draft becomes current_thread; keep the last real Chat tab.
+        let keep = self.cfg.last_chat_tab.clone();
         if grokhub_core::resume_needs_fresh_chat(self.messages.len(), self.scratch()) {
             if self.running && self.chat_job_thread.is_some() {
                 self.park_fresh_chat();
@@ -400,7 +567,17 @@ impl Cabin {
                 self.new_thread(false);
             }
         }
+        self.cfg.last_chat_tab = keep;
         self.nav = Nav::Chat;
+    }
+
+    /// A fresh launch: a clean draft ready in Chat, but the window opens on Home.
+    /// Proof shots (deck or web search) keep Chat, the page their seed is of.
+    pub(super) fn open_launch_page(&mut self) {
+        self.open_fresh_home();
+        if !super::loadout_home::proof_shot_requested() {
+            self.nav = Nav::Home;
+        }
     }
 
     /// Empty home. Does not halt or drop the in-flight reply on the previous thread.
@@ -411,18 +588,24 @@ impl Cabin {
                 .threads
                 .iter()
                 .enumerate()
-                .map(|(i, t)| ThreadReuseView {
-                    title: t.title.as_str(),
-                    scratch: t.scratch,
-                    empty: if i == self.thread_idx {
-                        self.messages.is_empty()
-                    } else {
-                        t.messages.is_empty()
-                    },
-                    has_session: t
-                        .grok_session
-                        .as_deref()
-                        .is_some_and(|s| !s.trim().is_empty()),
+                .map(|(i, t)| {
+                    let buried = threads::is_deleted(t) || threads::is_archived(t);
+                    ThreadReuseView {
+                        title: t.title.as_str(),
+                        scratch: t.scratch,
+                        empty: !buried
+                            && if i == self.thread_idx {
+                                self.messages.is_empty()
+                            } else {
+                                t.messages.is_empty()
+                            },
+                        // Main is never handed out as a fresh draft.
+                        has_session: buried
+                            || t.main
+                            || t.grok_session
+                                .as_deref()
+                                .is_some_and(|s| !s.trim().is_empty()),
+                    }
                 })
                 .collect();
             reuse_empty_thread_idx(&views, self.thread_idx, false).filter(|&idx| {
@@ -485,6 +668,10 @@ impl Cabin {
     }
 
     pub(super) fn begin_chat_rename(&mut self, idx: usize) {
+        if self.threads.get(idx).is_some_and(|t| t.main) {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         self.rename_buf = self.thread_rail_title(idx);
         self.rename_lock = if self.rename_buf.is_empty() {
             None
@@ -541,6 +728,10 @@ impl Cabin {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
         };
+        if t.main {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         t.pinned = toggle_pin(t.pinned);
         let now = now_ms();
         t.accessed_ms = now;
@@ -562,83 +753,96 @@ impl Cabin {
             .position(|t| t.grok_session.as_deref() == Some(id))
     }
 
-    pub(super) fn delete_thread_at(&mut self, idx: usize) {
-        let grok_id = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
-        let native = self.threads.get(idx).is_some_and(|t| t.native);
-        let retired = self
-            .threads
-            .get(idx)
-            .map(|t| t.retired_sessions.clone())
-            .unwrap_or_default();
+    /// Permanently drop a thread (idea discuss / helpers). No soft-delete trash.
+    pub(super) fn hard_drop_thread_at(&mut self, idx: usize) {
+        if self.threads.get(idx).is_none_or(|t| t.main) {
+            return;
+        }
         let was_current = idx == self.thread_idx;
-        match delete_thread(self.threads.len(), idx, self.thread_idx) {
-            DeleteOutcome::ResetLast => {
-                let old_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
-                self.halt_in_flight();
-                for id in &old_ids {
-                    self.drop_bg_runs_for(id);
-                }
-                self.finish_hub_dispatch("Chat deleted", false);
-                self.threads.clear();
-                self.threads.push(ChatThread::new("Chat", false));
-                self.thread_idx = 0;
-                self.messages = self.threads[0].messages.clone();
-                self.imagine_last.clear();
-                self.cfg.goal_pin.clear();
-                self.goal_step = 0;
-                self.drop_leaving_thread_chrome();
-                self.status = "Chat deleted".into();
-                self.stamp_current_access();
-            }
-            DeleteOutcome::Removed { next } => {
-                let gone = self.threads.remove(idx);
-                self.drop_bg_runs_for(&gone.id);
-                if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
-                    self.halt_in_flight();
-                    self.finish_hub_dispatch("Chat deleted", false);
-                }
-                self.thread_idx = next;
-                if was_current {
-                    self.messages = self
-                        .threads
-                        .get(next)
-                        .map(|t| t.messages.clone())
-                        .unwrap_or_else(|| Arc::new(Vec::new()));
-                    self.imagine_last =
-                        last_imagine_receipt(self.messages.iter().map(|m| m.1.as_str()))
-                            .unwrap_or_default();
-                    self.cfg.goal_pin = self
-                        .threads
-                        .get(next)
-                        .map(|t| t.goal.label.clone())
-                        .unwrap_or_default();
-                    self.goal_step = self.threads.get(next).map(|t| t.goal.step).unwrap_or(0);
-                    self.drop_leaving_thread_chrome();
-                }
-                self.status = format!("Deleted {}", gone.title);
-            }
-        }
-        let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &retired);
-        if native
-            && self
-                .acp
-                .as_ref()
-                .is_some_and(|handle| ids.iter().any(|id| id == &handle.session_id))
-        {
+        let gone = self.threads.remove(idx);
+        self.drop_bg_runs_for(&gone.id);
+        if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
             self.halt_in_flight();
-            self.acp = None;
+            self.finish_hub_dispatch("Chat deleted", false);
         }
-        // CLI-era sessions stay in ~/.grok untouched: GrokHub only reads them.
-        for id in &ids {
-            if native || id.starts_with("native-") {
-                let _ = grokhub_agent::delete_session(id);
+        self.hard_purge_thread_sessions(&gone);
+        if self.threads.is_empty() {
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+            self.stamp_current_access();
+        } else if was_current {
+            let next = if idx < self.threads.len() {
+                idx
+            } else {
+                self.threads.len().saturating_sub(1)
+            };
+            // Force a leave so messages reload onto the surviving row.
+            self.thread_idx = usize::MAX;
+            self.apply_switch_thread(next);
+        } else if idx < self.thread_idx {
+            self.thread_idx -= 1;
+        }
+        self.rename_idx = None;
+        self.persist();
+    }
+
+    pub(super) fn delete_thread_at(&mut self, idx: usize) {
+        let Some(main) = self.threads.get(idx).map(|t| t.main) else {
+            return;
+        };
+        if main {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
+        // Only one row left: hard reset (no trash to keep).
+        if self.threads.len() <= 1 {
+            let old_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
+            let gone = self.threads[0].clone();
+            self.halt_in_flight();
+            for id in &old_ids {
+                self.drop_bg_runs_for(id);
             }
+            self.finish_hub_dispatch("Chat deleted", false);
+            self.hard_purge_thread_sessions(&gone);
+            self.threads.clear();
+            self.threads.push(ChatThread::new("Chat", false));
+            self.thread_idx = 0;
+            self.messages = self.threads[0].messages.clone();
+            self.imagine_last.clear();
+            self.cfg.goal_pin.clear();
+            self.goal_step = 0;
+            self.drop_leaving_thread_chrome();
+            self.status = "Chat deleted".into();
+            self.stamp_current_access();
+            self.rename_idx = None;
+            self.persist();
+            return;
         }
-        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+        let was_current = idx == self.thread_idx;
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        let id = t.id.clone();
+        if !threads::soft_delete_thread(t, now_ms()) {
+            self.status = format!("{title} is already deleted");
+            return;
+        }
+        // Soft-delete keeps sessions and agent memory on disk for restore.
+        self.drop_bg_runs_for(&id);
+        if self.chat_job_thread.as_deref() == Some(id.as_str()) {
+            self.halt_in_flight();
+            self.finish_hub_dispatch("Chat deleted", false);
+        }
+        if was_current {
+            self.land_after_soft_delete();
+        }
+        self.status = format!("Deleted {title}");
         self.rename_idx = None;
         self.persist();
     }
@@ -684,8 +888,8 @@ impl Cabin {
         }
         self.grok_sessions.clear();
         self.threads.clear();
-        self.threads.push(ChatThread::new("Chat", false));
-        self.thread_idx = 0;
+        // Main is permanent: its transcript goes, the chat stays.
+        self.thread_idx = threads::ensure_main_thread(&mut self.threads);
         self.messages = self.threads[0].messages.clone();
         self.imagine_last.clear();
         self.cfg.goal_pin.clear();
@@ -706,6 +910,8 @@ impl Cabin {
             "workboard" => Nav::Workboard,
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
+            "library" => Nav::Library,
+            "objectives" | "mission" => Nav::Objectives,
             "night" | "automations" => Nav::Night,
             "agents" | "queue" => Nav::Agents,
             "devices" => Nav::Devices,

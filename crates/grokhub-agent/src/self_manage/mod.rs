@@ -10,7 +10,8 @@
 //! ([`scope_guard`]).
 //!
 //! Rule 4: the agent never widens its own permissions. These tools reach
-//! skills, connections, automations, Pulse's Steam source, and nothing else.
+//! skills, connections, automations, Pulse's Steam source, the Know me tags
+//! (read only), and nothing else.
 
 mod ops;
 
@@ -78,6 +79,7 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),
     ("pulse_steam", SelfClass::Soft),
+    ("know_me_tags", SelfClass::Read),
 ];
 
 /// The table name for a native name (`skill_create`) or a Grok Build MCP name
@@ -96,8 +98,13 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
 /// cabin's masked elicit card, as Spike-5b's `connection_add` does.
 pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
     let dir = crate::perm::config_dir();
-    let mut ask =
-        |msg: &str| crate::mcp::ask_secret("GrokHub", msg, crate::tools::connections::TOKEN_TITLE);
+    let mut ask = |msg: &str| {
+        crate::mcp::ask_secret(
+            grokhub_core::brand::product_name(),
+            msg,
+            crate::tools::connections::TOKEN_TITLE,
+        )
+    };
     run(&SelfCtx::new(&dir), name, args, &mut ask)
 }
 
@@ -250,28 +257,29 @@ pub fn mcp_tools() -> Vec<Value> {
         props
     };
     vec![
-        tool("skill_list", "List GrokHub skills.", obj(json!({}), &[])),
-        tool("skill_create", "Create a GrokHub skill. Logged with Undo. At most 5 new skills a day.", obj(named(skill_body.clone()), &["name", "instructions", "reason"])),
-        tool("skill_modify", "Change a GrokHub skill. Logged with Undo.", obj(named(skill_body), &["name", "reason"])),
-        tool("skill_disable", "Turn a GrokHub skill off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
-        tool("skill_enable", "Turn a disabled GrokHub skill back on. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
-        tool("skill_delete", "Delete a GrokHub skill. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
+        tool("skill_list", grokhub_core::brand::filled("List {product} skills."), obj(json!({}), &[])),
+        tool("skill_create", grokhub_core::brand::filled("Create a {product} skill. Logged with Undo. At most 5 new skills a day."), obj(named(skill_body.clone()), &["name", "instructions", "reason"])),
+        tool("skill_modify", grokhub_core::brand::filled("Change a {product} skill. Logged with Undo."), obj(named(skill_body), &["name", "reason"])),
+        tool("skill_disable", grokhub_core::brand::filled("Turn a {product} skill off. Logged with Undo."), obj(named(json!({})), &["name", "reason"])),
+        tool("skill_enable", grokhub_core::brand::filled("Turn a disabled {product} skill back on. Logged with Undo."), obj(named(json!({})), &["name", "reason"])),
+        tool("skill_delete", grokhub_core::brand::filled("Delete a {product} skill. Needs the user's click."), obj(named(json!({})), &["name", "reason"])),
         tool("connection_list", "List connections (MCP servers) in the cabin's own MCP config.", obj(json!({}), &[])),
         tool("connection_add", "Add a connection (MCP server) to the cabin's own MCP config. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body.clone()), &["name", "reason"])),
         tool("connection_modify", "Change a connection; fields left out stay. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body), &["name", "reason"])),
         tool("connection_disable", "Turn a connection off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("connection_remove", "Remove a connection. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
-        tool("automation_list", "List GrokHub automations.", obj(json!({}), &[])),
-        tool("automation_create", "Create a GrokHub automation. Logged with Undo. At most 2 a week until the user keeps one.", obj(json!({ "instructions": auto_body["instructions"], "every": auto_body["every"], "reason": reason }), &["instructions", "every", "reason"])),
-        tool("automation_modify", "Change a GrokHub automation. Logged with Undo.", obj(with_id(auto_body), &["id", "reason"])),
-        tool("automation_disable", "Turn a GrokHub automation off. Logged with Undo.", obj(with_id(json!({})), &["id", "reason"])),
-        tool("automation_delete", "Delete a GrokHub automation. Needs the user's click.", obj(with_id(json!({})), &["id", "reason"])),
+        tool("automation_list", grokhub_core::brand::filled("List {product} automations."), obj(json!({}), &[])),
+        tool("automation_create", grokhub_core::brand::filled("Create a {product} automation. Logged with Undo. At most 2 a week until the user keeps one."), obj(json!({ "instructions": auto_body["instructions"], "every": auto_body["every"], "reason": reason }), &["instructions", "every", "reason"])),
+        tool("automation_modify", grokhub_core::brand::filled("Change a {product} automation. Logged with Undo."), obj(with_id(auto_body), &["id", "reason"])),
+        tool("automation_disable", grokhub_core::brand::filled("Turn a {product} automation off. Logged with Undo."), obj(with_id(json!({})), &["id", "reason"])),
+        tool("automation_delete", grokhub_core::brand::filled("Delete a {product} automation. Needs the user's click."), obj(with_id(json!({})), &["id", "reason"])),
         tool("pulse_steam", "Steam games in Pulse: on, off, mute. Turns the user's Steam library source on or off and mutes or unmutes games by name. With no changes, reports which games feed Pulse. The result is what is saved; quote it instead of claiming from memory.", obj(json!({
             "on": { "type": "boolean", "description": "true uses the Steam library in Pulse, false stops it." },
             "mute": { "type": "array", "items": { "type": "string" }, "description": "Game names to keep out of Pulse." },
             "unmute": { "type": "array", "items": { "type": "string" }, "description": "Game names to let back in." },
             "reason": reason,
         }), &[])),
+        tool("know_me_tags", "Know me tags from this PC, with sources. Cite them, never guess.", obj(json!({}), &[])),
     ]
 }
 

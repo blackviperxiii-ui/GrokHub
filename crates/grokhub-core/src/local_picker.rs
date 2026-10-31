@@ -180,9 +180,10 @@ fn rate(p: &Profile, m: &LocalModel, measured: Option<f64>) -> (Bucket, String) 
     let hidden = |why: String| (Bucket::Hidden, why);
     match p.simd {
         CpuSimd::NoAvx => {
-            return hidden(
-                "This CPU has no AVX, so local AI is off and GrokHub uses the cloud.".into(),
-            )
+            return hidden(format!(
+                "This CPU has no AVX, so local AI is off and {product} uses the cloud.",
+                product = crate::brand::product_name()
+            ))
         }
         CpuSimd::AvxOnly if m.needs_avx2 => {
             return hidden("Needs AVX2; this CPU has AVX only.".into())
@@ -244,7 +245,7 @@ fn rate(p: &Profile, m: &LocalModel, measured: Option<f64>) -> (Bucket, String) 
         None => format!("about {est} tok/s"),
     };
     let optional = if m.optional {
-        " Optional: GrokHub never picks it for you."
+        crate::brand::filled(" Optional: {product} never picks it for you.")
     } else {
         ""
     };

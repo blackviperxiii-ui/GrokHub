@@ -66,11 +66,6 @@ fn maybe_queue_show_panel(cabin_thread_id: &str, card: &ToolCard) {
         ));
 }
 
-/// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
-/// prefix) still outranks a custom personality or tuned note that lands last.
-/// The agent puts each turn's talk style just before it.
-const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
-
 impl Cabin {
     /// Drain `show_panel` tool results captured on the native engine thread into [`Self::panels`].
     /// Only the pending queue — never re-scan `tool_cards` each frame (that revived dismissals
@@ -188,7 +183,10 @@ impl Cabin {
             self.fail_turn_start(&err);
             return true;
         }
-        let (carried, carry_idx) = self.native_carry(last_user);
+        let (mut carried, carry_idx) = self.native_carry(last_user);
+        if let Some(line) = self.take_focus_context() {
+            carried = format!("{line}\n{carried}");
+        }
         let prompted = self
             .acp
             .as_ref()
@@ -403,7 +401,8 @@ impl Cabin {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
         let mut parts: Vec<String> = Vec::new();
         let mut needs_safety_closer = false;
-        let voice = self.chat_personality().prompt_block();
+        let personality = self.chat_personality();
+        let voice = personality.prompt_block();
         if !voice.is_empty() {
             parts.push(voice);
             needs_safety_closer = true;
@@ -433,8 +432,11 @@ impl Cabin {
             parts.push(intentions);
             needs_safety_closer = true;
         }
+        // Closes the volatile voice/notes tail so cabin safety (earlier, in the
+        // stable prefix) still outranks a custom personality or tuned note that
+        // lands last. The agent puts each turn's talk style just before it.
         if needs_safety_closer {
-            parts.push(VOLATILE_SAFETY_CLOSER.to_string());
+            parts.push(grokhub_core::talk::safety_closer(personality.explicit).to_string());
         }
         (stable, parts.join("\n\n"))
     }
@@ -538,10 +540,16 @@ impl Cabin {
         self.persist_oauth_secrets();
     }
 
-    pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
+    /// Refresh grok_usage from the open native session. Does not paint — the
+    /// persistent "Native · tokens · pool" bar was removed (usage lives in Settings).
+    pub(super) fn sync_native_usage(&mut self, ui: &mut egui::Ui) {
         let checked_id = ui.id().with("native-usage-sid");
-        let native = self.threads.get(self.thread_idx).is_some();
-        if !native {
+        let sid = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|thread| thread.grok_session.clone())
+            .unwrap_or_default();
+        if sid.is_empty() {
             let checked = ui
                 .data(|data| data.get_temp::<String>(checked_id))
                 .unwrap_or_default();
@@ -550,31 +558,15 @@ impl Cabin {
             }
             return;
         }
-        let sid = self
-            .threads
-            .get(self.thread_idx)
-            .and_then(|thread| thread.grok_session.clone())
-            .unwrap_or_default();
         let checked = ui
             .data(|data| data.get_temp::<String>(checked_id))
             .unwrap_or_default();
-        if !sid.is_empty() && checked != sid {
+        if checked != sid {
             if let Ok(info) = grokhub_agent::load_session(&sid) {
                 self.show_native_usage(&info);
             }
             ui.data_mut(|data| data.insert_temp(checked_id, sid));
         }
-        let label = native_usage_label(&self.grok_usage);
-        let text = if label.is_empty() {
-            "Native".to_string()
-        } else {
-            format!("Native · {label}")
-        };
-        ui.label(
-            egui::RichText::new(text)
-                .size(crate::theme::FONT_TIP)
-                .color(crate::theme::muted()),
-        );
     }
 }
 

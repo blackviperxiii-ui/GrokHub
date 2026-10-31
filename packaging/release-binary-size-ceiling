@@ -1,4 +1,8 @@
 # Max bytes for target/release/grokhub(.exe) after thin-LTO release profile.
 # Measured Linux (2026-10-11): 43564296. Ceiling = that size + 15%, rounded up
 # for Windows PE variance. Bump only with a measured regression note in the PR.
-51000000
+# 2026-10-27: Linux measured 51025672 after the deck state recipes (#945); bumped to 54000000.
+# 2026-10-30: Linux measured 54275368 on beta 6896bc94, already over 54000000
+# (the 10-27 bump left +5.8%, not +15%). 54275368 * 1.15 = 62416674, rounded
+# up to the next 100 KB.
+62500000

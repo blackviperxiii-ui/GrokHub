@@ -18,6 +18,22 @@ use grokhub_core::model_registry::store::load_registry;
 
 use super::*;
 
+/// Title and body for a token budget warning.
+pub(super) fn token_budget_notice(
+    level: grokhub_core::BudgetLevel,
+    line: &str,
+    pauses: bool,
+) -> (&'static str, String) {
+    match level {
+        grokhub_core::BudgetLevel::Over if pauses => (
+            "Token budget used up",
+            format!("{line}. Scheduled work waits until tomorrow."),
+        ),
+        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
+        _ => ("Token budget at 80%", format!("{line}.")),
+    }
+}
+
 /// Settings → Cabin defaults rows.
 pub(super) const FAST_ROW: &str = "Use Grok 4.7 Fast when you're waiting";
 pub(super) const FAST_HINT: &str =
@@ -271,7 +287,7 @@ impl Cabin {
             BudgetCard::Eighty => (
                 BUDGET_EYEBROW,
                 budget::EIGHTY_CARD.into(),
-                "Settings → Cabin defaults has the cap.",
+                "Settings → Defaults has the cap.",
                 "OK",
                 "Change cap",
             ),
@@ -325,7 +341,10 @@ impl Cabin {
                 let mut notes = BudgetNotes::load(&dir);
                 notes.nudge_muted_until_ms = now + budget::NUDGE_EVERY_MS;
                 notes.save(&dir);
-                self.status = "Not now. GrokHub won't bring this up for 30 days.".into();
+                self.status = format!(
+                    "Not now. {} won't bring this up for 30 days.",
+                    grokhub_core::brand::product_name()
+                );
             }
         }
     }

@@ -318,7 +318,7 @@ fn the_weekly_pass_posts_at_most_five_cards_with_numbers_and_refuses_a_consent_t
         (findings[0].target.as_str(), findings[0].detail.as_str()),
         (
             "consent.jsonl",
-            "GrokHub never changes the consent store on its own"
+            "Loadout never changes the consent store on its own"
         )
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -1130,8 +1130,8 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
     assert_eq!(
         refused,
         vec![
-            "GrokHub never changes harness policy on its own".to_string(),
-            "GrokHub never changes the honesty rules on its own".to_string()
+            "Loadout never changes harness policy on its own".to_string(),
+            "Loadout never changes the honesty rules on its own".to_string()
         ]
     );
     let plain = cabin.chat_rules();
@@ -1140,7 +1140,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
         cabin.cfg.desktop_control,
     );
     assert!(
-        !plain.contains(super::canary_ui::NOTES_HEAD),
+        !plain.contains(super::canary_ui::NOTES_HEAD.as_str()),
         "nothing applied before Apply"
     );
 
@@ -1183,7 +1183,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
                 "{rules}"
             );
             let note_at = rules
-                .find(super::canary_ui::NOTES_HEAD)
+                .find(super::canary_ui::NOTES_HEAD.as_str())
                 .expect("the note sits in the chat rules");
             // Default voice layers ahead of notes; notes still beat cabin rules.
             let cabin_at = rules.find(&cabin_only).expect("cabin rules still present");
@@ -1196,7 +1196,7 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
             2
         } else {
             assert!(
-                !rules.contains(super::canary_ui::NOTES_HEAD),
+                !rules.contains(super::canary_ui::NOTES_HEAD.as_str()),
                 "control chats follow the rules alone"
             );
             control += 1;
@@ -1612,7 +1612,7 @@ fn self_review_file_cache_updates_on_write() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Brain 6 PR 2: six repair runs on Repair Linux this week, three failed;
+/// Brain 6 PR 2: six repair runs on Fix this PC this week, three failed;
 /// the reply moves its ports check to the front.
 fn stage_weak_playbook(root: &std::path::Path, now: u64) -> String {
     for i in 0..6u64 {
@@ -1631,7 +1631,7 @@ fn stage_weak_playbook(root: &std::path::Path, now: u64) -> String {
                 care: "critical".into(),
                 domain: "system".into(),
                 policy: "repair × critical".into(),
-                playbook: "repair-linux".into(),
+                playbook: "pc-fix".into(),
             },
             finished_at: now - DAY + i,
             at: now - DAY + i,
@@ -1641,13 +1641,15 @@ fn stage_weak_playbook(root: &std::path::Path, now: u64) -> String {
     }
     let linux = grokhub_core::playbook::BUILTIN[1].replace("\r\n", "\n");
     let ports =
-        "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";
+        "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\nos = [\"linux\"]\n\n";
     let first = "[[phase.step]]\nname = \"List failed services\"";
     assert!(linux.contains(ports) && linux.contains(first));
     let new = linux
         .replace(ports, "")
         .replacen(first, &format!("{ports}{first}"), 1);
-    format!("TUNE_BRAIN: playbook:repair-linux | Linux repair checks ports before services\n<<<\n{new}>>>\n")
+    format!(
+        "TUNE_BRAIN: playbook:pc-fix | Linux repair checks ports before services\n<<<\n{new}>>>\n"
+    )
 }
 
 #[test]
@@ -1672,7 +1674,7 @@ fn the_weekly_pass_tries_one_playbook_tweak_from_the_runs_and_quiet_mode_only_lo
     assert_eq!(
         shown,
         vec![(
-            "playbook:repair-linux",
+            "playbook:pc-fix",
             "Linux repair checks ports before services",
             hx::VersionStatus::Canary
         )]
@@ -1684,7 +1686,7 @@ fn the_weekly_pass_tries_one_playbook_tweak_from_the_runs_and_quiet_mode_only_lo
             .any(|c| c.title == "Trying: Linux repair checks ports before services"),
         "the trial's note is posted"
     );
-    assert!(root.join("playbooks").join("repair-linux.toml").exists());
+    assert!(root.join("playbooks").join("pc-fix.toml").exists());
     drop(pin_on);
     let _ = std::fs::remove_dir_all(&root);
 
@@ -1708,9 +1710,9 @@ fn the_weekly_pass_tries_one_playbook_tweak_from_the_runs_and_quiet_mode_only_lo
     assert_eq!(
         log,
         vec![(
-            "playbook:repair-linux".to_string(),
+            "playbook:pc-fix".to_string(),
             "Linux repair checks ports before services".to_string(),
-            "3 of 6 runs on the repair-linux playbook needed a fix.".to_string()
+            "3 of 6 runs on the pc-fix playbook needed a fix.".to_string()
         )]
     );
     let _ = std::fs::remove_dir_all(&root);

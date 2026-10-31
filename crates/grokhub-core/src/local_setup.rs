@@ -140,7 +140,8 @@ pub fn local_models() -> &'static [LocalModel] {
     &MODELS
 }
 
-/// A catalog id; an older install (a Qwen 2.5 id) finds nothing and loads by file.
+/// A catalog id; an older install (a Qwen 2.5 or stock Gemma 4 id) finds
+/// nothing and loads by file.
 pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
     local_models().iter().find(|m| m.id == id)
 }
@@ -210,7 +211,7 @@ pub fn suggestion_line(hw: &Hardware) -> String {
 
 pub fn suggestion_line_for(hw: &Hardware, simd: CpuSimd) -> String {
     if simd == CpuSimd::NoAvx {
-        return "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this.".into();
+        return format!("This CPU has no AVX, so no on-device model can run here. {product} uses the cloud; you can skip this.", product = crate::brand::product_name());
     }
     match suggest_for(hw, simd) {
         Some(m) => format!(
@@ -319,9 +320,9 @@ mod tests {
             pick(&hw("NVIDIA GeForce RTX 4070", 12_282, 32_768, 225_000)),
             Some("Gemma 4 12B")
         );
-        assert_eq!(pick(&hw("", 0, 16_384, 7_137)), Some("Gemma 4 E4B"));
+        assert_eq!(pick(&hw("", 0, 16_384, 7_105)), Some("Gemma 4 E4B"));
         // 1 MB short of the E4B's download plus headroom.
-        assert_eq!(pick(&hw("", 0, 16_384, 7_136)), Some("Gemma 4 E2B"));
+        assert_eq!(pick(&hw("", 0, 16_384, 7_104)), Some("Gemma 4 E2B"));
         // A 6 GB GPU carries the E4B on a 4 GB laptop.
         assert_eq!(
             pick(&hw(
@@ -336,7 +337,7 @@ mod tests {
         // RAM minus the 4 GB the OS keeps must hold 3 GB.
         assert_eq!(pick(&hw("", 0, 7_168, 100_000)), Some("Gemma 4 E2B"));
         assert_eq!(pick(&hw("", 0, 7_167, 100_000)), None);
-        assert_eq!(pick(&hw("", 0, 65_536, 5_317)), None, "no room on disk");
+        assert_eq!(pick(&hw("", 0, 65_536, 5_305)), None, "no room on disk");
         assert_eq!(pick(&Hardware::default()), None, "nothing read");
         assert_eq!(
             suggest_for(&hw("", 0, 8_192, 100_000), CpuSimd::NoAvx),
@@ -345,14 +346,15 @@ mod tests {
         );
         assert_eq!(
             suggest_for(&hw("", 0, 16_384, 100_000), CpuSimd::Avx2).map(|m| (m.id, m.route)),
-            Some(("gemma-4-e4b-it-q4_k_m", "local:small"))
+            Some(("gemma-4-e4b-it-abliterated-q4_k", "local:small"))
         );
         assert_eq!(
             suggest_for(&hw("", 0, 8_192, 100_000), CpuSimd::Avx2).map(|m| m.route),
             Some("local:tiny")
         );
-        // An older Qwen 2.5 install isn't in the catalog any more.
+        // An older Qwen 2.5 or stock Gemma 4 install isn't in the catalog any more.
         assert_eq!(model_by_id("qwen2.5-7b-instruct-q4_k_m"), None);
+        assert_eq!(model_by_id("gemma-4-e4b-it-q4_k_m"), None);
     }
 
     #[test]
@@ -384,7 +386,7 @@ mod tests {
         );
         assert_eq!(
             suggestion_line_for(&hw("", 0, 32_768, 225_280), CpuSimd::Avx2),
-            "Gemma 4 E4B fits this machine: a 5 GB download that needs 7 GB free."
+            "Gemma 4 E4B fits this machine: a 4.9 GB download that needs 6.9 GB free."
         );
         assert_eq!(
             suggestion_line_for(&hw("", 0, 2_048, 225_280), CpuSimd::Avx2),
@@ -392,7 +394,7 @@ mod tests {
         );
         assert_eq!(
             suggestion_line_for(&hw("", 0, 32_768, 225_280), CpuSimd::NoAvx),
-            "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this."
+            "This CPU has no AVX, so no on-device model can run here. Loadout uses the cloud; you can skip this."
         );
     }
 

@@ -72,6 +72,8 @@ fn sample_loop(config_dir: &Path) {
                 gov = Governor::new();
                 local_gov::apply(Level::Normal, "normal use");
             }
+            // A speed test can load the model while the switch is off.
+            local_sidecar::tick_idle_unload();
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
@@ -86,8 +88,37 @@ fn sample_loop(config_dir: &Path) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
         }
         local_sidecar::tick_governor();
+        // Offline or with the cloud down, have the model loaded before it's asked.
+        local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
+        // The idle rule runs here too, so an unused model unloads on time
+        // even when nothing asks for it again.
+        local_sidecar::tick_idle_unload();
         std::thread::sleep(Duration::from_millis(g::interval_ms(s.power.as_ref())));
     }
+}
+
+/// One fresh reading for the wind-down reminder (`wind_down_ui`), slow
+/// signals included. Blocks on the OS readers, so call it off the UI thread.
+pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
+    let s = Reader::default().sample(None);
+    let game = s.game;
+    // The sampler has no Windows game reader; wind-down fails closed without one.
+    #[cfg(windows)]
+    let game = game.or_else(windows_game);
+    grokhub_core::wind_down::Machine {
+        idle_secs: s.idle_secs,
+        game,
+        fullscreen: s.fullscreen,
+        external_gpu_pct: s.external_gpu_pct,
+    }
+}
+
+/// A Steam game or a known game exe, from a Toolhelp snapshot of process
+/// names: no process is opened, so no anti-cheat sees it. `None` when the
+/// snapshot fails.
+#[cfg(windows)]
+fn windows_game() -> Option<bool> {
+    grokhub_desktop::game_guard::windows_game()
 }
 
 #[derive(Default)]
@@ -272,26 +303,8 @@ fn compositor_hint() -> (Option<bool>, Option<String>) {
 
 /// Every process's name and command line.
 #[cfg(target_os = "linux")]
-fn processes() -> Option<Vec<(String, String)>> {
-    let entries = std::fs::read_dir("/proc").ok()?;
-    Some(
-        entries
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-            })
-            .filter_map(|e| {
-                let comm = read(e.path().join("comm"))?.trim().to_string();
-                let cmdline = read(e.path().join("cmdline"))
-                    .unwrap_or_default()
-                    .replace('\0', " ");
-                Some((comm, cmdline))
-            })
-            .collect(),
-    )
+pub(super) fn processes() -> Option<Vec<(String, String)>> {
+    grokhub_desktop::game_guard::processes()
 }
 
 /// NVIDIA through `nvidia-smi` (own share from `pmon`), else AMD sysfs.
@@ -516,22 +529,19 @@ fn win_quns() -> Option<bool> {
 }
 
 /// Whether the foreground window covers its monitor (the desktop itself
-/// doesn't count), and its executable's file name.
+/// doesn't count), and its executable's file name. The name comes from a
+/// Toolhelp snapshot by pid: the foreground app (often a game) is never
+/// opened, so its anti-cheat has nothing to log.
 #[cfg(windows)]
 fn win_foreground() -> (Option<bool>, Option<String>) {
-    use windows_sys::Win32::Foundation::{CloseHandle, RECT};
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
     };
-    // SAFETY: every out-pointer is a local sized for its call; the process
-    // handle is checked and closed here.
+    // SAFETY: every out-pointer is a local sized for its call.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
@@ -556,22 +566,9 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
             });
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        let name = if h.is_null() {
-            None
-        } else {
-            let mut buf = [0u16; 520];
-            let mut len = buf.len() as u32;
-            let ok =
-                QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
-            CloseHandle(h);
-            ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
-                .and_then(|p| {
-                    Path::new(&p)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_ascii_lowercase())
-                })
-        };
+        let name = (pid != 0)
+            .then(|| grokhub_desktop::game_guard::exe_name_of(pid))
+            .flatten();
         (covers, name)
     }
 }
@@ -645,24 +642,25 @@ impl Pdh {
     fn sample(&self, own: Option<u32>) -> Option<u8> {
         use windows_sys::Win32::System::Performance::{
             PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
-            PDH_FMT_DOUBLE,
+            PDH_FMT_DOUBLE, PDH_MORE_DATA,
         };
         // SAFETY: the first call sizes the buffer, the second fills it; every
         // item's name points into that buffer, which outlives the loop.
+        // No data or a failed read is `None`, never an idle GPU.
         unsafe {
             if PdhCollectQueryData(self.query) != 0 {
                 return None;
             }
             let (mut size, mut count) = (0u32, 0u32);
-            PdhGetFormattedCounterArrayW(
+            let sized = PdhGetFormattedCounterArrayW(
                 self.counter,
                 PDH_FMT_DOUBLE,
                 &mut size,
                 &mut count,
                 std::ptr::null_mut(),
             );
-            if size == 0 {
-                return Some(0);
+            if sized != PDH_MORE_DATA || size == 0 {
+                return None;
             }
             let item = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
             let mut buf: Vec<PDH_FMT_COUNTERVALUE_ITEM_W> =
@@ -788,6 +786,27 @@ impl Os {
 
     fn fast(&mut self, _own: Option<u32>) -> Fast {
         Fast::default()
+    }
+}
+
+/// The foreground app's process name, read once for focus help. `None`
+/// where no reader sees it (macOS, and Wayland compositors other than
+/// Hyprland and Sway). Never a window title.
+pub(super) fn foreground_process() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if wayland() {
+            return compositor_hint().1;
+        }
+        X11::connect()?.front()?.1
+    }
+    #[cfg(windows)]
+    {
+        win_foreground().1
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
     }
 }
 

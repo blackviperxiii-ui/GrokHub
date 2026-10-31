@@ -221,7 +221,8 @@ impl Cabin {
                 let version = m.version.clone();
                 self.start_runtime_download(m);
                 self.status = format!(
-                    "Local AI is on, so GrokHub is downloading its engine (llama.cpp {version}) to {}.",
+                    "Local AI is on, so {} is downloading its engine (llama.cpp {version}) to {}.",
+                    grokhub_core::brand::product_name(),
                     rd::bin_dir(&self.config_dir()).display()
                 );
             }
@@ -251,6 +252,13 @@ impl Cabin {
         }
         self.persist_cfg();
         local::set_enabled(on);
+        if on {
+            local_sidecar::cancel_pending_stop();
+        } else {
+            // Off frees the model's memory now, or as soon as a request still
+            // running finishes, instead of after the idle timeout.
+            local_sidecar::stop_when_idle();
+        }
         let installed = local::installed();
         if installed {
             self.refresh_models_now();
@@ -284,7 +292,22 @@ impl Cabin {
             self.open_local_setup();
         }
         let dl_model = self.setup.dl.as_ref().map(|d| d.model);
-        if let Some(m) = self.ui_model_choice(ui) {
+        // The default comes from this PC's memory: read it before offering one.
+        self.read_setup_hardware();
+        if self.setup.hw.is_none() && self.setup.installed.is_none() && dl_model.is_none() {
+            crate::cards::settings_note(ui, super::setup_wizard::CHECKING_HW);
+            // The read lands on another thread; look again soon, not on the next input.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        } else if let Some(m) = self.ui_model_choice(ui) {
+            if self
+                .setup
+                .hw
+                .as_ref()
+                .is_some_and(super::setup_wizard::hw_unknown)
+            {
+                crate::cards::settings_note(ui, super::setup_wizard::HW_UNKNOWN);
+            }
             self.ui_model_pick_rows(ui, dl_model.unwrap_or(m));
         }
         if installed
@@ -516,6 +539,95 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_reads_this_pc_before_offering_a_default_model() {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("local-ai-default");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let repaint = std::cell::Cell::new(std::time::Duration::MAX);
+        let clock = std::cell::Cell::new(0.0);
+        let texts = |cabin: &mut Cabin| {
+            // A second per frame, so any fade has settled and only real asks repaint.
+            clock.set(clock.get() + 1.0);
+            let raw = egui::RawInput {
+                time: Some(clock.get()),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_local_model_rows(ui));
+            repaint.set(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
+            let mut texts = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut texts);
+            }
+            texts
+        };
+        // Hardware not read yet: no dropdown to fall back to the catalog's biggest model.
+        let before = texts(&mut cabin);
+        // The first frame always repaints; the next one shows what the row asks for.
+        texts(&mut cabin);
+        assert!(
+            repaint.get() <= std::time::Duration::from_millis(250),
+            "the pending read looks again soon: {:?}",
+            repaint.get()
+        );
+        assert!(
+            before
+                .iter()
+                .any(|t| t == super::super::setup_wizard::CHECKING_HW),
+            "{before:?}"
+        );
+        assert!(!before.iter().any(|t| t == "Local model"), "{before:?}");
+        // A 16 GB PC with no GPU: the dropdown starts on a model that fits.
+        cabin.setup.hw = Some(grokhub_core::local_setup::Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 16_384,
+            free_disk_mb: 200_000,
+        });
+        let after = texts(&mut cabin);
+        assert!(after.iter().any(|t| t == "Local model"), "{after:?}");
+        // The dropdown's closed line (recommended only where the CPU has AVX).
+        let shown = after
+            .iter()
+            .find(|t| t.starts_with("Gemma 4 "))
+            .unwrap_or_else(|| panic!("no model shown: {after:?}"));
+        assert!(shown.starts_with("Gemma 4 E"), "{shown}");
+        assert!(!shown.contains("31B"), "{shown}");
+        assert!(!after
+            .iter()
+            .any(|t| t == super::super::setup_wizard::HW_UNKNOWN));
+        // A read that failed (memory 0): no recommendation from zeros, and it says so.
+        cabin.setup.hw = Some(grokhub_core::local_setup::Hardware::default());
+        assert_eq!(cabin.suggested_model().map(|m| m.id), None);
+        let failed = texts(&mut cabin);
+        assert!(
+            failed
+                .iter()
+                .any(|t| t == super::super::setup_wizard::HW_UNKNOWN),
+            "{failed:?}"
+        );
+        let small = grokhub_core::local_picker::smallest().unwrap();
+        assert!(
+            failed.iter().any(|t| t.starts_with(small.name)),
+            "the smallest is picked: {failed:?}"
+        );
+        assert!(
+            !failed.iter().any(|t| t.ends_with(" · recommended")),
+            "{failed:?}"
+        );
+    }
 
     #[test]
     fn the_hint_and_status_name_each_state() {

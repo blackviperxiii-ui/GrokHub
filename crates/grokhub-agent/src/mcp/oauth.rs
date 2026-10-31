@@ -190,7 +190,10 @@ pub(super) fn sign_in(
     let (listener, redirect) = crate::loopback::bind()?;
     let (auth, scope) = discover(server, url)?;
     let register = auth.registration_endpoint.as_deref().ok_or_else(|| {
-        format!("{server} needs a client id that GrokHub can't register on its own")
+        format!(
+            "{server} needs a client id that {product} can't register on its own",
+            product = grokhub_core::brand::product_name()
+        )
     })?;
     let (ok, v) = post(
         register,
@@ -199,8 +202,9 @@ pub(super) fn sign_in(
     )?;
     if !ok {
         return Err(format!(
-            "{server} refused to register GrokHub: {}",
-            form_error(&v, "no reason given")
+            "{server} refused to register {product}: {}",
+            form_error(&v, "no reason given"),
+            product = grokhub_core::brand::product_name()
         ));
     }
     let client = parse_registration(&v)?;

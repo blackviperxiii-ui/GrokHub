@@ -1,7 +1,7 @@
 // Typed wrappers over the Tauri commands in src-tauri/src/lib.rs. In the web
 // app the same commands run on the paired desktop (./transport).
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { call as invoke, inShell, subscribe } from "./transport";
+import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
@@ -105,7 +105,7 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
-export type Theme = "system" | "dark" | "light";
+export type Theme = "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
 
 export function setTheme(theme: Theme): Promise<Settings> {
   return invoke<Settings>("set_theme", { theme });
@@ -173,6 +173,11 @@ export function closeChat(conversationId: string): Promise<void> {
 
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
+}
+
+/** The web app's stream was down longer than the desktop keeps events for. */
+export function onEventGap(handler: () => void): Promise<UnlistenFn> {
+  return subscribe<null>(GAP_EVENT, () => handler());
 }
 
 export interface AutomationRow {
@@ -556,6 +561,42 @@ export interface LocalStatus {
   memory: string;
 }
 
+export interface LocalEngineProgress {
+  done: number;
+  total: number | null;
+  verifying: boolean;
+  line: string;
+}
+
+export interface LocalEngineInfo {
+  /** ready | missing | downloading | noBuild */
+  state: string;
+  version: string;
+  sizeLabel: string;
+  hint: string;
+  button: string;
+  progress: LocalEngineProgress | null;
+  error: string | null;
+}
+
+export interface LocalDraftOffer {
+  id: string;
+  name: string;
+  sizeLabel: string;
+  line: string;
+  button: string;
+  targetId: string;
+  targetName: string;
+}
+
+export interface LocalDraftProgress {
+  id: string;
+  done: number;
+  total: number | null;
+  verifying: boolean;
+  line: string;
+}
+
 export interface LocalAiView {
   config: LocalAiConfig;
   status: LocalStatus;
@@ -563,7 +604,26 @@ export interface LocalAiView {
   /** What hardware detection couldn't see. */
   limits: string[];
   maxThreads: number;
+  engine: LocalEngineInfo;
+  draftOffer: LocalDraftOffer | null;
+  /** Offers for every catalog model still missing its draft pair. */
+  draftOffers: LocalDraftOffer[];
+  draftProgress: LocalDraftProgress | null;
 }
+
+export type LocalEngineEvent = {
+  state: string;
+  progress: LocalEngineProgress | null;
+  error: string | null;
+  message: string | null;
+};
+
+export type LocalDrafterEvent = {
+  state: string;
+  progress: LocalDraftProgress | null;
+  error: string | null;
+  message: string | null;
+};
 
 /** Reads the hardware, so it can take a moment. */
 export function getLocalAi(): Promise<LocalAiView> {
@@ -586,13 +646,43 @@ export function runLocalSpeedTest(): Promise<string> {
   return invoke<string>("run_local_speed_test");
 }
 
+export function startLocalEngineDownload(): Promise<LocalEngineInfo> {
+  return invoke<LocalEngineInfo>("start_local_engine_download");
+}
+
+export function cancelLocalEngineDownload(): Promise<void> {
+  return invoke("cancel_local_engine_download");
+}
+
+export function startLocalDrafterDownload(targetId: string): Promise<LocalDraftOffer | null> {
+  return invoke<LocalDraftOffer | null>("start_local_drafter_download", { targetId });
+}
+
+export function cancelLocalDrafterDownload(): Promise<void> {
+  return invoke("cancel_local_drafter_download");
+}
+
+export function onLocalEngineEvent(
+  handler: (event: LocalEngineEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribe<LocalEngineEvent>("local-ai-engine", handler);
+}
+
+export function onLocalDrafterEvent(
+  handler: (event: LocalDrafterEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribe<LocalDrafterEvent>("local-ai-drafter", handler);
+}
+
 /** Settings → Web access (src-tauri/src/remote.rs). */
 export interface WebAccess {
   on: boolean;
   /** The pairing code; empty while off. */
   code: string;
-  /** Pairing links, the LAN one first. */
+  /** Pairing links, the LAN one (HTTPS) first, then this computer's own (HTTP). */
   links: string[];
+  /** SHA-256 of the HTTPS certificate, `AB:CD:…`; empty while off. */
+  fingerprint: string;
 }
 
 export function getWebAccess(): Promise<WebAccess> {

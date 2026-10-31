@@ -1,5 +1,9 @@
 use super::*;
 
+const E2B: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G12B: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G26B: &str = "Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+
 /// Lines of the pinned llama.cpp b11602 `llama-server --help`.
 const B11602_HELP: &str = "\
 --spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
@@ -70,7 +74,7 @@ fn an_older_engine_drafts_with_md_only() {
 }
 
 #[test]
-fn gemma_pairs_with_e2b_and_muse_with_its_dflash_drafter() {
+fn every_bigger_gemma_pairs_with_e2b() {
     let got: Vec<(&str, &str, DraftKind)> = pairs()
         .iter()
         .map(|p| (p.target.id, p.drafter.id, p.kind))
@@ -79,42 +83,40 @@ fn gemma_pairs_with_e2b_and_muse_with_its_dflash_drafter() {
         got,
         vec![
             (
-                "gemma-4-31b-it-q4_k_m",
-                "gemma-4-e2b-it-q4_k_m",
+                "gemma-4-31b-it-abliterated-q4_k",
+                "gemma-4-e2b-it-abliterated-q4_k",
                 DraftKind::Simple
             ),
             (
-                "muse-glimmer-30b-q4_k_m",
-                "muse-glimmer-30b-dflash-q4_k_m",
-                DraftKind::Dflash
-            ),
-            (
-                "gemma-4-26b-a4b-it-q4_k_m",
-                "gemma-4-e2b-it-q4_k_m",
+                "gemma-4-26b-a4b-it-abliterated-q4_k",
+                "gemma-4-e2b-it-abliterated-q4_k",
                 DraftKind::Simple
             ),
             (
-                "gemma-4-12b-it-q4_k_m",
-                "gemma-4-e2b-it-q4_k_m",
+                "gemma-4-12b-it-abliterated-q4_k",
+                "gemma-4-e2b-it-abliterated-q4_k",
                 DraftKind::Simple
             ),
             (
-                "gemma-4-e4b-it-q4_k_m",
-                "gemma-4-e2b-it-q4_k_m",
+                "gemma-4-e4b-it-abliterated-q4_k",
+                "gemma-4-e2b-it-abliterated-q4_k",
                 DraftKind::Simple
             ),
         ]
     );
-    assert_eq!(
-        pair_for_file("gemma-4-12B-it-Q4_K_M.gguf").map(|p| p.drafter.file),
-        Some("gemma-4-E2B-it-Q4_K_M.gguf")
-    );
-    assert_eq!(
-        pair_for_file("gemma-4-E2B-it-Q4_K_M.gguf"),
-        None,
-        "E2B is the drafter"
-    );
+    assert_eq!(pair_for_file(G12B).map(|p| p.drafter.file), Some(E2B));
+    assert_eq!(pair_for_file(E2B), None, "E2B is the drafter");
+    // A stock Gemma 4 file is not a catalog model, so it has no catalog pair.
+    assert_eq!(pair_for_file("gemma-4-12B-it-Q4_K_M.gguf"), None);
     assert_eq!(pair_for_file("qwen2.5-7b-instruct-q4_k_m.gguf"), None);
+    // A drafter row whose id says DFlash drafts as DFlash.
+    let e2b = crate::local_setup::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
+    let dflash = LocalModel {
+        id: "test-dflash-drafter",
+        ..*e2b
+    };
+    assert_eq!(DraftKind::of(e2b), DraftKind::Simple);
+    assert_eq!(DraftKind::of(&dflash), DraftKind::Dflash);
     assert_eq!(DraftKind::Simple.spec_type(), "draft-simple");
     assert_eq!(DraftKind::Dflash.spec_type(), "draft-dflash");
     assert_eq!(DraftKind::Mtp.spec_type(), "draft-mtp");
@@ -160,7 +162,7 @@ fn the_bench_keeps_a_drafter_at_40_percent_and_10_percent_faster() {
     assert!(!flat.keep);
     assert_eq!(
         verdict_line("Gemma 4 E2B", &flat),
-        "Gemma 4 E2B made replies 1.1× as fast with 75% of its guesses kept, so GrokHub left it off."
+        "Gemma 4 E2B made replies 1.1× as fast with 75% of its guesses kept, so Loadout left it off."
     );
     // Faster, but under 40% accepted.
     let wild = judge(
@@ -292,12 +294,14 @@ fn a_drafter_is_offered_until_it_is_downloaded() {
     let dir = std::env::temp_dir().join(format!("grokhub-drafters-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
-        offer("gemma-4-26B-A4B-it-Q4_K_M.gguf", &dir).map(|m| m.id),
-        Some("gemma-4-e2b-it-q4_k_m")
+        offer(G26B, &dir).map(|m| m.id),
+        Some("gemma-4-e2b-it-abliterated-q4_k")
     );
-    assert_eq!(offer("gemma-4-E2B-it-Q4_K_M.gguf", &dir), None);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("gemma-4-E2B-it-Q4_K_M.gguf"), b"x").unwrap();
+    assert_eq!(offer(E2B, &dir), None);
+    // A stock Gemma 4 file left from an older catalog is offered nothing.
     assert_eq!(offer("gemma-4-26B-A4B-it-Q4_K_M.gguf", &dir), None);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(E2B), b"x").unwrap();
+    assert_eq!(offer(G26B, &dir), None);
     let _ = std::fs::remove_dir_all(dir);
 }

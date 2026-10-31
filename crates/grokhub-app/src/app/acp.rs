@@ -326,6 +326,7 @@ impl Cabin {
 
     pub(super) fn finish_acp_turn(&mut self, text: String) {
         let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
+        self.note_activity_chat_end(true, "Reply finished");
         self.withdraw_perm_asks();
         self.perm_always_confirm = None;
         self.confirm = None;

@@ -224,7 +224,7 @@ pub fn encode_session_update() -> String {
         "type": "session.update",
         "session": {
             "voice": DEFAULT_VOICE,
-            "instructions": "You are Grok in the GrokHub cabin. Be brief.",
+            "instructions": crate::brand::filled("You are Grok in the {product} cabin. Be brief."),
             "turn_detection": { "type": "server_vad" },
             "audio": {
                 "input": {

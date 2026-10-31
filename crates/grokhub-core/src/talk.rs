@@ -3,9 +3,9 @@
 //! repair or research run ends with a findings card, and background work
 //! stays quiet. The style is a short block in the volatile tail of the
 //! system prompt, after the personality voice and before the closing
-//! reminder that the cabin safety rules win. A personality sets tone only;
-//! the style sets length and shape. Approval questions stay plain in every
-//! style and every personality.
+//! reminder that the cabin safety rules win. A personality sets tone, and in
+//! natural chat its length too; every other style sets length and shape.
+//! Approval questions stay plain in every style and every personality.
 
 /// First words of every style block, so a later turn can swap it in place.
 pub const STYLE_HEAD: &str = "Talk style for this turn:";
@@ -15,8 +15,29 @@ pub const STYLE_HEAD: &str = "Talk style for this turn:";
 pub const VOLATILE_SAFETY_CLOSER: &str =
     "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
 
+/// [`VOLATILE_SAFETY_CLOSER`] when an explicit preset's voice is in the tail:
+/// safety still wins, and means the hard limits, not fictional adult content.
+pub const VOLATILE_SAFETY_CLOSER_ADULT: &str =
+    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
+
+/// The closer for a volatile tail; `explicit` when an explicit preset speaks in it.
+pub fn safety_closer(explicit: bool) -> &'static str {
+    if explicit {
+        VOLATILE_SAFETY_CLOSER_ADULT
+    } else {
+        VOLATILE_SAFETY_CLOSER
+    }
+}
+
+fn is_closer(para: &str) -> bool {
+    para == VOLATILE_SAFETY_CLOSER || para == VOLATILE_SAFETY_CLOSER_ADULT
+}
+
 /// Closes every style block, the same layering rule as a personality's.
 pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+
+/// Closes the natural-chat block: there the personality sets length too.
+pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
@@ -47,7 +68,7 @@ pub enum TalkStyle {
     Quiet,
     /// Creative: the draft, then one line.
     Draft,
-    /// Care-first casual chat. The length is a target, not a hard stop.
+    /// Hanging out: the personality sets the length, and there is no cap.
     Natural,
 }
 
@@ -89,8 +110,7 @@ impl TalkStyle {
             Self::Findings => Some(AFTER_CARD_WORDS),
             Self::Summary => Some(SUMMARY_WORDS),
             Self::Quiet => Some(QUIET_WORDS),
-            Self::Draft => None,
-            Self::Natural => Some(SHORT_REPLY_WORDS),
+            Self::Draft | Self::Natural => None,
         }
     }
 
@@ -104,7 +124,7 @@ impl TalkStyle {
             Self::Summary => ("summary with links", "under"),
             Self::Quiet => ("quiet", "under"),
             Self::Draft => ("draft", ""),
-            Self::Natural => ("natural", "about"),
+            Self::Natural => return "natural, personality sets length".into(),
         };
         match self.reply_cap_words() {
             Some(words) => format!("{name}, {cap} {words} words"),
@@ -118,7 +138,7 @@ impl TalkStyle {
     }
 
     /// [`block`] with soft length targets on the 60, 150 and 120 styles.
-    /// Natural always uses the soft casual target. Other styles stay exact.
+    /// Natural has no target. Other styles stay exact.
     pub fn prompt_block(self, soft: bool) -> String {
         let body = match self {
             Self::Short if soft => format!(
@@ -149,9 +169,11 @@ impl TalkStyle {
                 "background work. Say only what the person needs, under {QUIET_WORDS} words; leave suggestions as one-tap cards."
             ),
             Self::Draft => "creative. Deliver the draft itself, then at most one line about it.".into(),
-            Self::Natural => format!(
-                "natural conversation. Aim for about {SHORT_REPLY_WORDS} words, and go longer when care needs it. No headings, lists or preamble."
-            ),
+            Self::Natural => {
+                return format!(
+                    "{STYLE_HEAD} natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n{NATURAL_LINE}"
+                )
+            }
         };
         format!("{STYLE_HEAD} {body}\n{STYLE_LINE}")
     }
@@ -172,7 +194,7 @@ pub fn soft_cap_words(style: TalkStyle) -> Option<usize> {
     let hard = style.reply_cap_words()?;
     let slack = matches!(
         style,
-        TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress | TalkStyle::Natural
+        TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress
     );
     Some(if slack { hard + hard / 5 * 2 } else { hard })
 }
@@ -183,15 +205,16 @@ pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
         .is_none_or(|cap| reply_words(reply) <= cap)
 }
 
-/// The care-first check. Short, concise, progress and natural may run past
+/// The care-first check. Short, concise and progress may run past
 /// the hard target up to [`soft_cap_words`].
 pub fn fits_soft_cap(style: TalkStyle, reply: &str) -> bool {
     soft_cap_words(style).is_none_or(|cap| reply_words(reply) <= cap)
 }
 
 /// The system prompt with this turn's style block: an earlier style block is
-/// replaced, and the block sits before [`VOLATILE_SAFETY_CLOSER`], which is
-/// added when the prompt has none. Paragraphs are split on blank lines, so the
+/// replaced, and the block sits before the closer ([`safety_closer`]), which is
+/// added when the prompt has none: the adults-only one when an explicit
+/// preset's voice is in the prompt. Paragraphs are split on blank lines, so the
 /// rest of the prompt is kept byte for byte.
 pub fn restyle(system: &str, style: TalkStyle) -> String {
     restyle_caps(system, style, false)
@@ -206,11 +229,13 @@ pub fn restyle_caps(system: &str, style: TalkStyle, soft: bool) -> String {
     };
     paras.retain(|p| !p.starts_with(STYLE_HEAD));
     let block = style.prompt_block(soft);
-    match paras.iter().rposition(|p| *p == VOLATILE_SAFETY_CLOSER) {
+    match paras.iter().rposition(|p| is_closer(p)) {
         Some(at) => paras.insert(at, &block),
         None => {
             paras.push(&block);
-            paras.push(VOLATILE_SAFETY_CLOSER);
+            paras.push(safety_closer(
+                system.contains(crate::adult_guard::ADULT_VOICE),
+            ));
         }
     }
     paras.join("\n\n")
@@ -227,7 +252,7 @@ mod tests {
 
     #[test]
     fn each_shipped_row_names_its_style() {
-        assert_eq!(style("chat", "casual"), TalkStyle::Short);
+        assert_eq!(style("chat", "casual"), TalkStyle::Natural);
         assert_eq!(style("question", "careful"), TalkStyle::Concise);
         assert_eq!(style("question", "casual"), TalkStyle::Concise);
         assert_eq!(style("task", "careful"), TalkStyle::Progress);
@@ -253,7 +278,7 @@ mod tests {
                 soft_cap_words(TalkStyle::Progress),
                 soft_cap_words(TalkStyle::Natural),
             ),
-            (Some(84), Some(210), Some(168), Some(84))
+            (Some(84), Some(210), Some(168), None)
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
         assert_eq!(TalkStyle::Concise.reply_cap_words(), Some(150));
@@ -269,15 +294,9 @@ mod tests {
         assert!(TalkStyle::Progress
             .prompt_block(true)
             .contains("about 120 words"));
-        assert!(TalkStyle::Natural.block().contains("about 60 words"));
-        assert!(TalkStyle::Natural
-            .block()
-            .contains("go longer when care needs it"));
-        let past_hard = "word ".repeat(61);
         let past_soft = "word ".repeat(85);
-        assert!(!fits_cap(TalkStyle::Natural, &past_hard));
-        assert!(fits_soft_cap(TalkStyle::Natural, &past_hard));
-        assert!(!fits_soft_cap(TalkStyle::Natural, &past_soft));
+        assert!(fits_cap(TalkStyle::Natural, &"word ".repeat(400)));
+        assert!(fits_soft_cap(TalkStyle::Natural, &"word ".repeat(400)));
         assert!(fits_soft_cap(TalkStyle::Short, &"word ".repeat(84)));
         assert!(!fits_soft_cap(TalkStyle::Short, &past_soft));
         assert_eq!(soft_cap_words(TalkStyle::Findings), Some(80));
@@ -301,6 +320,22 @@ mod tests {
         assert!(fits_cap(TalkStyle::Draft, &rambling));
         assert!(TalkStyle::Progress.progress_notes() && TalkStyle::Findings.progress_notes());
         assert!(!TalkStyle::Short.progress_notes() && !TalkStyle::Summary.progress_notes());
+    }
+
+    #[test]
+    fn hanging_out_lets_the_personality_set_length_and_never_signs_off() {
+        let block = TalkStyle::Natural.block();
+        assert_eq!(
+            block,
+            "Talk style for this turn: natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n\
+             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+        );
+        assert_eq!(TalkStyle::Natural.prompt_block(true), block);
+        assert!(!block.contains("words"));
+        assert!(!block.contains(STYLE_LINE));
+        // Task turns keep their caps.
+        assert!(TalkStyle::Progress.block().contains("under 120 words"));
+        assert!(TalkStyle::Concise.block().contains(STYLE_LINE));
     }
 
     #[test]
@@ -392,7 +427,7 @@ mod tests {
                 ("summary with links, under 200 words".to_string(), Some(200)),
                 ("quiet, under 40 words".to_string(), Some(40)),
                 ("draft, no length cap".to_string(), None),
-                ("natural, about 60 words".to_string(), Some(60)),
+                ("natural, personality sets length".to_string(), None),
             ]
         );
         for (style, reply) in GOLDEN {
@@ -422,6 +457,7 @@ mod tests {
     fn every_shipped_personality_composes_with_every_style() {
         for p in crate::personality::builtins() {
             let voice = p.prompt_block();
+            let closer = safety_closer(p.explicit);
             let system = if voice.is_empty() {
                 "RULES".to_string()
             } else {
@@ -431,7 +467,7 @@ mod tests {
                     "{}: a blank line would split the voice",
                     p.id
                 );
-                format!("RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}")
+                format!("RULES\n\n{voice}\n\n{closer}")
             };
             for style in ALL {
                 let out = restyle(&system, style);
@@ -440,7 +476,7 @@ mod tests {
                 assert_eq!(out.matches(STYLE_HEAD).count(), 1, "{} {style:?}", p.id);
                 assert!(out.starts_with("RULES\n\n"), "{} {style:?}", p.id);
                 assert!(
-                    out.ends_with(&format!("{block}\n\n{VOLATILE_SAFETY_CLOSER}")),
+                    out.ends_with(&format!("{block}\n\n{closer}")),
                     "{} {style:?}",
                     p.id
                 );
@@ -462,5 +498,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_explicit_voice_gets_the_adult_closer_and_every_other_voice_the_old_one() {
+        assert_eq!(safety_closer(false), VOLATILE_SAFETY_CLOSER);
+        assert_eq!(
+            VOLATILE_SAFETY_CLOSER,
+            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone."
+        );
+        assert_eq!(
+            safety_closer(true),
+            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
+        );
+        // A prompt with no closer yet gets the one that fits its voice.
+        let whore = crate::personality::builtin("whore").prompt_block();
+        let out = restyle(&format!("RULES\n\n{whore}"), TalkStyle::Natural);
+        assert!(
+            out.ends_with(&format!("\n\n{VOLATILE_SAFETY_CLOSER_ADULT}")),
+            "{out}"
+        );
+        assert_eq!(out.matches("always win over notes").count(), 1);
+        let pirate = crate::personality::builtin("pirate").prompt_block();
+        let out = restyle(&format!("RULES\n\n{pirate}"), TalkStyle::Natural);
+        assert!(
+            out.ends_with(&format!("\n\n{VOLATILE_SAFETY_CLOSER}")),
+            "{out}"
+        );
+        // An adult closer already there is found, not doubled.
+        let adult = format!("RULES\n\n{whore}\n\n{VOLATILE_SAFETY_CLOSER_ADULT}");
+        let styled = restyle(&adult, TalkStyle::Short);
+        assert_eq!(
+            styled,
+            format!(
+                "RULES\n\n{whore}\n\n{}\n\n{VOLATILE_SAFETY_CLOSER_ADULT}",
+                TalkStyle::Short.block()
+            )
+        );
     }
 }

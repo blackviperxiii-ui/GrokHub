@@ -40,6 +40,12 @@ pub(super) struct SetupWizard {
     pub(super) runtime_dl_error: Option<String>,
     /// Checked this launch (or since Local AI was turned on) that llama-server is here.
     pub(super) engine_checked: bool,
+    /// The model whose Download was clicked once: its size and free disk show
+    /// with a second button before anything downloads.
+    pub(super) confirm_dl: Option<&'static str>,
+    /// Free disk read when that confirm opened, so it isn't the figure from
+    /// launch after other downloads filled the drive.
+    pub(super) confirm_free_mb: Option<u64>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -61,6 +67,18 @@ pub(super) fn device_for(hw: &Hardware) -> Device {
         battery_low: false,
         low_end: ls::low_end(hw),
     }
+}
+
+/// Shown where the model dropdown goes until the hardware read lands.
+pub(super) const CHECKING_HW: &str = "Checking this machine's GPU, memory and free disk…";
+
+/// The hardware read came back without the PC's memory, so nothing can be
+/// recommended from it.
+pub(super) const HW_UNKNOWN: &str = "Couldn't read this PC's memory, so there's no recommended model. The smallest is picked; choose a bigger one only if you know it fits.";
+
+/// A hardware read that failed: `detect_hardware` reports unread memory as 0.
+pub(super) fn hw_unknown(hw: &Hardware) -> bool {
+    hw.ram_mb == 0
 }
 
 pub(super) const SETUP_DONE_STATUS: &str =
@@ -280,6 +298,12 @@ impl Cabin {
     pub(super) fn open_setup(&mut self, step: SetupStep) {
         self.setup.checked = true;
         self.setup.step = Some(step);
+        self.read_setup_hardware();
+    }
+
+    /// Start reading the GPU, memory and free disk off the UI thread, once.
+    /// The wizard and Settings › Local AI both pick the default from it.
+    pub(super) fn read_setup_hardware(&mut self) {
         if self.setup.hw.is_none() && self.setup.hw_rx.is_none() {
             let (tx, rx) = mpsc::channel();
             self.setup.hw_rx = Some(rx);
@@ -403,10 +427,7 @@ impl Cabin {
                 crate::cards::settings_note(ui, &ls::suggestion_line(hw));
                 pick = self.ui_model_choice(ui);
             }
-            None => crate::cards::settings_note(
-                ui,
-                "Checking this machine's GPU, memory and free disk…",
-            ),
+            None => crate::cards::settings_note(ui, CHECKING_HW),
         }
         crate::cards::settings_note(ui, &format!("Models go to {}.", models_dir().display()));
         let dl_model = self.setup.dl.as_ref().map(|d| d.model);
