@@ -7,6 +7,7 @@ mod edit;
 mod live;
 mod page;
 mod paint;
+mod pc_sheet;
 #[cfg(test)]
 mod tile_tests;
 

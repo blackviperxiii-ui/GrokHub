@@ -42,10 +42,7 @@ fn scan_input() -> ScanInput {
         .unwrap_or_default();
     let profile = super::local_probe::read_profile(&home);
     let gpu = profile
-        .gpus
-        .iter()
-        .find(|g| !g.integrated)
-        .or_else(|| profile.gpus.first())
+        .main_gpu()
         .map(|g| g.name.trim().to_string())
         .unwrap_or_default();
     let locale = ["LC_ALL", "LANG"]
