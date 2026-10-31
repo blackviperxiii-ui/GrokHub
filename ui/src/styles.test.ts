@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import CSS from "./styles.css?raw";
+import RAW_CSS from "./styles.css?raw";
+
+// A Windows checkout reads the file with CRLF; the multi-line selectors
+// below are matched with LF.
+const CSS = RAW_CSS.replace(/\r\n/g, "\n");
 
 // Error text (`--danger-text`) must read at WCAG AA (4.5:1) on every
 // theme's page (`--bg`) and card (`--panel`) backgrounds. `--danger` stays for
