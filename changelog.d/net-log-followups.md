@@ -1,1 +1,0 @@
-- The internet drop log now raises "Offline since …" and "Back online" as toasts on every page, saves the CSV to Downloads under USERPROFILE on Windows, and counts a minute as slow only when the connect takes more than 300 ms.

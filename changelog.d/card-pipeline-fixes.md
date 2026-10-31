@@ -1,1 +1,0 @@
-- CI: beta auto-merge now fires (it never ran from beta), card sync reads the Loadout project, and merged card PRs close their issue and card.

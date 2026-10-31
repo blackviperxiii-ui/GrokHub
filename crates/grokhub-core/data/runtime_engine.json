@@ -1,28 +1,28 @@
 {
-  "version": "b11602",
+  "version": "b12017",
   "platforms": {
     "linux-x86_64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-ubuntu-vulkan-x64.tar.gz",
-      "size": 30359972,
-      "sha256": "c6854a5a32a0b0e9b3afa833b267b3dbf1a1d0c98b88f8a8adff934e684f2b75",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-vulkan-x64.tar.gz",
+      "size": 35665113,
+      "sha256": "e940a901831c2e157b6329b8738f6edd6b036889c07e4e39d4fc818831220f61",
       "format": "tar.gz"
     },
     "linux-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-ubuntu-arm64.tar.gz",
-      "size": 13842373,
-      "sha256": "442ddd53f40d7d84c996abe2c9f41829bfacf1a84f535d7964e56d62495cbcc1",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-arm64.tar.gz",
+      "size": 18571024,
+      "sha256": "676e8f99db67fbecd7854b948ed50d0bf5d7db463613fc8fcd8f4491a7709bec",
       "format": "tar.gz"
     },
     "windows-x86_64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-win-vulkan-x64.zip",
-      "size": 32127294,
-      "sha256": "f3fd64464b6fa4d81477c57770886cac9f63ef8d29ba26b3f5fc8ef91b18b797",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-vulkan-x64.zip",
+      "size": 37514219,
+      "sha256": "e3d43788fed7b2e5983320975cb21d91fbc2579698a497f0f8cecbe9c029312b",
       "format": "zip"
     },
     "windows-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-win-cpu-arm64.zip",
-      "size": 12383328,
-      "sha256": "ae948d97623572f1a9a937a53c7e0cc1491fab4528f1ed0ee4d612895062bbf4",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-cpu-arm64.zip",
+      "size": 13068809,
+      "sha256": "602a97c5bbf770713c6ef15ca395ef0ae27e19022735b8c2eeec3ec4bc29c549",
       "format": "zip"
     }
   }

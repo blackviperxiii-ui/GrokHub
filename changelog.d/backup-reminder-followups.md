@@ -1,1 +1,0 @@
-- Backup reminders: a snooze that can't be saved now says so, the reminder's one-taps come back after a restart while its Pulse post is still up, and a backup tool with no snapshots yet is named instead of "no backup tool was found".

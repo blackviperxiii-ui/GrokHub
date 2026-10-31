@@ -1,2 +1,0 @@
-- Pulse offers the two off-by-default PC helpers once each, under its header: "Offer to sleep the PC late at night?" and "Suggest Downloads cleanups?", with Turn on and Not now. Not now stops that offer for good.
-- Settings › Behavior lists Late-night wind-down and Downloads cleanups first, under "PC helpers", so a small window no longer clips them.

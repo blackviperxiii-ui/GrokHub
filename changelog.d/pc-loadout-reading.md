@@ -1,1 +1,0 @@
-- The PC loadout header now shows a real, labeled number, "RAM N% used", instead of an unlabeled health score. That score read 100% whenever heat couldn't be read, which is most Windows PCs. The header stays blank until free memory has been read, and the small GPU temp tile says "Sensors unavailable" whenever heat wasn't read.
