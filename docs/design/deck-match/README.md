@@ -8,4 +8,4 @@ Each change keeps its own page here, so two changes never edit the same file:
 - Don't add rows to this README. It only explains the layout.
 - List every page with `ls docs/design/deck-match/*.md`.
 
-Shots come from `scripts/deck-shots.ps1` on the Windows CI job (`deck-shots` artifact, and base64 JPEGs between `DECK-SHOT-BEGIN` / `DECK-SHOT-END` markers in the job log). The shot list lives in `scripts/deck-shots.list.ps1`.
+Shots come from `scripts/deck-shots.ps1` in the manual `Deck shots` workflow (`.github/workflows/deck-shots.yml`; pick shots with its `only` input; `deck-shots` artifact, and base64 JPEGs between `DECK-SHOT-BEGIN` / `DECK-SHOT-END` markers in the job log). The shot list lives in `scripts/deck-shots.list.ps1`.

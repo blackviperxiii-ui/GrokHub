@@ -151,6 +151,17 @@ jobs:
       - name: Package
         shell: pwsh
         run: ./scripts/make-windows-release.ps1
+      # Pack script locks and the release binary size ceiling (needs the
+      # binary Package just built). ci.yml's windows-release runs these only
+      # on the nightly now, so they gate every release here.
+      - name: Pack script locks
+        shell: pwsh
+        run: ./scripts/make-windows-release.tests.ps1
+      - name: No Electron leftover
+        shell: pwsh
+        run: |
+          if (Test-Path package.json) { throw 'electron leftover' }
+          if (Test-Path desktop) { throw 'electron leftover' }
       # Authenticode via SignPath Foundation. No-op until secrets/vars exist.
       # Only tags are signed (every beta push would spam approvals).
       - name: Detect SignPath configuration
