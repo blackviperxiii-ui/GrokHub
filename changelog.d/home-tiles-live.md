@@ -1,0 +1,1 @@
+- Home: the AI usage, Game Mode and Connection tiles show real numbers (tokens today against your cap and this week's spend, the game the guard sees, sends in the last day) instead of placeholders, and their buttons open the right Settings section.

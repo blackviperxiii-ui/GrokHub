@@ -103,9 +103,18 @@ pub(super) enum BudgetCard {
     Nudge(String),
 }
 
+/// The minute tally Home's AI usage tile reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct WeekSpend {
+    pub usd: f64,
+    pub pct: Option<u8>,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct BudgetUi {
-    pub rx: Option<mpsc::Receiver<(Budget, NudgeFacts)>>,
+    pub rx: Option<mpsc::Receiver<(Budget, NudgeFacts, f64)>>,
+    /// This week's model spend in USD and its share of the cap, from the last tally.
+    pub week: Option<WeekSpend>,
     pub last: Option<Instant>,
     pub card: Option<BudgetCard>,
     pub facts: NudgeFacts,
@@ -213,7 +222,10 @@ impl Cabin {
     pub(super) fn tick_budget(&mut self, now: u64) {
         if let Some(rx) = self.harness.router.budget.rx.take() {
             match rx.try_recv() {
-                Ok((b, facts)) => self.budget_landed(&b, facts, now),
+                Ok((b, facts, usd)) => {
+                    self.harness.router.budget.week = Some(WeekSpend { usd, pct: b.pct });
+                    self.budget_landed(&b, facts, now);
+                }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.budget.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {}
             }
@@ -234,13 +246,10 @@ impl Cabin {
         self.harness.router.budget.rx = Some(rx);
         std::thread::spawn(move || {
             let reg = load_registry(&dir);
-            let b = Budget::of(
-                &budget::load_week(&dir, &reg, now),
-                reg.entitlement.credential,
-                cap,
-            );
+            let week = budget::load_week(&dir, &reg, now);
+            let b = Budget::of(&week, reg.entitlement.credential, cap);
             let facts = budget::nudge_facts(&budget::read_records(&dir), now);
-            let _ = tx.send((b, facts));
+            let _ = tx.send((b, facts, week.spent_usd));
         });
     }
 
