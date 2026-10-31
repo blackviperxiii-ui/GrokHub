@@ -16,9 +16,22 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
-use grokhub_core::companion::Mood;
+use grokhub_core::companion::{Mood, Outfit};
 
+use super::desktop_anim as anim;
 use super::*;
+
+/// A loaded outfit picture and its hit mask.
+type Cached = (egui::TextureHandle, Option<HitMask>);
+
+/// Window-side animation state, kept on the viewport's context: which
+/// outfit is up, and the one fading out when it just changed.
+#[derive(Clone)]
+struct WindowAnim {
+    outfit: String,
+    prev: Option<Cached>,
+    fade_start: f64,
+}
 
 /// The window in points.
 pub(super) const WINDOW_SIZE: Vec2 = Vec2::new(320.0, 480.0);
@@ -587,21 +600,12 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
     }
     let painter = ui.painter().with_clip_rect(frame);
     crate::pedestal::paint(&painter, frame, t, snap.still, &colors);
-    let tex = outfit_texture(ui.ctx(), snap.mood, snap.adults_ok);
+    let (tex, outfit) = outfit_texture(ui.ctx(), snap.mood, snap.adults_ok);
     let art = tex
         .as_ref()
         .map(|(tex, _)| art_rect(frame, tex.size()))
         .unwrap_or(frame);
-    if let Some((tex, _)) = &tex {
-        let bob = if snap.still {
-            0.0
-        } else {
-            ((t * std::f64::consts::TAU / 4.0).sin() as f32) * 3.0
-        };
-        egui::Image::from_texture(tex)
-            .corner_radius(crate::theme::RADIUS_SM)
-            .paint_at(ui, art.translate(Vec2::new(0.0, bob)));
-    }
+    let fading = paint_companion(ui, &painter, art, tex.as_ref(), outfit, t, snap.still);
     let resp = ui.interact(
         frame,
         ui.id().with("desktop-nyx"),
@@ -651,9 +655,119 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
         sh.monitor = monitor;
         sh.over_art = over;
     }
-    if let Some(wait) = repaint_after(true, snap.still, false) {
+    if let Some(wait) = repaint_after(true, snap.still && !fading, false) {
         ui.ctx().request_repaint_after(wait);
+    } else if !snap.still {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(anim::blink_next_change(t)));
     }
+}
+
+/// Nyx herself: breathing and bobbing, blinking when her outfit has an
+/// eyes patch, and crossfading with a scanline sweep when the outfit just
+/// changed. Returns whether a fade is still running.
+fn paint_companion(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    art: Rect,
+    tex: Option<&Cached>,
+    outfit: &Outfit,
+    t: f64,
+    still: bool,
+) -> bool {
+    let anim_id = ui.id().with("desktop-nyx-anim");
+    let mut state = ui
+        .ctx()
+        .data(|d| d.get_temp::<WindowAnim>(anim_id))
+        .unwrap_or_else(|| WindowAnim {
+            outfit: outfit.id.clone(),
+            prev: None,
+            fade_start: f64::NEG_INFINITY,
+        });
+    if state.outfit != outfit.id {
+        // Keep the old picture for the fade; its texture is cached on the
+        // context under the old outfit's key.
+        let prev_id = egui::Id::new(format!("desktop-nyx-{}", state.outfit).as_str());
+        state.prev = ui.ctx().data(|d| d.get_temp::<Cached>(prev_id));
+        state.outfit = outfit.id.clone();
+        state.fade_start = t;
+    }
+    let fading = !still && anim::fading(t, state.fade_start);
+    let k = anim::fade_k(t, state.fade_start, still);
+    let b = anim::breath(t, still);
+    let bob = anim::bob(t, still);
+    let art_b = art.translate(Vec2::new(0.0, bob));
+    if fading {
+        if let Some((prev, _)) = &state.prev {
+            painter.add(egui::Shape::mesh(anim::breath_mesh(
+                prev.id(),
+                art_b,
+                b,
+                anim::fade_tint(1.0 - k),
+            )));
+        }
+    }
+    if let Some((tex, _)) = tex {
+        painter.add(egui::Shape::mesh(anim::breath_mesh(
+            tex.id(),
+            art_b,
+            b,
+            anim::fade_tint(k),
+        )));
+        if anim::blink_closed(t, still) {
+            if let Some(eyes) = &outfit.eyes {
+                if let Some(patch) = patch_texture(ui.ctx(), &eyes.file) {
+                    let r = anim::patch_rect(
+                        art_b,
+                        tex.size(),
+                        Pos2::new(eyes.x, eyes.y),
+                        patch.size(),
+                        anim::head_lift(art, b),
+                    );
+                    egui::Image::from_texture(&patch)
+                        .tint(anim::fade_tint(k))
+                        .paint_at(ui, r);
+                }
+            }
+        }
+    }
+    if fading {
+        let band = anim::scan_band(art_b, k);
+        painter
+            .with_clip_rect(art_b)
+            .rect_filled(band, 0.0, Color32::from_white_alpha(48));
+    }
+    if !fading {
+        state.prev = None;
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(anim_id, state));
+    fading
+}
+
+/// A patch picture (eyes closed, a mouth shape) read from its file and
+/// cached on the context. Patch files are paths as the outfit file gives
+/// them; a missing file means no patch, and the outfit simply doesn't
+/// blink.
+fn patch_texture(ctx: &egui::Context, file: &str) -> Option<egui::TextureHandle> {
+    let key = format!("desktop-nyx-patch-{file}");
+    let id = egui::Id::new(key.as_str());
+    if let Some(c) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return c;
+    }
+    let tex = std::fs::read(file)
+        .ok()
+        .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        .map(|img| {
+            let rgba = img.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            ctx.load_texture(
+                key,
+                egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+                egui::TextureOptions::LINEAR,
+            )
+        });
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
 }
 
 /// The mode whose embedded picture `outfit` is: `mood` itself when the
@@ -673,12 +787,15 @@ fn outfit_texture(
     ctx: &egui::Context,
     mood: Mood,
     adults_ok: bool,
-) -> Option<(egui::TextureHandle, Option<HitMask>)> {
+) -> (Option<Cached>, &'static Outfit) {
     let nyx = grokhub_core::companion::nyx();
     let outfit = nyx.outfit_for(mood, adults_ok);
+    (load_outfit_texture(ctx, outfit, mood), outfit)
+}
+
+fn load_outfit_texture(ctx: &egui::Context, outfit: &Outfit, mood: Mood) -> Option<Cached> {
     let key = format!("desktop-nyx-{}", outfit.id);
     let id = egui::Id::new(key.as_str());
-    type Cached = (egui::TextureHandle, Option<HitMask>);
     if let Some(c) = ctx.data(|d| d.get_temp::<Cached>(id)) {
         return Some(c);
     }
