@@ -465,6 +465,9 @@ impl Cabin {
     /// reply rewrites the last assistant message, so a post there would be lost.
     pub(super) fn post_finished_bg_runs(&mut self) {
         let busy = self.running.then(|| self.chat_job_thread.clone()).flatten();
+        let main_busy = busy.as_deref().is_some_and(|id| {
+            threads::main_thread_index(&self.threads).is_some_and(|i| self.threads[i].id == id)
+        });
         let ready: Vec<usize> = self
             .bg
             .runs
@@ -474,6 +477,7 @@ impl Cabin {
                 r.end.is_some()
                     && busy.as_deref() != Some(r.thread_id.as_str())
                     && !self.scheduled_report_waits(r, busy.as_deref())
+                    && !(main_busy && self.reports_to_main(r))
             })
             .map(|(i, _)| i)
             .collect();
@@ -490,13 +494,14 @@ impl Cabin {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
             if run.origin == BgOrigin::Scheduled {
-                // Its report goes to Follow up and the home feed, never a chat
-                // you can see. The hidden Background chat keeps a copy.
+                // Its report goes to Follow up, the home feed, and Main. The
+                // hidden Background chat keeps a copy.
                 self.push_msg_on(
                     &run.thread_id,
                     "assistant",
                     bg_result_post(&run.title, &end, &reply),
                 );
+                self.post_main_report(&run.title, &end, &reply);
                 self.settle_scheduled_run(run.automation.as_deref(), &end, &reply);
                 threads::file_background_sessions(
                     &mut self.threads,
@@ -505,6 +510,10 @@ impl Cabin {
                 continue;
             }
             if !self.threads.iter().any(|t| t.id == run.thread_id) {
+                // The chat that started it is gone: the report lands in Main.
+                if end != BgEnd::Stopped || !reply.trim().is_empty() {
+                    self.post_main_report(&run.title, &end, &reply);
+                }
                 threads::file_background_sessions(
                     &mut self.threads,
                     std::slice::from_ref(&run.session),
@@ -552,6 +561,19 @@ impl Cabin {
             }
         }
         self.persist();
+    }
+
+    /// Scheduled runs and runs whose chat is gone post their report in Main.
+    fn reports_to_main(&self, run: &BgRun) -> bool {
+        run.origin == BgOrigin::Scheduled || !self.threads.iter().any(|t| t.id == run.thread_id)
+    }
+
+    /// Post a background report in Main. The next turn there hears it too.
+    pub(super) fn post_main_report(&mut self, title: &str, end: &BgEnd, reply: &str) {
+        let idx = self.main_thread_idx();
+        let id = self.threads[idx].id.clone();
+        self.push_msg_on(&id, "assistant", bg_result_post(title, end, reply));
+        self.bg.unread.push((id, bg_result_note(title, end, reply)));
     }
 
     /// A scheduled run's report lands in its Follow up card's chat. While you

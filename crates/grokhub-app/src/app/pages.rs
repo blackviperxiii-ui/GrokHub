@@ -825,15 +825,7 @@ impl Cabin {
                 let mut del: Option<usize> = None;
                 let keys: Vec<threads::SessionSortKey> = shown
                     .iter()
-                    .map(|&i| {
-                        let t = &self.threads[i];
-                        threads::SessionSortKey {
-                            pinned: t.pinned,
-                            pinned_ms: t.pinned_ms,
-                            accessed_ms: t.accessed_ms,
-                            list_rank: 0,
-                        }
-                    })
+                    .map(|&i| threads::sort_key(&self.threads[i]))
                     .collect();
                 let order = threads::session_list_order(&keys);
                 for pos in order {
@@ -842,13 +834,20 @@ impl Cabin {
                     if threads::is_background_history_title(&title) {
                         continue;
                     }
-                    let kind = if keys[pos].pinned { "Pinned" } else { "Chat" };
+                    let main = self.threads[i].main;
+                    let kind = if main {
+                        "Main"
+                    } else if keys[pos].pinned {
+                        "Pinned"
+                    } else {
+                        "Chat"
+                    };
                     match crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Chat,
                         &title,
                         kind,
-                        Some("Delete"),
+                        (!main).then_some("Delete"),
                         false,
                     ) {
                         crate::cards::TileHit::Body => open = Some(i),

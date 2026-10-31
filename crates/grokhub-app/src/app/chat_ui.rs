@@ -2807,7 +2807,8 @@ impl Cabin {
                 } else {
                     "Archive"
                 };
-                if session_menu_row(ui, archive_label, !self.messages.is_empty()) {
+                let main = self.threads.get(self.thread_idx).is_some_and(|t| t.main);
+                if session_menu_row(ui, archive_label, !main && !self.messages.is_empty()) {
                     self.toggle_archive_current();
                 }
             });

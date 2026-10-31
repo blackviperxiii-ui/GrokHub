@@ -76,6 +76,10 @@ pub struct ChatThread {
     /// default in Settings.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub personality: String,
+    /// The permanent Main chat. It is never archived, deleted, or filed into a
+    /// project, always lists first, and background reports post into it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub main: bool,
 }
 
 impl ChatThread {
@@ -105,6 +109,7 @@ impl ChatThread {
             native: false,
             native_carry: false,
             personality: String::new(),
+            main: false,
         }
     }
 
@@ -548,6 +553,61 @@ pub fn adopt_sessions_from(
     found.into_iter().map(|(_, t)| t).collect()
 }
 
+/// Title of the permanent Main chat.
+pub const MAIN_THREAD_TITLE: &str = "Main";
+
+pub fn main_thread_index(threads: &[ChatThread]) -> Option<usize> {
+    threads.iter().position(|t| t.main)
+}
+
+/// Keep exactly one live Main chat and return its index. A missing one is
+/// added at the end; a second one (hand-edited file) goes back to a plain chat.
+pub fn ensure_main_thread(threads: &mut Vec<ChatThread>) -> usize {
+    let mut found = None;
+    for (i, t) in threads.iter_mut().enumerate() {
+        if !t.main {
+            continue;
+        }
+        if found.is_some() {
+            t.main = false;
+            continue;
+        }
+        found = Some(i);
+        t.archived_at = None;
+        t.deleted_at = None;
+        t.background = false;
+        t.scratch = false;
+        t.project_id = None;
+        t.title_locked = true;
+    }
+    if let Some(i) = found {
+        return i;
+    }
+    let mut created = ChatThread::new(MAIN_THREAD_TITLE, false);
+    created.main = true;
+    created.title_locked = true;
+    threads.push(created);
+    threads.len() - 1
+}
+
+/// Sort key for chat lists. Main sorts above every pinned chat.
+pub fn sort_key(t: &ChatThread) -> SessionSortKey {
+    if t.main {
+        return SessionSortKey {
+            pinned: true,
+            pinned_ms: u64::MAX,
+            accessed_ms: t.accessed_ms,
+            list_rank: 0,
+        };
+    }
+    SessionSortKey {
+        pinned: t.pinned,
+        pinned_ms: t.pinned_ms,
+        accessed_ms: t.accessed_ms,
+        list_rank: 0,
+    }
+}
+
 /// One History row for [`session_list_order`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionSortKey {
@@ -585,6 +645,9 @@ fn listed_user_chat(
     if thread.archived_at.is_some() || thread.deleted_at.is_some() {
         return false;
     }
+    if thread.main {
+        return true;
+    }
     let empty = if Some(index) == live_idx {
         live_empty
     } else {
@@ -607,9 +670,9 @@ pub fn is_archived(thread: &ChatThread) -> bool {
     thread.archived_at.is_some()
 }
 
-/// Archive a chat. Returns false when it was already archived.
+/// Archive a chat. Returns false when it was already archived or is Main.
 pub fn archive_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
-    if thread.archived_at.is_some() || thread.deleted_at.is_some() {
+    if thread.main || thread.archived_at.is_some() || thread.deleted_at.is_some() {
         return false;
     }
     thread.archived_at = Some(now_ms);
@@ -628,10 +691,10 @@ pub fn is_deleted(thread: &ChatThread) -> bool {
     thread.deleted_at.is_some()
 }
 
-/// Move a chat to trash. Returns false when it was already deleted.
+/// Move a chat to trash. Returns false when it was already deleted or is Main.
 /// Does not touch agent memory or native sessions.
 pub fn soft_delete_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
-    if thread.deleted_at.is_some() {
+    if thread.main || thread.deleted_at.is_some() {
         return false;
     }
     thread.deleted_at = Some(now_ms);
@@ -676,6 +739,7 @@ pub fn should_auto_archive(thread: &ChatThread, now_ms: u64, days: u32, busy: bo
     if days == 0
         || busy
         || thread.pinned
+        || thread.main
         || thread.background
         || thread.archived_at.is_some()
         || thread.deleted_at.is_some()

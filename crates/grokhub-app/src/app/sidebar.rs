@@ -918,15 +918,9 @@ impl Cabin {
             if threads::is_background_history_title(&title) {
                 continue;
             }
-            let t = &self.threads[i];
             rows.push(Row {
                 title,
-                key: threads::SessionSortKey {
-                    pinned: t.pinned,
-                    pinned_ms: t.pinned_ms,
-                    accessed_ms: t.accessed_ms,
-                    list_rank: 0,
-                },
+                key: threads::sort_key(&self.threads[i]),
                 idx: i,
             });
         }
@@ -962,6 +956,10 @@ impl Cabin {
                 .inner;
             if resp.clicked() {
                 act = Some(TabAct::Switch(i));
+            }
+            // Main has no Pin, Archive, Rename, or Delete.
+            if self.threads.get(i).is_some_and(|t| t.main) {
+                continue;
             }
             if resp.double_clicked() {
                 act = Some(TabAct::StartRename(i));
