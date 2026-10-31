@@ -1,0 +1,1 @@
+- Internal: the Offline only network-exit test now counts the on-device model's loopback /props read (added by #1169), so beta's tests pass again. No behavior change.
