@@ -1418,10 +1418,39 @@ pub fn capture_data_url() -> Result<String, String> {
     Ok(jpeg_data_url(&bytes))
 }
 
+/// Make `dir` for this user alone: it must not exist yet, and on Unix only
+/// the owner can enter it. A shared temp folder lets anyone pre-create a
+/// fixed name and then read or swap what is written inside.
+pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(dir)
+    }
+}
+
+/// A file in this run's private temp folder, made on first use under a
+/// random name. Voice clips, pasted pictures and spoken replies go here
+/// rather than under a fixed name in the shared temp folder.
+pub(crate) fn private_temp(name: &str) -> Result<PathBuf, String> {
+    static DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("grokhub-{}", grokhub_core::new_token()));
+        create_private_dir(&dir)
+            .map(|()| dir)
+            .map_err(|e| format!("temp folder: {e}"))
+    });
+    dir.as_ref().map(|d| d.join(name)).map_err(Clone::clone)
+}
+
 pub const PLAYERS: &[&str] = &["ffplay", "mpv", "paplay"];
 
 pub fn record_once() -> Result<PathBuf, String> {
-    let wav = std::env::temp_dir().join("grokhub-voice.wav");
+    let wav = private_temp("voice.wav")?;
     record_wav(&wav)?;
     Ok(wav)
 }
@@ -1938,7 +1967,7 @@ fn wayland_display_for_tools() -> Option<String> {
 }
 
 pub fn clipboard_image() -> Option<PathBuf> {
-    let dest = std::env::temp_dir().join("grokhub-clip.png");
+    let dest = private_temp("clip.png").ok()?;
     #[cfg(windows)]
     {
         let png = crate::win_native::clipboard_image().and_then(|(bytes, is_png)| {
@@ -2042,6 +2071,38 @@ pub fn clipboard_once() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_private_dir_refuses_a_folder_that_already_exists() {
+        let dir = std::env::temp_dir().join(format!("gh-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        create_private_dir(&dir).expect("fresh folder");
+        let again = create_private_dir(&dir).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn private_temp_files_share_one_random_folder() {
+        let voice = private_temp("voice.wav").unwrap();
+        let clip = private_temp("clip.png").unwrap();
+        assert_eq!(voice.parent(), clip.parent());
+        assert_eq!(voice.file_name().unwrap(), "voice.wav");
+        let folder = voice.parent().unwrap();
+        assert_eq!(folder.parent().unwrap(), std::env::temp_dir());
+        let name = folder.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("grokhub-") && name.len() == "grokhub-".len() + 48,
+            "{name}"
+        );
+        assert!(folder.is_dir());
+    }
 
     fn png_crc(data: &[u8]) -> u32 {
         let mut crc = 0xffff_ffffu32;

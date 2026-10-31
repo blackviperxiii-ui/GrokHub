@@ -160,7 +160,9 @@ pub fn mouth_now(slot: &LipSlot) -> Option<Mouth> {
 /// the slot when the player returns. A clip that won't decode still plays,
 /// with the mouth closed.
 pub fn speak_mp3(bytes: Vec<u8>, slot: &LipSlot) {
-    let path = std::env::temp_dir().join("grokhub-speak.mp3");
+    let Ok(path) = crate::desktop::private_temp("speak.mp3") else {
+        return;
+    };
     if std::fs::write(&path, &bytes).is_err() {
         return;
     }
