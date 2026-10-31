@@ -166,18 +166,18 @@ pub fn tool_output_compact_settings(config_dir: &Path) -> ToolOutputCompactSetti
     parse_tool_output_compact_file(&text)
 }
 
+/// `key = value` pairs of a flat config file, `#` comments and blank lines skipped.
+fn config_pairs(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines().filter_map(|line| {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let (key, value) = line.split_once('=')?;
+        Some((key.trim(), value.trim()))
+    })
+}
+
 fn parse_tool_output_compact_file(text: &str) -> ToolOutputCompactSettings {
     let mut settings = ToolOutputCompactSettings::default();
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
+    for (key, value) in config_pairs(text) {
         if key.eq_ignore_ascii_case("enabled") && value.eq_ignore_ascii_case("true") {
             settings.enabled = true;
         } else if key.eq_ignore_ascii_case("min_bytes") {
@@ -393,6 +393,222 @@ fn extractive_tool_output_summary(output: &str) -> String {
         out.push('\n');
     }
     out.trim().to_string()
+}
+
+/// Config file under [`crate::perm::config_dir`] for the history trim pass.
+/// With no file, repeated read-only outputs are dropped and nothing ages out.
+pub const HISTORY_TRIM_CONFIG: &str = "history_trim.toml";
+
+/// The trim pass acts once the history fills this percent of the context window, inclusive.
+pub const HISTORY_TRIM_PERCENT: u8 = 40;
+
+/// Read-only tools whose output a later call with the same arguments makes redundant.
+pub const TRIM_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
+
+/// Default user turns after an output before `age_out` may spool it.
+pub const AGE_OUT_USER_TURNS: usize = 3;
+
+const DROPPED_OUTPUT_PREFIX: &str = "[Output dropped: ";
+
+/// `{config}/history_trim.toml`: `enabled = false` keeps repeated outputs;
+/// `age_out = true` spools big, old outputs (off by default: it trades quality).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryTrimSettings {
+    pub enabled: bool,
+    pub age_out: bool,
+    pub age_out_min_bytes: usize,
+    pub age_out_user_turns: usize,
+}
+
+impl Default for HistoryTrimSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            age_out: false,
+            age_out_min_bytes: TOOL_OUTPUT_COMPACT_MIN_BYTES,
+            age_out_user_turns: AGE_OUT_USER_TURNS,
+        }
+    }
+}
+
+pub fn history_trim_settings(config_dir: &Path) -> HistoryTrimSettings {
+    std::fs::read_to_string(config_dir.join(HISTORY_TRIM_CONFIG))
+        .map(|text| parse_history_trim_file(&text))
+        .unwrap_or_default()
+}
+
+fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
+    let mut settings = HistoryTrimSettings::default();
+    for (key, value) in config_pairs(text) {
+        let flag = || value.parse::<bool>().ok();
+        let count = || value.parse::<usize>().ok().map(|n| n.max(1));
+        match key.to_ascii_lowercase().as_str() {
+            "enabled" => settings.enabled = flag().unwrap_or(settings.enabled),
+            "age_out" => settings.age_out = flag().unwrap_or(settings.age_out),
+            "age_out_min_bytes" => {
+                settings.age_out_min_bytes = count().unwrap_or(settings.age_out_min_bytes)
+            }
+            "age_out_user_turns" => {
+                settings.age_out_user_turns = count().unwrap_or(settings.age_out_user_turns)
+            }
+            _ => {}
+        }
+    }
+    settings
+}
+
+/// One trim pass over `history` as `{config}/history_trim.toml` allows: drop
+/// repeated read-only outputs ([`trim_history`]), then spool old big ones when
+/// `age_out` is on ([`age_out_history`]). Returns how many outputs changed.
+pub fn trim_pass(
+    history: &mut [InputItem],
+    ctx_len: u64,
+    config_dir: &Path,
+    workspace: &Path,
+    conversation_id: &str,
+) -> usize {
+    let settings = history_trim_settings(config_dir);
+    let dropped = if settings.enabled {
+        trim_history(history, ctx_len)
+    } else {
+        0
+    };
+    dropped + age_out_history(history, ctx_len, &settings, workspace, conversation_id)
+}
+
+fn trim_due(history: &[InputItem], ctx_len: u64) -> bool {
+    tokens::exceeds_threshold(
+        estimate_input_tokens(history),
+        ctx_len,
+        HISTORY_TRIM_PERCENT,
+    )
+}
+
+fn already_shrunk(output: &str) -> bool {
+    output.starts_with(DROPPED_OUTPUT_PREFIX) || output.starts_with("<tool_output_compact ")
+}
+
+/// At [`HISTORY_TRIM_PERCENT`] of `ctx_len` or more: when a later [`TRIM_TOOLS`]
+/// call with the same name and the same arguments has a real result in `history`
+/// (not a `not run:` refusal), the older call's output text becomes a short note
+/// naming the newest such call.
+/// Every item stays, so call/output pairs hold; messages, other tools and the
+/// newest of each repeat are never touched. Returns how many outputs changed.
+pub fn trim_history(history: &mut [InputItem], ctx_len: u64) -> usize {
+    if !trim_due(history, ctx_len) {
+        return 0;
+    }
+    let outputs: std::collections::HashMap<&str, &str> = history
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { call_id, output } => {
+                Some((call_id.as_str(), output.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    // Answered read-only calls in history order: (call id, tool, parsed arguments,
+    // whether its output is a real result that can stand in for an older one).
+    let calls: Vec<(String, String, serde_json::Value, bool)> = history
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } if TRIM_TOOLS.contains(&name.as_str()) => {
+                let output = outputs.get(call_id.as_str())?;
+                let args = serde_json::from_str(arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
+                let result = !output.starts_with("not run:") && !already_shrunk(output);
+                Some((call_id.clone(), name.clone(), args, result))
+            }
+            _ => None,
+        })
+        .collect();
+    let notes: std::collections::HashMap<&str, String> = calls
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (id, name, args, _))| {
+            let (newest, ..) = calls[i + 1..]
+                .iter()
+                .rev()
+                .find(|(_, n, a, result)| *result && n == name && a == args)?;
+            Some((
+                id.as_str(),
+                format!(
+                    "{DROPPED_OUTPUT_PREFIX}{name} ran again later with the same arguments \
+                     (call {newest}). Use that result.]"
+                ),
+            ))
+        })
+        .collect();
+    let mut changed = 0;
+    for item in history.iter_mut() {
+        if let InputItem::FunctionCallOutput { call_id, output } = item {
+            if let Some(note) = notes.get(call_id.as_str()) {
+                if !already_shrunk(output) {
+                    *output = note.clone();
+                    changed += 1;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// With `settings.age_out` on and the history at [`HISTORY_TRIM_PERCENT`] of
+/// `ctx_len` or more: a tool output of at least `age_out_min_bytes` with
+/// `age_out_user_turns` or more user messages after it is spooled under the
+/// workspace (as [`maybe_compact_tool_output`] does) and replaced with an
+/// extractive summary plus its handle and path. No model call. Returns how
+/// many outputs changed.
+pub fn age_out_history(
+    history: &mut [InputItem],
+    ctx_len: u64,
+    settings: &HistoryTrimSettings,
+    workspace: &Path,
+    conversation_id: &str,
+) -> usize {
+    if !settings.age_out || !trim_due(history, ctx_len) {
+        return 0;
+    }
+    let names: std::collections::HashMap<String, String> = history
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCall { call_id, name, .. } => Some((call_id.clone(), name.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut users_after = 0usize;
+    let mut changed = 0;
+    for item in history.iter_mut().rev() {
+        match item {
+            InputItem::Message { role, .. } if role == "user" => users_after += 1,
+            InputItem::FunctionCallOutput { call_id, output }
+                if users_after >= settings.age_out_user_turns
+                    && output.len() >= settings.age_out_min_bytes
+                    && !already_shrunk(output) =>
+            {
+                let Ok((handle, rel_path)) =
+                    spool_tool_output(workspace, conversation_id, call_id, output)
+                else {
+                    continue;
+                };
+                let tool = names.get(call_id.as_str()).map_or("tool", String::as_str);
+                *output = format_tool_output_compact_message(
+                    tool,
+                    &handle,
+                    &rel_path,
+                    &extractive_tool_output_summary(output),
+                    output.len(),
+                );
+                changed += 1;
+            }
+            _ => {}
+        }
+    }
+    changed
 }
 
 struct ToolOutputSummaryCall {
@@ -1303,6 +1519,10 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 #[cfg(test)]
 #[path = "compact_server_tests.rs"]
 mod server_tests;
+
+#[cfg(test)]
+#[path = "compact_trim_tests.rs"]
+mod trim_tests;
 
 #[cfg(test)]
 mod tests {

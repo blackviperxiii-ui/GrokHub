@@ -529,6 +529,9 @@ pub fn run_loop(
     let mut turns = 0u32;
     let guard_key =
         crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
+    // At most one trim pass changes the history per turn, so it costs the prompt
+    // cache one miss and later requests extend the trimmed history again.
+    let mut trimmed = false;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
@@ -548,6 +551,18 @@ pub fn run_loop(
                 usage.add(&extra);
                 emit_usage(on_event, &usage, history, input.context_length);
             }
+        }
+        if !trimmed
+            && crate::compact::trim_pass(
+                history,
+                input.context_length,
+                &crate::perm::config_dir(),
+                input.workspace,
+                input.conversation_id,
+            ) > 0
+        {
+            trimmed = true;
+            crate::prefix_guard::note_trim(&guard_key);
         }
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
@@ -4441,6 +4456,86 @@ mod tests {
                 reason: crate::prefix_guard::Reason::Unexpected,
             }]
         );
+    }
+
+    #[test]
+    fn a_file_read_twice_is_trimmed_once_with_one_named_prefix_break() {
+        let dir = workspace("trim-loop");
+        let body: String = (0..200).map(|i| format!("log line {i:03} ok\n")).collect();
+        std::fs::write(dir.join("big.log"), &body).unwrap();
+        let conv = format!("trim-loop-{}", std::process::id());
+        let args = r#"{"target_file":"big.log"}"#;
+        let script = scripted(vec![
+            turn("", vec![call("r1", "read_file", args)]),
+            turn("", vec![call("r2", "read_file", args)]),
+            turn("The log is all ok.", Vec::new()),
+        ]);
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            // Two reads fill over 40% of this window and stay under 85%.
+            context_length: 4_000,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "check the log", None, &mut |ev| {
+            events.push(ev)
+        });
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Compact { .. })));
+        let output = |items: &[InputItem], id: &str| -> Option<String> {
+            items.iter().find_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+        };
+        let seen = script.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3);
+        let full = output(&seen[1], "r1").unwrap();
+        assert!(full.contains("log line 199 ok"), "{full}");
+        let note = "[Output dropped: read_file ran again later with the same arguments \
+                    (call r2). Use that result.]";
+        // Request 2 still carries r1 whole; request 3 carries the trim and r2 stays whole.
+        assert_eq!(output(&seen[1], "r2"), None);
+        assert_eq!(output(&seen[2], "r1").as_deref(), Some(note));
+        assert_eq!(output(&seen[2], "r2").as_deref(), Some(full.as_str()));
+        assert_eq!(output(&history, "r1").as_deref(), Some(note));
+        assert_eq!(output(&history, "r2").as_deref(), Some(full.as_str()));
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, .. }) if role == "assistant"
+        ));
+        let key = crate::prefix_guard::run_key(&conv, 0, None);
+        crate::prefix_guard::assert_no_unexpected_break(&key);
+        let breaks = crate::prefix_guard::breaks(&key);
+        assert_eq!(breaks.len(), 1, "{breaks:?}");
+        assert_eq!(breaks[0].reason, crate::prefix_guard::Reason::Trim);
+        assert_eq!(breaks[0].part, crate::prefix_guard::Part::Input);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

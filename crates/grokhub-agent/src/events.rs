@@ -173,6 +173,12 @@ impl NativeEngine {
         self.auth_kind = auth_kind;
     }
 
+    /// The model's window in tokens, when the caller knows it better than the
+    /// built-in default (a local model's context size). [`Self::set_route`] resets it.
+    pub fn set_context_length(&mut self, tokens: u64) {
+        self.context_length = tokens;
+    }
+
     pub fn set_halt(&mut self, halt: Box<dyn HaltCheck + Send>) {
         self.halt = halt;
     }
