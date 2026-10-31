@@ -1200,6 +1200,7 @@ fn request_blob(req: &ResponsesRequest) -> String {
                 out.push_str(arguments);
                 out.push('\n');
             }
+            InputItem::ServerCompaction { .. } => {}
         }
     }
     out
