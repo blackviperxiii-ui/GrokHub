@@ -121,6 +121,8 @@ pub enum LoopEvent {
         started: bool,
         usage: Usage,
         error: Option<String>,
+        /// Set on the finish of a compaction xAI's server ran.
+        server: Option<grokhub_core::wire::CompactDetail>,
     },
     Permission {
         id: String,
@@ -262,6 +264,7 @@ fn run_compact_pass(
         started: true,
         usage: usage.clone(),
         error: None,
+        server: None,
     });
     crate::hooks::on_compact(input.conversation_id, input.workspace, true);
     let compact_result = crate::compact::compact_after_flush(
@@ -276,17 +279,18 @@ fn run_compact_pass(
     );
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
     match compact_result {
-        Ok(extra) => {
+        Ok(done) => {
             crate::prefix_guard::note_compaction(&crate::prefix_guard::run_key(
                 input.conversation_id,
                 input.depth,
                 input.agent_id,
             ));
-            usage.add(&extra);
+            usage.add(&done.usage);
             on_event(LoopEvent::Compact {
                 started: false,
                 usage: usage.clone(),
                 error: None,
+                server: done.server,
             });
             emit_usage(on_event, usage, history, input.context_length);
             CompactPass::Ok
@@ -296,6 +300,7 @@ fn run_compact_pass(
                 started: false,
                 usage: usage.clone(),
                 error: Some("cancelled".into()),
+                server: None,
             });
             CompactPass::Cancelled
         }
@@ -304,6 +309,7 @@ fn run_compact_pass(
                 started: false,
                 usage: usage.clone(),
                 error: Some(message),
+                server: None,
             });
             CompactPass::Failed
         }
