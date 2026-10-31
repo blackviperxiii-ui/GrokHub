@@ -4,6 +4,7 @@
 mod browser;
 mod config;
 mod elicit;
+mod headers;
 mod http;
 mod names;
 mod oauth;
