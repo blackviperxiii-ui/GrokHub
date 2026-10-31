@@ -333,15 +333,7 @@ fn history_row_titles(cabin: &Cabin) -> Vec<String> {
     );
     let keys: Vec<crate::threads::SessionSortKey> = listed
         .iter()
-        .map(|&i| {
-            let t = &cabin.threads[i];
-            crate::threads::SessionSortKey {
-                pinned: t.pinned,
-                pinned_ms: t.pinned_ms,
-                accessed_ms: t.accessed_ms,
-                list_rank: 0,
-            }
-        })
+        .map(|&i| crate::threads::sort_key(&cabin.threads[i]))
         .collect();
     crate::threads::session_list_order(&keys)
         .into_iter()
@@ -774,8 +766,8 @@ fn delete_all_history_clears_seeded_chats() {
     assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
     let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(
-        saved.contains("\"Chat\""),
-        "the fresh chat is saved: {saved}"
+        saved.contains("\"Main\""),
+        "the fresh Main chat is saved: {saved}"
     );
     assert!(
         !saved.contains("Pier light") && !saved.contains("Salt lane"),
@@ -790,8 +782,13 @@ fn delete_all_history_clears_seeded_chats() {
         "Salt lane must be gone"
     );
     assert_eq!(cabin.status, "Deleted all chats");
-    assert_eq!(cabin.threads.len(), 1, "the fresh chat is the only row");
-    assert_eq!(cabin.threads[0].title, "Chat");
+    assert_eq!(
+        cabin.threads.len(),
+        1,
+        "the fresh Main chat is the only row"
+    );
+    assert_eq!(cabin.threads[0].title, "Main");
+    assert!(cabin.threads[0].main);
     assert!(
         cabin.threads[0].messages.is_empty(),
         "the fresh chat has no transcript"
@@ -975,7 +972,8 @@ fn delete_all_history_leaves_one_empty_chat() {
 
     assert_eq!(cabin.status, "Deleted all chats");
     assert_eq!(cabin.threads.len(), 1);
-    assert_eq!(cabin.threads[0].title, "Chat");
+    assert_eq!(cabin.threads[0].title, "Main");
+    assert!(cabin.threads[0].main);
     assert!(cabin.threads[0].messages.is_empty());
     assert!(cabin.messages.is_empty());
     assert!(cabin.cfg.goal_pin.is_empty());
@@ -1530,5 +1528,156 @@ fn tab_plus_shows_the_new_chat_as_a_selected_tab() {
     cabin.switch_thread(project_chat);
     assert!(!cabin.messages.is_empty(), "the project chat has messages");
     assert_eq!(cabin.chat_tab_indices(), vec![0]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn finished_scheduled_run(thread_id: &str, say: &str) -> super::background::BgRun {
+    super::background::BgRun {
+        id: 1,
+        thread_id: thread_id.to_string(),
+        title: "Tidy downloads".into(),
+        origin: grokhub_core::BgOrigin::Scheduled,
+        rx: None,
+        say: say.to_string(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: Some(grokhub_core::BgEnd::Done),
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: None,
+    }
+}
+
+#[test]
+fn main_chat_is_listed_first_and_cannot_be_archived_deleted_or_pinned() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("main-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut pinned = spoke("Night watch", 900);
+    pinned.pinned = true;
+    pinned.pinned_ms = 900;
+    let mut list = vec![spoke("Harbor plan", 500), pinned];
+    let main_idx = crate::threads::ensure_main_thread(&mut list);
+    assert_eq!(main_idx, 2);
+    assert_eq!(crate::threads::ensure_main_thread(&mut list), 2, "one Main");
+    let mut cabin = Cabin::quiet_cabin(list, 0);
+
+    // Empty, it still lists, above the pinned chat.
+    assert_eq!(
+        history_row_titles(&cabin),
+        ["Main", "Night watch", "Harbor plan"]
+    );
+    let order = cabin.chat_tab_order(&cabin.chat_tab_indices());
+    assert_eq!(
+        cabin.chat_tab_indices()[order[0]],
+        2,
+        "Main leads the strip"
+    );
+
+    cabin.archive_thread_at(2);
+    assert_eq!(cabin.threads[2].archived_at, None);
+    assert_eq!(
+        cabin.status,
+        "Main is your permanent chat and always stays put"
+    );
+    cabin.delete_thread_at(2);
+    assert_eq!(cabin.threads[2].deleted_at, None);
+    cabin.hard_drop_thread_at(2);
+    assert_eq!(cabin.threads.len(), 3);
+    cabin.pin_thread(2);
+    assert!(!cabin.threads[2].pinned);
+    cabin.begin_chat_rename(2);
+    assert_eq!(cabin.rename_idx, None);
+
+    // + never hands Main out as the fresh draft.
+    cabin.switch_thread(2);
+    cabin.new_thread(false);
+    assert_ne!(cabin.thread_idx, 2);
+    assert!(cabin.threads[2].main);
+
+    // Delete all keeps a fresh, empty Main and opens it.
+    cabin.delete_all_history();
+    assert_eq!(cabin.threads.len(), 1);
+    assert!(cabin.threads[0].main);
+    assert_eq!(cabin.threads[0].title, "Main");
+    assert_eq!(cabin.thread_idx, 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn main_chat_repairs_a_bad_saved_row() {
+    let mut first = crate::threads::ChatThread::new("Main", false);
+    first.main = true;
+    first.archived_at = Some(5);
+    first.deleted_at = Some(6);
+    first.project_id = Some("proj".into());
+    let mut second = crate::threads::ChatThread::new("Main copy", false);
+    second.main = true;
+    let mut list = vec![first, second];
+    assert_eq!(crate::threads::ensure_main_thread(&mut list), 0);
+    assert_eq!(list[0].archived_at, None);
+    assert_eq!(list[0].deleted_at, None);
+    assert_eq!(list[0].project_id, None);
+    assert!(list[0].title_locked);
+    assert!(!list[1].main, "only one Main");
+    assert!(!crate::threads::should_auto_archive(
+        &list[0],
+        u64::MAX,
+        1,
+        false
+    ));
+}
+
+#[test]
+fn scheduled_and_orphan_background_reports_post_in_main() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("main-report");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut list = vec![spoke("Harbor plan", 500)];
+    let main_idx = crate::threads::ensure_main_thread(&mut list);
+    let mut cabin = Cabin::quiet_cabin(list, 0);
+    let bg_idx = cabin.ensure_background_history_thread();
+    let bg_id = cabin.threads[bg_idx].id.clone();
+
+    cabin
+        .bg
+        .runs
+        .push(finished_scheduled_run(&bg_id, "Moved 4 files."));
+    cabin.post_finished_bg_runs();
+    let main = &cabin.threads[main_idx];
+    assert_eq!(
+        main.messages.last().map(|m| m.1.as_str()),
+        Some("**Background task done** · Tidy downloads\n\nMoved 4 files.")
+    );
+    assert_eq!(
+        cabin.bg.unread,
+        vec![(
+            main.id.clone(),
+            "- Tidy downloads (done): Moved 4 files.".to_string()
+        )]
+    );
+    assert_eq!(cabin.threads[bg_idx].messages.len(), 1, "hidden copy kept");
+
+    // A /bg run whose chat is gone reports in Main instead of vanishing.
+    let mut orphan = finished_scheduled_run("thr-gone", "All clear.");
+    orphan.origin = grokhub_core::BgOrigin::User;
+    orphan.title = "Check the logs".into();
+    cabin.bg.runs.push(orphan);
+    cabin.post_finished_bg_runs();
+    assert_eq!(
+        cabin.threads[main_idx]
+            .messages
+            .last()
+            .map(|m| m.1.as_str()),
+        Some("**Background task done** · Check the logs\n\nAll clear.")
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
