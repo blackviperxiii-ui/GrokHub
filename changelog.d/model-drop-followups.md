@@ -1,1 +1,0 @@
-- Model drop: every new model from one Downloads scan now gets its own offer, Settings lists `.stp` with the other extensions, OBJ sizes no longer claim millimetres, and the Windows "Open in slicer" one-tap runs the slicer in PowerShell (`& "…exe"`).
