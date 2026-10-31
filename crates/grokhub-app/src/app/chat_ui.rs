@@ -127,6 +127,9 @@ fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
 pub(super) fn paint_connectivity_status_chip(ui: &mut egui::Ui) {
     use crate::ui_kit::{badge, BadgeTone};
     use grokhub_core::connectivity::{global_ui_phase, ConnectivityUiPhase};
+    if super::connectivity_ui::paint_offline_only_chip(ui) {
+        return;
+    }
     let phase = global_ui_phase();
     let tone = match phase {
         ConnectivityUiPhase::Online => BadgeTone::Neutral,

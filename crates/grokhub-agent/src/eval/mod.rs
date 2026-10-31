@@ -31,6 +31,7 @@ pub mod close_check;
 pub mod efficiency;
 pub mod longmem;
 pub mod metrics;
+pub mod recall_set;
 pub mod sycophancy;
 pub mod turn_endings;
 
