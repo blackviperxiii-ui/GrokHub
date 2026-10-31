@@ -1,16 +1,101 @@
-//! JSON-RPC 2.0 messages for one MCP session. Newline-delimited on the wire.
+//! JSON-RPC 2.0 messages for one MCP connection. Newline-delimited on the wire.
+//!
+//! Two eras: the session era opens with `initialize` ([`negotiate`]); the
+//! stateless era (2026-07-28) has no handshake and every request carries its
+//! version and capabilities in `_meta` ([`with_meta`]). [`pick_era`] reads the
+//! server's answer to the `server/discover` probe.
 
 use serde_json::{json, Value};
 
 /// MCP revisions of the session era (an `initialize` handshake opens each
 /// session), newest first. `initialize` asks for the first; the server's
-/// answer must be one of these ([`negotiate`]). A later era that skips
-/// `initialize` gets its own list and negotiation beside this one.
+/// answer must be one of these ([`negotiate`]).
 pub(crate) const SESSION_VERSIONS: [&str; 4] =
     ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// The revision this client asks for.
+/// The session-era revision `initialize` asks for.
 pub(crate) const LATEST: &str = SESSION_VERSIONS[0];
+
+/// MCP revisions of the stateless era (no `initialize`; the version rides in
+/// every request's `_meta`), newest first. The probe asks for the first.
+pub(crate) const STATELESS_VERSIONS: [&str; 1] = ["2026-07-28"];
+
+/// The stateless revision `server/discover` asks for.
+pub(crate) const STATELESS: &str = STATELESS_VERSIONS[0];
+
+/// Which handshake a server takes. Kept for the life of the connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Era {
+    /// No handshake; send this version in every request's `_meta`.
+    Stateless(&'static str),
+    /// Open with `initialize`, then [`negotiate`].
+    Session,
+}
+
+/// The modern errors the spec reserves (-32020..=-32022). Any of them proves a
+/// stateless-era server; every other error is a session-era server's.
+const HEADER_MISMATCH: i64 = -32020;
+const MISSING_CAPABILITY: i64 = -32021;
+const UNSUPPORTED_VERSION: i64 = -32022;
+
+/// The era from the server's reply to `server/discover` (`None`: no JSON-RPC
+/// reply at all, such as a timeout or an empty or non-JSON body). A
+/// `DiscoverResult` or a reserved modern error means stateless; anything
+/// else means session era, never keyed to one error code (stdio and
+/// Streamable HTTP "Backward Compatibility", MCP 2026-07-28).
+pub(crate) fn pick_era(server: &str, reply: Option<&Value>) -> Result<Era, String> {
+    let Some(reply) = reply else {
+        return Ok(Era::Session);
+    };
+    if let Some(result) = reply.get("result") {
+        return match result.get("supportedVersions").and_then(Value::as_array) {
+            Some(listed) => choose(server, listed),
+            None => Ok(Era::Session),
+        };
+    }
+    let Some(err) = reply.get("error") else {
+        return Ok(Era::Session);
+    };
+    match err.get("code").and_then(Value::as_i64) {
+        Some(UNSUPPORTED_VERSION) => {
+            let listed = err
+                .pointer("/data/supported")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            choose(server, &listed)
+        }
+        Some(HEADER_MISMATCH | MISSING_CAPABILITY) => Err(format!(
+            "MCP server `{server}` refused the request: {}",
+            rpc_error(reply)
+                .map(|e| one_line(&e, 200))
+                .unwrap_or_default()
+        )),
+        _ => Ok(Era::Session),
+    }
+}
+
+/// The newest revision this client and the server's list share, stateless first.
+fn choose(server: &str, listed: &[Value]) -> Result<Era, String> {
+    let listed: Vec<&str> = listed.iter().filter_map(Value::as_str).collect();
+    if let Some(version) = STATELESS_VERSIONS.iter().find(|v| listed.contains(v)) {
+        return Ok(Era::Stateless(version));
+    }
+    if SESSION_VERSIONS.iter().any(|v| listed.contains(v)) {
+        return Ok(Era::Session);
+    }
+    let shown: Vec<String> = listed.iter().take(6).map(|v| one_line(v, 40)).collect();
+    let shown = if shown.is_empty() {
+        "none".to_string()
+    } else {
+        shown.join(", ")
+    };
+    Err(format!(
+        "MCP server `{server}` speaks MCP versions {shown}; this client speaks {}, {}",
+        STATELESS_VERSIONS.join(", "),
+        SESSION_VERSIONS.join(", ")
+    ))
+}
 
 /// The revision for this session, from the server's `initialize` result.
 /// The server answers the version asked for or another it speaks; an answer
@@ -336,17 +421,130 @@ pub struct ToolIcon {
     pub sizes: Vec<String>,
 }
 
+fn client_capabilities() -> Value {
+    json!({ "elicitation": { "form": {}, "url": {} } })
+}
+
+fn client_info() -> Value {
+    json!({ "name": "GrokHub", "version": env!("CARGO_PKG_VERSION") })
+}
+
 pub(crate) fn initialize_params() -> Value {
     json!({
         "protocolVersion": LATEST,
-        "capabilities": {
-            "elicitation": { "form": {}, "url": {} }
-        },
-        "clientInfo": {
-            "name": "GrokHub",
-            "version": env!("CARGO_PKG_VERSION")
-        }
+        "capabilities": client_capabilities(),
+        "clientInfo": client_info()
     })
+}
+
+/// `params` with the stateless era's per-request `_meta`: the version, the
+/// client's capabilities (required) and its name (recommended). Keys the
+/// caller already put in `_meta` stay.
+pub(crate) fn with_meta(params: Value, version: &str) -> Value {
+    let mut params = match params {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    let meta = params.entry("_meta").or_insert_with(|| json!({}));
+    if !meta.is_object() {
+        *meta = json!({});
+    }
+    if let Some(meta) = meta.as_object_mut() {
+        meta.insert(
+            "io.modelcontextprotocol/protocolVersion".into(),
+            json!(version),
+        );
+        meta.insert(
+            "io.modelcontextprotocol/clientCapabilities".into(),
+            client_capabilities(),
+        );
+        meta.insert("io.modelcontextprotocol/clientInfo".into(), client_info());
+    }
+    Value::Object(params)
+}
+
+/// A stateless-era result that must be final: `resultType` absent (older
+/// servers) or `"complete"`.
+pub(crate) fn complete(server: &str, result: Value) -> Result<Value, String> {
+    match result.get("resultType").and_then(Value::as_str) {
+        None | Some("complete") => Ok(result),
+        Some(other) => Err(format!(
+            "MCP server `{server}` sent a result of type {}",
+            one_line(other, 40)
+        )),
+    }
+}
+
+/// Rounds of server questions (`input_required`) one `tools/call` may take.
+pub(crate) const MAX_INPUT_ROUNDS: usize = 4;
+
+/// One stateless-era `tools/call`. `send` posts the params (the transport adds
+/// `_meta`) and gives back the result. An `input_required` result is answered
+/// on the elicit card and the call is sent again with `inputResponses` and the
+/// server's `requestState` (Multi Round-Trip Requests), at most
+/// [`MAX_INPUT_ROUNDS`] times.
+pub(crate) fn call_tool(
+    server: &str,
+    name: &str,
+    args: &Value,
+    send: &mut dyn FnMut(Value) -> Result<Value, String>,
+) -> Result<(String, bool), String> {
+    let base = json!({"name": name, "arguments": args});
+    let mut params = base.clone();
+    for _ in 0..=MAX_INPUT_ROUNDS {
+        let result = send(params)?;
+        match result.get("resultType").and_then(Value::as_str) {
+            Some("input_required") => {
+                params = base.clone();
+                let (responses, state) = input_round(server, &result)?;
+                if let Some(responses) = responses {
+                    params["inputResponses"] = responses;
+                }
+                if let Some(state) = state {
+                    params["requestState"] = json!(state);
+                }
+            }
+            _ => return Ok(tool_output(&complete(server, result)?)),
+        }
+    }
+    Err(format!(
+        "MCP server `{server}` kept asking for more input; stopped after {MAX_INPUT_ROUNDS} answers"
+    ))
+}
+
+/// Answers for one `InputRequiredResult`: each `elicitation/create` goes to the
+/// elicit card; the client offers no sampling or roots, so asking for them is
+/// an error. `requestState` comes back exactly as sent.
+fn input_round(server: &str, result: &Value) -> Result<(Option<Value>, Option<String>), String> {
+    let state = result
+        .get("requestState")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let asks = result.get("inputRequests").and_then(Value::as_object);
+    if asks.is_none() && state.is_none() {
+        return Err(format!(
+            "MCP server `{server}` asked for more input without saying what"
+        ));
+    }
+    let Some(asks) = asks else {
+        return Ok((None, state));
+    };
+    let mut responses = serde_json::Map::new();
+    for (key, ask) in asks {
+        let method = ask.get("method").and_then(Value::as_str).unwrap_or("");
+        if method != "elicitation/create" {
+            return Err(format!(
+                "MCP server `{server}` asked for {}, which this client does not offer",
+                one_line(method, 60)
+            ));
+        }
+        let params = ask.get("params").cloned().unwrap_or_else(|| json!({}));
+        responses.insert(
+            key.clone(),
+            super::elicit::answer_input(server, key, &params),
+        );
+    }
+    Ok((Some(Value::Object(responses)), state))
 }
 
 #[cfg(test)]
@@ -384,6 +582,162 @@ mod tests {
             negotiate("box", &json!({"protocolVersion": 20251125})),
             Err("MCP server `box` did not say which MCP version it speaks".to_string())
         );
+    }
+
+    fn err(code: i64, data: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": "nope", "data": data}})
+    }
+
+    #[test]
+    fn pick_era_reads_the_discover_probe_like_the_spec_says() {
+        let discover = |versions: Value| json!({"jsonrpc": "2.0", "id": 1, "result": {"resultType": "complete", "supportedVersions": versions, "capabilities": {}}});
+        let era = |reply: Option<Value>| pick_era("box", reply.as_ref());
+        // A DiscoverResult: stateless when it lists 2026-07-28.
+        assert_eq!(
+            era(Some(discover(json!(["2026-07-28"])))),
+            Ok(Era::Stateless("2026-07-28"))
+        );
+        assert_eq!(
+            era(Some(discover(json!(["2025-11-25", "2026-07-28"])))),
+            Ok(Era::Stateless("2026-07-28"))
+        );
+        // Lists only session versions: initialize.
+        assert_eq!(era(Some(discover(json!(["2025-11-25"])))), Ok(Era::Session));
+        // UnsupportedProtocolVersion is modern: use its list, never blind fallback.
+        assert_eq!(
+            era(Some(err(
+                -32022,
+                json!({"supported": ["2026-07-28"], "requested": "x"})
+            ))),
+            Ok(Era::Stateless("2026-07-28"))
+        );
+        assert_eq!(
+            era(Some(err(
+                -32022,
+                json!({"supported": ["2027-01-01", "2025-06-18"]})
+            ))),
+            Ok(Era::Session)
+        );
+        assert_eq!(
+            era(Some(err(-32022, json!({"supported": ["2027-01-01"]})))),
+            Err("MCP server `box` speaks MCP versions 2027-01-01; this client speaks 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05".to_string())
+        );
+        assert_eq!(
+            era(Some(err(-32022, json!(null)))),
+            Err("MCP server `box` speaks MCP versions none; this client speaks 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05".to_string())
+        );
+        assert_eq!(
+            era(Some(err(
+                -32021,
+                json!({"requiredCapabilities": {"sampling": {}}})
+            ))),
+            Err("MCP server `box` refused the request: nope (-32021)".to_string())
+        );
+        assert_eq!(
+            era(Some(err(-32020, json!(null)))),
+            Err("MCP server `box` refused the request: nope (-32020)".to_string())
+        );
+        // Anything else is a session-era server, whatever the code.
+        for code in [-32601, -32602, -32600, -32000, -32002, 1] {
+            assert_eq!(
+                era(Some(err(code, json!(null)))),
+                Ok(Era::Session),
+                "{code}"
+            );
+        }
+        assert_eq!(
+            era(Some(json!({"jsonrpc": "2.0", "id": 1, "result": {}}))),
+            Ok(Era::Session)
+        );
+        assert_eq!(
+            era(Some(json!({"jsonrpc": "2.0", "id": 1}))),
+            Ok(Era::Session)
+        );
+        assert_eq!(era(None), Ok(Era::Session));
+    }
+
+    #[test]
+    fn with_meta_adds_the_per_request_fields_and_keeps_the_rest() {
+        let params = with_meta(
+            json!({"name": "echo", "_meta": {"progressToken": 7, "io.modelcontextprotocol/protocolVersion": "old"}}),
+            "2026-07-28",
+        );
+        assert_eq!(
+            params,
+            json!({
+                "name": "echo",
+                "_meta": {
+                    "progressToken": 7,
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}, "url": {}}},
+                    "io.modelcontextprotocol/clientInfo": {"name": "GrokHub", "version": env!("CARGO_PKG_VERSION")}
+                }
+            })
+        );
+        assert_eq!(
+            with_meta(Value::Null, "2026-07-28")["_meta"]
+                ["io.modelcontextprotocol/protocolVersion"],
+            "2026-07-28"
+        );
+    }
+
+    #[test]
+    fn call_tool_answers_input_required_and_stops_a_server_that_keeps_asking() {
+        let ask = json!({
+            "resultType": "input_required",
+            "inputRequests": {"note": {"method": "elicitation/create", "params": {"message": "Need a value"}}},
+            "requestState": "rs-1"
+        });
+        let mut sent = Vec::new();
+        let done = call_tool("box", "echo", &json!({"a": 1}), &mut |params| {
+            sent.push(params);
+            Ok(if sent.len() == 1 {
+                ask.clone()
+            } else {
+                json!({"resultType": "complete", "content": [{"type": "text", "text": "ok"}]})
+            })
+        });
+        assert_eq!(done, Ok(("ok".to_string(), false)));
+        assert_eq!(
+            sent,
+            vec![
+                json!({"name": "echo", "arguments": {"a": 1}}),
+                json!({"name": "echo", "arguments": {"a": 1}, "inputResponses": {"note": {"action": "decline"}}, "requestState": "rs-1"}),
+            ]
+        );
+
+        let mut rounds = 0;
+        let looped = call_tool("box", "echo", &json!({}), &mut |_| {
+            rounds += 1;
+            Ok(json!({"resultType": "input_required", "requestState": "again"}))
+        });
+        assert_eq!(
+            looped,
+            Err("MCP server `box` kept asking for more input; stopped after 4 answers".to_string())
+        );
+        assert_eq!(rounds, MAX_INPUT_ROUNDS + 1);
+
+        let sampling = call_tool("box", "echo", &json!({}), &mut |_| {
+            Ok(
+                json!({"resultType": "input_required", "inputRequests": {"q": {"method": "sampling/createMessage"}}}),
+            )
+        });
+        assert_eq!(
+            sampling,
+            Err("MCP server `box` asked for sampling/createMessage, which this client does not offer".to_string())
+        );
+        let empty = call_tool("box", "echo", &json!({}), &mut |_| {
+            Ok(json!({"resultType": "input_required"}))
+        });
+        assert_eq!(
+            empty,
+            Err("MCP server `box` asked for more input without saying what".to_string())
+        );
+        // Older servers leave resultType out: complete.
+        let old = call_tool("box", "echo", &json!({}), &mut |_| {
+            Ok(json!({"content": [{"type": "text", "text": "old"}], "isError": true}))
+        });
+        assert_eq!(old, Ok(("old".to_string(), true)));
     }
 
     #[test]
