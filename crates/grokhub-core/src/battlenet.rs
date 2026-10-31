@@ -202,7 +202,11 @@ pub fn wine_path(prefix: &Path, win: &str) -> Option<PathBuf> {
     let drive = if letter == 'c' {
         prefix.join("drive_c")
     } else {
-        prefix.join("dosdevices").join(format!("{letter}:"))
+        // Pushed as text: joining `d:` on Windows would read it as a drive
+        // and drop the prefix.
+        let mut dir = prefix.join("dosdevices").into_os_string();
+        dir.push(format!("/{letter}:"));
+        PathBuf::from(dir)
     };
     Some(
         rest.split('/')
