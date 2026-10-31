@@ -153,6 +153,140 @@ fn disk_paths(dirs: &PlatformDirs) -> Vec<(String, PathBuf)> {
     }
 }
 
+/// Filesystems that are never a drive someone fills up.
+const PSEUDO_FS: &[&str] = &[
+    "tmpfs",
+    "devtmpfs",
+    "proc",
+    "sysfs",
+    "cgroup",
+    "cgroup2",
+    "overlay",
+    "squashfs",
+    "autofs",
+    "debugfs",
+    "tracefs",
+    "securityfs",
+    "pstore",
+    "bpf",
+    "configfs",
+    "fusectl",
+    "mqueue",
+    "hugetlbfs",
+    "devpts",
+    "efivarfs",
+    "binfmt_misc",
+    "nsfs",
+    "ramfs",
+    "rpc_pipefs",
+    "fuse.portal",
+    "fuse.gvfsd-fuse",
+    "vfat",
+    "iso9660",
+    "nfs",
+    "nfs4",
+    "cifs",
+    "smb3",
+    "fuse.sshfs",
+];
+
+/// Mount points under these hold system bits, not space people manage.
+const SYSTEM_MOUNTS: &[&str] = &["/boot", "/snap", "/var/lib/docker", "/var/snap", "/efi"];
+
+/// The local drives in `/proc/mounts`: one line per block device, the
+/// shortest mount point first (`/` before `/home` on the same btrfs). Network,
+/// removable-boot and pseudo filesystems are left out.
+pub fn mounts_to_drives(text: &str) -> Vec<(String, PathBuf)> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    let mut rows: Vec<(&str, String)> = text
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (dev, at, fs) = (f.next()?, f.next()?, f.next()?);
+            let at = at.replace("\\040", " ");
+            let real = dev.starts_with("/dev/") && !dev.starts_with("/dev/loop");
+            let system = SYSTEM_MOUNTS
+                .iter()
+                .any(|m| at == *m || at.starts_with(&format!("{m}/")));
+            (real && !system && !PSEUDO_FS.contains(&fs)).then_some((dev, at))
+        })
+        .collect();
+    rows.sort_by_key(|(_, at)| at.len());
+    for (dev, at) in rows {
+        if seen.iter().any(|d| d == dev) {
+            continue;
+        }
+        seen.push(dev.to_string());
+        let label = if at == "/" {
+            "/".to_string()
+        } else {
+            at.rsplit('/').next().unwrap_or(&at).to_string()
+        };
+        out.push((label, PathBuf::from(at)));
+    }
+    out
+}
+
+/// Every local drive with its free and total bytes, read from the OS
+/// (`/proc/mounts` + statvfs, fixed Windows drive letters). Two paths on one
+/// disk show once.
+pub fn local_drives(probe: &dyn SystemProbe, dirs: &PlatformDirs) -> Vec<DiskUse> {
+    let paths = match dirs.os {
+        HostOs::Linux => std::fs::read_to_string("/proc/mounts")
+            .map(|t| mounts_to_drives(&t))
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| disk_paths(dirs)),
+        HostOs::Windows => {
+            let fixed = fixed_drive_letters();
+            if fixed.is_empty() {
+                disk_paths(dirs)
+            } else {
+                fixed
+                    .into_iter()
+                    .map(|d| (d.clone(), PathBuf::from(format!("{d}\\"))))
+                    .collect()
+            }
+        }
+        HostOs::MacOs => disk_paths(dirs),
+    };
+    let mut out: Vec<DiskUse> = Vec::new();
+    for (label, path) in paths {
+        if let Some((total, free)) = probe.disk(&path).filter(|(t, _)| *t > 0) {
+            if out.iter().any(|d| d.total == total && d.free == free) {
+                continue;
+            }
+            out.push(DiskUse { label, total, free });
+        }
+    }
+    out
+}
+
+/// `C:`, `D:`… for the fixed (internal) drives; optical, removable and network
+/// drives are skipped so nothing waits on a spun-down share.
+#[cfg(windows)]
+fn fixed_drive_letters() -> Vec<String> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    const DRIVE_FIXED: u32 = 3;
+    // SAFETY: no arguments; returns a bitmask of present drive letters.
+    let mask = unsafe { GetLogicalDrives() };
+    (0..26u8)
+        .filter(|i| mask & (1 << i) != 0)
+        .map(|i| format!("{}:", (b'A' + i) as char))
+        .filter(|d| {
+            let wide: Vec<u16> = format!("{d}\\").encode_utf16().chain(Some(0)).collect();
+            // SAFETY: a NUL-terminated root path.
+            unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_FIXED }
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn fixed_drive_letters() -> Vec<String> {
+    Vec::new()
+}
+
 /// Take the snapshot. Read only: statvfs / GetDiskFreeSpaceEx, plus on Linux
 /// `systemctl --failed`, `journalctl -p err -b` and `pacman -Qu` (local database only).
 pub fn snapshot(probe: &dyn SystemProbe, dirs: &PlatformDirs) -> SystemSnapshot {
@@ -355,5 +489,32 @@ mod tests {
             }]
         );
         assert_eq!(snap.failed_units, None);
+    }
+
+    #[test]
+    fn proc_mounts_lists_each_local_drive_once() {
+        let mounts = "\
+/dev/nvme0n1p2 / btrfs rw,subvol=/@ 0 0
+proc /proc proc rw 0 0
+tmpfs /tmp tmpfs rw 0 0
+/dev/nvme0n1p2 /home btrfs rw,subvol=/@home 0 0
+/dev/nvme0n1p1 /boot/efi vfat rw 0 0
+/dev/nvme1n1p1 /mnt/Game\\040Drive ext4 rw 0 0
+/dev/loop3 /snap/core/1 squashfs ro 0 0
+//nas/share /mnt/nas cifs rw 0 0
+/dev/sda1 /run/media/viper/Backup ext4 rw 0 0
+";
+        let got = mounts_to_drives(mounts);
+        assert_eq!(
+            got,
+            [
+                ("/".to_string(), PathBuf::from("/")),
+                ("Game Drive".to_string(), PathBuf::from("/mnt/Game Drive")),
+                (
+                    "Backup".to_string(),
+                    PathBuf::from("/run/media/viper/Backup")
+                ),
+            ]
+        );
     }
 }

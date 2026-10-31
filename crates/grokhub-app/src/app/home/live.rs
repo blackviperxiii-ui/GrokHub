@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness::{self as hx, EgressRead};
+use grokhub_agent::indexers::system_state::{self, DiskUse};
 
 const REFRESH: Duration = Duration::from_secs(60);
 const DAY_MS: u64 = 86_400_000;
@@ -21,6 +22,8 @@ pub(super) struct LiveFacts {
     pub local_ready: bool,
     /// The main GPU's temperature in °C, when the OS reports one.
     pub gpu_temp_c: Option<i32>,
+    /// Each local drive's free and total bytes.
+    pub drives: Vec<DiskUse>,
 }
 
 struct Slot {
@@ -35,6 +38,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
         top_dest: None,
         local_ready: false,
         gpu_temp_c: None,
+        drives: Vec::new(),
     },
     at: None,
     reading: false,
@@ -55,6 +59,10 @@ pub(super) fn live_facts() -> LiveFacts {
                 let mut facts = summarize_sends(&read, grokhub_core::now_ms());
                 facts.local_ready = grokhub_agent::route::local::available();
                 facts.gpu_temp_c = crate::app::local_probe::gpu_temp_c();
+                facts.drives = system_state::local_drives(
+                    &system_state::OsProbe,
+                    &grokhub_agent::indexers::paths::PlatformDirs::from_env(),
+                );
                 if let Ok(mut slot) = SLOT.lock() {
                     slot.facts = facts;
                     slot.at = Some(Instant::now());
