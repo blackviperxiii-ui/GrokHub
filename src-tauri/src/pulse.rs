@@ -379,9 +379,6 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
     };
-    if let Some(outcome) = outcome {
-        react(config_dir, &card, outcome, shift, now_ms);
-    }
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
             grokhub_core::dismiss_idea(cards, id)
@@ -442,6 +439,11 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             remove(&mut cards)
         }
     };
+    // After the ledger note: a refused note must leave taste learning alone
+    // too, so "Nothing was changed" stays true.
+    if let Some(outcome) = outcome {
+        react(config_dir, &card, outcome, shift, now_ms);
+    }
     if changed {
         save(config_dir, &cards)?;
     }
@@ -727,6 +729,25 @@ mod tests {
         let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
         assert!(!saved.contains("idea-1"), "{saved}");
         assert!(saved.contains("post-1"), "{saved}");
+    }
+
+    #[test]
+    fn a_refused_ledger_note_leaves_taste_learning_and_the_card_alone() {
+        let d = dirs("refused", &sample());
+        let path = ledger_path();
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("mkdir");
+        std::fs::write(&path, vec![b'-'; NOTES_CAP as usize + 1]).expect("big ledger");
+        let err = act(&d.config, "idea-1", Act::NotThis, &day(), NOW).expect_err("refused");
+        assert_eq!(
+            err,
+            "The Pulse ledger is too large to add to. Nothing was changed."
+        );
+        assert!(
+            !reactions_path(&d.config).exists(),
+            "a refused note must not score the card"
+        );
+        let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
+        assert!(saved.contains("idea-1"), "{saved}");
     }
 
     #[test]

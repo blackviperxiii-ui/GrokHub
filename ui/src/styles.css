@@ -560,6 +560,8 @@ button.danger {
 .automations .add input:not([type="checkbox"]),
 .memory .add input:not([type="checkbox"]) {
   flex: 1;
+  /* A text input's intrinsic width otherwise pushes the button off a phone. */
+  min-width: 0;
 }
 
 .memory-file label {

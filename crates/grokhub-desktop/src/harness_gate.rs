@@ -470,11 +470,19 @@ mod tests {
             ("park", "credentials")
         );
         assert_eq!(last.args_redacted, r#"{"chars":4}"#);
-        let trace = std::fs::read_to_string(hx::span_path(&dir, hx::CU_TRACE)).unwrap();
-        assert!(
-            !trace.contains("4821"),
-            "the typed PIN never reaches a span"
-        );
+        // Check the text fields, not the raw file: `ts_ms` and other numbers
+        // can contain the digits by chance.
+        for span in &spans {
+            let json = serde_json::to_value(span).unwrap();
+            for (key, value) in json.as_object().unwrap() {
+                if let Some(text) = value.as_str() {
+                    assert!(
+                        !text.contains("4821"),
+                        "the typed PIN never reaches a span: {key}={text}"
+                    );
+                }
+            }
+        }
         assert_eq!(access_now(&dir, false), AccessMode::Readonly);
         assert_eq!(access_now(&dir, true), AccessMode::Supervised);
         let _ = std::fs::remove_dir_all(dir);

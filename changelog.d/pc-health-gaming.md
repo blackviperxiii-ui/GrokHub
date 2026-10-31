@@ -1,1 +1,1 @@
-- Command Centre: opt-in PC health while gaming samples CPU/GPU temps and util lightly (card 16.1 / local_governor game detection), then posts a Pulse summary with max temps, throttle flags, a GPU vs CPU bound guess, and tips — never changes fans, clocks, or drivers.
+- Opt-in PC health while gaming samples CPU/GPU temps and util lightly (local_governor game detection), then posts a Pulse summary with max temps, throttle flags, a GPU vs CPU bound guess, and tips — never changes fans, clocks, or drivers.
