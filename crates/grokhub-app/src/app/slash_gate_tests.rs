@@ -92,11 +92,23 @@ const GATES: &[GateRow] = &[
     GateRow {
         variant: "Record",
         route: "self.start_screen_recording(",
-        rails: &[(
-            include_str!("screen_record_ui.rs"),
-            "start_screen_recording",
-            "start(self.cfg.screen_record",
-        )],
+        rails: &[
+            (
+                include_str!("screen_record_ui.rs"),
+                "start_screen_recording",
+                "self.start_screen_recording_under(",
+            ),
+            (
+                include_str!("screen_record_ui.rs"),
+                "start_screen_recording_under",
+                "start(self.cfg.screen_record",
+            ),
+            (
+                include_str!("screen_record_ui.rs"),
+                "start_screen_recording_under",
+                "Guarded::ScreenRecording",
+            ),
+        ],
     },
     GateRow {
         variant: "Inhabit",

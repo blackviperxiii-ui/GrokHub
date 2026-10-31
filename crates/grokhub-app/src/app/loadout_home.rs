@@ -14,6 +14,7 @@ use grokhub_core::{ChipKind, QuickChip, UpdateCard, UpdateStatus};
 use super::*;
 
 mod chat_first;
+pub(super) mod nyx_wardrobe;
 
 /// The companion cutout the chat header's round face is cropped from.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
@@ -24,6 +25,9 @@ const NYX_DOCTOR_JPG: &[u8] = include_bytes!("../../../../brand/nyx-doctor.jpg")
 const NYX_READING_JPG: &[u8] = include_bytes!("../../../../brand/nyx-reading.jpg");
 const NYX_HANGING_OUT_JPG: &[u8] = include_bytes!("../../../../brand/nyx-hanging-out.jpg");
 const NYX_VIPER_JPG: &[u8] = include_bytes!("../../../../brand/nyx-viper.jpg");
+const NYX_THINKING_JPG: &[u8] = include_bytes!("../../../../brand/nyx/actions/thinking/1.jpg");
+const NYX_WRITING_JPG: &[u8] = include_bytes!("../../../../brand/nyx/actions/writing/1.jpg");
+const NYX_RAUNCHY_JPG: &[u8] = include_bytes!("../../../../brand/nyx-raunchy.jpg");
 /// Below this page width the dock hides and the chat gets the whole page.
 /// The default 1100 px window leaves about 840 px beside the rail, so the
 /// dock shows there in its compact width.
@@ -42,30 +46,55 @@ const XP_PER_TASK: u32 = 100;
 const XP_PER_STEP: u32 = 25;
 pub(super) const XP_PER_LEVEL: u32 = 500;
 
-/// What Nyx is doing, shown in the corner box: a tool turn picks Working,
-/// Doctor or Reading by what the tool does, a game the user just left is
-/// Gaming, and anything else is Hanging out. The Viper personality wears
-/// the snake onesie whatever the mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Mood {
-    Working,
-    Gaming,
-    Doctor,
-    Reading,
-    HangingOut,
-    Viper,
+/// What Nyx is doing, shown in the corner box. The modes and her outfits
+/// live in [`grokhub_core::companion`] (`assets/companions/nyx/companion.toml`),
+/// so the desktop companion reads the same source.
+pub(super) use grokhub_core::companion::Mood;
+
+/// The shipped picture an outfit file names, embedded in the build. The
+/// companion file is the source of which outfit a mode wears; this is
+/// only how the bytes get into the binary.
+fn builtin_art(file: &str) -> Option<&'static [u8]> {
+    Some(match file {
+        "brand/nyx-working.jpg" => NYX_WORKING_JPG,
+        "brand/nyx-gaming.jpg" => NYX_GAMING_JPG,
+        "brand/nyx-doctor.jpg" => NYX_DOCTOR_JPG,
+        "brand/nyx-reading.jpg" => NYX_READING_JPG,
+        "brand/nyx-hanging-out.jpg" => NYX_HANGING_OUT_JPG,
+        "brand/nyx-viper.jpg" => NYX_VIPER_JPG,
+        "brand/nyx/actions/thinking/1.jpg" => NYX_THINKING_JPG,
+        "brand/nyx/actions/writing/1.jpg" => NYX_WRITING_JPG,
+        "brand/nyx-raunchy.jpg" => NYX_RAUNCHY_JPG,
+        _ => return None,
+    })
 }
 
-impl Mood {
+/// The outfit Nyx wears for `mood`: the shipped one the companion file
+/// names, or the default when a mode has no picture of its own. Adult
+/// outfits are included; the wardrobe only asks for an explicit mode with
+/// adults-only personalities on.
+pub(super) fn mood_outfit(mood: Mood) -> &'static grokhub_core::companion::Outfit {
+    grokhub_core::companion::nyx().outfit_for(mood, true)
+}
+
+/// The embedded picture for `mood`, by way of the companion file.
+pub(super) fn mood_art(mood: Mood) -> &'static [u8] {
+    let nyx = grokhub_core::companion::nyx();
+    builtin_art(&mood_outfit(mood).file)
+        .or_else(|| builtin_art(&nyx.default_outfit().file))
+        .unwrap_or(NYX_HANGING_OUT_JPG)
+}
+
+/// The corner box's picture and texture key for a mode. The key stays a
+/// static name because [`nyx_wardrobe`] uses it to name a pose set.
+pub(super) trait MoodArt {
+    fn art(self) -> &'static [u8];
+    fn key(self) -> &'static str;
+}
+
+impl MoodArt for Mood {
     fn art(self) -> &'static [u8] {
-        match self {
-            Mood::Working => NYX_WORKING_JPG,
-            Mood::Gaming => NYX_GAMING_JPG,
-            Mood::Doctor => NYX_DOCTOR_JPG,
-            Mood::Reading => NYX_READING_JPG,
-            Mood::HangingOut => NYX_HANGING_OUT_JPG,
-            Mood::Viper => NYX_VIPER_JPG,
-        }
+        mood_art(self)
     }
 
     fn key(self) -> &'static str {
@@ -76,23 +105,19 @@ impl Mood {
             Mood::Reading => "loadout-nyx-reading",
             Mood::HangingOut => "loadout-nyx-hanging-out",
             Mood::Viper => "loadout-nyx-viper",
+            Mood::Thinking => "loadout-nyx-thinking",
+            Mood::Writing => "loadout-nyx-writing",
+            Mood::Raunchy => "loadout-nyx-raunchy",
         }
     }
 }
 
 /// `GROKHUB_DECK_MOOD` (`working`, `gaming`, `doctor`, `reading`,
-/// `hanging-out`, `viper`) pins the picture for the deck screenshots
-/// (`scripts/deck-shots.ps1`), where no turn or game can run.
+/// `hanging-out`, `viper`, `thinking`, `writing`, `raunchy`) pins the picture
+/// for the deck screenshots (`scripts/deck-shots.ps1`), where no turn or
+/// game can run.
 pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "working" => Some(Mood::Working),
-        "gaming" => Some(Mood::Gaming),
-        "doctor" => Some(Mood::Doctor),
-        "reading" => Some(Mood::Reading),
-        "hanging-out" => Some(Mood::HangingOut),
-        "viper" => Some(Mood::Viper),
-        _ => None,
-    }
+    Mood::parse(raw)
 }
 
 /// Launch pins are read once per run. Tests flip them inside one process,
@@ -149,8 +174,15 @@ const READING_WORDS: &[&str] = &[
     "wiki",
 ];
 
+/// Words in a tool title that mean writing prose. Plain file writes and
+/// edits stay Working.
+const WRITING_WORDS: &[&str] = &[
+    "compose", "draft", "essay", "journal", "letter", "memo", "notes", "poem", "prose", "story",
+];
+
 /// The mode for a running tool, by the words in its title. PC care wins
-/// over looking things up; anything else is work at the desk.
+/// over looking things up, then writing prose; anything else is work at
+/// the desk.
 pub(super) fn tool_mood(title: &str) -> Mood {
     let lower = title.to_ascii_lowercase();
     let words: Vec<&str> = lower
@@ -162,17 +194,40 @@ pub(super) fn tool_mood(title: &str) -> Mood {
         Mood::Doctor
     } else if has(READING_WORDS) || words.iter().any(|w| w.starts_with("http")) {
         Mood::Reading
+    } else if has(WRITING_WORDS) {
+        Mood::Writing
     } else {
         Mood::Working
     }
 }
 
-/// Viper wins; then a running tool's mode; then a game the user just left.
-pub(super) fn mood_for(viper: bool, tool: Option<&str>, gaming: bool) -> Mood {
-    if viper {
-        Mood::Viper
+/// The outfit a personality wears over every mode. Only explicit presets
+/// have one, and only while adults-only personalities are on: Viper's snake
+/// onesie, else the raunchy outfit. Anything else shows Nyx's mode picture.
+pub(super) fn outfit_for(id: &str, explicit: bool, adults_only: bool) -> Option<Mood> {
+    if !(explicit && adults_only) {
+        None
+    } else if id == "viper" {
+        Some(Mood::Viper)
+    } else {
+        Some(Mood::Raunchy)
+    }
+}
+
+/// An outfit wins; then a running tool's mode; then a turn still thinking;
+/// then a game the user just left.
+pub(super) fn mood_for(
+    outfit: Option<Mood>,
+    tool: Option<&str>,
+    thinking: bool,
+    gaming: bool,
+) -> Mood {
+    if let Some(outfit) = outfit {
+        outfit
     } else if let Some(title) = tool {
         tool_mood(title)
+    } else if thinking {
+        Mood::Thinking
     } else if gaming {
         Mood::Gaming
     } else {
@@ -423,7 +478,7 @@ pub(super) fn pc_profile() -> Option<LocalProfile> {
 pub(super) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     use crate::ui_kit::recipe::{look, Part, State};
     let l = look(Part::Card, State::Default);
-    egui::Frame::NONE
+    let resp = egui::Frame::NONE
         .fill(l.fill)
         .stroke(l.stroke)
         .corner_radius(l.radius)
@@ -432,7 +487,10 @@ pub(super) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::
             ui.set_width(ui.available_width());
             add(ui);
         })
-        .response
+        .response;
+    // Its mark lifts while the card is hovered; the card stays still.
+    crate::motion::icon::note_card(ui, resp.rect);
+    resp
 }
 
 pub(super) fn caption(text: &str) -> egui::RichText {
@@ -442,16 +500,28 @@ pub(super) fn caption(text: &str) -> egui::RichText {
         .color(crate::theme::muted())
 }
 
-/// Amber diamond before a dock card title, as on the deck.
+/// Amber diamond: a checklist bullet, or (filled) a title mark.
 pub(super) fn diamond(ui: &mut egui::Ui, filled: bool) {
-    let (mark, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    paint_diamond(ui, filled, false);
+}
+
+/// The diamond before a card's title: the card's icon, so it lifts while the
+/// card is hovered.
+pub(super) fn card_mark(ui: &mut egui::Ui) {
+    paint_diamond(ui, true, true);
+}
+
+fn paint_diamond(ui: &mut egui::Ui, filled: bool, on_card: bool) {
+    let (mark, resp) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let pose = if on_card {
+        crate::motion::icon::card_icon_pose(ui, resp.id, mark)
+    } else {
+        crate::motion::icon::Pose::REST
+    };
     let c = mark.center();
-    let points = vec![
-        egui::pos2(c.x, c.y - 5.0),
-        egui::pos2(c.x + 5.0, c.y),
-        egui::pos2(c.x, c.y + 5.0),
-        egui::pos2(c.x - 5.0, c.y),
-    ];
+    let points = [(0.0, -5.0), (5.0, 0.0), (0.0, 5.0), (-5.0, 0.0)]
+        .map(|(x, y)| pose.map(c, egui::pos2(c.x + x, c.y + y)))
+        .to_vec();
     let (fill, stroke) = if filled {
         (crate::theme::amber(), egui::Stroke::NONE)
     } else {
@@ -476,7 +546,7 @@ pub(super) fn header(
     ui.horizontal(|ui| {
         if mark {
             ui.spacing_mut().item_spacing.x = 6.0;
-            diamond(ui, true);
+            card_mark(ui);
         }
         ui.label(caption(title));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -508,22 +578,6 @@ fn paint_brackets(painter: &egui::Painter, rect: egui::Rect) {
     }
 }
 
-fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(mood.key());
-    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
-        return Some(tex);
-    }
-    let rgba = image::load_from_memory(mood.art()).ok()?.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let tex = ctx.load_texture(
-        mood.key(),
-        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-    Some(tex)
-}
-
 /// The centred part of a `tex`-sized picture that fills `frame` without
 /// stretching, as UV coordinates.
 fn cover_uv(tex: [usize; 2], frame: egui::Vec2) -> egui::Rect {
@@ -535,6 +589,60 @@ fn cover_uv(tex: [usize; 2], frame: egui::Vec2) -> egui::Rect {
         (1.0, (tw / th) / (fw / fh))
     };
     egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v))
+}
+
+/// `GROKHUB_DECK_PEDESTAL=1` shows the desktop companion's holo pedestal in
+/// the corner box for the deck screenshots, with the companion cutout
+/// standing on it, so each theme's pedestal can be checked before the
+/// desktop window exists. Deck shots only.
+fn pedestal_preview_pinned() -> bool {
+    deck_switch_is("GROKHUB_DECK_PEDESTAL", "1")
+}
+
+/// The full companion cutout (`brand/companion.png`, transparent
+/// background) as a texture.
+pub(super) fn companion_cutout(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("loadout-companion-cutout");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(tex);
+    }
+    let rgba = image::load_from_memory(COMPANION_PNG).ok()?.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        "loadout-companion-cutout",
+        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Where a cutout of `tex_size` pixels stands on the pedestal in `frame`:
+/// scaled to fit the frame's height above the disc, feet on the disc.
+pub(super) fn cutout_rect(frame: egui::Rect, tex_size: [usize; 2]) -> egui::Rect {
+    let l = crate::pedestal::layout(frame);
+    let (tw, th) = (tex_size[0].max(1) as f32, tex_size[1].max(1) as f32);
+    let h = (l.feet.y - frame.top() - 8.0).max(1.0);
+    let w = (h * tw / th).min(frame.width());
+    let h = w * th / tw;
+    egui::Rect::from_min_size(
+        egui::pos2(l.feet.x - w * 0.5, l.feet.y - h),
+        egui::vec2(w, h),
+    )
+}
+
+fn paint_pedestal_preview(ui: &mut egui::Ui, frame: egui::Rect) {
+    let still = crate::motion::reduced_motion(ui);
+    let t = ui.input(|i| i.time);
+    let colors = crate::pedestal::colors(None);
+    let painter = ui.painter().with_clip_rect(frame);
+    crate::pedestal::paint(&painter, frame, t, still, &colors);
+    if let Some(tex) = companion_cutout(ui.ctx()) {
+        egui::Image::from_texture(&tex).paint_at(ui, cutout_rect(frame, tex.size()));
+    }
+    if let Some(wait) = crate::pedestal::repaint_after(still) {
+        ui.ctx().request_repaint_after(wait);
+    }
 }
 
 /// Circular face crop of the companion for Hangout bubbles and the chat header.
@@ -1189,14 +1297,37 @@ impl Cabin {
     fn dock_companion(&mut self, ui: &mut egui::Ui) {
         let shown = self.shown_personality();
         let name = shown.name.as_str();
-        let art_on = super::personality_ui::wears_companion_art(&shown.id);
         let live = self.voice_is_on();
-        let mood = self.companion_mood();
+        let activity = self.companion_activity();
+        let look = self.dock_look_now();
+        let desktop = self.cfg.desktop_nyx && look.is_some();
+        let undocked = desktop && self.cfg.desktop_nyx_undocked;
+        let mut pop_out = false;
+        let mut dock_back = false;
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                diamond(ui, true);
+                card_mark(ui);
                 ui.label(caption(&dock_title(&shown.id, name)));
+                if desktop {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (label, hint) = if undocked {
+                            ("Dock back", format!("Bring {name} back into the cabin"))
+                        } else {
+                            ("Pop out", format!("Put {name} on your desktop"))
+                        };
+                        let hit = ui
+                            .add(egui::Button::new(caption(label)).frame(false))
+                            .on_hover_text(hint);
+                        if hit.clicked() {
+                            if undocked {
+                                dock_back = true;
+                            } else {
+                                pop_out = true;
+                            }
+                        }
+                    });
+                }
             });
             ui.add_space(crate::theme::SPACING_4);
             let w = ui.available_width();
@@ -1204,18 +1335,31 @@ impl Cabin {
                 ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
             ui.painter()
                 .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
-            if !art_on {
+            let tex = look
+                .and_then(|look| nyx_wardrobe::dock_pose(ui.ctx(), &look, activity))
+                .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
+            if pedestal_preview_pinned() {
+                paint_pedestal_preview(ui, art);
+            } else if undocked {
+                ui.painter().text(
+                    art.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{name} is on your desktop"),
+                    egui::FontId::proportional(crate::theme::TYPE_BODY),
+                    crate::theme::muted(),
+                );
+            } else if let Some(tex) = tex {
+                egui::Image::from_texture(&tex)
+                    .uv(cover_uv(tex.size(), art.size()))
+                    .corner_radius(crate::theme::RADIUS_SM)
+                    .paint_at(ui, art);
+            } else {
                 let side = (art.height() * 0.5).min(art.width());
                 let tile = egui::Rect::from_center_size(art.center(), egui::vec2(side, side));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(tile), |ui| {
                     let letter = super::personality_ui::initial_letter(name);
                     super::personality_ui::paint_letter_tile(ui, letter, side, true);
                 });
-            } else if let Some(tex) = companion_texture(ui.ctx(), mood) {
-                egui::Image::from_texture(&tex)
-                    .uv(cover_uv(tex.size(), art.size()))
-                    .corner_radius(crate::theme::RADIUS_SM)
-                    .paint_at(ui, art);
             }
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
@@ -1236,6 +1380,11 @@ impl Cabin {
             });
         });
         paint_brackets(ui.painter(), resp.rect);
+        if pop_out {
+            self.pop_nyx_out();
+        } else if dock_back {
+            self.dock_nyx_back();
+        }
         let click = ui
             .interact(
                 resp.rect,
@@ -1244,14 +1393,26 @@ impl Cabin {
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Talk to {name}"));
-        if click.clicked() {
+        if click.clicked() && !pop_out && !dock_back {
             self.listen_voice();
         }
     }
 
     /// The dock's pose for what this chat is doing right now.
     pub(super) fn companion_mood(&self) -> Mood {
-        if let Some(mood) = pinned_mood() {
+        self.mood_with(false)
+    }
+
+    /// What this chat is doing under any outfit, which moves an outfit's
+    /// set on to its next pose.
+    pub(super) fn companion_activity(&self) -> Mood {
+        self.mood_with(true)
+    }
+
+    fn mood_with(&self, under_outfit: bool) -> Mood {
+        let adults_only = self.explicit_art_ok();
+        // Even a deck pin shows the raunchy outfit only with adults-only on.
+        if let Some(mood) = pinned_mood().filter(|m| *m != Mood::Raunchy || adults_only) {
             return mood;
         }
         // A permission ask is a tool waiting to run.
@@ -1266,7 +1427,17 @@ impl Cabin {
             .app
             .as_ref()
             .is_some_and(|a| a.category == grokhub_core::focus_app::FocusCategory::Gaming);
-        mood_for(self.shown_personality_id() == "viper", tool, gaming)
+        let thinking = tool.is_none() && self.thinking_here();
+        let id = self.shown_personality_id();
+        let explicit = adults_only
+            && grokhub_core::personality::lookup(&super::personality_ui::presets_dir(), &id)
+                .explicit;
+        let outfit = if under_outfit {
+            None
+        } else {
+            outfit_for(&id, explicit, adults_only)
+        };
+        mood_for(outfit, tool, thinking, gaming)
     }
 
     pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
@@ -1644,6 +1815,53 @@ mod tests {
     }
 
     #[test]
+    fn the_pedestal_preview_stands_the_cutout_on_the_disc() {
+        let frame = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(276.0, 215.0));
+        let r = cutout_rect(frame, [351, 440]);
+        let l = crate::pedestal::layout(frame);
+        assert!((r.bottom() - l.feet.y).abs() < 1e-3, "feet on the disc");
+        assert!((r.center().x - l.feet.x).abs() < 1e-3, "centred");
+        assert!(
+            (r.top() - 8.0).abs() < 1e-3,
+            "fills the height above the disc"
+        );
+        assert!(
+            (r.width() / r.height() - 351.0 / 440.0).abs() < 1e-4,
+            "no stretch"
+        );
+        // A wide, short frame is limited by width instead.
+        let wide = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 400.0));
+        let r = cutout_rect(wide, [351, 440]);
+        assert_eq!(r.width(), 100.0);
+        assert!(r.top() > 8.0);
+    }
+
+    #[test]
+    fn the_pedestal_pin_is_a_deck_switch() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_pedestal = std::env::var("GROKHUB_DECK_PEDESTAL").ok();
+        std::env::remove_var("GROKHUB_DECK_SHOT");
+        std::env::remove_var("GROKHUB_DECK_PEDESTAL");
+        assert!(!pedestal_preview_pinned());
+        std::env::set_var("GROKHUB_DECK_PEDESTAL", "1");
+        assert!(
+            !pedestal_preview_pinned(),
+            "nothing without GROKHUB_DECK_SHOT"
+        );
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        assert!(pedestal_preview_pinned());
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_pedestal {
+            Some(v) => std::env::set_var("GROKHUB_DECK_PEDESTAL", v),
+            None => std::env::remove_var("GROKHUB_DECK_PEDESTAL"),
+        }
+    }
+
+    #[test]
     fn companion_face_builds_a_circular_texture() {
         let ctx = egui::Context::default();
         let tex = companion_face(&ctx).expect("companion face");
@@ -1665,18 +1883,44 @@ mod tests {
             Mood::Reading,
             Mood::HangingOut,
             Mood::Viper,
+            Mood::Thinking,
+            Mood::Writing,
+            Mood::Raunchy,
         ];
         for mood in all {
-            let img = image::load_from_memory(mood.art()).expect("mode art decodes");
+            let img = image::load_from_memory(mood_art(mood)).expect("mode art decodes");
             assert_eq!((img.width(), img.height()), (448, 350), "{mood:?}");
         }
         let mut keys: Vec<_> = all.iter().map(|m| m.key()).collect();
+        keys.sort();
         keys.dedup();
-        assert_eq!(keys.len(), 6);
+        assert_eq!(keys.len(), 9);
         let mut arts: Vec<_> = all.iter().map(|m| m.art().as_ptr()).collect();
         arts.sort();
         arts.dedup();
-        assert_eq!(arts.len(), 6, "each mode shows a different picture");
+        assert_eq!(arts.len(), 9, "each mode shows a different picture");
+    }
+
+    #[test]
+    fn the_corner_box_reads_its_outfits_from_the_companion_file() {
+        let nyx = grokhub_core::companion::nyx();
+        for outfit in &nyx.outfits {
+            assert!(
+                builtin_art(&outfit.file).is_some(),
+                "{} is named in companion.toml but not embedded",
+                outfit.file
+            );
+        }
+        assert_eq!(mood_outfit(Mood::Working).id, "working");
+        assert_eq!(Mood::Working.key(), "loadout-nyx-working");
+        assert_eq!(Mood::HangingOut.key(), "loadout-nyx-hanging-out");
+        // Every mode has a picture of its own in the shipped file.
+        assert_eq!(mood_outfit(Mood::Thinking).id, "thinking");
+        assert_eq!(mood_art(Mood::Thinking), NYX_THINKING_JPG);
+        assert_eq!(mood_art(Mood::Writing), NYX_WRITING_JPG);
+        assert_eq!(mood_art(Mood::Raunchy), NYX_RAUNCHY_JPG);
+        assert!(mood_outfit(Mood::Raunchy).adult, "raunchy is adults only");
+        assert_eq!(builtin_art("brand/nyx-nothing.jpg"), None);
     }
 
     #[test]
@@ -1687,6 +1931,9 @@ mod tests {
         assert_eq!(parse_mood("reading"), Some(Mood::Reading));
         assert_eq!(parse_mood("hanging-out"), Some(Mood::HangingOut));
         assert_eq!(parse_mood("VIPER"), Some(Mood::Viper));
+        assert_eq!(parse_mood("thinking"), Some(Mood::Thinking));
+        assert_eq!(parse_mood("Writing"), Some(Mood::Writing));
+        assert_eq!(parse_mood("raunchy"), Some(Mood::Raunchy));
         assert_eq!(parse_mood("hello"), None);
         assert_eq!(parse_mood(""), None);
     }
@@ -1701,6 +1948,12 @@ mod tests {
         assert_eq!(tool_mood("Fetch https://example.com/guide"), Mood::Reading);
         assert_eq!(tool_mood("https://example.com"), Mood::Reading);
         assert_eq!(tool_mood("Run cargo build"), Mood::Working);
+        assert_eq!(tool_mood("Draft a cover letter"), Mood::Writing);
+        assert_eq!(tool_mood("Compose the essay"), Mood::Writing);
+        assert_eq!(tool_mood("Add to my journal"), Mood::Writing);
+        assert_eq!(tool_mood("Write src/main.rs"), Mood::Working);
+        assert_eq!(tool_mood("Edit Cargo.toml"), Mood::Working);
+        assert_eq!(tool_mood("Search the web for essay tips"), Mood::Reading);
         assert_eq!(
             tool_mood("Edit src/fancy.rs"),
             Mood::Working,
@@ -1710,11 +1963,33 @@ mod tests {
     }
 
     #[test]
-    fn viper_then_a_tool_then_a_game_then_hanging_out() {
-        assert_eq!(mood_for(true, Some("Run cargo build"), true), Mood::Viper);
-        assert_eq!(mood_for(false, Some("Search the web"), true), Mood::Reading);
-        assert_eq!(mood_for(false, None, true), Mood::Gaming);
-        assert_eq!(mood_for(false, None, false), Mood::HangingOut);
+    fn an_outfit_then_a_tool_then_thinking_then_a_game_then_hanging_out() {
+        assert_eq!(
+            mood_for(Some(Mood::Viper), Some("Run cargo build"), true, true),
+            Mood::Viper
+        );
+        assert_eq!(
+            mood_for(Some(Mood::Raunchy), Some("Read fan curve"), true, true),
+            Mood::Raunchy
+        );
+        assert_eq!(
+            mood_for(None, Some("Search the web"), true, true),
+            Mood::Reading
+        );
+        assert_eq!(mood_for(None, None, true, true), Mood::Thinking);
+        assert_eq!(mood_for(None, None, false, true), Mood::Gaming);
+        assert_eq!(mood_for(None, None, false, false), Mood::HangingOut);
+    }
+
+    #[test]
+    fn only_explicit_presets_with_adults_only_on_wear_an_outfit() {
+        assert_eq!(outfit_for("whore", true, true), Some(Mood::Raunchy));
+        assert_eq!(outfit_for("whore-copy", true, true), Some(Mood::Raunchy));
+        assert_eq!(outfit_for("viper", true, true), Some(Mood::Viper));
+        assert_eq!(outfit_for("whore", true, false), None);
+        assert_eq!(outfit_for("viper", true, false), None);
+        assert_eq!(outfit_for("nyx", false, true), None);
+        assert_eq!(outfit_for("pirate", false, true), None);
     }
 
     #[test]
@@ -1748,7 +2023,7 @@ mod tests {
         cabin.chat_job_thread = Some(cabin.threads[0].id.clone());
         assert_eq!(
             cabin.companion_mood(),
-            Mood::HangingOut,
+            Mood::Thinking,
             "thinking, no tool yet"
         );
 
@@ -1766,6 +2041,8 @@ mod tests {
         assert_eq!(cabin.companion_mood(), Mood::Reading);
         cabin.live_blocks[0].tool_title = "Run cargo test".into();
         assert_eq!(cabin.companion_mood(), Mood::Working);
+        cabin.live_blocks[0].tool_title = "Draft the release notes".into();
+        assert_eq!(cabin.companion_mood(), Mood::Writing);
 
         cabin.running = false;
         cabin.chat_job_thread = None;
@@ -1781,6 +2058,74 @@ mod tests {
         assert_eq!(cabin.companion_mood(), Mood::Gaming, "Viper is adults-only");
         cabin.cfg.explicit_personalities = true;
         assert_eq!(cabin.companion_mood(), Mood::Viper);
+    }
+
+    #[test]
+    fn the_raunchy_outfit_needs_an_explicit_preset_and_adults_only() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+        cabin.thread_idx = 0;
+        cabin.messages = Arc::new(Vec::new());
+        cabin.focus.app = Some(grokhub_core::focus_app::FocusApp {
+            name: "Rift Circuit".into(),
+            category: grokhub_core::focus_app::FocusCategory::Gaming,
+        });
+        let presets = grokhub_core::personality::load_all(&super::personality_ui::presets_dir()).0;
+        let explicit: Vec<&str> = presets
+            .iter()
+            .filter(|p| p.explicit)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(explicit.contains(&"whore") && explicit.contains(&"viper"));
+
+        for p in &presets {
+            cabin.cfg.personality = p.id.clone();
+            cabin.cfg.explicit_personalities = true;
+            let on = match (p.explicit, p.id.as_str()) {
+                (true, "viper") => Mood::Viper,
+                (true, _) => Mood::Raunchy,
+                (false, _) => Mood::Gaming,
+            };
+            assert_eq!(cabin.companion_mood(), on, "{} with adults-only on", p.id);
+            cabin.cfg.explicit_personalities = false;
+            assert_eq!(
+                cabin.companion_mood(),
+                Mood::Gaming,
+                "{} with adults-only off shows Nyx's mode",
+                p.id
+            );
+        }
+
+        // A chat's own explicit pick follows the same switch.
+        cabin.cfg.personality = "nyx".into();
+        cabin.threads[0].personality = "whore".into();
+        cabin.nav = Nav::Chat;
+        cabin.focus.app = None;
+        cabin.cfg.explicit_personalities = true;
+        assert_eq!(cabin.companion_mood(), Mood::Raunchy);
+        cabin.cfg.explicit_personalities = false;
+        assert_eq!(cabin.companion_mood(), Mood::HangingOut);
+
+        // A deck pin for the raunchy picture follows the switch too.
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_MOOD", "raunchy");
+        cabin.threads[0].personality = String::new();
+        let pinned_off = cabin.companion_mood();
+        cabin.cfg.explicit_personalities = true;
+        let pinned_on = cabin.companion_mood();
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_mood {
+            Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
+            None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+        }
+        assert_eq!(pinned_off, Mood::HangingOut);
+        assert_eq!(pinned_on, Mood::Raunchy);
     }
 
     #[test]

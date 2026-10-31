@@ -163,6 +163,7 @@ mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
 mod day_brief_ui;
+mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
@@ -173,6 +174,7 @@ mod findings_ui;
 mod fix_it;
 mod focus_ui;
 mod game_companion_ui;
+mod game_watch_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -645,6 +647,8 @@ pub struct Cabin {
     presence_ring: Vec<(u64, String)>,
     voice_state: VoiceState,
     voice_ready_at: Option<Instant>,
+    /// Labs: the companion's own desktop window, while she is popped out.
+    desktop_nyx: Option<desktop_nyx::DesktopNyx>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
     cmd_line: String,
     cmd_hist: Vec<String>,
@@ -1273,6 +1277,7 @@ impl Cabin {
             presence_ring: vec![],
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            desktop_nyx: None,
             voice_hold_rx: None,
             cmd_line: String::new(),
             cmd_hist: vec![],
@@ -1748,6 +1753,7 @@ impl Cabin {
             presence_ring: Vec::new(),
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            desktop_nyx: None,
             voice_hold_rx: None,
             cmd_line: String::new(),
             cmd_hist: Vec::new(),
@@ -5060,6 +5066,7 @@ impl Cabin {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
             Some(crate::tray::TrayCmd::Halt) => self.halt_everything("Stopped"),
             Some(crate::tray::TrayCmd::Quit) => self.quit_from_tray(ctx),
+            Some(crate::tray::TrayCmd::DesktopNyx) => self.toggle_desktop_nyx(),
             None => {}
         }
     }
@@ -5110,6 +5117,12 @@ impl Cabin {
 }
 
 impl eframe::App for Cabin {
+    /// Clear to nothing: the cabin's panels paint every pixel of the root
+    /// window, and the companion's desktop window needs a see-through frame.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
@@ -5152,6 +5165,9 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
+        // The process-wide sidecar is a static, so nothing drops it at exit: stop
+        // llama-server here or it keeps the model loaded after the cabin is gone.
+        grokhub_agent::route::local_sidecar::stop_global();
         // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 
@@ -5193,6 +5209,7 @@ impl eframe::App for Cabin {
         self.refresh_greeting();
         self.drain_inbox();
         self.poll_tray(ctx);
+        self.tick_desktop_nyx(ctx);
         self.poll_voice_hold();
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());

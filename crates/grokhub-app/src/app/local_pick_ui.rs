@@ -109,7 +109,7 @@ impl Cabin {
             if crate::cards::white_pill(ui, &format!("Use {}", m.name)) {
                 self.switch_local_model(m);
             }
-            // Picking Muse/Gemma with its GGUF already on disk still offers
+            // Picking a Gemma with its GGUF already on disk still offers
             // the paired draft model, even before this row is the active one.
             self.ui_drafter_offer_for(ui, m.file);
         } else {

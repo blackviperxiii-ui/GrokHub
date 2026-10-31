@@ -5,6 +5,8 @@
 //! played, a guides link and their note from last time; a quiet desktop
 //! notification follows when the user turned that on. When the game closes,
 //! a one-tap offers to leave a note for next time. Nothing touches the game.
+//! The same sample tells the game watcher (`game_watch_ui`) when a game it
+//! listens for runs, so the sampling also runs with only the watcher on.
 
 use std::path::PathBuf;
 
@@ -83,7 +85,7 @@ impl Cabin {
     /// Each frame: sample what is running every few seconds, and take the
     /// news for a launch when it is back.
     pub(super) fn tick_game_companion(&mut self) {
-        if !self.cfg.game_companion {
+        if !self.cfg.game_companion && !self.cfg.game_watch {
             return;
         }
         if let Some(rx) = self.focus.game.news_rx.take() {
@@ -113,10 +115,15 @@ impl Cabin {
         });
     }
 
+    /// The Steam app id the last sample saw running.
+    pub(super) fn game_running(&self) -> Option<u32> {
+        self.focus.game.watch.current
+    }
+
     /// One sample. A launch of a library game fetches its news off the UI thread.
-    fn note_running(&mut self, running: Option<u32>, now: u64) {
+    pub(super) fn note_running(&mut self, running: Option<u32>, now: u64) {
         let events = self.focus.game.watch.note(running);
-        if events.is_empty() {
+        if events.is_empty() || !self.cfg.game_companion {
             return;
         }
         let library = self.steam_library(now).1.to_vec();
@@ -290,6 +297,13 @@ impl Cabin {
         }
     }
 
+    /// Which game the in-game watcher supports first, from the Steam
+    /// library's playtime read now (`grokhub_core::game_watch_pick`).
+    fn game_watch_first_line(&mut self, now: u64) -> String {
+        let (_, games) = self.steam_library(now);
+        grokhub_core::game_watch_pick::settings_line(games)
+    }
+
     pub(super) fn ui_game_companion_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.game_companion;
         if crate::cards::settings_toggle(
@@ -299,11 +313,19 @@ impl Cabin {
             &mut on,
         ) {
             self.cfg.game_companion = on;
+            // The game watcher keeps what the last sample saw, so its
+            // listener doesn't drop mid-match.
+            let seen = std::mem::take(&mut self.focus.game.watch);
             self.focus.game = GameUi::default();
+            if self.cfg.game_watch {
+                self.focus.game.watch = seen;
+            }
             self.chip_paint_key.clear();
             self.persist_cfg();
             self.status = "Saved".into();
         }
+        let line = self.game_watch_first_line(now_ms());
+        crate::cards::settings_note(ui, &line);
         if !self.cfg.game_companion {
             return;
         }
@@ -480,6 +502,24 @@ mod tests {
     }
 
     #[test]
+    fn the_sampler_runs_for_the_game_watcher_alone_and_not_with_both_off() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.tick_game_companion();
+        assert!(cabin.focus.game.sample_rx.is_none(), "both off: no sample");
+        cabin.cfg.game_watch = true;
+        cabin.tick_game_companion();
+        assert!(cabin.focus.game.sample_rx.is_some());
+        // A sample with only the watcher on is kept for it, and starts no
+        // companion card.
+        cabin.note_running(Some(730), 1_000);
+        cabin.note_running(None, 2_000);
+        cabin.note_running(Some(730), 3_000);
+        assert_eq!(cabin.game_running(), Some(730));
+        assert!(cabin.focus.game.playing.is_none());
+        assert!(cabin.focus.game.news_rx.is_none());
+    }
+
+    #[test]
     fn a_game_outside_the_library_starts_nothing() {
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.game_companion = true;
@@ -490,5 +530,36 @@ mod tests {
         assert!(cabin.focus.game.playing.is_none() && cabin.focus.game.news_rx.is_none());
         cabin.note_running(None, 2_000);
         assert!(cabin.focus.game.ended.is_none());
+    }
+
+    #[test]
+    fn settings_names_the_watchers_first_game_from_steam_playtime() {
+        let mut cabin = Cabin::quiet_for_test();
+        let now = now_ms();
+        let played = |id, name: &str, playtime_min| SteamGame {
+            playtime_min,
+            ..game(id, name)
+        };
+        cabin.sources.steam.seed_library_for_test(
+            vec![
+                played(7, "Hades", 9_000),
+                played(730, "Counter-Strike 2", 40),
+                played(570, "Dota 2", 400),
+            ],
+            true,
+            now,
+        );
+        assert_eq!(
+            cabin.game_watch_first_line(now),
+            "Game watcher: Dota 2 first, most played in your Steam library. League of Legends and World of Warcraft aren't on Steam, so they aren't ranked."
+        );
+        cabin
+            .sources
+            .steam
+            .seed_library_for_test(vec![game(7, "Hades")], true, now);
+        assert_eq!(
+            cabin.game_watch_first_line(now),
+            "Game watcher: Counter-Strike 2 first by default, since no supported game has playtime in your Steam library. League of Legends and World of Warcraft aren't on Steam, so they aren't ranked."
+        );
     }
 }

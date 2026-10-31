@@ -31,6 +31,7 @@ pub mod local_perf;
 pub mod local_sidecar;
 pub mod local_spec;
 pub mod log;
+pub mod match_ask;
 pub mod policy;
 pub mod providers;
 pub mod refresh;
@@ -207,6 +208,12 @@ pub fn call_model(
     // Playbooks 8: a banned ask never leaves the computer.
     let mut sent = call.clone();
     adult::scrub(&mut sent.input);
+    if let Some(out) = adult::held_reply(&sent.input) {
+        return Ok(Routed {
+            out,
+            tokens: CallTokens::default(),
+        });
+    }
     let text = live::last_user_text(&sent.input).0;
     let mut rc = RouteCall {
         provider: &call.provider,
@@ -233,7 +240,7 @@ pub fn call_model(
     sent.model = decision.send_model(&call.model);
     // Explicit turns go only to xAI or this computer's model.
     let on_provider =
-        decision.on_provider() && !adult::to_xai(&text, providers::dest(&dir, &sent.model));
+        decision.on_provider() && !adult::to_xai(&sent.input, providers::dest(&dir, &sent.model));
     if decision.on_provider() && !on_provider {
         sent.model = adult::xai_model(&call.model);
     }
@@ -275,7 +282,8 @@ pub fn call_model(
         &decision,
         &RouteDone::of(&out, started.elapsed()),
     );
-    let out = out?;
+    let mut out = out?;
+    out.text = grokhub_core::adult_guard::screen_reply(&out.text).to_string();
     let tokens = CallTokens::of(&sent, &out.usage);
     Ok(Routed { out, tokens })
 }
@@ -446,6 +454,29 @@ fn successor(reg: &Registry, id: &str, ids: &[&str]) -> Option<String> {
     rec.served_as.clone().filter(|s| ids.contains(&s.as_str()))
 }
 
+/// Some cloud model is up for this path and could take a step: healthy, and
+/// either within your spend now or only waiting for your OK on its price.
+/// A model left out for its price or for this step's needs (image, tools,
+/// context) still counts, so only a real outage makes the device the last resort.
+fn cloud_can_answer(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    grok_build: bool,
+    spend: &spend::Spend,
+    now_ms: u64,
+) -> bool {
+    let fit = policy::Fit {
+        grok_build,
+        ..policy::Fit::default()
+    };
+    reg.models.keys().map(String::as_str).any(|id| {
+        !local::is_local(id)
+            && policy::fits_any_cost(reg, profiles, id, fit, now_ms)
+            && (policy::approved(reg, id, grok_build, spend)
+                || policy::route_class(reg, id, grok_build, spend) == CostClass::Premium)
+    })
+}
+
 impl Router {
     fn pick_model(
         input: &RouteInput<'_>,
@@ -468,7 +499,17 @@ impl Router {
             return keep(current);
         }
         if !gb && reg.entitlement.credential == Credential::None {
-            // No sign-in: nothing native is included, so the call keeps its own model.
+            // No sign-in: nothing native is included, but a provider you added
+            // and picked in Settings still answers on its own key and grant.
+            if let Some(p) = input
+                .prefer
+                .map(str::trim)
+                .filter(|p| ids.contains(p) && policy::is_new_provider(reg, p))
+            {
+                rules.push("provider:picked".into());
+                return keep(p);
+            }
+            // Otherwise the call keeps its own model.
             rules.push("cost:not_included".into());
             return keep(current);
         }
@@ -779,6 +820,32 @@ impl Router {
             }
         };
         let gov_paused = input.local.capacity.paused();
+        let cloud_ids: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|id| !local::is_local(id))
+            .collect();
+        // No sign-in or key, and the pick is not a provider you added with its
+        // own key and grant: no cloud route can answer this step.
+        let no_cloud_route = |rules: &[String], pick: &ModelPick| {
+            rules.iter().any(|r| r == "cost:not_included")
+                && !(cloud_ids.contains(&pick.model.as_str())
+                    && policy::is_new_provider(reg, &pick.model))
+        };
+        let too_hard = local::too_hard_for_local(input.class, input.ctx_tokens, input.d);
+        let elig = local::eligible(&input.local, input.class, input.ctx_tokens);
+        // With no cloud model left, the device takes what it would take offline,
+        // never hard or long work.
+        let as_offline = local::LocalGate {
+            offline: true,
+            ..input.local.clone()
+        };
+        let last_resort =
+            !too_hard && (elig || local::eligible(&as_offline, input.class, input.ctx_tokens));
+        let local_id = reg.models.keys().map(String::as_str).find(|id| {
+            local::admits(&as_offline, id, input.class, input.ctx_tokens)
+                && policy::fits(reg, profiles, id, fit, &input.spend, now_ms)
+        });
         let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
             // Sensitive data stays on the device, and the device is paused.
             local_paused(&mut rules)
@@ -847,20 +914,28 @@ impl Router {
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
-            let cloud_ids: Vec<&str> = ids
-                .iter()
-                .copied()
-                .filter(|id| !local::is_local(id))
-                .collect();
             let mut pick =
                 Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
-            if !pick.no_route && !local::is_local(&pick.model) {
+            let no_keys = no_cloud_route(&rules, &pick);
+            if !pick.no_route && !local::is_local(&pick.model) && !no_keys {
                 rules.push("local:escalate_verify".into());
                 pick.replaced = Some(local_tier);
                 local::note_local_verify_failed(false);
-            } else if pick.no_route && local::eligible(&input.local, input.class, input.ctx_tokens)
-            {
-                // Every plan model down: fall back to local and clear the sticky flag.
+            } else if no_keys {
+                // No sign-in or key: there is no cloud model to escalate to, so
+                // the device keeps the step when it may take it.
+                if let Some(id) = local_id.filter(|_| last_resort) {
+                    rules.push("local:no_keys".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                    local::note_local_verify_failed(false);
+                }
+            } else if pick.no_route && last_resort {
+                // Every plan model down: fall back to local and clear the sticky
+                // flag, never for hard or long work.
                 if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
                     rules.push("local:cloud_down".into());
                     pick = ModelPick {
@@ -873,23 +948,20 @@ impl Router {
             }
             pick
         } else {
-            let too_hard = local::too_hard_for_local(input.class, input.ctx_tokens, input.d);
-            let elig = local::eligible(&input.local, input.class, input.ctx_tokens);
-            let cloud_ids: Vec<&str> = ids
-                .iter()
-                .copied()
-                .filter(|id| !local::is_local(id))
-                .collect();
-            // Grok stays primary: under Throttle, or for a heavy step before
-            // RampUp, online background work stays off the device.
-            let hold = local::online_hold(&input.local, input.class, input.ctx_tokens);
-            let pool = if hold.is_some() { &cloud_ids } else { &ids };
+            // Every cloud model is down, not just left out for its price or this
+            // step's needs (those keep the premium ask and the stand-in).
+            let cloud_down = !cloud_can_answer(reg, profiles, fit.grok_build, &input.spend, now_ms);
+            // Online, the cloud always wins while any cloud model can take the step:
+            // the device is the last resort, never a cheaper pick.
+            let pool = if cloud_ids.is_empty() && cloud_down {
+                &ids
+            } else {
+                &cloud_ids
+            };
             let mut pick = Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules);
-            if let Some(rule) = hold {
-                rules.push(rule.into());
-            }
-            // Cloud pool empty + local already won (cheapest/table): retag as cloud_down.
-            // Do not fire when a healthy cloud id remains — local may win online on purpose.
+            // No sign-in or key and no provider you added took it: no cloud model can answer.
+            let no_keys = no_cloud_route(&rules, &pick);
+            // Cloud pool empty + local already won: retag as cloud_down.
             let cloud_pool_empty_local = !input.local.offline
                 && !pick.no_route
                 && local::is_local(&pick.model)
@@ -903,10 +975,19 @@ impl Router {
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
-            } else if (pick.no_route && elig) || cloud_pool_empty_local {
-                // Plan models down / no healthy cloud route: fall back to local when eligible.
-                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
-                    rules.push("local:cloud_down".into());
+            } else if (((pick.no_route && cloud_down) || no_keys) && last_resort)
+                || cloud_pool_empty_local
+            {
+                // Plan models down / no healthy cloud route / no keys: fall back to local.
+                if let Some(id) = local_id {
+                    rules.push(
+                        if no_keys {
+                            "local:no_keys"
+                        } else {
+                            "local:cloud_down"
+                        }
+                        .into(),
+                    );
                     pick = ModelPick {
                         model: id.to_string(),
                         no_route: false,
@@ -1063,6 +1144,12 @@ impl Router {
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
                 format!(
                     "{tier_word} · {}: {from} (local) is too small for this step.",
+                    effort_word(effort.as_deref())
+                )
+            }
+            (Some(from), _) if rules.iter().any(|r| r == "local:no_keys") => {
+                format!(
+                    "{tier_word} · {}: {from} needs a sign-in or key (using local).",
                     effort_word(effort.as_deref())
                 )
             }

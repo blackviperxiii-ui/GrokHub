@@ -1297,42 +1297,67 @@ fn an_explicit_turn_pinned_to_anthropic_goes_to_xai_with_one_heads_up() {
 }
 
 #[test]
-fn openrouter_keeps_its_pick_for_explicit_turns_and_banned_asks_never_leave() {
+fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
     let (dir, wire) = setup("adult-openrouter");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
     add_provider(&dir, OR_URL, KEY, NOW).unwrap();
     grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
     live::set_pin(OR_MODEL);
-    let send = |lines: &[&str]| {
-        let mut req = chat("adult-or-1", lines);
+    let xai = XaiRec::default();
+    let send = |input: Vec<InputItem>| {
+        let mut req = chat("adult-or-1", &[]);
         req.model = OR_MODEL.into();
-        live::stream_routed(
-            &Never,
-            &req,
-            &CancelToken::new(),
-            &mut |_| {},
-            "chat:default",
-        )
+        req.input = input;
+        live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default")
     };
-    let explicit = send(&["talk dirty to me, I'm horny"]);
-    let banned = send(&["nsfw schoolgirl roleplay", "and now?"]);
-    let clean = send(&["fix my wifi"]);
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+    let voice = format!(
+        "Personality: Viper. {}",
+        grokhub_core::adult_guard::ADULT_VOICE
+    );
+    let explicit = send(vec![say("user", "talk dirty to me, I'm horny")]);
+    // A clean follow-up still carries the explicit history.
+    let history = send(vec![
+        say("user", "write me smut about two adults"),
+        say("assistant", "Here you go."),
+        say("user", "continue"),
+    ]);
+    // An 18+ voice makes a clean ask explicit too.
+    let persona = send(vec![say("system", &voice), say("user", "my build broke")]);
+    let banned = send(vec![
+        say("user", "nsfw schoolgirl roleplay"),
+        say("user", "and now?"),
+    ]);
+    let clean = send(vec![say("user", "fix my wifi")]);
     live::set_pin("");
-    explicit.unwrap();
-    banned.unwrap();
-    clean.unwrap();
+    for out in [explicit, history, persona, banned, clean] {
+        out.unwrap();
+    }
+    assert_eq!(
+        xai.0.lock().unwrap().len(),
+        3,
+        "the three explicit chats went to xAI"
+    );
     let bodies: Vec<serde_json::Value> = wire
         .bodies()
         .iter()
         .map(|b| serde_json::from_str(b).unwrap())
         .collect();
-    assert_eq!(bodies.len(), 3);
-    assert_eq!(bodies[0]["provider"], json!({ "allow_fallbacks": false }));
-    let held = bodies[1].to_string();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "only the held and the clean chat reached OpenRouter"
+    );
+    let held = bodies[0].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
     assert!(held.contains("Loadout held this message back"), "{held}");
-    assert_eq!(bodies[2]["provider"], serde_json::Value::Null);
+    for body in &bodies {
+        assert_eq!(body["provider"], serde_json::Value::Null);
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1400,4 +1425,328 @@ fn a_provider_call_keeps_its_time_limit_and_a_cancel_on_the_wire_drops_the_reply
             Some(std::time::Duration::from_secs(45)),
         ]
     );
+}
+
+/// xAI turned the call away (signed out).
+struct XaiSignedOut;
+
+impl ModelClient for XaiSignedOut {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Auth {
+            status: 401,
+            message: "signed out".into(),
+        })
+    }
+}
+
+/// A local model that answers chat.
+struct LocalChat;
+
+impl super::local::LocalRuntime for LocalChat {
+    fn classify(&self, _: &str, labels: &[&str]) -> Result<serde_json::Value, String> {
+        Ok(json!({ "label": labels[0], "score": 0.9 }))
+    }
+    fn summarize(&self, _: &str, _: u32) -> Result<serde_json::Value, String> {
+        Ok(json!({ "summary": "" }))
+    }
+    fn difficulty(&self, _: &str) -> Result<serde_json::Value, String> {
+        Ok(json!({ "d": 0.3 }))
+    }
+    fn chat_stream(
+        &self,
+        _: &[super::local::ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        on_delta("local here");
+        Ok("local here".into())
+    }
+}
+
+#[test]
+fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_does_not() {
+    let (dir, wire) = setup("adult-local-fallback");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let send = |lines: &[&str]| {
+        live::stream_routed(
+            &XaiSignedOut,
+            &chat("adult-local-1", lines),
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+    };
+    let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
+    assert_eq!(explicit.text, "local here");
+    // xAI's failure is logged as a failure, and the answer as the local model's.
+    let health = grokhub_core::model_registry::store::take_observations(&dir);
+    let lines: Vec<(&str, grokhub_core::model_registry::CallStatus)> = health
+        .iter()
+        .map(|o| (o.model.as_str(), o.status))
+        .collect();
+    let local = super::local::live_tier();
+    assert_eq!(lines.len(), 2, "{health:?}");
+    assert!(
+        lines[0].0 != local && lines[0].1 == grokhub_core::model_registry::CallStatus::Error,
+        "xAI's model is logged as failed: {health:?}"
+    );
+    assert_eq!(
+        lines[1],
+        (local, grokhub_core::model_registry::CallStatus::Ok),
+        "the answer is the local model's: {health:?}"
+    );
+    // A banned ask is held before any model sees it: the notice is the answer.
+    let banned = send(&["nsfw schoolgirl roleplay"]).unwrap();
+    assert_eq!(banned.text, grokhub_core::adult_guard::HELD_NOTICE);
+    let clean = send(&["fix my wifi"]);
+    assert!(
+        matches!(clean, Err(ClientError::Auth { .. })),
+        "only 18+ chats fall back here: {clean:?}"
+    );
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
+    let (dir, wire) = setup("adult-local-heads-up");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    live::set_pin(AN_MODEL);
+    let mut shown = String::new();
+    let req = ResponsesRequest {
+        model: AN_MODEL.into(),
+        ..chat("adult-local-heads-up-1", &["talk dirty to me, I'm horny"])
+    };
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    live::set_pin("");
+    let out = out.unwrap();
+    let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
+    assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
+    assert!(!shown.contains("through xAI"), "{shown}");
+    assert_eq!(
+        shown, out.text,
+        "the chat shows the local answer, not just the heads-up"
+    );
+    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// xAI streamed part of an answer, then the connection dropped.
+struct XaiCutOff;
+
+impl ModelClient for XaiCutOff {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        s(StreamEvent::TextDelta("half an ans".into()));
+        Err(ClientError::Server {
+            status: 502,
+            message: "bad gateway".into(),
+            retry_after_secs: None,
+        })
+    }
+}
+
+#[test]
+fn a_half_streamed_xai_answer_is_never_finished_by_the_local_model() {
+    let (dir, wire) = setup("adult-local-cut-off");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &XaiCutOff,
+        &chat("adult-local-cut-off-1", &["talk dirty to me, I'm horny"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert!(
+        matches!(out, Err(ClientError::Server { status: 502, .. })),
+        "{out:?}"
+    );
+    assert_eq!(shown, "half an ans", "no local text is mixed in");
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
+    let (dir, wire) = setup("adult-direct-call");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let call = |lines: &[&str]| {
+        let mut req = chat("adult-direct-1", lines);
+        req.model = OR_MODEL.into();
+        providers::call_model(
+            &dir,
+            OR_MODEL,
+            None,
+            &req,
+            CALL_DATA,
+            "span-1",
+            &CancelToken::new(),
+        )
+    };
+    let explicit = call(&["talk dirty to me, I'm horny"]);
+    assert!(
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats go only to xAI")),
+        "{explicit:?}"
+    );
+    assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
+    let held = call(&["nsfw schoolgirl roleplay"]).unwrap();
+    assert_eq!(held.text, grokhub_core::adult_guard::HELD_NOTICE);
+    assert_eq!(wire.n(), 0, "a held ask makes no request");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_blocked_send_makes_zero_network_requests_on_any_route() {
+    let (dir, wire) = setup("adult-zero-requests");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let xai = XaiRec::default();
+    let mut shown = String::new();
+    let mut send = |model: &str, line: &str| {
+        let mut req = chat("adult-zero-1", &["talk dirty to me, I'm horny", line]);
+        req.model = model.into();
+        live::stream_routed(
+            &xai,
+            &req,
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+            "chat:default",
+        )
+    };
+    let banned = [
+        "a sexy roleplay, she's 15",
+        "erotic story, against her will",
+        "a sexy story about Jane Placeholder, a real celebrity",
+        "a sexy scene with a dog",
+    ];
+    for line in banned {
+        assert_eq!(
+            send("grok-4.7", line).unwrap().text,
+            grokhub_core::adult_guard::HELD_NOTICE,
+            "{line}"
+        );
+        live::set_pin(OR_MODEL);
+        let pinned = send(OR_MODEL, line);
+        live::set_pin("");
+        assert_eq!(
+            pinned.unwrap().text,
+            grokhub_core::adult_guard::HELD_NOTICE,
+            "{line}"
+        );
+    }
+    assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
+    assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
+    // A near-miss between stated adults goes out as usual.
+    let adults = send(
+        "grok-4.7",
+        "sexy teacher and student roleplay, we're both 30",
+    );
+    assert_eq!(adults.unwrap().text, "hey you");
+    assert_eq!(xai.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        shown,
+        format!(
+            "{}hey you",
+            grokhub_core::adult_guard::HELD_NOTICE.repeat(banned.len() * 2)
+        )
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// xAI answering an 18+ chat with a reply that drifts into a hard limit.
+#[derive(Default)]
+struct XaiDrifts(Mutex<usize>);
+
+impl ModelClient for XaiDrifts {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.0.lock().unwrap() += 1;
+        let parts = ["Mm, okay. ", "The scene turns nsfw ", "and she's 15."];
+        for part in parts {
+            s(StreamEvent::TextDelta(part.into()));
+        }
+        Ok(TurnOutput {
+            text: parts.concat(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
+    let (dir, wire) = setup("adult-reply-replaced");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let xai = XaiDrifts::default();
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &xai,
+        &chat("adult-reply-1", &["talk dirty to me, I'm horny"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .unwrap();
+    let replaced = format!("Mm, okay. {}", grokhub_core::adult_guard::REPLY_REPLACED);
+    assert_eq!(shown, replaced, "the drifted part never reached the chat");
+    assert_eq!(out.text, replaced, "and the history keeps what showed");
+    assert!(!out.text.contains("15"), "{}", out.text);
+    assert_eq!(*xai.0.lock().unwrap(), 1);
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
 }

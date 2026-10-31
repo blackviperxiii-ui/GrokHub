@@ -451,6 +451,10 @@ pub struct AppConfig {
     /// Also a quiet desktop notification when the companion card posts.
     #[serde(default)]
     pub game_companion_ping: bool,
+    /// Settings → Behavior: the game watcher's GSI file and loopback
+    /// listener (`grokhub_core::game_watch_gsi`). Off by default.
+    #[serde(default)]
+    pub game_watch: bool,
     /// Settings → Behavior: offer next steps for new 3D models in Downloads.
     /// Off by default.
     #[serde(default)]
@@ -461,6 +465,10 @@ pub struct AppConfig {
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
+    /// Settings → Appearance: reduce motion. No hover lifts, no icon motion,
+    /// and Settings jumps instead of scrolling. Off by default.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Settings → Appearance: chat pages show the objectives and recent chats on
     /// the left and a PC snapshot on the right (deck slide 10) instead of the
     /// companion dock. Off by default.
@@ -488,6 +496,10 @@ pub struct AppConfig {
     /// first time adults-only turns on, then never again.
     #[serde(default)]
     pub adult_confirmed: bool,
+    /// When that 18+ yes was given (Unix ms). Empty for a yes carried over
+    /// from before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adult_confirmed_at_ms: Option<u64>,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -496,6 +508,23 @@ pub struct AppConfig {
     /// default; logs can hold more than the chat.
     #[serde(default)]
     pub diagnostics_include_logs: bool,
+    /// Labs: the companion can pop out of the corner box into her own
+    /// see-through window on the desktop.
+    #[serde(default)]
+    pub desktop_nyx: bool,
+    /// She is popped out right now (the window shows when nothing hides it).
+    #[serde(default)]
+    pub desktop_nyx_undocked: bool,
+    /// Her window sits behind other windows instead of floating on top.
+    #[serde(default)]
+    pub desktop_nyx_behind: bool,
+    /// Where her window last settled, in points from the monitor's corner.
+    #[serde(default)]
+    pub desktop_nyx_pos: Option<[f32; 2]>,
+    /// Adults-only outfits may show on the desktop. Off by default: the
+    /// desktop is visible to anyone at the screen.
+    #[serde(default)]
+    pub desktop_nyx_adult: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -824,9 +853,11 @@ impl Default for AppConfig {
             net_log: false,
             game_companion: false,
             game_companion_ping: false,
+            game_watch: false,
             model_drop: false,
             models_folder: String::new(),
             dock_panels: false,
+            reduce_motion: false,
             chat_objectives: false,
             desktop_control: false,
             screen_record: false,
@@ -834,8 +865,14 @@ impl Default for AppConfig {
             personality: String::new(),
             explicit_personalities: false,
             adult_confirmed: false,
+            adult_confirmed_at_ms: None,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
+            desktop_nyx: false,
+            desktop_nyx_undocked: false,
+            desktop_nyx_behind: false,
+            desktop_nyx_pos: None,
+            desktop_nyx_adult: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
@@ -1677,6 +1714,33 @@ mod tests {
         assert!(!load().diagnostics_mode);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().diagnostics_mode);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reduce_motion_defaults_off_and_round_trips() {
+        assert!(!AppConfig::default().reduce_motion);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.reduce_motion);
+        let _g = hold_test_config();
+        let root = test_config_root("reduce-motion");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            reduce_motion: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().reduce_motion);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"reduceMotion\": true"),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.reduce_motion = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().reduce_motion);
         let _ = fs::remove_dir_all(&root);
     }
 

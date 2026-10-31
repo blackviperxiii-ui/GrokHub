@@ -737,18 +737,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn muse_selected_offers_dflash_when_missing() {
+    fn a_gemma_selected_offers_e2b_when_missing() {
         let dir = std::env::temp_dir().join(format!("gh-shell-offer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(drafters_dir(&dir)).unwrap();
-        let offer = draft_offer(&dir, "muse-glimmer-30b-q4_k_m").expect("offer");
-        assert_eq!(offer.id, "muse-glimmer-30b-dflash-q4_k_m");
+        let offer = draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").expect("offer");
+        assert_eq!(offer.id, "gemma-4-e2b-it-abliterated-q4_k");
         assert!(offer.button.starts_with("Install and run draft model"));
-        assert!(offer.line.contains("Muse"));
-        let dflash = ls::model_by_id("muse-glimmer-30b-dflash-q4_k_m").unwrap();
+        assert!(offer
+            .line
+            .contains("Gemma 4 E2B can draft replies for Gemma 4 12B"));
+        // A stock Gemma 4 id from the older catalog is offered nothing.
+        assert!(draft_offer(&dir, "gemma-4-12b-it-q4_k_m").is_none());
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
         let dest = drafters_dir(&dir);
-        std::fs::write(dest.join(dflash.file), b"x").unwrap();
-        assert!(draft_offer(&dir, "muse-glimmer-30b-q4_k_m").is_none());
+        std::fs::write(dest.join(e2b.file), b"x").unwrap();
+        assert!(draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 

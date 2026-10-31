@@ -1,0 +1,3 @@
+- Local AI: the status shows Ready once the on-device server has exited, instead of Running while the model is gone.
+- Local AI: the idle unload waits for requests in flight and counts idle time from when the last one finished, so a long answer no longer gets the model stopped mid-reply.
+- Local AI: switching the local model Off unloads it right away, and quitting Loadout stops the on-device server instead of leaving it holding memory.

@@ -2,22 +2,51 @@
 //! Reads Counter-Strike 2 Game State Integration payloads, turns the change
 //! between two payloads into match events, and runs plain rules over the
 //! timeline for pointers and an end-of-match recap. No model is called and
-//! nothing leaves the machine; the local listener and UI are follow-ups.
+//! nothing leaves the machine. `MatchTracker` and `ToastGate` are what the
+//! cabin runs per event, for any game whose adapter yields `WatchEvent`s.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::update_feed::{digest_card, UpdateCard};
+
 /// One thing that happened in a match.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     RoundStart { round: u32 },
     RoundEnd { round: u32, won: bool },
     Kill,
     Death,
     MatchEnd { won: u32, lost: u32 },
+    // League: the match began (`GameStart`), and an objective fell, with
+    // `ally` true when the player's team took it (`None`: side unknown).
+    MatchStart,
+    Objective { what: Objective, ally: Option<bool> },
+    // WoW: a boss pull began, and ended in a kill or a wipe.
+    PullStart(Pull),
+    PullEnd { pull: Pull, kill: bool },
+}
+
+/// The League objectives the watcher records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Objective {
+    Dragon,
+    Baron,
+    Turret,
+}
+
+/// A WoW boss encounter, as its `ENCOUNTER_START` / `ENCOUNTER_END` lines
+/// name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pull {
+    pub encounter_id: u32,
+    pub name: String,
+    pub difficulty: u32,
+    pub group_size: u32,
 }
 
 /// An event and when it was seen, in ms since the epoch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub at_ms: u64,
     pub kind: EventKind,
@@ -206,7 +235,7 @@ pub fn recap(timeline: &[WatchEvent]) -> Recap {
                 }
             }
             EventKind::MatchEnd { won, lost } => final_score = Some((won, lost)),
-            EventKind::RoundStart { .. } => {}
+            _ => {}
         }
     }
     if let Some((won, lost)) = final_score {
@@ -216,9 +245,143 @@ pub fn recap(timeline: &[WatchEvent]) -> Recap {
     r
 }
 
+/// What one event brings the cabin: a new pointer to show, or the match's
+/// end with its recap and every pointer it fired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchNews {
+    Pointer(String),
+    End { recap: Recap, pointers: Vec<String> },
+}
+
+/// One match as the cabin follows it, game-agnostic: the timeline so far,
+/// how many of its pointers went out, and whether its recap did. A
+/// `MatchEnd` closes the match once; a repeat of it adds nothing, and the
+/// next other event starts a new match.
+#[derive(Debug, Default)]
+pub struct MatchTracker {
+    timeline: Vec<WatchEvent>,
+    shown: usize,
+    ended: bool,
+}
+
+impl MatchTracker {
+    pub fn take(&mut self, event: WatchEvent) -> Vec<MatchNews> {
+        let end = matches!(event.kind, EventKind::MatchEnd { .. });
+        if self.ended {
+            if end {
+                return Vec::new();
+            }
+            *self = MatchTracker::default();
+        }
+        self.timeline.push(event);
+        let fired = pointers(&self.timeline);
+        let mut out: Vec<MatchNews> = fired[self.shown.min(fired.len())..]
+            .iter()
+            .map(|p| MatchNews::Pointer(p.text.clone()))
+            .collect();
+        self.shown = fired.len();
+        if end {
+            self.ended = true;
+            let mut texts: Vec<String> = Vec::new();
+            for p in fired {
+                if !texts.contains(&p.text) {
+                    texts.push(p.text);
+                }
+            }
+            out.push(MatchNews::End {
+                recap: recap(&self.timeline),
+                pointers: texts,
+            });
+        }
+        out
+    }
+}
+
+/// Pointer toasts come at most once per this long. One that comes sooner is
+/// not queued; the recap card still lists it.
+pub const POINTER_TOAST_GAP_MS: u64 = 60_000;
+
+/// Rate limit for pointer toasts.
+#[derive(Debug, Default)]
+pub struct ToastGate {
+    last_ms: Option<u64>,
+}
+
+impl ToastGate {
+    /// True when a toast may show at `now_ms`, and counts it as shown.
+    pub fn allow(&mut self, now_ms: u64) -> bool {
+        if self
+            .last_ms
+            .is_some_and(|last| now_ms.saturating_sub(last) < POINTER_TOAST_GAP_MS)
+        {
+            return false;
+        }
+        self.last_ms = Some(now_ms);
+        true
+    }
+}
+
+/// The recap as a Pulse card: the result in the title, the numbers and the
+/// match's pointers in the body. A score shows only for games played in
+/// rounds; a one-game result (Dota 2's 1-0) is just won or lost.
+pub fn recap_card(game: &str, recap: &Recap, pointers: &[String], at_ms: u64) -> UpdateCard {
+    let result = match recap.won.cmp(&recap.lost) {
+        std::cmp::Ordering::Greater => "won",
+        std::cmp::Ordering::Less => "lost",
+        std::cmp::Ordering::Equal => "tied",
+    };
+    let title = if recap.won + recap.lost > 1 {
+        format!("{game} match: {result} {}-{}", recap.won, recap.lost)
+    } else {
+        format!("{game} match: {result}")
+    };
+    let mut body = format!("{} kills, {} deaths.", recap.kills, recap.deaths);
+    if recap.longest_win_streak > 1 {
+        body.push_str(&format!(
+            " Longest win streak: {} rounds.",
+            recap.longest_win_streak
+        ));
+    }
+    if !pointers.is_empty() {
+        body.push_str(" Pointers this match: ");
+        body.push_str(&pointers.join(" "));
+    }
+    let slug: String = game
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    digest_card(&format!("source:game-watch:{slug}"), &title, &body, at_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn league_and_wow_events_round_trip_through_the_match_store_json() {
+        let pull = Pull {
+            encounter_id: 2902,
+            name: "Ulgrax".into(),
+            difficulty: 16,
+            group_size: 20,
+        };
+        let kinds = vec![
+            EventKind::MatchStart,
+            EventKind::Objective {
+                what: Objective::Baron,
+                ally: Some(true),
+            },
+            EventKind::PullStart(pull.clone()),
+            EventKind::PullEnd { pull, kill: false },
+        ];
+        for kind in kinds {
+            let ev = WatchEvent { at_ms: 1, kind };
+            let json = serde_json::to_string(&ev).unwrap();
+            assert_eq!(serde_json::from_str::<WatchEvent>(&json).unwrap(), ev);
+        }
+    }
 
     fn payload(round: u32, phase: &str, win: &str, kills: u32, deaths: u32) -> String {
         format!(
@@ -423,5 +586,149 @@ mod tests {
         ended.push(ev(10, EventKind::MatchEnd { won: 13, lost: 9 }));
         let r = recap(&ended);
         assert_eq!((r.won, r.lost), (13, 9));
+    }
+
+    fn won(at_ms: u64, round: u32) -> WatchEvent {
+        ev(at_ms, EventKind::RoundEnd { round, won: true })
+    }
+
+    #[test]
+    fn the_tracker_hands_out_each_pointer_once_and_one_end_per_match() {
+        let mut m = MatchTracker::default();
+        assert_eq!(m.take(won(1, 1)), vec![]);
+        assert_eq!(m.take(lost(2, 2)), vec![]);
+        assert_eq!(m.take(lost(3, 3)), vec![]);
+        assert_eq!(
+            m.take(lost(4, 4)),
+            vec![MatchNews::Pointer(LOSS_STREAK.into())]
+        );
+        assert_eq!(m.take(lost(5, 5)), vec![]);
+        assert_eq!(m.take(ev(6, EventKind::Kill)), vec![]);
+        assert_eq!(
+            m.take(ev(7, EventKind::MatchEnd { won: 1, lost: 4 })),
+            vec![MatchNews::End {
+                recap: Recap {
+                    won: 1,
+                    lost: 4,
+                    kills: 1,
+                    deaths: 0,
+                    longest_win_streak: 1
+                },
+                pointers: vec![LOSS_STREAK.into()],
+            }]
+        );
+        // The game says game over again: no second end.
+        assert_eq!(
+            m.take(ev(8, EventKind::MatchEnd { won: 1, lost: 4 })),
+            vec![]
+        );
+        // The next match starts clean.
+        assert_eq!(m.take(ev(9, EventKind::Death)), vec![]);
+        assert_eq!(
+            m.take(ev(10, EventKind::MatchEnd { won: 0, lost: 1 })),
+            vec![MatchNews::End {
+                recap: Recap {
+                    won: 0,
+                    lost: 1,
+                    kills: 0,
+                    deaths: 1,
+                    longest_win_streak: 0
+                },
+                pointers: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_pointer_that_fires_twice_is_listed_once_at_the_end() {
+        let mut m = MatchTracker::default();
+        let mut news = Vec::new();
+        for (i, e) in [
+            lost(1, 1),
+            lost(2, 2),
+            lost(3, 3),
+            won(4, 4),
+            lost(5, 5),
+            lost(6, 6),
+            lost(7, 7),
+            ev(8, EventKind::MatchEnd { won: 1, lost: 6 }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            news.extend(m.take(e).into_iter().map(|n| (i, n)));
+        }
+        assert_eq!(
+            news,
+            vec![
+                (2, MatchNews::Pointer(LOSS_STREAK.into())),
+                (6, MatchNews::Pointer(LOSS_STREAK.into())),
+                (
+                    7,
+                    MatchNews::End {
+                        recap: Recap {
+                            won: 1,
+                            lost: 6,
+                            kills: 0,
+                            deaths: 0,
+                            longest_win_streak: 1
+                        },
+                        pointers: vec![LOSS_STREAK.into()],
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn pointer_toasts_wait_a_minute_between_each() {
+        let mut gate = ToastGate::default();
+        assert!(gate.allow(1_000));
+        assert!(!gate.allow(1_000));
+        assert!(!gate.allow(60_999));
+        assert!(gate.allow(61_000));
+        assert!(!gate.allow(100_000));
+        assert!(gate.allow(200_000));
+    }
+
+    #[test]
+    fn the_recap_card_names_the_game_and_the_result() {
+        let r = Recap {
+            won: 13,
+            lost: 9,
+            kills: 21,
+            deaths: 15,
+            longest_win_streak: 4,
+        };
+        let card = recap_card("Counter-Strike 2", &r, &[LOSS_STREAK.into()], 5_000);
+        assert_eq!(card.title, "Counter-Strike 2 match: won 13-9");
+        assert_eq!(
+            card.body.as_deref(),
+            Some("21 kills, 15 deaths. Longest win streak: 4 rounds. Pointers this match: Three rounds lost in a row. A save round or a timeout might reset things.")
+        );
+        assert_eq!(card.source_id, "source:game-watch:counter-strike-2");
+        assert_eq!(card.created_at, 5_000);
+        assert!(crate::update_feed::names_its_item(&card));
+
+        let dota = Recap {
+            won: 0,
+            lost: 1,
+            kills: 3,
+            deaths: 7,
+            longest_win_streak: 0,
+        };
+        let card = recap_card("Dota 2", &dota, &[], 9_000);
+        assert_eq!(card.title, "Dota 2 match: lost");
+        assert_eq!(card.body.as_deref(), Some("3 kills, 7 deaths."));
+        assert_eq!(card.source_id, "source:game-watch:dota-2");
+        let tie = Recap {
+            won: 12,
+            lost: 12,
+            ..Recap::default()
+        };
+        assert_eq!(
+            recap_card("Counter-Strike 2", &tie, &[], 1).title,
+            "Counter-Strike 2 match: tied 12-12"
+        );
     }
 }

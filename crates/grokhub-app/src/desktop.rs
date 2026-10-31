@@ -14,6 +14,7 @@ use grokhub_core::{
     DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
     IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
 };
+use grokhub_desktop::game_guard::{GameGuard, Guarded};
 use image::GenericImageView;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -33,7 +34,7 @@ struct LastDeskFrame {
 
 static LAST_DESK_FRAME: Mutex<Option<LastDeskFrame>> = Mutex::new(None);
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct DeskScan {
     rows: Vec<AtspiRow>,
     lock: Vec<String>,
@@ -639,7 +640,22 @@ pub fn ensure_hands() -> HandsDown {
     hands_peek()
 }
 
+/// The shared window scan (AT-SPI, wmctrl) behind [`collect_rows`] and
+/// [`lock_titles`]. Reading other windows' titles waits while an anti-cheat
+/// runs: every caller then gets an empty scan and no helper is started.
 fn desk_scan() -> DeskScan {
+    desk_scan_under(crate::desktop_mcp::game_guard(), desk_scan_cached)
+}
+
+/// [`desk_scan`] with the game guard the caller read.
+fn desk_scan_under(guard: GameGuard, scan: impl FnOnce() -> DeskScan) -> DeskScan {
+    if guard.blocks(Guarded::WindowCheck).is_some() {
+        return DeskScan::default();
+    }
+    scan()
+}
+
+fn desk_scan_cached() -> DeskScan {
     if let Ok(g) = LAST_DESK_SCAN.lock() {
         if let Some((at, scan)) = g.as_ref() {
             if at.elapsed() < DESK_SCAN_TTL {
@@ -971,10 +987,19 @@ fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<St
 }
 
 pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
+    run_computer_op_under(op, cancel, crate::desktop_mcp::game_guard())
+}
+
+/// [`run_computer_op_cancel`] with the game guard the caller read. A held
+/// op reads no window titles and drives nothing.
+fn run_computer_op_under(op: &ComputerOp, cancel: Option<&AtomicBool>, guard: GameGuard) -> String {
     let started = Instant::now();
     let line = computer_cmd_line(op);
     if cancelled(cancel) {
         return hands_receipt(&line, started, false, "halted");
+    }
+    if let Some(msg) = guard.blocks(Guarded::DesktopControl) {
+        return hands_receipt(&line, started, false, &format!("blocked: {msg}"));
     }
     let titles = lock_titles();
     let title_refs: Vec<&str> = titles.iter().map(|s| s.as_str()).collect();
@@ -1284,6 +1309,15 @@ fn rgba_frame_to_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+    capture_jpeg_under(path, crate::desktop_mcp::game_guard())
+}
+
+/// [`capture_jpeg`] with the game guard the caller read. A held capture
+/// grabs no frame and writes no file.
+fn capture_jpeg_under(path: &Path, guard: GameGuard) -> Result<Vec<u8>, String> {
+    if let Some(msg) = guard.blocks(Guarded::ScreenCapture) {
+        return Err(msg);
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -2281,6 +2315,102 @@ mod tests {
             &ComputerOp::Click { x: 10, y: 20 },
             &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         ));
+    }
+
+    #[test]
+    fn the_game_guard_holds_every_computer_cmd_and_the_eyes_capture() {
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let ops = [
+            ComputerOp::Click { x: 10, y: 20 },
+            ComputerOp::Type { text: "hi".into() },
+            ComputerOp::Key {
+                name: "ctrl+l".into(),
+            },
+            ComputerOp::Act {
+                name: "Save".into(),
+            },
+            ComputerOp::Tab {
+                action: TabAction::List,
+                query: String::new(),
+            },
+            ComputerOp::Cursor,
+        ];
+        for op in &ops {
+            let started = Instant::now();
+            let out = run_computer_op_under(op, None, gaming);
+            assert!(out.contains("exit 1"), "{out}");
+            assert!(
+                out.ends_with("\nblocked: Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC."),
+                "{out}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{op:?} did work"
+            );
+        }
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let out = run_computer_op_under(&ComputerOp::Click { x: 1, y: 2 }, None, eac);
+        assert!(
+            out.ends_with("\nblocked: Desktop control is blocked while Easy Anti-Cheat is running so it doesn't flag this PC."),
+            "{out}"
+        );
+        let dir = std::env::temp_dir().join(format!("grokhub-guard-shot-{}", std::process::id()));
+        let path = dir.join("desk.jpg");
+        assert_eq!(
+            capture_jpeg_under(&path, eac),
+            Err("Screen capture is blocked while Easy Anti-Cheat is running so it doesn't flag this PC.".to_string())
+        );
+        assert_eq!(
+            capture_jpeg_under(&path, gaming),
+            Err("Screen capture is paused while you're gaming so the game's anti-cheat doesn't flag this PC.".to_string())
+        );
+        assert!(!dir.exists(), "a held capture writes nothing");
+    }
+
+    #[test]
+    fn an_anticheat_stops_the_shared_window_scan_for_every_caller() {
+        let eac = GameGuard {
+            anticheat: Some("Easy Anti-Cheat"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let seen = || DeskScan {
+            rows: vec![AtspiRow {
+                name: "Game".into(),
+                role: "frame".into(),
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }],
+            lock: vec!["Lock".into()],
+        };
+        let held = desk_scan_under(eac, || panic!("no window scan while an anti-cheat runs"));
+        assert!(held.rows.is_empty() && held.lock.is_empty());
+        // Gaming alone pauses desktop control, not window checks.
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        assert_eq!(desk_scan_under(gaming, seen).lock, ["Lock"]);
+        assert_eq!(desk_scan_under(GameGuard::default(), seen).rows.len(), 1);
+        // collect_rows and lock_titles share the guarded scan.
+        let src = include_str!("desktop.rs");
+        let scan = src
+            .split("\nfn desk_scan() -> DeskScan {")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("desk_scan");
+        assert!(scan.contains("desk_scan_under(crate::desktop_mcp::game_guard()"));
     }
 
     #[test]

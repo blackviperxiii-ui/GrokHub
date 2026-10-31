@@ -1,0 +1,1 @@
+- 18+ chats now stay off providers that ban them even when the newest message is held back, a reply that falls back to this computer's model says so instead of naming xAI, a half-finished xAI reply is never mixed with a local one, and Try it is only offered for an 18+ personality when somewhere can take it.

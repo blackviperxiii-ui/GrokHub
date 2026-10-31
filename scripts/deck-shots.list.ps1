@@ -130,7 +130,7 @@ Shot 1600 900 'age-check-1600x900' 'ops-dark' '19' -pinPersonality -ageCheck -pe
 Shot 1100 720 'age-check-1100x720' 'ops-dark' '19' -pinPersonality -ageCheck -personality 'nyx' -nav 'settings'
 # Nyx's corner box in each mode, beside the approved pictures in
 # docs/design/loadout-baseline-v1/nyx-modes/.
-foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper') {
+foreach ($m in 'working', 'gaming', 'doctor', 'reading', 'hanging-out', 'viper', 'raunchy') {
     Shot 1600 900 "nyx-$m-1600x900" 'ops-dark' '02' -dock -mood $m
     Shot 1100 720 "nyx-$m-1100x720" 'ops-dark' '02' -dock -mood $m
 }
@@ -160,3 +160,8 @@ Shot 1600 900 'signed-out-empty-1600x900' 'ops-dark' '02'
 Shot 1100 720 'signed-out-empty-1100x720' 'ops-dark' '02'
 Shot 1600 900 'signed-out-send-1600x900' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'
 Shot 1100 720 'signed-out-send-1100x720' 'ops-dark' '02' -keys 'paint the harbor{ENTER}'
+# Desktop companion holo pedestal: the painter-drawn pedestal in the corner
+# box with the companion cutout on it, in all three Loadout themes.
+Shot 1600 900 'pedestal-ops-dark-1600x900' 'ops-dark' '02' -dock -pedestal
+Shot 1600 900 'pedestal-oled-black-1600x900' 'oled-black' '02' -dock -pedestal
+Shot 1600 900 'pedestal-soft-charcoal-1600x900' 'soft-charcoal' '02' -dock -pedestal

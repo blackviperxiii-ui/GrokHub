@@ -26,7 +26,7 @@ use grokhub_core::local_profile::{PowerInfo, Thermal};
 #[cfg(any(target_os = "linux", windows))]
 use super::local_probe;
 use super::setup_wizard::ram_mb;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::setup_wizard::run;
 
 /// Slow signals are read every this many samples.
@@ -72,6 +72,8 @@ fn sample_loop(config_dir: &Path) {
                 gov = Governor::new();
                 local_gov::apply(Level::Normal, "normal use");
             }
+            // A speed test can load the model while the switch is off.
+            local_sidecar::tick_idle_unload();
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
@@ -86,6 +88,11 @@ fn sample_loop(config_dir: &Path) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
         }
         local_sidecar::tick_governor();
+        // Offline or with the cloud down, have the model loaded before it's asked.
+        local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
+        // The idle rule runs here too, so an unused model unloads on time
+        // even when nothing asks for it again.
+        local_sidecar::tick_idle_unload();
         std::thread::sleep(Duration::from_millis(g::interval_ms(s.power.as_ref())));
     }
 }
@@ -106,26 +113,12 @@ pub(super) fn read_machine() -> grokhub_core::wind_down::Machine {
     }
 }
 
-/// A game running from a store's library, by the full paths of this
-/// session's processes. `None` when the list can't be read or an unreadable
-/// process could be an elevated game.
+/// A Steam game or a known game exe, from a Toolhelp snapshot of process
+/// names: no process is opened, so no anti-cheat sees it. `None` when the
+/// snapshot fails.
 #[cfg(windows)]
 fn windows_game() -> Option<bool> {
-    let text = run(
-        "powershell",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$s = (Get-Process -Id $PID).SessionId; Get-Process | Where-Object SessionId -eq $s | ForEach-Object { if ($_.Path) { $_.Path } else { '?' + $_.ProcessName } }",
-        ],
-    )?;
-    let lines: Vec<String> = text
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    g::game_in_process_list(&lines)
+    grokhub_desktop::game_guard::windows_game()
 }
 
 #[derive(Default)]
@@ -311,25 +304,7 @@ fn compositor_hint() -> (Option<bool>, Option<String>) {
 /// Every process's name and command line.
 #[cfg(target_os = "linux")]
 pub(super) fn processes() -> Option<Vec<(String, String)>> {
-    let entries = std::fs::read_dir("/proc").ok()?;
-    Some(
-        entries
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-            })
-            .filter_map(|e| {
-                let comm = read(e.path().join("comm"))?.trim().to_string();
-                let cmdline = read(e.path().join("cmdline"))
-                    .unwrap_or_default()
-                    .replace('\0', " ");
-                Some((comm, cmdline))
-            })
-            .collect(),
-    )
+    grokhub_desktop::game_guard::processes()
 }
 
 /// NVIDIA through `nvidia-smi` (own share from `pmon`), else AMD sysfs.
@@ -554,22 +529,19 @@ fn win_quns() -> Option<bool> {
 }
 
 /// Whether the foreground window covers its monitor (the desktop itself
-/// doesn't count), and its executable's file name.
+/// doesn't count), and its executable's file name. The name comes from a
+/// Toolhelp snapshot by pid: the foreground app (often a game) is never
+/// opened, so its anti-cheat has nothing to log.
 #[cfg(windows)]
 fn win_foreground() -> (Option<bool>, Option<String>) {
-    use windows_sys::Win32::Foundation::{CloseHandle, RECT};
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
     };
-    // SAFETY: every out-pointer is a local sized for its call; the process
-    // handle is checked and closed here.
+    // SAFETY: every out-pointer is a local sized for its call.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
@@ -594,22 +566,9 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
             });
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        let name = if h.is_null() {
-            None
-        } else {
-            let mut buf = [0u16; 520];
-            let mut len = buf.len() as u32;
-            let ok =
-                QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
-            CloseHandle(h);
-            ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
-                .and_then(|p| {
-                    Path::new(&p)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_ascii_lowercase())
-                })
-        };
+        let name = (pid != 0)
+            .then(|| grokhub_desktop::game_guard::exe_name_of(pid))
+            .flatten();
         (covers, name)
     }
 }

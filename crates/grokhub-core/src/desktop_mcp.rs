@@ -452,6 +452,12 @@ pub trait DesktopBackend {
         let _ = (x, y);
         None
     }
+    /// Whether a game or its anti-cheat is running now (see
+    /// [`crate::game_guard`]). The live backend reads it; the default (fakes)
+    /// is clear.
+    fn game_guard(&mut self) -> crate::game_guard::GameGuard {
+        crate::game_guard::GameGuard::default()
+    }
 }
 
 /// The accessible label and role of the control under a click (Spike-2b).
@@ -658,6 +664,9 @@ impl<B: DesktopBackend> DesktopServer<B> {
             self.backend.release_input();
             return tool_fail(id, *HALT_MSG, true);
         }
+        if let Some(msg) = self.guard_refusal(name) {
+            return tool_fail(id, &msg, false);
+        }
         if is_input_tool(name) && self.backend.is_locked() {
             self.backend.release_input();
             return tool_fail(id, LOCK_MSG, false);
@@ -671,8 +680,27 @@ impl<B: DesktopBackend> DesktopServer<B> {
         }
     }
 
-    /// Run one desktop tool. Callers apply the switch, halt, and lock gates first.
+    /// Why the game guard holds this tool now: input, window and screen
+    /// tools pause while the user is gaming or an anti-cheat runs.
+    pub fn guard_refusal(&mut self, name: &str) -> Option<String> {
+        use crate::game_guard::{desktop_tool_guarded, Guarded};
+        if !desktop_tool_guarded(name) {
+            return None;
+        }
+        let what = if name == "screenshot" {
+            Guarded::ScreenCapture
+        } else {
+            Guarded::DesktopControl
+        };
+        self.backend.game_guard().blocks(what)
+    }
+
+    /// Run one desktop tool. Callers apply the switch, halt, and lock gates
+    /// first. The game guard is checked here too, so no caller skips it.
     pub fn invoke(&mut self, name: &str, args: &Value) -> Result<Value, String> {
+        if let Some(msg) = self.guard_refusal(name) {
+            return Err(msg);
+        }
         match name {
             "list_monitors" => self.tool_list_monitors(),
             "screenshot" => self.tool_screenshot(args),
@@ -2061,6 +2089,7 @@ mod tests {
         fail_moves_while_down: bool,
         down: bool,
         window: Option<WindowGeom>,
+        guard: crate::game_guard::GameGuard,
     }
 
     impl DesktopBackend for Fake {
@@ -2153,6 +2182,9 @@ mod tests {
         fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
             self.log.push(format!("trash:{}", paths.len()));
             Ok(())
+        }
+        fn game_guard(&mut self) -> crate::game_guard::GameGuard {
+            self.guard
         }
     }
 
@@ -2348,6 +2380,86 @@ mod tests {
         let log = &s.backend_mut().log;
         assert!(log.last().unwrap().contains("btn:Left:false"), "{log:?}");
         assert!(!s.backend_mut().down);
+    }
+
+    #[test]
+    fn the_game_guard_pauses_input_window_and_screen_tools_with_a_plain_error() {
+        use crate::game_guard::GameGuard;
+        let gaming = GameGuard {
+            anticheat: None,
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let vanguard = GameGuard {
+            anticheat: Some("Vanguard"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        let paused = "Desktop control is paused while you're gaming so the game's anti-cheat doesn't flag this PC.";
+        let tools = [
+            ("click", json!({"x":1,"y":1})),
+            ("move", json!({"x":1,"y":1})),
+            ("drag", json!({"from_x":1,"from_y":1,"to_x":2,"to_y":2})),
+            ("scroll", json!({"x":1,"y":1,"dy":1})),
+            ("type", json!({"text":"hi"})),
+            ("key", json!({"keys":"ctrl+s"})),
+            ("open_app", json!({"app":"firefox"})),
+            ("focus_window", json!({"title":"Notes"})),
+            ("get_window_geometry", json!({"title":"Notes"})),
+            (
+                "set_window_geometry",
+                json!({"title":"Notes","x":0,"y":0,"width":100,"height":100}),
+            ),
+        ];
+        for (tool, args) in tools {
+            let mut s = server();
+            s.backend_mut().guard = gaming;
+            let line = json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
+                "params":{"name":tool,"arguments":args}})
+            .to_string();
+            let out = s.handle_line(&line, on());
+            let reply = reply_of(&out);
+            assert_eq!(reply["result"]["isError"], true, "{tool}");
+            assert_eq!(reply["result"]["content"][0]["text"], paused, "{tool}");
+            assert!(!out.exit);
+            assert!(s.backend_mut().log.is_empty(), "{tool} reached the backend");
+            // The direct path (in-process agent tools) refuses the same way.
+            assert_eq!(s.invoke(tool, &args), Err(paused.to_string()), "{tool}");
+            assert!(s.backend_mut().log.is_empty(), "{tool} reached the backend");
+        }
+        let mut s = server();
+        s.backend_mut().guard = vanguard;
+        assert_eq!(
+            s.invoke("screenshot", &json!({})),
+            Err(
+                "Screen capture is blocked while Vanguard is running so it doesn't flag this PC."
+                    .into()
+            )
+        );
+        assert_eq!(
+            s.invoke("click", &json!({"x":1,"y":1})),
+            Err(
+                "Desktop control is blocked while Vanguard is running so it doesn't flag this PC."
+                    .into()
+            )
+        );
+        assert!(s.backend_mut().log.is_empty());
+        // Monitors and file tools touch no other app and still run.
+        assert!(s.invoke("list_monitors", &json!({})).is_ok());
+        assert_eq!(s.backend_mut().log, vec!["list".to_string()]);
+        // Clear again: the same calls go through.
+        s.backend_mut().guard = GameGuard::default();
+        assert!(s.invoke("screenshot", &json!({})).is_ok());
+        assert!(s.invoke("click", &json!({"x":1,"y":1})).is_ok());
+        // Riot Vanguard installed with no Riot game open pauses nothing.
+        let vg = crate::game_guard::scan_anticheats(&["vgtray.exe"], &["vgk", "vgc"]);
+        s.backend_mut().guard = crate::game_guard::decide(&crate::game_guard::GuardSignals {
+            anticheat: vg.running,
+            idle_anticheat: vg.idle,
+            ..Default::default()
+        });
+        assert!(s.invoke("screenshot", &json!({})).is_ok());
+        assert!(s.invoke("click", &json!({"x":1,"y":1})).is_ok());
     }
 
     #[test]

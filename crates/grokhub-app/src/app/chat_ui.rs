@@ -134,6 +134,15 @@ pub(super) fn paint_connectivity_status_chip(ui: &mut egui::Ui) {
         ConnectivityUiPhase::OfflineLocal => BadgeTone::Warning,
     };
     badge(ui, phase.label(), tone);
+    // Online, but every cloud model is down: say the answers come from the device.
+    if phase != ConnectivityUiPhase::OfflineLocal && grokhub_agent::route::local::fallback_active()
+    {
+        badge(
+            ui,
+            grokhub_agent::route::local::LOCAL_FALLBACK_MSG,
+            BadgeTone::Warning,
+        );
+    }
     // The governor paused the on-device model (a game, low battery, heat).
     if grokhub_agent::route::local::switched_on() && grokhub_agent::route::local_gov::paused() {
         badge(

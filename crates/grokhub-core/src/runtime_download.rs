@@ -453,13 +453,16 @@ fn extract_zip(archive: &Path, into: &Path) -> Result<(), String> {
 /// Find `llama-server` on `PATH` when env/config installs are absent.
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&paths) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    find_in_dirs(std::env::split_paths(&paths), name)
+}
+
+/// The first `dir/name` that is a file. An empty or relative entry would mean
+/// whatever folder Loadout was started from, so only absolute folders count.
+fn find_in_dirs(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Option<PathBuf> {
+    dirs.into_iter()
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
@@ -738,6 +741,23 @@ mod tests {
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relative_or_empty_path_entry_never_finds_the_engine() {
+        // Tests run from the crate folder, so `src/lib.rs` exists relative to it.
+        let dir = tmp("path-rel");
+        fs::create_dir_all(&dir).unwrap();
+        let dirs = || [PathBuf::new(), PathBuf::from("."), PathBuf::from("src")];
+        assert!(Path::new("src").join("lib.rs").is_file());
+        assert_eq!(find_in_dirs(dirs(), "lib.rs"), None);
+        let lib = dir.join("lib.rs");
+        fs::write(&lib, b"x").unwrap();
+        assert_eq!(
+            find_in_dirs(dirs().into_iter().chain([dir.clone()]), "lib.rs"),
+            Some(lib)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -61,7 +61,16 @@ fn atspi(timeout: Duration) -> String {
 }
 
 /// Lock or login window titles on screen now; any one means locked.
+/// Reading other windows' titles waits while an anti-cheat runs: then no
+/// helper is started and the list is empty.
 pub fn lock_titles() -> Vec<String> {
+    let guard = crate::game_guard::current();
+    if guard
+        .blocks(crate::game_guard::Guarded::WindowCheck)
+        .is_some()
+    {
+        return Vec::new();
+    }
     if let Ok(last) = LAST_LOCK.lock() {
         if let Some((at, titles)) = last.as_ref() {
             if at.elapsed() < LOCK_TTL {

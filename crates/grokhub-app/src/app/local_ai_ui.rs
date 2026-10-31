@@ -252,6 +252,13 @@ impl Cabin {
         }
         self.persist_cfg();
         local::set_enabled(on);
+        if on {
+            local_sidecar::cancel_pending_stop();
+        } else {
+            // Off frees the model's memory now, or as soon as a request still
+            // running finishes, instead of after the idle timeout.
+            local_sidecar::stop_when_idle();
+        }
         let installed = local::installed();
         if installed {
             self.refresh_models_now();

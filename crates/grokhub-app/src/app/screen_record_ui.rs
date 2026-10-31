@@ -159,12 +159,15 @@ fn still_ext(mime: &str) -> &'static str {
 }
 
 /// The capture loop, off the UI thread. Takes a still whenever the recorder
-/// says one is due, until Stop or the 2-minute cap. A still that cannot be
+/// says one is due, until Stop or the 2-minute cap. While `held` (the game
+/// guard holds screen recording) no still is taken and the loop keeps
+/// waiting, so Stop and the cap still end it. Any other still that cannot be
 /// taken or saved ends the recording with what it has.
 pub(super) fn record_loop(
     dir: &Path,
     stop: &AtomicBool,
     mut grab: impl FnMut() -> Result<(Vec<u8>, String), String>,
+    mut held: impl FnMut() -> bool,
     mut now_ms: impl FnMut() -> u64,
     mut wait: impl FnMut(),
 ) -> RecordDone {
@@ -185,7 +188,7 @@ pub(super) fn record_loop(
         if stop.load(Ordering::Relaxed) || rec.should_stop(now) {
             break;
         }
-        if rec.frame_due(now) {
+        if rec.frame_due(now) && !held() {
             let saved = grab().and_then(|(bytes, mime)| {
                 let path = dir.join(sr::frame_name(done.frames.len(), still_ext(&mime)));
                 std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
@@ -196,6 +199,8 @@ pub(super) fn record_loop(
                     done.frames.push(path);
                     rec.note_frame(now);
                 }
+                // The guard took hold between the check and the grab.
+                Err(_) if held() => {}
                 Err(e) => {
                     done.err = Some(e);
                     break;
@@ -220,8 +225,19 @@ pub(super) fn report_summary(report: &sr::ScreenReport) -> String {
 }
 
 impl Cabin {
-    /// `/record [note]`: needs Settings → Screen recording on.
+    /// `/record [note]`: needs Settings → Screen recording on, and no
+    /// anti-cheat running (the game guard).
     pub(super) fn start_screen_recording(&mut self, note: String) {
+        self.start_screen_recording_under(note, crate::desktop_mcp::game_guard)
+    }
+
+    /// [`Self::start_screen_recording`] with the game guard read by `guard`.
+    /// A held recording is refused before any folder is made.
+    fn start_screen_recording_under(
+        &mut self,
+        note: String,
+        guard: impl FnOnce() -> grokhub_desktop::game_guard::GameGuard,
+    ) {
         if self.screen_rec.is_some() {
             self.status = sr::ALREADY_RECORDING.into();
             return;
@@ -230,6 +246,13 @@ impl Cabin {
             self.status = why.into();
             self.live_mut()
                 .push(("assistant".into(), mark_slash_result(why)));
+            self.persist();
+            return;
+        }
+        if let Some(why) = guard().blocks(grokhub_desktop::game_guard::Guarded::ScreenRecording) {
+            self.live_mut()
+                .push(("assistant".into(), mark_slash_result(&why)));
+            self.status = why;
             self.persist();
             return;
         }
@@ -245,7 +268,12 @@ impl Cabin {
         let into = dir.clone();
         std::thread::spawn(move || {
             let grab = crate::desktop_mcp::screen_grabber();
-            let done = record_loop(&into, &flag, grab, now_ms, || {
+            let held = || {
+                crate::desktop_mcp::game_guard()
+                    .blocks(grokhub_desktop::game_guard::Guarded::ScreenRecording)
+                    .is_some()
+            };
+            let done = record_loop(&into, &flag, grab, held, now_ms, || {
                 std::thread::sleep(Duration::from_millis(250))
             });
             let _ = tx.send(done);
@@ -819,6 +847,7 @@ mod tests {
                 grabs.set(grabs.get() + 1);
                 Ok((vec![grabs.get() as u8; 4], "image/png".into()))
             },
+            || false,
             || clock.get(),
             || {
                 clock.set(clock.get() + 500);
@@ -852,6 +881,7 @@ mod tests {
             &dir,
             &stop,
             || Ok((vec![1], "image/jpeg".into())),
+            || false,
             || clock.get(),
             || clock.set(clock.get() + 1_000),
         );
@@ -874,6 +904,7 @@ mod tests {
                     Err("portal refused".into())
                 }
             },
+            || false,
             || clock.get(),
             || clock.set(clock.get() + 1_000),
         );
@@ -881,6 +912,117 @@ mod tests {
         assert_eq!(done.err.as_deref(), Some("portal refused"));
         assert_eq!(done.secs, 4);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_capture_loop_waits_out_the_game_guard_and_stop_still_ends_it() {
+        let dir = scratch("held");
+        let stop = AtomicBool::new(false);
+        let clock = Cell::new(0u64);
+        let grabs = Cell::new(0usize);
+        // An anti-cheat runs from 1 s to 5 s; the grabber refuses then too.
+        let held_now = |t: u64| (1_000..5_000).contains(&t);
+        let done = record_loop(
+            &dir,
+            &stop,
+            || {
+                grabs.set(grabs.get() + 1);
+                if held_now(clock.get()) {
+                    Err("Screen recording is blocked while FACEIT is running so it doesn't flag this PC.".into())
+                } else {
+                    Ok((vec![1], "image/png".into()))
+                }
+            },
+            || held_now(clock.get()),
+            || clock.get(),
+            || {
+                clock.set(clock.get() + 500);
+                if clock.get() >= 8_000 {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!(done.err, None, "a held still does not end the recording");
+        assert_eq!(done.secs, 8);
+        // Stills at 0 s, then none while held, then 5 s and 7 s.
+        assert_eq!(done.frames.len(), 3);
+        assert_eq!(grabs.get(), 3, "nothing is grabbed while held");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Held the whole time: Stop still ends it, with no stills.
+        let dir = scratch("held-stop");
+        let stop = AtomicBool::new(false);
+        let clock = Cell::new(0u64);
+        let done = record_loop(
+            &dir,
+            &stop,
+            || panic!("no still while held"),
+            || true,
+            || clock.get(),
+            || {
+                clock.set(clock.get() + 500);
+                if clock.get() >= 3_000 {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!((done.frames.len(), done.err, done.secs), (0, None, 3));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The guard takes hold between the check and the grab: that refused
+        // still is skipped too, and the next one is taken.
+        let dir = scratch("held-race");
+        let stop = AtomicBool::new(false);
+        let clock = Cell::new(0u64);
+        let checks = Cell::new(0usize);
+        let grabs = Cell::new(0usize);
+        let done = record_loop(
+            &dir,
+            &stop,
+            || {
+                grabs.set(grabs.get() + 1);
+                if grabs.get() == 1 {
+                    Err("Screen recording is blocked".into())
+                } else {
+                    Ok((vec![1], "image/png".into()))
+                }
+            },
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() == 2
+            },
+            || clock.get(),
+            || {
+                clock.set(clock.get() + 500);
+                if clock.get() >= 1_000 {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!((done.frames.len(), done.err), (1, None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_while_an_anticheat_runs_is_refused_before_any_folder_is_made() {
+        let (_g, root, home) = pinned("screenrec-guard");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.screen_record = true;
+        let faceit = grokhub_desktop::game_guard::GameGuard {
+            anticheat: Some("FACEIT"),
+            gaming: true,
+            idle_anticheat: None,
+        };
+        cabin.start_screen_recording_under("video stutters".into(), || faceit);
+        let why = "Screen recording is blocked while FACEIT is running so it doesn't flag this PC.";
+        assert!(cabin.screen_rec.is_none());
+        assert_eq!(cabin.status, why);
+        assert!(cabin.messages.last().is_some_and(|m| m.1.ends_with(why)));
+        assert!(
+            !root.join("GrokHub").join("recordings").exists(),
+            "no folder is made while the guard holds"
+        );
+        unpin(home);
     }
 
     fn png(path: &Path) {

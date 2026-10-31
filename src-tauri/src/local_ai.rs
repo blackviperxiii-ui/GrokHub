@@ -389,9 +389,9 @@ pub struct FileRow {
     pub source: &'static str,
     /// Not a file from GrokHub's catalog.
     pub third_party: bool,
-    /// Its name says its safety training was removed.
+    /// Its name says its safety training was removed (every catalog build's does).
     pub abliterated: bool,
-    /// Picking it shows the notice first.
+    /// Picking it shows the notice first: a third-party file not yet seen.
     pub needs_notice: bool,
 }
 
@@ -436,7 +436,9 @@ pub fn file_row(path: &Path, bytes: u64, source: &'static str, seen: &[String]) 
     let abliterated = ABLITERATED.iter().any(|w| lower.contains(w));
     let shown = path.display().to_string();
     FileRow {
-        needs_notice: (third_party || abliterated) && !seen.contains(&shown),
+        // A catalog file is abliterated too, but it is no stranger: only a file
+        // from outside the catalog asks first.
+        needs_notice: third_party && !seen.contains(&shown),
         path: shown,
         name,
         size: ls::size_label(bytes / (1_024 * 1_024)),
