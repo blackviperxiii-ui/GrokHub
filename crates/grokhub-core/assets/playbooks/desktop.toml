@@ -1,11 +1,11 @@
-# GrokHub playbook: work an app on the desktop (click, type, open windows).
+# Loadout playbook: work an app on the desktop (click, type, open windows).
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
 # replaces the shipped one; Reset puts the shipped one back.
 #
 # Look steps only read. Safe steps can be undone. Risky steps ask you first,
-# every time; a playbook can never make GrokHub skip an approval.
+# every time; a playbook can never make Loadout skip an approval.
 
 id = "desktop"
 name = "Desktop apps"

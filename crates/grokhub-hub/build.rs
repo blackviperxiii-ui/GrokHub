@@ -3,8 +3,8 @@ fn main() {
         return;
     }
     let mut res = winresource::WindowsResource::new();
-    res.set("ProductName", "GrokHub");
-    res.set("FileDescription", "GrokHub Hub");
+    res.set("ProductName", "Loadout");
+    res.set("FileDescription", "Loadout Hub");
     res.compile()
         .expect("embed Windows version resources into grokhub-hub.exe");
 }

@@ -980,6 +980,7 @@ mod tests {
     fn desktop_entry_allows_kwin_screenshot2() {
         let text = include_str!("../../../packaging/grokhub.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
+        assert!(text.lines().any(|line| line == "Name=Loadout"));
         assert!(text.lines().any(|line| line == "Exec=grokhub"));
         assert!(text
             .lines()

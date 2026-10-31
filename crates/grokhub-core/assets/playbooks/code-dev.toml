@@ -1,11 +1,11 @@
-# GrokHub playbook: change or fix code in a project.
+# Loadout playbook: change or fix code in a project.
 #
 # Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
 # Duplicate does it for you) to change it. A file there with the same id
 # replaces the shipped one; Reset puts the shipped one back.
 #
 # Look steps only read. Safe steps can be undone. Risky steps ask you first,
-# every time; a playbook can never make GrokHub skip an approval.
+# every time; a playbook can never make Loadout skip an approval.
 
 id = "code-dev"
 name = "Code changes"
