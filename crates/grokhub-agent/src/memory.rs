@@ -57,6 +57,27 @@ pub const INJECT_TOKEN_CAP: u64 = 1_024;
 
 /// Temporal half-life. The score halves every 30 days at equal FTS rank.
 pub const HALF_LIFE_SECS: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+/// Most index chunks one recall pack carries.
+const LEGACY_PACK_CAP: usize = 5;
+/// A chunk scoring under this share of the best hit is left out of the pack.
+const LEGACY_MIN_SHARE: f64 = 0.25;
+/// Most AMR lines one recall pack carries.
+const AMR_PACK_CAP: usize = 8;
+/// A paragraph longer than this is indexed as several chunks, split at line breaks.
+const CHUNK_BYTES: usize = 600;
+/// What a prompt with no content words searches for.
+const FALLBACK_QUERY: &str = "project conventions preferences architecture";
+/// Words that say nothing about what to recall. Dropped from every query.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as", "at",
+    "be", "been", "before", "being", "but", "by", "can", "could", "did", "do", "does", "dont",
+    "for", "from", "get", "got", "had", "has", "have", "he", "her", "here", "him", "his", "how",
+    "i", "if", "im", "in", "into", "is", "it", "its", "ive", "just", "me", "mine", "my", "no",
+    "not", "now", "of", "on", "or", "our", "out", "please", "she", "should", "so", "some", "tell",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they", "this", "those",
+    "to", "too", "up", "us", "very", "was", "we", "were", "what", "whats", "when", "where",
+    "wheres", "which", "who", "why", "will", "with", "would", "you", "your",
+];
 
 const OPEN_TAG: &str = "<memory-context>";
 const CLOSE_TAG: &str = "</memory-context>";
@@ -259,14 +280,14 @@ pub fn dream(
 /// installed apps, or similar — even when the memory backend is still legacy.
 /// Those facts live in AMR regardless of `memory_backend`.
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
-    inject_snippets(workspace, user_text, true)
+    format_injection(&collect_snippets(workspace, user_text, &[]))
 }
 
 /// Later-turn recall. Same pack as the first turn, minus lines already in
 /// `already` (the fenced bodies from earlier turns). `None` when nothing new
 /// matched. Library asks still include sealed installed-app lines.
 pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
-    let fresh: Vec<String> = collect_snippets(workspace, user_text, true)
+    let fresh: Vec<String> = collect_snippets(workspace, user_text, already)
         .into_iter()
         .filter(|body| !already_has(already, body))
         .collect();
@@ -298,22 +319,16 @@ fn normalize_hit(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
-fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Option<String> {
-    format_injection(&collect_snippets(workspace, user_text, include_legacy))
-}
-
-fn collect_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Vec<String> {
+/// Sealed library lines, then AMR lines, then index chunks. `already` holds
+/// lines an earlier turn injected, so the index pack fills with new chunks.
+fn collect_snippets(workspace: &Path, user_text: &str, already: &[String]) -> Vec<String> {
     let amr = if amr_enabled() {
         amr_injection_lines(user_text)
     } else {
         Vec::new()
     };
     let scope = scope_library_lines(user_text);
-    let legacy = if include_legacy {
-        legacy_injection_bodies(workspace, user_text)
-    } else {
-        None
-    };
+    let legacy = legacy_injection_bodies(workspace, user_text, already);
     let mut seen = std::collections::HashSet::new();
     let source: Vec<String> = if amr.is_empty() && scope.is_empty() {
         match legacy {
@@ -487,9 +502,13 @@ fn scope_library_lines(user_text: &str) -> Vec<String> {
     out
 }
 
-/// Index hits for the first turn, or `None` when there are no files or the
+/// Index chunks for the pack, or `None` when there are no files or the
 /// index won't open.
-fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<String>> {
+fn legacy_injection_bodies(
+    workspace: &Path,
+    user_text: &str,
+    already: &[String],
+) -> Option<Vec<String>> {
     if !memory_files_present(workspace) {
         return None;
     }
@@ -498,7 +517,21 @@ fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<Stri
     }
     let query = injection_query(user_text);
     let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
-    Some(hits.into_iter().map(|hit| hit.body).collect())
+    Some(pack_legacy(hits, already))
+}
+
+/// At most [`LEGACY_PACK_CAP`] chunks from `hits` (best first), skipping
+/// chunks under [`LEGACY_MIN_SHARE`] of the top score, repeats, and chunks
+/// an earlier turn already injected.
+fn pack_legacy(hits: Vec<Hit>, already: &[String]) -> Vec<String> {
+    let top = hits.first().map_or(0.0, |hit| hit.score);
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter()
+        .filter(|hit| hit.score >= top * LEGACY_MIN_SHARE)
+        .map(|hit| hit.body)
+        .filter(|body| !already_has(already, body) && seen.insert(normalize_hit(body)))
+        .take(LEGACY_PACK_CAP)
+        .collect()
 }
 
 /// AMR is on when `app.json` is missing (a new install) or sets
@@ -642,25 +675,21 @@ pub(crate) fn inject_token_cap_at(dir: &Path) -> u64 {
         .unwrap_or(INJECT_TOKEN_CAP)
 }
 
-/// AMR lines for the words in the first message (4+ letters), at most 8.
-/// `recall` never creates the store and skips tombstoned and locked nodes.
+/// AMR lines for the message's content words (3+ letters), at most
+/// [`AMR_PACK_CAP`]: lines matching the most distinct words first, then the
+/// newest. Recall never creates the store and skips tombstoned and locked nodes.
 fn amr_injection_lines(user_text: &str) -> Vec<String> {
-    let store = amr_store();
-    let query = injection_query(user_text).to_lowercase();
-    let mut words: Vec<&str> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 4)
+    let words: Vec<String> = content_words(&injection_query(user_text))
+        .into_iter()
+        .filter(|w| w.chars().count() >= 3)
         .collect();
-    words.dedup();
     let mut out: Vec<String> = Vec::new();
-    for word in words {
-        for hit in store.recall(word) {
-            if out.len() >= 8 {
-                return out;
-            }
-            if !out.contains(&hit.line) {
-                out.push(hit.line);
-            }
+    for hit in amr_store().recall_ranked(&words) {
+        if out.len() >= AMR_PACK_CAP {
+            break;
+        }
+        if !out.contains(&hit.line) {
+            out.push(hit.line);
         }
     }
     out
@@ -743,6 +772,24 @@ fn index_entry(scope: &str, body: &str, created_at: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Move this workspace's index rows that contain `needle` `secs` into the
+/// past, so evals can plant an older note beside a newer one.
+#[cfg(test)]
+pub(crate) fn backdate_entries(workspace: &Path, needle: &str, secs: i64) -> Result<usize, String> {
+    rebuild_if_stale(workspace)?;
+    let conn = open_db()?;
+    let mut n = 0;
+    for path in scope_paths(workspace) {
+        n += conn
+            .execute(
+                "UPDATE entries SET created_at = created_at - ?1 WHERE path = ?2 AND instr(body, ?3) > 0",
+                params![secs, path, needle],
+            )
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(n)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub body: String,
@@ -766,6 +813,7 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
          FROM entries_fts \
          JOIN entries e ON e.id = entries_fts.rowid \
          WHERE entries_fts MATCH ?1 AND e.path IN ({}) \
+         ORDER BY bm25(entries_fts) \
          LIMIT 24",
         slots.join(", ")
     );
@@ -877,13 +925,36 @@ fn split_scope(text: &str) -> (bool, &str) {
     (false, text)
 }
 
+/// The prompt itself when it has a content word, else [`FALLBACK_QUERY`].
 fn injection_query(user_text: &str) -> String {
-    let trimmed = user_text.trim();
-    if trimmed.chars().count() < 20 {
-        "project conventions preferences architecture".to_string()
+    if content_words(user_text).is_empty() {
+        FALLBACK_QUERY.to_string()
     } else {
-        trimmed.to_string()
+        user_text.trim().to_string()
     }
+}
+
+/// Lowercase words of 2+ characters that are not [`STOPWORDS`], first
+/// occurrence order, no repeats.
+fn content_words(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in query_words(text) {
+        if !STOPWORDS.contains(&word.as_str()) && !out.contains(&word) {
+            out.push(word);
+        }
+    }
+    out
+}
+
+/// Lowercase alphanumeric runs of 2+ characters. Apostrophes join a word
+/// ("don't" is "dont").
+fn query_words(text: &str) -> Vec<String> {
+    text.replace(['\'', '\u{2019}'], "")
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 2)
+        .map(str::to_string)
+        .collect()
 }
 
 fn format_injection(snippets: &[String]) -> Option<String> {
@@ -1219,6 +1290,8 @@ fn index_file_conn(conn: &Connection, path: &Path, file_scope: &str) -> Result<u
     Ok(n)
 }
 
+/// Blank-line paragraphs. One over [`CHUNK_BYTES`] is split at line breaks,
+/// so a long note can't crowd the pack; a single longer line stays whole.
 fn paragraphs(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -1228,6 +1301,9 @@ fn paragraphs(text: &str) -> Vec<String> {
                 out.push(std::mem::take(&mut cur));
             }
             continue;
+        }
+        if !cur.is_empty() && cur.len() + 1 + line.len() > CHUNK_BYTES {
+            out.push(std::mem::take(&mut cur));
         }
         if !cur.is_empty() {
             cur.push('\n');
@@ -1258,15 +1334,56 @@ fn open_db() -> Result<Connection, String> {
         CREATE TABLE IF NOT EXISTS files (
             path TEXT PRIMARY KEY,
             stamp TEXT NOT NULL
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-            body,
-            content='entries',
-            content_rowid='id'
         );",
     )
     .map_err(|err| err.to_string())?;
+    ensure_stemmed_fts(&conn)?;
     Ok(conn)
+}
+
+/// Create `entries_fts` with the Porter stemmer ("saves" finds "save").
+/// An index from before the stemmer is dropped and rebuilt from `entries`
+/// once, and every file is marked stale so its paragraphs are re-chunked on
+/// the next recall. The index is a cache of the markdown files; nothing is lost.
+fn ensure_stemmed_fts(conn: &Connection) -> Result<(), String> {
+    let err = |err: rusqlite::Error| err.to_string();
+    let schema = |conn: &Connection| -> Result<Option<String>, String> {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(err)
+    };
+    if schema(conn)?.is_some_and(|sql| sql.contains("porter")) {
+        return Ok(());
+    }
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(err)?;
+    let result = (|| {
+        // Another process may have migrated while this one waited for the lock.
+        let old = schema(conn)?;
+        if old.as_deref().is_some_and(|sql| sql.contains("porter")) {
+            return Ok(());
+        }
+        if old.is_some() {
+            conn.execute_batch("DROP TABLE entries_fts; DELETE FROM files;")
+                .map_err(err)?;
+        }
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE entries_fts USING fts5(
+                body,
+                content='entries',
+                content_rowid='id',
+                tokenize='porter unicode61'
+            );",
+        )
+        .map_err(err)?;
+        rebuild_fts(conn)
+    })();
+    let end = if result.is_ok() { "COMMIT" } else { "ROLLBACK" };
+    conn.execute_batch(end).map_err(err)?;
+    result
 }
 
 fn rebuild_fts(conn: &Connection) -> Result<(), String> {
@@ -1280,15 +1397,19 @@ fn index_path() -> PathBuf {
         .join("index.sqlite")
 }
 
+/// The query's content words OR'd together. A query made only of stopwords
+/// (a direct search for "it") keeps its words instead of matching nothing.
 fn fts_query(query: &str) -> String {
-    let mut parts = Vec::new();
-    for raw in query.split_whitespace() {
-        let clean: String = raw.chars().filter(|ch| ch.is_alphanumeric()).collect();
-        if clean.len() >= 2 {
-            parts.push(format!("\"{clean}\""));
-        }
+    let mut words = content_words(query);
+    if words.is_empty() {
+        words = query_words(query);
+        words.dedup();
     }
-    parts.join(" OR ")
+    words
+        .iter()
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn now_secs() -> i64 {
@@ -1951,5 +2072,190 @@ mod tests {
         assert!(amr_enabled());
         fs::write(cfg.join("app.json"), "{\"memory_migrated\":true}\n").unwrap();
         assert!(!amr_enabled());
+    }
+
+    /// Thirty notes all share "the"; only the newest names the save folder.
+    /// The SQL cap must keep the best match, not the oldest 24 rows.
+    fn write_thirty_notes(ws: &Path) {
+        let mut text = String::new();
+        for i in 0..29 {
+            text.push_str(&format!("the shelf note number {i} sits by the door\n\n"));
+        }
+        text.push_str("the save folder is D:/Loadout/saves\n");
+        fs::write(workspace_memory_path(ws), text).unwrap();
+    }
+
+    #[test]
+    fn the_best_match_survives_the_sql_row_cap() {
+        let (_cfg, ws, _guard) = temp_pair("rowcap");
+        write_thirty_notes(&ws);
+        let hits = search(&ws, "where is the save folder").unwrap();
+        assert_eq!(hits[0].body, "the save folder is D:/Loadout/saves");
+    }
+
+    #[test]
+    fn a_short_prompt_recalls_by_its_own_stemmed_words() {
+        let (cfg, ws, _guard) = temp_pair("saves");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        write_thirty_notes(&ws);
+        let block = first_turn_injection(&ws, "where are my saves").unwrap();
+        assert!(block.contains("D:/Loadout/saves"), "{block}");
+        assert!(!block.contains("shelf note"), "{block}");
+    }
+
+    #[test]
+    fn amr_lines_matching_more_query_words_come_first() {
+        use grokhub_core::amr::{remember_line, LineWrite};
+        let (cfg, _ws, _guard) = temp_pair("amr-rank");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        let store = amr_store();
+        let line = |text| LineWrite {
+            text,
+            source: "user",
+            tags: Vec::new(),
+            confidence: 0.9,
+            revive: false,
+        };
+        remember_line(&store, &line("ranked mode off"), 1).unwrap();
+        remember_line(&store, &line("Kestrel duo partner ranked"), 1).unwrap();
+        assert_eq!(
+            amr_injection_lines("my ranked duo partner"),
+            vec![
+                "Kestrel duo partner ranked".to_string(),
+                "ranked mode off".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_pack_never_carries_more_than_five_index_chunks() {
+        let (cfg, ws, _guard) = temp_pair("pack5");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        let text: String = (0..9)
+            .map(|i| format!("harbor lamp {i} is green\n\n"))
+            .collect();
+        fs::write(workspace_memory_path(&ws), text).unwrap();
+        let block = first_turn_injection(&ws, "what color is the harbor lamp").unwrap();
+        assert_eq!(block.matches("```\nharbor lamp").count(), 5, "{block}");
+        // A later turn fills the pack with chunks it has not sent yet.
+        let sent = injected_lines(&[InputItem::Message {
+            role: "system".into(),
+            content: vec![crate::ContentPart::InputText(block)],
+        }]);
+        assert_eq!(sent.len(), 5, "{sent:?}");
+        let next = followup_injection(&ws, "what color is the harbor lamp", &sent).unwrap();
+        assert_eq!(next.matches("```\nharbor lamp").count(), 4, "{next}");
+    }
+
+    #[test]
+    fn pack_drops_weak_hits_repeats_and_lines_already_sent() {
+        let hit = |body: &str, score: f64| Hit {
+            body: body.to_string(),
+            scope: "workspace".to_string(),
+            created_at: 0,
+            bm25: -score,
+            score,
+        };
+        let hits = vec![
+            hit("alpha", 8.0),
+            hit("bravo", 6.0),
+            hit("Alpha", 5.0),
+            hit("charlie", 4.0),
+            hit("delta", 3.0),
+            hit("echo", 2.5),
+            hit("foxtrot", 2.0),
+            hit("golf", 1.9),
+        ];
+        assert_eq!(
+            pack_legacy(hits.clone(), &[]),
+            vec!["alpha", "bravo", "charlie", "delta", "echo"]
+        );
+        assert_eq!(
+            pack_legacy(hits, &["bravo".to_string()]),
+            vec!["alpha", "charlie", "delta", "echo", "foxtrot"]
+        );
+        assert!(pack_legacy(Vec::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn queries_drop_stopwords_and_fall_back_only_when_empty() {
+        assert_eq!(
+            content_words("Where are MY saves, the saves?"),
+            vec!["saves"]
+        );
+        assert_eq!(
+            fts_query("where is the save folder"),
+            "\"save\" OR \"folder\""
+        );
+        assert_eq!(fts_query("is it"), "\"is\" OR \"it\"");
+        assert_eq!(injection_query("where are my saves"), "where are my saves");
+        assert_eq!(injection_query("what is it"), FALLBACK_QUERY);
+    }
+
+    #[test]
+    fn long_paragraphs_split_at_line_breaks() {
+        let line = "x".repeat(250);
+        let long = format!("{line}\n{line}\n{line}\n\nshort note\n");
+        let parts = paragraphs(&long);
+        assert_eq!(
+            parts.iter().map(String::len).collect::<Vec<_>>(),
+            vec![501, 250, 10]
+        );
+        let one_line = "y".repeat(700);
+        assert_eq!(paragraphs(&one_line), vec![one_line.clone()]);
+    }
+
+    #[test]
+    fn an_unstemmed_index_is_rebuilt_once_with_the_stemmer() {
+        let (_cfg, ws, _guard) = temp_pair("stem");
+        let path = workspace_memory_path(&ws).display().to_string();
+        fs::create_dir_all(index_path().parent().unwrap()).unwrap();
+        {
+            let old = Connection::open(index_path()).unwrap();
+            old.execute_batch(
+                "CREATE TABLE entries (id INTEGER PRIMARY KEY, scope TEXT NOT NULL, \
+                 path TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, \
+                 content_hash TEXT NOT NULL);
+                 CREATE TABLE files (path TEXT PRIMARY KEY, stamp TEXT NOT NULL);
+                 CREATE VIRTUAL TABLE entries_fts USING fts5(body, content='entries', content_rowid='id');",
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO entries (scope, path, body, created_at, content_hash) VALUES ('workspace', ?1, 'the save folder is D:/Loadout/saves', 5, 'h')",
+                params![path],
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO files (path, stamp) VALUES (?1, 'old')",
+                params![path],
+            )
+            .unwrap();
+            old.execute_batch("INSERT INTO entries_fts(entries_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        let schema = || -> String {
+            open_db()
+                .unwrap()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = 'entries_fts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(schema().contains("tokenize='porter unicode61'"));
+        let hits = recall("saving", 5, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.body.as_str()).collect::<Vec<_>>(),
+            vec!["the save folder is D:/Loadout/saves"]
+        );
+        let stale: i64 = open_db()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stale, 0, "every file reindexes on its next recall");
+        // A second open keeps the rows it already rebuilt.
+        assert!(schema().contains("porter"));
+        assert_eq!(recall("saving", 5, &[path]).unwrap().len(), 1);
     }
 }
