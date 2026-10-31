@@ -1,1 +1,0 @@
-- The repeated-ask Automate offer now shows its own question on Pulse ("You ask this most evenings around 7 PM, …"), says Open edits the schedule line first, and schedules at the hour you actually ask instead of an hour early.

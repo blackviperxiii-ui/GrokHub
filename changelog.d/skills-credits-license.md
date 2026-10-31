@@ -1,1 +1,0 @@
-- Built-in skills credits now point at the upstream projects instead of naming people, and the upstream MIT notice ships unchanged beside them.

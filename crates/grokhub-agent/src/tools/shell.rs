@@ -71,7 +71,8 @@ fn timeout_ms(args: &Value) -> u64 {
     }
 }
 
-fn cap_output(raw: &str) -> String {
+/// Keeps the head and tail of long output; shell and background tasks share it.
+pub(crate) fn cap_output(raw: &str) -> String {
     let text = raw.trim();
     if text.chars().count() <= OUTPUT_CHARS {
         return text.to_string();

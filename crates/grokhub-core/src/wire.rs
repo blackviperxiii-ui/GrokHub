@@ -160,6 +160,15 @@ pub struct ElicitChoice {
     pub recommended: bool,
 }
 
+/// What one xAI server-side compaction did. Tokens are the cabin's estimate of the
+/// model input before and after; `dropped_message_count` is xAI's own count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompactDetail {
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub dropped_message_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
     Ready {
@@ -188,6 +197,8 @@ pub enum AcpEvent {
         started: bool,
         usage: GrokUsage,
         error: Option<String>,
+        /// Set on the finish of a compaction xAI's server ran; `None` otherwise.
+        server: Option<CompactDetail>,
     },
     Done {
         stop_reason: String,
@@ -915,11 +926,13 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
             started: true,
             usage: parse_usage(update),
             error: None,
+            server: None,
         }),
         "auto_compact_completed" => Some(AcpEvent::Compact {
             started: false,
             usage: parse_usage(update),
             error: None,
+            server: None,
         }),
         "auto_compact_failed" => {
             let msg = update
@@ -938,6 +951,7 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
                 } else {
                     msg
                 }),
+                server: None,
             })
         }
         "plan" => {

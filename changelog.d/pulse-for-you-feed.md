@@ -1,1 +1,0 @@
-- Pulse renames the Ideas tab to For You. Dismissing a For You card after you used it, or a Feed card after Like or Discuss, records as used/done and never counts as a negative bury; only unused dismiss and Not this stay negative.

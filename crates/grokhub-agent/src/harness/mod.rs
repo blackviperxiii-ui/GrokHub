@@ -145,7 +145,7 @@ pub use egress::{
     guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,
     provider_or_park, read_egress, read_egress_report, record_approved_once, DataClass,
     EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
-    HUB_DEST, HUB_SYNC_DATA,
+    HUB_DEST, HUB_SYNC_DATA, XAI_MODEL_ENDPOINTS,
 };
 pub use evidence::{
     evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,

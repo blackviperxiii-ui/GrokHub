@@ -93,7 +93,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-app/src/desktop.rs", 4, "hub health, CDP HTTP + websocket: loopback via egress_ok"),
     ("crates/grokhub-app/src/app/print_alerts_ui.rs", 1, "the user's printer: LAN, allowed (a public host is refused by egress_ok)"),
-    ("crates/grokhub-app/src/app/mod.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
+    ("crates/grokhub-app/src/app/lan_host.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).

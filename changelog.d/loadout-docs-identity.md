@@ -1,1 +1,0 @@
-- The README and the reference guide name the app Loadout; download names, folders and commands keep their GrokHub names so installs and updates don't change.

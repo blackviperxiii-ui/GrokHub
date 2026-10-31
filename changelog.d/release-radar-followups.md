@@ -1,1 +1,0 @@
-- Release radar now takes wishlist games in turn with the most-played library games and goes round the whole list across daily checks, so wishlisted games get looked at. Soundtracks, demos and DLC for other games no longer post as "sequels", and a search hit that is DLC for the game itself is labelled as DLC.

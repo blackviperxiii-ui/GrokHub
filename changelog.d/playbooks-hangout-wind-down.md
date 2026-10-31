@@ -1,2 +1,0 @@
-- Two new talk playbooks. Hanging out covers small talk: it matches your energy and length, banters and flirts back within the persona's content level, makes no task offers or sign-offs, and uses no tools. Winding down covers tired, stressed or venting lines: it listens first, stays gentle and short, and offers no fixes unless you ask.
-- The Brief gains a `low` mood for tired, stressed or venting lines, and "I'm crashing out" reads as a mood instead of a crash to repair. Playbooks can match on mood (Settings → Playbooks shows "Fits chat · low").

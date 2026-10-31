@@ -1,1 +1,0 @@
-- Labs Diagnostics zip now also redacts bare AWS access keys, Slack, Stripe, Google API and Notion tokens, JWTs, passwords in URLs, and whole PEM private key blocks.

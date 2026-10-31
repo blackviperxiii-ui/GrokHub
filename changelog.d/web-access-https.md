@@ -1,1 +1,0 @@
-- Web access is served over HTTPS on your network. Loadout makes its own certificate the first time and keeps it, and Settings shows the certificate's fingerprint so you can check it against the one in your browser the first time it warns you.

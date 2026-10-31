@@ -7,12 +7,15 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::harness::{guard_egress, DataClass, EgressReq, GateOutcome};
+use crate::harness::{guard_egress, DataClass, EgressReq, GateOutcome, XAI_MODEL_ENDPOINTS};
 use crate::retry::{decide_retry, DEFAULT_MAX_RETRIES};
 use crate::sse::{SseEvent, SseParser};
 
 pub const DEFAULT_MODEL: &str = "grok-4.7";
 pub const RESPONSES_URL: &str = "https://api.x.ai/v1/responses";
+/// xAI server-side context compaction. One pass per call; the conversation must
+/// already fit the window.
+pub const RESPONSES_COMPACT_URL: &str = "https://api.x.ai/v1/responses/compact";
 pub const USER_AGENT: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,26 @@ pub enum InputItem {
         call_id: String,
         output: String,
     },
+    /// One `output` item of an xAI `/v1/responses/compact` reply, kept as the exact
+    /// JSON text it arrived as. Opaque: it is never parsed for meaning, edited,
+    /// merged or reordered, and goes back to xAI as received. Build it with
+    /// [`InputItem::server_compaction`].
+    ServerCompaction {
+        raw: String,
+    },
+}
+
+impl InputItem {
+    /// A [`InputItem::ServerCompaction`] from one item's JSON text, or `None`
+    /// when it is not a JSON object of type `compaction`.
+    pub fn server_compaction(raw: &str) -> Option<InputItem> {
+        let value: Value = serde_json::from_str(raw).ok()?;
+        (value.get("type").and_then(Value::as_str) == Some("compaction")).then(|| {
+            InputItem::ServerCompaction {
+                raw: raw.to_string(),
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +133,28 @@ pub struct ResponsesRequest {
     pub hosted_search: bool,
     /// Overrides the agent timeout for this call. `None` keeps the client's idle timeout.
     pub call_timeout: Option<Duration>,
+}
+
+/// One call to xAI's server-side compaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactRequest {
+    pub model: String,
+    /// The part of the conversation to fold. It may start with earlier compaction items.
+    pub input: Vec<InputItem>,
+    pub conversation_id: String,
+    /// Hard cap on the whole call, retries and backoff included. When it runs
+    /// out the call fails with [`ClientError::IdleTimeout`].
+    pub timeout: Duration,
+}
+
+/// What `/v1/responses/compact` sent back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CompactOutput {
+    /// The reply's `output` items, in order, each an [`InputItem::ServerCompaction`].
+    pub items: Vec<InputItem>,
+    pub usage: Usage,
+    /// Input messages the server folded into the compaction item.
+    pub dropped_message_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +377,21 @@ pub trait ModelClient {
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError>;
+
+    /// True when [`ModelClient::compact`] can reach xAI's compaction endpoint.
+    fn compacts_server_side(&self) -> bool {
+        false
+    }
+
+    /// xAI server-side compaction. `None` when this client has no such endpoint
+    /// (local runtimes, providers, test fakes): the caller summarizes instead.
+    fn compact(
+        &self,
+        _req: &CompactRequest,
+        _cancel: &CancelToken,
+    ) -> Option<Result<CompactOutput, ClientError>> {
+        None
+    }
 }
 
 pub fn request_headers(bearer: &str, conv_id: &str) -> Vec<(String, String)> {
@@ -392,9 +452,70 @@ fn input_wire(items: &[InputItem]) -> (Vec<Value>, bool) {
                     "output": output,
                 }));
             }
+            // Built only from valid JSON ([`InputItem::server_compaction`]).
+            InputItem::ServerCompaction { raw } => {
+                if let Ok(item) = serde_json::from_str::<Value>(raw) {
+                    input.push(item);
+                }
+            }
         }
     }
     (input, has_image)
+}
+
+/// The `/v1/responses/compact` body: the model and the input, nothing else.
+pub fn compact_body(req: &CompactRequest) -> Value {
+    let model = if req.model.trim().is_empty() {
+        DEFAULT_MODEL
+    } else {
+        req.model.trim()
+    };
+    json!({"model": model, "input": input_wire_value(&req.input)})
+}
+
+/// Largest compaction reply read (the opaque item grows with the conversation).
+const COMPACT_REPLY_CAP: u64 = 64 * 1024 * 1024;
+
+/// A `response.compaction` reply: its `output` items as the exact JSON text
+/// they came in, `usage`, and `dropped_message_count`.
+pub fn parse_compact_reply(body: &str) -> Result<CompactOutput, ClientError> {
+    use serde_json::value::RawValue;
+    let bad = |why: &str| ClientError::Protocol(format!("compaction reply: {why}"));
+    let fields: std::collections::HashMap<String, Box<RawValue>> =
+        serde_json::from_str(body).map_err(|_| bad("not a JSON object"))?;
+    let output = fields.get("output").ok_or_else(|| bad("no output"))?;
+    let rows: Vec<Box<RawValue>> =
+        serde_json::from_str(output.get()).map_err(|_| bad("output is not a list"))?;
+    let mut items = Vec::new();
+    for row in &rows {
+        let item = InputItem::server_compaction(row.get())
+            .ok_or_else(|| bad("an output item is not a compaction"))?;
+        let value: Value = serde_json::from_str(row.get()).map_err(|_| bad("bad item"))?;
+        if value
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(bad("a compaction item has no encrypted_content"));
+        }
+        items.push(item);
+    }
+    if items.is_empty() {
+        return Err(bad("no compaction item"));
+    }
+    let usage_value: Value = fields
+        .get("usage")
+        .and_then(|u| serde_json::from_str(u.get()).ok())
+        .unwrap_or(Value::Null);
+    let dropped_message_count = usage_value
+        .get("dropped_message_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Ok(CompactOutput {
+        items,
+        usage: crate::sse::parse_usage_value(&json!({"usage": usage_value})),
+        dropped_message_count,
+    })
 }
 
 pub fn responses_body(req: &ResponsesRequest) -> Value {
@@ -485,6 +606,81 @@ impl XaiClient {
         Ok(self)
     }
 
+    /// The compaction endpoint next to this client's responses URL, if it has one.
+    fn compact_url(&self) -> Option<String> {
+        if self.url == RESPONSES_URL {
+            return Some(RESPONSES_COMPACT_URL.to_string());
+        }
+        (loopback_http(&self.url) && self.url.ends_with("/v1/responses"))
+            .then(|| format!("{}/compact", self.url))
+    }
+
+    /// Every request this client makes: the EgressGuard first, then one POST with
+    /// the bearer, user agent and conv-id header. An HTTP error comes back mapped.
+    fn post_guarded(
+        &self,
+        url: &str,
+        conversation_id: &str,
+        accept: &str,
+        call_timeout: Option<Duration>,
+        body: Value,
+    ) -> Result<ureq::Response, ClientError> {
+        // Only the listed xAI endpoints, or a loopback test server.
+        if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) {
+            return Err(ClientError::Protocol(format!(
+                "not an xAI model endpoint: {url}"
+            )));
+        }
+        // EgressGuard (Spike-4a): api.x.ai is a default model host, so this
+        // logs one `egress.jsonl` line and goes. Loopback test servers are local.
+        let data = [DataClass::Chat, DataClass::Personal];
+        let egress = guard_egress(&crate::perm::config_dir(), &EgressReq::new(url, &data));
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
+            return Err(ClientError::Protocol(reason));
+        }
+        let mut call = self
+            .agent
+            .post(url)
+            .set("Authorization", &{
+                let bearer = &self.bearer;
+                format!("Bearer {bearer}")
+            })
+            .set("User-Agent", USER_AGENT)
+            .set("x-grok-conv-id", conversation_id)
+            .set("Accept", accept);
+        if let Some(limit) = call_timeout {
+            call = call.timeout(limit);
+        }
+        let sent = crate::timing::lap("client:to_headers");
+        let response = call.send_json(body);
+        drop(sent);
+        match response {
+            Ok(resp) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                Ok(resp)
+            }
+            Err(ureq::Error::Status(status, resp)) => {
+                grokhub_core::connectivity::note_global_transport_hint(
+                    grokhub_core::connectivity::classify_http_status(status),
+                    grokhub_core::now_ms(),
+                );
+                let retry_after = retry_after_header(&resp);
+                let message = read_error_body(resp);
+                Err(map_http_status(
+                    status,
+                    &message,
+                    retry_after,
+                    self.auth_kind,
+                ))
+            }
+            Err(ureq::Error::Transport(err)) => {
+                let client_err = classify_transport(&err);
+                crate::route::connectivity::note_ureq_transport(&ureq::Error::Transport(err));
+                Err(client_err)
+            }
+        }
+    }
+
     fn once(
         &self,
         req: &ResponsesRequest,
@@ -495,59 +691,87 @@ impl XaiClient {
             return Err(ClientError::Cancelled);
         }
         let _ = crate::sse::take_served_model();
-        // EgressGuard (Spike-4a): api.x.ai is a default model host, so this
-        // logs one `egress.jsonl` line and goes. Loopback test servers are local.
-        let data = [DataClass::Chat, DataClass::Personal];
-        let egress = guard_egress(
-            &crate::perm::config_dir(),
-            &EgressReq::new(&self.url, &data),
-        );
-        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
-            return Err(ClientError::Protocol(reason));
-        }
         let body = crate::timing::time("client:body", || responses_body(req));
-        let mut call = self
-            .agent
-            .post(&self.url)
-            .set("Authorization", &{
-                let bearer = &self.bearer;
-                format!("Bearer {bearer}")
-            })
-            .set("User-Agent", USER_AGENT)
-            .set("x-grok-conv-id", &req.conversation_id)
-            .set("Accept", "text/event-stream");
-        if let Some(limit) = req.call_timeout {
-            call = call.timeout(limit);
-        }
-        let sent = crate::timing::lap("client:to_headers");
-        let response = call.send_json(body);
-        drop(sent);
-        let response = match response {
-            Ok(resp) => {
-                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
-                resp
-            }
-            Err(ureq::Error::Status(status, resp)) => {
-                grokhub_core::connectivity::note_global_transport_hint(
-                    grokhub_core::connectivity::classify_http_status(status),
-                    grokhub_core::now_ms(),
-                );
-                let retry_after = retry_after_header(&resp);
-                let message = read_error_body(resp);
-                return Err(map_http_status(
-                    status,
-                    &message,
-                    retry_after,
-                    self.auth_kind,
-                ));
-            }
-            Err(ureq::Error::Transport(err)) => {
-                let client_err = classify_transport(&err);
-                crate::route::connectivity::note_ureq_transport(&ureq::Error::Transport(err));
-                return Err(client_err);
-            }
-        };
+        let response = self.post_guarded(
+            &self.url,
+            &req.conversation_id,
+            "text/event-stream",
+            req.call_timeout,
+            body,
+        )?;
         read_sse(response.into_reader(), cancel, sink)
+    }
+
+    fn compact_once(
+        &self,
+        url: &str,
+        req: &CompactRequest,
+        cancel: &CancelToken,
+        limit: Option<Duration>,
+    ) -> Result<CompactOutput, ClientError> {
+        if cancel.is_cancelled() {
+            return Err(ClientError::Cancelled);
+        }
+        let response = self.post_guarded(
+            url,
+            &req.conversation_id,
+            "application/json",
+            limit,
+            compact_body(req),
+        )?;
+        let mut text = String::new();
+        response
+            .into_reader()
+            .take(COMPACT_REPLY_CAP)
+            .read_to_string(&mut text)
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.to_ascii_lowercase().contains("timed out") {
+                    ClientError::IdleTimeout
+                } else {
+                    ClientError::Transport(msg)
+                }
+            })?;
+        if cancel.is_cancelled() {
+            return Err(ClientError::Cancelled);
+        }
+        parse_compact_reply(&text)
+    }
+
+    /// One call with the client's retry policy: transient errors back off and retry.
+    /// With a `deadline`, each attempt gets the time left as its own timeout and no
+    /// backoff runs past it, so the whole call ends by then.
+    fn with_retries<T>(
+        cancel: &CancelToken,
+        deadline: Option<std::time::Instant>,
+        mut call: impl FnMut(Option<Duration>) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        let left = || deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()));
+        let mut retry_count = 0u32;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(ClientError::Cancelled);
+            }
+            if left().is_some_and(|l| l.is_zero()) {
+                return Err(ClientError::IdleTimeout);
+            }
+            match call(left()) {
+                Ok(out) => return Ok(out),
+                Err(err) if err.is_retryable() => {
+                    match decide_retry(&err, retry_count, DEFAULT_MAX_RETRIES) {
+                        Some(wait) if left().is_some_and(|l| wait >= l) => return Err(err),
+                        Some(wait) => {
+                            retry_count = retry_count.saturating_add(1);
+                            if !sleep_cancellable(wait, cancel) {
+                                return Err(ClientError::Cancelled);
+                            }
+                        }
+                        None => return Err(err),
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 }
 
@@ -567,27 +791,23 @@ impl ModelClient for XaiClient {
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
-        let mut retry_count = 0u32;
-        loop {
-            if cancel.is_cancelled() {
-                return Err(ClientError::Cancelled);
-            }
-            match self.once(req, cancel, sink) {
-                Ok(out) => return Ok(out),
-                Err(err) if err.is_retryable() => {
-                    match decide_retry(&err, retry_count, DEFAULT_MAX_RETRIES) {
-                        Some(wait) => {
-                            retry_count = retry_count.saturating_add(1);
-                            if !sleep_cancellable(wait, cancel) {
-                                return Err(ClientError::Cancelled);
-                            }
-                        }
-                        None => return Err(err),
-                    }
-                }
-                Err(err) => return Err(err),
-            }
-        }
+        Self::with_retries(cancel, None, |_| self.once(req, cancel, sink))
+    }
+
+    fn compacts_server_side(&self) -> bool {
+        self.compact_url().is_some()
+    }
+
+    fn compact(
+        &self,
+        req: &CompactRequest,
+        cancel: &CancelToken,
+    ) -> Option<Result<CompactOutput, ClientError>> {
+        let url = self.compact_url()?;
+        let deadline = std::time::Instant::now() + req.timeout;
+        Some(Self::with_retries(cancel, Some(deadline), |limit| {
+            self.compact_once(&url, req, cancel, limit)
+        }))
     }
 }
 
@@ -972,5 +1192,84 @@ mod tests {
         let rendered = format!("{client:?}");
         assert!(!rendered.contains("super-secret-value"), "{rendered}");
         assert!(rendered.contains("redacted"), "{rendered}");
+    }
+    #[test]
+    fn compact_reply_keeps_each_item_as_sent_and_reads_usage() {
+        let body = r#"{"id":"cmp_1","object":"response.compaction","output":[ {"id":"cmp_1", "type":"compaction","encrypted_content":"Zm9v"} ],"usage":{"input_tokens":50,"output_tokens":7,"output_tokens_details":{"reasoning_tokens":2},"dropped_message_count":4,"cost_in_usd_ticks":11}}"#;
+        assert_eq!(
+            parse_compact_reply(body).unwrap(),
+            CompactOutput {
+                items: vec![InputItem::ServerCompaction {
+                    raw: r#"{"id":"cmp_1", "type":"compaction","encrypted_content":"Zm9v"}"#.into(),
+                }],
+                usage: Usage {
+                    input_tokens: 50,
+                    output_tokens: 7,
+                    reasoning_tokens: 2,
+                    cost_in_usd_ticks: 11,
+                    cached_tokens: 0,
+                },
+                dropped_message_count: 4,
+            }
+        );
+        for (bad, why) in [
+            ("not json", "compaction reply: not a JSON object"),
+            (r#"{"usage":{}}"#, "compaction reply: no output"),
+            (r#"{"output":[]}"#, "compaction reply: no compaction item"),
+            (
+                r#"{"output":[{"type":"message","content":[]}]}"#,
+                "compaction reply: an output item is not a compaction",
+            ),
+            (
+                r#"{"output":[{"type":"compaction","encrypted_content":""}]}"#,
+                "compaction reply: a compaction item has no encrypted_content",
+            ),
+        ] {
+            assert_eq!(
+                parse_compact_reply(bad).unwrap_err(),
+                ClientError::Protocol(why.into()),
+                "{bad}"
+            );
+        }
+        assert_eq!(InputItem::server_compaction(r#"{"type":"message"}"#), None);
+        assert_eq!(InputItem::server_compaction("[1]"), None);
+    }
+
+    #[test]
+    fn compaction_goes_only_next_to_the_xai_or_loopback_responses_url() {
+        let mk = || XaiClient::new("t", AuthKind::ApiKey, Duration::from_secs(1));
+        assert_eq!(
+            mk().compact_url().as_deref(),
+            Some("https://api.x.ai/v1/responses/compact")
+        );
+        assert!(mk().compacts_server_side());
+        let local = mk()
+            .with_loopback_url("http://127.0.0.1:4711/v1/responses")
+            .unwrap();
+        assert_eq!(
+            local.compact_url().as_deref(),
+            Some("http://127.0.0.1:4711/v1/responses/compact")
+        );
+        let other = mk()
+            .with_loopback_url("http://127.0.0.1:4711/v1/chat/completions")
+            .unwrap();
+        assert_eq!(other.compact_url(), None);
+        assert!(!other.compacts_server_side());
+        let req = CompactRequest {
+            model: String::new(),
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hi".into())],
+            }],
+            conversation_id: "c".into(),
+            timeout: Duration::from_secs(1),
+        };
+        assert!(other.compact(&req, &CancelToken::new()).is_none());
+        assert_eq!(
+            compact_body(&req),
+            json!({"model": DEFAULT_MODEL, "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+            ]})
+        );
     }
 }

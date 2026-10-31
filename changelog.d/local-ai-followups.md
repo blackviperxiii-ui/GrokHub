@@ -1,4 +1,0 @@
-- Cabin: Local AI download confirm reads the drive's free space when it opens, not the figure from launch.
-- Cabin: a hardware read that fails shows as unknown, with no recommended model, instead of as a PC with no memory.
-- Cabin: Settings looks again every 250 ms while it reads this PC's hardware, so the model picker appears without a mouse move.
-- Cabin: draft model downloads ask first and check free space, like main model downloads.

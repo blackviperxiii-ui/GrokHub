@@ -1,6 +1,6 @@
 #define MyAppName "Loadout"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.4.0"
+  #define MyAppVersion "3.5.0"
 #endif
 #define MyAppPublisher "Loadout"
 #define MyAppExeName "grokhub.exe"
