@@ -1,0 +1,1 @@
+- Windows Setup, the Start menu and the desktop shortcut now say Loadout. Updating clears the old GrokHub shortcuts; the install folder, AppId and `grokhub.exe` stay the same, so updates land in place.
