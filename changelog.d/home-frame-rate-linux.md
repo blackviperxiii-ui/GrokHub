@@ -1,0 +1,1 @@
+- Home on Linux: the Frame Rate tile now shows the frames your screen actually shows, counted by the kernel's display driver from outside the game, so anti-cheat has nothing to see. It needs a one-time permission; the tile's Copy setup button gives you the commands to run once. Without it, the tile still says plainly that it isn't reading.

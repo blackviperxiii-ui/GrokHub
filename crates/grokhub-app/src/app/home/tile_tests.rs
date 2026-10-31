@@ -263,8 +263,19 @@ fn speeds_tile_reads_the_internet_log_and_sends_nothing_when_off() {
 
 #[test]
 fn frame_rate_tile_is_honest_about_not_reading_games() {
-    let t = frame_rate_text(false);
+    use super::fps::FpsState;
+    use grokhub_agent::indexers::display_fps::FpsBlock;
+    let t = frame_rate_text(None);
     assert_eq!(t.big, "Not read");
     assert_eq!(t.caption, "Loadout never hooks into games");
     assert_eq!(t.tone, Tone::Quiet);
+    let t = frame_rate_text(Some(FpsState::Rate(143.6)));
+    assert_eq!(
+        (t.big.as_str(), t.caption.as_str()),
+        ("144 FPS", "Frames on screen")
+    );
+    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NeedsPermission)));
+    assert_eq!(t.caption, "Needs a one-time permission");
+    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)));
+    assert_eq!(t.caption, "This driver doesn't report screen frames");
 }
