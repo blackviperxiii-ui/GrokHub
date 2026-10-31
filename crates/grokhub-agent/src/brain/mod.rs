@@ -4,6 +4,7 @@
 //! goal and reason steer the turn's routing (Brain 2, `route::goal`).
 
 mod brief;
+mod local_sort;
 pub mod playbook;
 mod policy;
 
