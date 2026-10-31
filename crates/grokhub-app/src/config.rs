@@ -508,6 +508,23 @@ pub struct AppConfig {
     /// default; logs can hold more than the chat.
     #[serde(default)]
     pub diagnostics_include_logs: bool,
+    /// Labs: the companion can pop out of the corner box into her own
+    /// see-through window on the desktop.
+    #[serde(default)]
+    pub desktop_nyx: bool,
+    /// She is popped out right now (the window shows when nothing hides it).
+    #[serde(default)]
+    pub desktop_nyx_undocked: bool,
+    /// Her window sits behind other windows instead of floating on top.
+    #[serde(default)]
+    pub desktop_nyx_behind: bool,
+    /// Where her window last settled, in points from the monitor's corner.
+    #[serde(default)]
+    pub desktop_nyx_pos: Option<[f32; 2]>,
+    /// Adults-only outfits may show on the desktop. Off by default: the
+    /// desktop is visible to anyone at the screen.
+    #[serde(default)]
+    pub desktop_nyx_adult: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -851,6 +868,11 @@ impl Default for AppConfig {
             adult_confirmed_at_ms: None,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
+            desktop_nyx: false,
+            desktop_nyx_undocked: false,
+            desktop_nyx_behind: false,
+            desktop_nyx_pos: None,
+            desktop_nyx_adult: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,

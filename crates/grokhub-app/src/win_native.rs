@@ -684,6 +684,79 @@ pub fn clipboard_image() -> Option<(Vec<u8>, bool)> {
     }
 }
 
+// ---- Desktop companion window -------------------------------------------
+
+/// `SetWindowDisplayAffinity`: the window is left out of screen capture
+/// and sharing (Windows 10 2004+).
+const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
+/// `SHQueryUserNotificationState` values: a fullscreen app has the screen.
+const QUNS_BUSY: i32 = 2;
+const QUNS_RUNNING_D3D_FULL_SCREEN: i32 = 3;
+
+struct TitledState {
+    pid: u32,
+    title: Vec<u16>,
+    hwnd: HWND,
+}
+
+unsafe extern "system" fn enum_titled(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let state = &mut *(lparam as *mut TitledState);
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if pid != state.pid {
+        return TRUE;
+    }
+    let mut buf = [0u16; 64];
+    let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+    if n <= 0 || buf[..n as usize] != state.title[..] {
+        return TRUE;
+    }
+    state.hwnd = hwnd;
+    0
+}
+
+/// This process's top-level window titled exactly `title`.
+fn titled_hwnd(title: &str) -> Option<HWND> {
+    let mut state = TitledState {
+        pid: std::process::id(),
+        title: OsStr::new(title).encode_wide().collect(),
+        hwnd: ptr::null_mut(),
+    };
+    unsafe {
+        EnumWindows(Some(enum_titled), &mut state as *mut _ as LPARAM);
+    }
+    (!state.hwnd.is_null()).then_some(state.hwnd)
+}
+
+/// Keep the window titled `title` out of screenshots, recordings and
+/// screen shares. True once the affinity is set.
+pub fn exclude_from_capture(title: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
+    let Some(hwnd) = titled_hwnd(title) else {
+        return false;
+    };
+    unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) != 0 }
+}
+
+/// The cursor in screen pixels, over any window.
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut p = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x, p.y))
+}
+
+/// A fullscreen game or presentation has the screen, by the shell's
+/// notification state (what also quiets toasts).
+pub fn fullscreen_app_in_front() -> bool {
+    use windows_sys::Win32::UI::Shell::SHQueryUserNotificationState;
+    let mut state = 0i32;
+    if unsafe { SHQueryUserNotificationState(&mut state) } < 0 {
+        return false;
+    }
+    matches!(state, QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

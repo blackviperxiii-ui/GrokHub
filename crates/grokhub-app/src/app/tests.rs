@@ -2126,6 +2126,7 @@ fn quiet_cabin() -> Cabin {
         presence_ring: Vec::new(),
         voice_state: grokhub_core::VoiceState::Idle,
         voice_ready_at: None,
+        desktop_nyx: None,
         voice_hold_rx: None,
         cmd_line: String::new(),
         cmd_hist: Vec::new(),

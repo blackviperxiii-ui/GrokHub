@@ -1300,11 +1300,34 @@ impl Cabin {
         let live = self.voice_is_on();
         let activity = self.companion_activity();
         let look = self.dock_look_now();
+        let desktop = self.cfg.desktop_nyx && look.is_some();
+        let undocked = desktop && self.cfg.desktop_nyx_undocked;
+        let mut pop_out = false;
+        let mut dock_back = false;
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 card_mark(ui);
                 ui.label(caption(&dock_title(&shown.id, name)));
+                if desktop {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (label, hint) = if undocked {
+                            ("Dock back", format!("Bring {name} back into the cabin"))
+                        } else {
+                            ("Pop out", format!("Put {name} on your desktop"))
+                        };
+                        let hit = ui
+                            .add(egui::Button::new(caption(label)).frame(false))
+                            .on_hover_text(hint);
+                        if hit.clicked() {
+                            if undocked {
+                                dock_back = true;
+                            } else {
+                                pop_out = true;
+                            }
+                        }
+                    });
+                }
             });
             ui.add_space(crate::theme::SPACING_4);
             let w = ui.available_width();
@@ -1317,6 +1340,14 @@ impl Cabin {
                 .and_then(|pose| nyx_wardrobe::dock_texture(ui.ctx(), pose));
             if pedestal_preview_pinned() {
                 paint_pedestal_preview(ui, art);
+            } else if undocked {
+                ui.painter().text(
+                    art.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{name} is on your desktop"),
+                    egui::FontId::proportional(crate::theme::TYPE_BODY),
+                    crate::theme::muted(),
+                );
             } else if let Some(tex) = tex {
                 egui::Image::from_texture(&tex)
                     .uv(cover_uv(tex.size(), art.size()))
@@ -1349,6 +1380,11 @@ impl Cabin {
             });
         });
         paint_brackets(ui.painter(), resp.rect);
+        if pop_out {
+            self.pop_nyx_out();
+        } else if dock_back {
+            self.dock_nyx_back();
+        }
         let click = ui
             .interact(
                 resp.rect,
@@ -1357,7 +1393,7 @@ impl Cabin {
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Talk to {name}"));
-        if click.clicked() {
+        if click.clicked() && !pop_out && !dock_back {
             self.listen_voice();
         }
     }
