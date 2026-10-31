@@ -886,7 +886,7 @@ pub(super) fn frame_rate_text(windows: bool) -> TileText {
         detail: Some(if windows {
             "Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely".into()
         } else {
-            "Steam's in-game counter or MangoHud show FPS".into()
+            "Steam's in-game FPS counter shows it safely".into()
         }),
         tone: Tone::Quiet,
     }
