@@ -1,4 +1,0 @@
-- Settings › Privacy no longer says "Cloud OFF" and "Your data stays on this PC" while you're signed in and chat or background tasks would use Grok. A quiet week now reads "Nothing left this PC this week" with the cloud READY, and a line names what goes to Grok (chat, and background tasks unless the installed on-device model takes them). "Cloud OFF" is kept for when nothing can leave: not signed in and no calls.
-- The On-device model hint matches the router: small background jobs run on this PC and bigger ones still use Grok, or it says the model isn't installed yet.
-- The title bar chip reads the same 7-day egress log: "LOCAL · 0 B SENT" only for a week with no calls, otherwise the number of calls sent.
-- The Pulse wind-down offer only says it is on once the switch is saved; a failed save keeps its error showing.

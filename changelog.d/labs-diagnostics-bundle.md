@@ -1,1 +1,0 @@
-- Labs: Diagnostics mode (off by default) exports a redacted chat debug bundle to the Desktop as `loadout-diagnostics-DATE-TIME.zip` (JSON + Markdown) with classifier, playbook, policy, length cap, tools, and timings — one click, Open folder toast, Windows and Linux.

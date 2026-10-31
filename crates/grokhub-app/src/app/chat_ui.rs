@@ -937,6 +937,47 @@ impl Cabin {
     }
 }
 
+/// Width the composer text wraps at inside the pill's middle column
+/// (minus the mic and the gap before it).
+pub(super) fn composer_text_w(mid: f32) -> f32 {
+    (mid - 8.0 - 22.0).max(80.0)
+}
+
+/// Lines the composer text takes on screen: typed breaks plus soft wraps.
+pub(super) fn composer_visual_rows(ui: &egui::Ui, text: &str, text_w: f32) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+    // TextEdit wraps inside composer_field_frame's 2px side margins.
+    let wrap = (text_w - 4.0).max(1.0);
+    let galley = ui.fonts_mut(|f| {
+        f.layout(
+            text.to_owned(),
+            egui::FontId::new(15.0, egui::FontFamily::Proportional),
+            egui::Color32::PLACEHOLDER,
+            wrap,
+        )
+    });
+    galley.rows.len().max(1)
+}
+
+/// Tallest the composer pill gets before its text scrolls inside it:
+/// 240px, or 40% of the window on short screens.
+pub(super) fn composer_max_h(window_h: f32) -> f32 {
+    (window_h * 0.4).clamp(crate::theme::QUERY_MIN_H, 240.0)
+}
+
+/// Pill height for `rows` lines: one line keeps the 60px pill, each extra
+/// line adds 22px, capped at `max_h`.
+pub(super) fn composer_pill_h(rows: usize, max_h: f32) -> f32 {
+    let want = if rows <= 1 {
+        crate::theme::QUERY_MIN_H
+    } else {
+        (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
+    };
+    want.min(max_h.max(crate::theme::QUERY_MIN_H))
+}
+
 fn composer_field_frame() -> egui::Frame {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(2, 0))
 }
@@ -2637,7 +2678,13 @@ impl Cabin {
         let pane_w =
             crate::cards::composer_pill_w(ui.ctx().content_rect().width()).min(avail.width());
         let side = empty_home_side_gap(avail.width(), pane_w);
-        let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H);
+        // Last frame's pill height: a long draft lifts the box so it never
+        // grows off the bottom of the pane.
+        let pill_now = self
+            .composer_geom
+            .map_or(crate::theme::QUERY_MIN_H, |(pill, _, _)| pill.height());
+        let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H)
+            .min((avail.height() - pill_now - 96.0).max(16.0));
         let mark_h = if greet_on { 40.0 + 12.0 } else { 0.0 };
         let greet_h = if greet_on {
             greeting_galley_h(ui, &self.greeting, pane_w) + mark_h
@@ -3049,14 +3096,20 @@ impl Cabin {
                         self.apply_composer_session_row(ui);
                         let composer_id = egui::Id::new("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
-                        let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
                         let pad_l = 20.0;
                         let pad_r = 24.0;
-                        let pill_h = if rows == 1 {
-                            crate::theme::QUERY_MIN_H
-                        } else {
-                            (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
-                        };
+                        let inner = (cap - pad_l - pad_r).max(200.0);
+                        let mid = crate::cards::composer_mid_w(inner);
+                        let text_w = composer_text_w(mid);
+                        // Count wrapped lines, not just Enter presses, so long text
+                        // grows the pill instead of spilling past it.
+                        let rows = composer_visual_rows(ui, &self.composer, text_w);
+                        let max_h = composer_max_h(ui.ctx().content_rect().height());
+                        let pill_h = ui.ctx().animate_value_with_time(
+                            composer_id.with("pill-h"),
+                            composer_pill_h(rows, max_h),
+                            0.08,
+                        );
                         ui.allocate_ui_with_layout(
                             egui::vec2(cap, pill_h),
                             egui::Layout::left_to_right(egui::Align::Center),
@@ -3075,7 +3128,6 @@ impl Cabin {
                                     crate::theme::composer_chrome_stroke(focused),
                                     egui::StrokeKind::Middle,
                                 );
-                                let inner = (cap - pad_l - pad_r).max(200.0);
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 ui.add_space(pad_l);
                                 let plus = crate::icons::paint_bar_icon(
@@ -3101,7 +3153,6 @@ impl Cabin {
                                 ui.add_space(8.0);
                                 let cluster = crate::cards::composer_go_cluster_w();
                                 let go_sz = crate::cards::composer_go_hit_w();
-                                let mid = crate::cards::composer_mid_w(inner);
                                 let (mut mic_rect, mut go_rect) =
                                     (egui::Rect::NOTHING, egui::Rect::NOTHING);
                                 ui.allocate_ui_with_layout(
@@ -3109,15 +3160,15 @@ impl Cabin {
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         ui.spacing_mut().item_spacing.x = 8.0;
-                                        let text_w = (mid - 8.0 - 22.0).max(80.0);
                                         let edit = egui::ScrollArea::vertical()
                                             .id_salt("chat-composer-scroll")
                                             .max_width(text_w)
                                             .max_height(pill_h)
                                             .auto_shrink([false, true])
                                             .show(ui, |ui| {
+                                                // Floor only: past max_h the field is
+                                                // taller than the pill and scrolls.
                                                 ui.set_min_height(pill_h);
-                                                ui.set_max_height(pill_h);
                                                 let hint_align = if rows == 1 {
                                                     egui::Align::Center
                                                 } else {

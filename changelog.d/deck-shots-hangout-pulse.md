@@ -1,1 +1,0 @@
-- Deck-match proof shots: Hangout slide 02 and Pulse slides 13 and 15 beside Windows cabin captures.

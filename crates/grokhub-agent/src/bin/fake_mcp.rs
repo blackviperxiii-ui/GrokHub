@@ -22,10 +22,13 @@ fn main() {
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
         match method {
             "initialize" => {
+                // FAKE_MCP_VERSION: answer another revision (default 2025-03-26).
+                let version =
+                    std::env::var("FAKE_MCP_VERSION").unwrap_or_else(|_| "2025-03-26".into());
                 respond(
                     &id,
                     json!({
-                        "protocolVersion": "2025-03-26",
+                        "protocolVersion": version,
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": "fake", "version": "0"}
                     }),
@@ -100,11 +103,24 @@ fn tool_list() -> Vec<Value> {
 }
 
 fn tool(name: &str, description: &str) -> Value {
-    json!({
+    let mut tool = json!({
         "name": name,
         "description": description,
         "inputSchema": {"type": "object", "properties": {}}
-    })
+    });
+    if rich() {
+        tool["title"] = json!("Echo Weather");
+        tool["outputSchema"] =
+            json!({"type": "object", "properties": {"temperature": {"type": "number"}}});
+        tool["annotations"] = json!({"readOnlyHint": true, "openWorldHint": false});
+        tool["icons"] = json!([{"src": "https://example.com/echo.png", "mimeType": "image/png"}]);
+    }
+    tool
+}
+
+/// FAKE_MCP_RICH=1: 2025-11-25 tool metadata and results (structured content, a resource link).
+fn rich() -> bool {
+    std::env::var("FAKE_MCP_RICH").ok().as_deref() == Some("1")
 }
 
 fn call_tool(reader: &mut impl BufRead, params: Option<&Value>) -> Value {
@@ -140,6 +156,22 @@ fn call_tool(reader: &mut impl BufRead, params: Option<&Value>) -> Value {
             .cloned()
             .unwrap_or(Value::Null);
         return text_result(&format!("action={action} content={content}"));
+    }
+    if rich() {
+        return json!({
+            "content": [
+                {"type": "text", "text": "weather ok"},
+                {
+                    "type": "resource_link",
+                    "uri": "file:///tmp/forecast.json",
+                    "name": "forecast.json",
+                    "title": "Forecast",
+                    "mimeType": "application/json",
+                    "description": "Five-day forecast"
+                }
+            ],
+            "structuredContent": {"temperature": 22.5}
+        });
     }
     text_result(&format!("pid={} args={args}", std::process::id()))
 }

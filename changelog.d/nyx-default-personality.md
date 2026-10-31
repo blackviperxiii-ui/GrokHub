@@ -1,1 +1,0 @@
-- Nyx is the default personality: the plain "Default" preset is gone, and a profile or chat still set to it speaks as Nyx after the upgrade. Nyx now carries the honesty values the old preset stated.

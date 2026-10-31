@@ -185,7 +185,10 @@ impl NativeEngine {
             .history
             .iter()
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
-            .map(crate::compact::message_text)
+            .map(|item| {
+                let text = crate::compact::message_text(item);
+                crate::prefix_cache::visible_user_text(&text).to_string()
+            })
             .rev()
             .take(2)
             .collect::<Vec<_>>()
@@ -399,11 +402,13 @@ impl Engine for NativeEngine {
                 started,
                 usage,
                 error,
+                server,
             } => {
                 emit(AcpEvent::Compact {
                     started,
                     usage: grok_usage(&usage, kind, meter_used, meter_limit),
                     error,
+                    server,
                 });
             }
             LoopEvent::Usage(total) => {
@@ -609,6 +614,7 @@ impl NativeEngine {
             started: true,
             usage: grok_usage(&self.usage, kind, used, limit),
             error: None,
+            server: None,
         });
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
         let compact_result = crate::compact::compact_after_flush(
@@ -630,8 +636,8 @@ impl NativeEngine {
             ));
         }
         match compact_result {
-            Ok(extra) => {
-                self.usage.add(&extra);
+            Ok(done) => {
+                self.usage.add(&done.usage);
                 let delta = self.usage.saturating_delta(&before);
                 let _ = crate::session::record_compaction(
                     &session,
@@ -647,6 +653,7 @@ impl NativeEngine {
                     started: false,
                     usage: usage.clone(),
                     error: None,
+                    server: done.server,
                 });
                 emit(AcpEvent::Usage(usage));
                 emit(AcpEvent::Done {
@@ -658,6 +665,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some("cancelled".into()),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "cancelled".into(),
@@ -668,6 +676,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some(message),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "end_turn".into(),
@@ -969,6 +978,8 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1340,7 +1351,7 @@ mod tests {
         )));
         assert!(events.iter().any(|ev| matches!(
             ev,
-            AcpEvent::Compact { started: false, error: None, usage }
+            AcpEvent::Compact { started: false, error: None, usage, server: None }
                 if usage.cost_in_usd_ticks == 4
                     && usage.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
                     && usage.context_tokens_used > 0
@@ -1359,7 +1370,10 @@ mod tests {
                 .contains("This session is being continued")));
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "remember the harbor"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "remember the harbor"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item).contains("/compact")));
@@ -1397,7 +1411,10 @@ mod tests {
         let input = loaded.input();
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "keep this"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "keep this"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item)

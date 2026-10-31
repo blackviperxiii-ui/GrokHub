@@ -2037,6 +2037,8 @@ mod tests {
 
     #[test]
     fn schemas_for_keeps_spawn_and_session_tools_in_plan_mode() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let plan = tools::schemas_for(&Gate::phase_readonly());
         let names: Vec<&str> = plan
             .iter()

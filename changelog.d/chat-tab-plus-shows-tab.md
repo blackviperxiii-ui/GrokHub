@@ -1,2 +1,0 @@
-- The chat tab strip's + (and Ctrl+N) now shows the new chat as a selected "New chat" tab instead of an empty strip.
-- The far-right ... menu lists the chats that did not fit, the Activity list opens below the tab strip, and the left rail no longer jumps when Chat opens.
