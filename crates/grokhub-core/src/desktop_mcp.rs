@@ -2211,6 +2211,18 @@ mod tests {
     }
 
     #[test]
+    fn server_discover_is_method_not_found_so_new_clients_fall_back_to_initialize() {
+        // Session era only: a 2026-07-28 dual-era client probes with
+        // `server/discover` and takes any non-modern error as "initialize".
+        let mut s = server();
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+        let v = reply_of(&s.handle_line(line, on()));
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["error"]["code"], -32601);
+        assert_eq!(v["error"]["message"], "Method not found");
+    }
+
+    #[test]
     fn initialize_negotiates_and_names_the_server() {
         let mut s = server();
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#;
