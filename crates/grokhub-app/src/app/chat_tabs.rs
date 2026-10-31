@@ -241,18 +241,10 @@ impl Cabin {
         }
     }
 
-    fn chat_tab_order(&self, listed: &[usize]) -> Vec<usize> {
+    pub(super) fn chat_tab_order(&self, listed: &[usize]) -> Vec<usize> {
         let keys: Vec<threads::SessionSortKey> = listed
             .iter()
-            .map(|&i| {
-                let t = &self.threads[i];
-                threads::SessionSortKey {
-                    pinned: t.pinned,
-                    pinned_ms: t.pinned_ms,
-                    accessed_ms: t.accessed_ms,
-                    list_rank: 0,
-                }
-            })
+            .map(|&i| threads::sort_key(&self.threads[i]))
             .collect();
         threads::session_list_order(&keys)
     }
@@ -273,7 +265,8 @@ impl Cabin {
         }
         let full = self.chat_tab_title(i);
         let title = grokhub_core::display_tab_title(&full);
-        let pinned = self.threads.get(i).is_some_and(|t| t.pinned);
+        let main = self.threads.get(i).is_some_and(|t| t.main);
+        let pinned = main || self.threads.get(i).is_some_and(|t| t.pinned);
         let selected = i == self.thread_idx;
         let fill = if selected {
             crate::theme::selected()
@@ -305,7 +298,12 @@ impl Cabin {
             egui::StrokeKind::Inside,
         );
 
-        let close_w = if hovered || selected { 18.0 } else { 0.0 };
+        // Main has no close: it can't be deleted.
+        let close_w = if !main && (hovered || selected) {
+            18.0
+        } else {
+            0.0
+        };
         let pin_w = if pinned { 14.0 } else { 0.0 };
         let pad = 8.0;
         let text_left = rect.left() + pad + pin_w;
@@ -361,6 +359,9 @@ impl Cabin {
         let resp = resp.on_hover_text(&full);
         if act.is_none() && resp.clicked() {
             act = Some(TabAct::Switch(i));
+        }
+        if main {
+            return act;
         }
         if resp.double_clicked() {
             act = Some(TabAct::StartRename(i));

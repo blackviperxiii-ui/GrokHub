@@ -1,0 +1,2 @@
+- Chat: a permanent Main chat is always first in the tab strip, sidebar, and History. It can't be archived, deleted, pinned, or renamed, and it opens by default on a first run or when the last chat is gone.
+- Chat: scheduled automation reports, and background tasks whose chat was closed, now post their result in Main, and the next reply there knows about them.

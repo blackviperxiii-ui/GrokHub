@@ -983,18 +983,15 @@ impl Cabin {
             }
             let user_chat =
                 |t: &ChatThread| !t.background && !threads::is_background_history_title(&t.title);
+            // Main is the default: a first run, or a saved chat that is gone, opens it.
+            parked_learn |= threads::main_thread_index(&threads).is_none();
+            let main_idx = threads::ensure_main_thread(&mut threads);
+            let main_id = threads[main_idx].id.clone();
             let keep_id = threads
                 .iter()
                 .find(|t| t.id == cfg.current_thread && user_chat(t))
                 .map(|t| t.id.clone())
-                .or_else(|| {
-                    threads
-                        .iter()
-                        .filter(|t| user_chat(t))
-                        .max_by_key(|t| (t.accessed_ms, t.id.clone()))
-                        .map(|t| t.id.clone())
-                })
-                .or_else(|| threads.first().map(|t| t.id.clone()));
+                .or(Some(main_id));
             let before = threads.len();
             threads.retain(|t| {
                 let has_session = t
@@ -1002,7 +999,7 @@ impl Cabin {
                     .as_deref()
                     .is_some_and(|s| !s.trim().is_empty());
                 keep_loaded_thread(
-                    keep_id.as_deref() == Some(t.id.as_str()),
+                    t.main || keep_id.as_deref() == Some(t.id.as_str()),
                     t.pinned,
                     &t.title,
                     t.scratch,
@@ -1013,9 +1010,6 @@ impl Cabin {
                     !t.goal.label.trim().is_empty(),
                 )
             });
-            if threads.is_empty() {
-                threads.push(ChatThread::new("Chat", false));
-            }
             let dropped_leftover = adopted_n > 0 || threads.len() != before || parked_learn;
             let thread_idx = threads
                 .iter()

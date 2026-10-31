@@ -3,6 +3,9 @@
 use super::*;
 use crate::ui_kit::{setting_row, SettingRowControl};
 
+/// Status line when an action would archive, delete, pin, or rename Main.
+pub(super) const MAIN_STAYS: &str = "Main is your permanent chat and always stays put";
+
 impl Cabin {
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
@@ -100,6 +103,11 @@ impl Cabin {
         created.background = true;
         self.threads.push(created);
         self.threads.len() - 1
+    }
+
+    /// The permanent Main chat, added back if it is missing.
+    pub(super) fn main_thread_idx(&mut self) -> usize {
+        threads::ensure_main_thread(&mut self.threads)
     }
 
     pub(super) fn stamp_current_access(&mut self) {
@@ -203,6 +211,10 @@ impl Cabin {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
         };
+        if t.main {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         let title = t.title.clone();
         let id = t.id.clone();
         if !threads::archive_thread(t, now_ms()) {
@@ -404,15 +416,7 @@ impl Cabin {
         let next = {
             let keys: Vec<threads::SessionSortKey> = listed
                 .iter()
-                .map(|&i| {
-                    let t = &self.threads[i];
-                    threads::SessionSortKey {
-                        pinned: t.pinned,
-                        pinned_ms: t.pinned_ms,
-                        accessed_ms: t.accessed_ms,
-                        list_rank: 0,
-                    }
-                })
+                .map(|&i| threads::sort_key(&self.threads[i]))
                 .collect();
             let order = threads::session_list_order(&keys);
             order.first().map(|&pos| listed[pos])
@@ -487,7 +491,9 @@ impl Cabin {
                             } else {
                                 t.messages.is_empty()
                             },
+                        // Main is never handed out as a fresh draft.
                         has_session: buried
+                            || t.main
                             || t.grok_session
                                 .as_deref()
                                 .is_some_and(|s| !s.trim().is_empty()),
@@ -593,7 +599,9 @@ impl Cabin {
                             } else {
                                 t.messages.is_empty()
                             },
+                        // Main is never handed out as a fresh draft.
                         has_session: buried
+                            || t.main
                             || t.grok_session
                                 .as_deref()
                                 .is_some_and(|s| !s.trim().is_empty()),
@@ -660,6 +668,10 @@ impl Cabin {
     }
 
     pub(super) fn begin_chat_rename(&mut self, idx: usize) {
+        if self.threads.get(idx).is_some_and(|t| t.main) {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         self.rename_buf = self.thread_rail_title(idx);
         self.rename_lock = if self.rename_buf.is_empty() {
             None
@@ -716,6 +728,10 @@ impl Cabin {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
         };
+        if t.main {
+            self.status = MAIN_STAYS.into();
+            return;
+        }
         t.pinned = toggle_pin(t.pinned);
         let now = now_ms();
         t.accessed_ms = now;
@@ -739,7 +755,7 @@ impl Cabin {
 
     /// Permanently drop a thread (idea discuss / helpers). No soft-delete trash.
     pub(super) fn hard_drop_thread_at(&mut self, idx: usize) {
-        if idx >= self.threads.len() {
+        if self.threads.get(idx).is_none_or(|t| t.main) {
             return;
         }
         let was_current = idx == self.thread_idx;
@@ -776,7 +792,11 @@ impl Cabin {
     }
 
     pub(super) fn delete_thread_at(&mut self, idx: usize) {
-        if idx >= self.threads.len() {
+        let Some(main) = self.threads.get(idx).map(|t| t.main) else {
+            return;
+        };
+        if main {
+            self.status = MAIN_STAYS.into();
             return;
         }
         // Only one row left: hard reset (no trash to keep).
@@ -868,8 +888,8 @@ impl Cabin {
         }
         self.grok_sessions.clear();
         self.threads.clear();
-        self.threads.push(ChatThread::new("Chat", false));
-        self.thread_idx = 0;
+        // Main is permanent: its transcript goes, the chat stays.
+        self.thread_idx = threads::ensure_main_thread(&mut self.threads);
         self.messages = self.threads[0].messages.clone();
         self.imagine_last.clear();
         self.cfg.goal_pin.clear();
