@@ -444,7 +444,7 @@ jobs:
           name: smoke-shots-${{ runner.os }}
           path: smoke-shots/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
 
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
