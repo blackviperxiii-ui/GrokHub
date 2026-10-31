@@ -4,6 +4,8 @@
 //! The child is its own process group or job so a stop kills the whole tree.
 
 use std::path::Path;
+#[cfg(unix)]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
@@ -318,8 +320,12 @@ fn spawn_and_wait(
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let out_thread = thread::spawn(move || read_pipe(stdout));
-    let err_thread = thread::spawn(move || read_pipe(stderr));
+    let out_buf = Arc::new(Mutex::new(CapBuf::new()));
+    let err_buf = Arc::new(Mutex::new(CapBuf::new()));
+    let readers = [
+        spawn_reader(stdout, Arc::clone(&out_buf)),
+        spawn_reader(stderr, Arc::clone(&err_buf)),
+    ];
     let started = Instant::now();
     let limit = Duration::from_millis(timeout_ms);
     let status = loop {
@@ -349,9 +355,14 @@ fn spawn_and_wait(
             }
         }
     };
-    let stdout = out_thread.join().unwrap_or_default();
-    let stderr = err_thread.join().unwrap_or_default();
-    let raw = merge_output(stdout, stderr);
+    // A process that left the group (setsid, a daemon) can keep the pipes open
+    // after bash is gone. Wait a moment for the rest of the output, never past
+    // Stop, then answer with what arrived.
+    let drained = drain_readers(&readers, stop, DRAIN_GRACE);
+    let mut raw = merge_output(take_buf(&out_buf), take_buf(&err_buf));
+    if !drained {
+        raw.extend_from_slice(HELD_OPEN.as_bytes());
+    }
     Ok(match status {
         StopKind::Exited(code) => finish(&format!("exit {code}"), &raw, code != 0),
         StopKind::TimedOut => finish(&format!("timed out after {timeout_ms}ms"), &raw, true),
@@ -375,6 +386,66 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> Vec<u8> {
         }
     }
     cap.bytes()
+}
+
+/// How long to keep reading after bash ends, for output still in flight.
+#[cfg(unix)]
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+#[cfg(unix)]
+const HELD_OPEN: &str =
+    "\n(a background process still holds this command's output; stopped waiting for it)";
+
+#[cfg(unix)]
+fn spawn_reader(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+    into: Arc<Mutex<CapBuf>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let Some(mut pipe) = pipe else {
+            return;
+        };
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => into
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(&buf[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+/// True once every reader hit end of file; false when the grace ran out or
+/// Stop was pressed first. Readers left running end when their pipe closes.
+#[cfg(unix)]
+fn drain_readers(
+    readers: &[std::thread::JoinHandle<()>],
+    stop: &dyn Fn() -> bool,
+    grace: Duration,
+) -> bool {
+    let started = Instant::now();
+    loop {
+        if readers.iter().all(|r| r.is_finished()) {
+            return true;
+        }
+        if stop() || started.elapsed() >= grace {
+            return false;
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+#[cfg(unix)]
+fn take_buf(buf: &Mutex<CapBuf>) -> Vec<u8> {
+    std::mem::replace(
+        &mut *buf.lock().unwrap_or_else(|err| err.into_inner()),
+        CapBuf::new(),
+    )
+    .bytes()
 }
 
 #[cfg(unix)]
@@ -628,6 +699,59 @@ mod tests {
         assert_eq!(super::timeout_ms(&json!({"timeout": 0})), 120_000);
         assert_eq!(super::timeout_ms(&json!({"timeout": 200})), 200);
         assert_eq!(super::timeout_ms(&json!({"timeout": 900_000})), 300_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_left_holding_the_output_does_not_hang_the_command() {
+        let dir = scratch("escaped");
+        // setsid leaves the process group, so the group kill misses it, and it
+        // keeps the stdout pipe open after bash exits.
+        let started = Instant::now();
+        let out = run(
+            &dir,
+            &json!({"command": "setsid sleep 30 & echo started"}),
+            &|| false,
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(out.text.contains("exit 0"), "{}", out.text);
+        assert!(out.text.contains("started"), "{}", out.text);
+        assert!(
+            out.text.contains("still holds this command's output"),
+            "{}",
+            out.text
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_ends_the_wait_on_a_process_left_holding_the_output() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = scratch("escaped-stop");
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let out = run(
+            &dir,
+            &json!({"command": "setsid sleep 30 & sleep 20"}),
+            &|| stop.load(Ordering::SeqCst),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(out.text.starts_with("killed"), "{}", out.text);
     }
 
     #[cfg(unix)]

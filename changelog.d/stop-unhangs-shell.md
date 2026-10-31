@@ -1,0 +1,1 @@
+- A terminal command that leaves a background process holding its output (a daemon, `setsid`, a service helper) no longer freezes the run. The command now answers with what it printed within about 2 seconds of finishing, and Stop ends the wait right away.
