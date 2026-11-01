@@ -584,8 +584,10 @@ mod tests {
         let g = grant_destination(&d, HUB_DEST, &data, UserClick::from_click()).unwrap();
         let text = fs::read_to_string(consent_path(&d)).unwrap();
         assert!(text.lines().all(is_sealed_line), "{text}");
+        // Sealed lines are base64, which can spell "hub" or "user" by chance, so look
+        // for the JSON-quoted plaintext (base64 has no quotes) and the hyphenated id.
         assert!(
-            !text.contains("hub") && !text.contains(&g.id) && !text.contains("user"),
+            !text.contains("\"hub\"") && !text.contains(&g.id) && !text.contains("\"user\""),
             "{text}"
         );
         assert!(ConsentLedger::load(&d)
