@@ -31,6 +31,8 @@ pub struct Capabilities {
     /// The composer's push-to-talk mic (xAI speech to text). Desktops and
     /// phones; the web app never gets it.
     pub voice: bool,
+    /// The Library page: this computer's Steam games and Play.
+    pub library: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -57,6 +59,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         summon_hotkey: desktop && !(os == "linux" && wayland),
         notifications: desktop,
         voice: desktop || phone,
+        library: desktop,
     }
 }
 
@@ -105,6 +108,7 @@ mod tests {
             summon_hotkey: true,
             notifications: true,
             voice: true,
+            library: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -125,6 +129,7 @@ mod tests {
             summon_hotkey: false,
             notifications: false,
             voice: true,
+            library: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -192,6 +197,7 @@ mod tests {
                 "summonHotkey": false,
                 "notifications": false,
                 "voice": true,
+                "library": false,
             })
         );
     }

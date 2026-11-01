@@ -80,6 +80,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
+    ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),

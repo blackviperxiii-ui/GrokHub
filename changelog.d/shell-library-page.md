@@ -1,0 +1,1 @@
+- The new desktop app has a Library page: the Steam games on this computer as a cover grid with All, Installed and Backlog tabs, search, and Play. It reads only Steam's own library files and the public store art (off under Offline only), and Play only hands the game's id to Steam.

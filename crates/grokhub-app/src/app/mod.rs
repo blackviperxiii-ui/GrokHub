@@ -309,6 +309,7 @@ enum Nav {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
+    AiModels,
     Privacy,
     Appearance,
     Behavior,
