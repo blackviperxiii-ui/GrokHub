@@ -60,6 +60,11 @@ pub struct BenchRow {
     pub peak_rss_kb: u64,
     /// The reasoning effort each request sent (`-` for none), in order.
     pub efforts: Vec<String>,
+    /// Each request's size in bytes, in order.
+    pub request_bytes: Vec<usize>,
+    /// Each request's cacheable head minus what it shares with the previous
+    /// request's head: the bytes a prompt cache has not seen yet.
+    pub fresh_bytes: Vec<usize>,
 }
 
 struct Recorder {
@@ -203,6 +208,14 @@ fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u
     let first_tools_bytes = first.get("tools").map(json_len).unwrap_or(0);
     let total_bytes: usize = bodies.iter().map(json_len).sum();
     let heads: Vec<String> = bodies.iter().map(cache_head).collect();
+    let fresh_bytes = heads
+        .iter()
+        .enumerate()
+        .map(|(i, h)| match i.checked_sub(1).map(|p| &heads[p]) {
+            Some(prev) => h.len() - common_prefix(prev, h),
+            None => h.len(),
+        })
+        .collect();
     let pcts: Vec<f64> = heads
         .windows(2)
         .filter(|w| !w[0].is_empty())
@@ -232,6 +245,8 @@ fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u
         wall_ms,
         peak_rss_kb: peak_rss_kb(),
         efforts: bodies.iter().map(sent_effort).collect(),
+        request_bytes: bodies.iter().map(json_len).collect(),
+        fresh_bytes,
     }
 }
 
@@ -318,6 +333,139 @@ struct Scenario {
     trim_off: bool,
     /// Turn Steady effort on (`steadyEffort` in `app.json`).
     steady: bool,
+    /// What the Workboard holds while it runs (KB-04).
+    board: Board,
+    /// The engine's conversation id after `bench-`; empty uses the name. The
+    /// router keys its 1-in-10 effort holdout on it, so rows compared byte
+    /// for byte need ids on the same side of it.
+    session: &'static str,
+}
+
+/// KB-04: the Workboard during a scenario. Board reads and writes are local
+/// file work, so a board with cards must cost a normal turn nothing; only a
+/// resume turn carries one capped note, in its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Board {
+    /// No `workboard.json`.
+    Off,
+    /// Cards on the board, with progress logs, and none running.
+    Idle,
+    /// The same board; the first prompt is the resume turn of its interrupted
+    /// card, carrying the KB-03 resume block, then a plain follow-up.
+    Resume,
+}
+
+/// The interrupted card the `kanban_resume` turn picks up.
+const BOARD_RESUME_ID: &str = "w-bench-tray";
+const BOARD_NOW: u64 = 1_761_955_200_000;
+/// The same two asks in every kanban row, so the rows differ only by the board.
+const KANBAN_PROMPTS: [&str; 2] = [
+    "Pick the tray icon fix back up.",
+    "Thanks. Where is my save folder again?",
+];
+
+/// A board as a few weeks of use leave it: your cards, the agent's finished
+/// and filed cards, one interrupted run, and their progress logs. No card is
+/// in Doing.
+fn seed_board(cfg: &Path) {
+    use grokhub_core::work_item::{append_work_log, Checkpoint, StepStatus, WorkKind, WorkStep};
+    use grokhub_core::work_resume::{claim_run, interrupt_card, InterruptCause, HOST_CABIN};
+    use grokhub_core::work_run as wr;
+    use grokhub_core::{BoardCard, BoardStatus, WorkOrigin};
+    let step = |text: &str, status| WorkStep {
+        text: text.to_string(),
+        status,
+    };
+    let mut cards = Vec::new();
+    for (i, (title, status)) in [
+        ("Buy a longer HDMI cable", BoardStatus::Todo),
+        ("Back up the Elden Ring saves", BoardStatus::Todo),
+        ("Try the new GPU driver", BoardStatus::FollowUp),
+        ("Sort the screenshots folder", BoardStatus::Done),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut c = BoardCard::new(title, "", "");
+        c.id = format!("w-bench-user-{i}");
+        c.status = status;
+        c.updated_ms = BOARD_NOW - 1000;
+        cards.push(c);
+    }
+    let mut done = BoardCard::new("Clear the shader cache", "", "");
+    done.id = "w-bench-done".into();
+    done.origin = Some(WorkOrigin::Agent);
+    done.status = BoardStatus::Done;
+    done.steps = vec![
+        step("Find the cache folders", StepStatus::Done),
+        step("Delete the stale caches", StepStatus::Done),
+    ];
+    cards.push(done);
+    let mut tray = BoardCard::new("Fix the tray icon", "", "");
+    tray.id = BOARD_RESUME_ID.into();
+    tray.origin = Some(WorkOrigin::Agent);
+    tray.kind = WorkKind::Task;
+    tray.status = BoardStatus::InProgress;
+    tray.run = true;
+    tray.thread_id = Some("t-bench".into());
+    tray.steps = vec![
+        step("Read the tray code", StepStatus::Done),
+        step("Patch the DPI scaling", StepStatus::Doing),
+        step("Re-run the app tests", StepStatus::Planned),
+    ];
+    tray.checkpoint = Some(Checkpoint {
+        goal: "Fix the blurry tray icon on a 150% display".into(),
+        refs: vec!["src/tray.rs".into()],
+        session: "native-bench".into(),
+        model: "grok-4.7".into(),
+        attempt: 1,
+        ..Default::default()
+    });
+    claim_run(&mut tray, HOST_CABIN, grokhub_core::wire::PermissionMode::Auto);
+    interrupt_card(&mut tray, InterruptCause::Restart, BOARD_NOW);
+    cards.push(tray);
+    let _ = std::fs::create_dir_all(cfg);
+    let _ = wr::edit_board_file(&wr::board_path(cfg), BOARD_NOW, |board| {
+        board.extend(cards);
+    });
+    for (id, text) in [
+        (BOARD_RESUME_ID, "Read src/tray.rs: the icon is drawn at 16 px"),
+        (BOARD_RESUME_ID, "Started the DPI patch"),
+        ("w-bench-done", "Cleared 2.1 GB of shader cache"),
+    ] {
+        let _ = append_work_log(&wr::work_dir(cfg), id, BOARD_NOW, wr::LOG_NOTE, text);
+    }
+}
+
+/// The resume note the app sends with the resume turn, read back from the
+/// seeded board.
+fn board_resume_block(cfg: &Path) -> String {
+    use grokhub_core::work_run as wr;
+    wr::read_board_file(&wr::board_path(cfg))
+        .ok()
+        .and_then(|cards| cards.into_iter().find(|c| c.id == BOARD_RESUME_ID))
+        .map(|c| grokhub_core::work_resume::resume_block(&c))
+        .unwrap_or_default()
+}
+
+/// One kanban row: the same asks and replies, only the board differs.
+fn kanban(name: &'static str, board: Board, session: &'static str) -> Scenario {
+    Scenario {
+        name,
+        prompts: KANBAN_PROMPTS.to_vec(),
+        script: vec![
+            text_turn("Back on it: the DPI patch is next."),
+            text_turn("D:/Loadout/saves."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![],
+        context_tokens: None,
+        trim_off: false,
+        steady: false,
+        board,
+        session,
+    }
 }
 
 /// A log read three times with the same arguments, one turn each (a third
@@ -345,6 +493,8 @@ fn re_reads(name: &'static str, trim_off: bool) -> Scenario {
         context_tokens: Some(LOCAL_CONTEXT_TOKENS),
         trim_off,
         steady: false,
+        board: Board::Off,
+        session: "",
     }
 }
 
@@ -367,6 +517,8 @@ fn tool_errors(name: &'static str, steady: bool) -> Scenario {
         context_tokens: None,
         trim_off: false,
         steady,
+        board: Board::Off,
+        session: "",
     }
 }
 
@@ -384,6 +536,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         Scenario {
             name: "tools",
@@ -400,6 +554,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         Scenario {
             name: "diagnostics",
@@ -416,6 +572,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         Scenario {
             name: "long-chat",
@@ -427,6 +585,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         Scenario {
             name: "three-turns",
@@ -447,6 +607,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         Scenario {
             // LO-45: a chat that opens as small talk, then asks for a file.
@@ -463,11 +625,17 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
         re_reads("re-reads", false),
         re_reads("re-reads (trim off)", true),
         tool_errors("tool-errors", false),
         tool_errors("tool-errors (steady)", true),
+        // KB-04: the Workboard costs a normal turn nothing; a resume pays once.
+        kanban("kanban_off", Board::Off, "kanban-1"),
+        kanban("kanban_idle_on", Board::Idle, "kanban-2"),
+        kanban("kanban_resume", Board::Resume, "kanban-3"),
         // LO-43: a plain read-only ask runs its tool with no model request.
         Scenario {
             name: "instant",
@@ -479,6 +647,8 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
             steady: false,
+            board: Board::Off,
+            session: "",
         },
     ]
 }
@@ -512,9 +682,14 @@ fn bench_engine(ws: &Path, id: &str, client: Arc<dyn ModelClient + Send + Sync>)
 
 /// Run every scenario and return one row each.
 pub fn run_bench() -> Vec<BenchRow> {
+    run_scenarios(|_| true)
+}
+
+/// Run the scenarios whose name `keep` takes, in order, one row each.
+fn run_scenarios(keep: impl Fn(&str) -> bool) -> Vec<BenchRow> {
     let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
     let mut rows = Vec::new();
-    for sc in scenarios() {
+    for sc in scenarios().into_iter().filter(|sc| keep(sc.name)) {
         let Some(dir) = scratch(&format!("eff-{}", sc.name)) else {
             continue;
         };
@@ -540,7 +715,12 @@ pub fn run_bench() -> Vec<BenchRow> {
         }
         let rec = Arc::new(Recorder::new(sc.script, sc.finish));
         let shared: Arc<dyn ModelClient + Send + Sync> = rec.clone();
-        let mut engine = bench_engine(&ws, sc.name, shared);
+        let id = if sc.session.is_empty() {
+            sc.name
+        } else {
+            sc.session
+        };
+        let mut engine = bench_engine(&ws, id, shared);
         if let Some(tokens) = sc.context_tokens {
             engine.set_context_length(tokens);
         }
@@ -552,9 +732,22 @@ pub fn run_bench() -> Vec<BenchRow> {
             );
             engine.resume(history_turns(sc.history_turns, &system), Usage::default());
         }
+        let mut resume = None;
+        if sc.board != Board::Off {
+            seed_board(&dir.join("cfg"));
+        }
+        if sc.board == Board::Resume {
+            resume = Some(board_resume_block(&dir.join("cfg")));
+        }
         let start = Instant::now();
-        for prompt in &sc.prompts {
-            let _ = engine.prompt(prompt, None, &mut |_| {});
+        for (i, prompt) in sc.prompts.iter().enumerate() {
+            // KB-03: the block rides in the resume turn's input only, as the
+            // app's `kick_model` sends it; later turns carry nothing new.
+            let ask = match resume.as_deref().filter(|_| i == 0) {
+                Some(block) => grokhub_core::skill::apply_skill_follow(prompt, Some(block)),
+                None => prompt.to_string(),
+            };
+            let _ = engine.prompt(&ask, None, &mut |_| {});
         }
         let wall = start.elapsed().as_millis();
         let bodies = rec.bodies();
@@ -621,6 +814,9 @@ mod tests {
                 "re-reads (trim off)",
                 "tool-errors",
                 "tool-errors (steady)",
+                "kanban_off",
+                "kanban_idle_on",
+                "kanban_resume",
                 "instant"
             ]
         );
@@ -675,6 +871,76 @@ mod tests {
         assert!(
             render_bench(std::slice::from_ref(instant)).contains("| instant | 0 |"),
             "{table}"
+        );
+        for name in ["kanban_off", "kanban_idle_on", "kanban_resume"] {
+            assert!(table.contains(&format!("| {name} | 2 |")), "{table}");
+        }
+    }
+
+    /// First-request system prompt bytes on every row before KB-04.
+    const SYSTEM_BYTES_BEFORE_KB04: usize = 10_943;
+
+    /// KB-04: the token gate for the Workboard. A board full of cards costs a
+    /// normal turn 0 bytes; a resume turn pays one capped note, in its input,
+    /// once; the request after it adds nothing new.
+    #[test]
+    fn kanban_board_costs_a_normal_turn_nothing_and_a_resume_once() {
+        use grokhub_core::work_resume::RESUME_BLOCK_MAX;
+        let sessions: Vec<&str> = scenarios()
+            .iter()
+            .filter(|s| s.name.starts_with("kanban_"))
+            .map(|s| s.session)
+            .collect();
+        assert_eq!(sessions, ["kanban-1", "kanban-2", "kanban-3"]);
+        for s in sessions {
+            assert!(
+                !crate::route::guard::in_holdout(&format!("bench-{s}")),
+                "{s}: every kanban row must route outside the effort holdout"
+            );
+        }
+        let rows = run_scenarios(|n| n.starts_with("kanban_"));
+        let row = |name: &str| rows.iter().find(|r| r.scenario == name).unwrap().clone();
+        let off = row("kanban_off");
+        let idle = row("kanban_idle_on");
+        let resume = row("kanban_resume");
+        assert_eq!(off.requests, 2, "{off:?}");
+
+        // Cards on the board, none active: byte for byte the board-off row.
+        assert_eq!(idle.first_system_bytes, off.first_system_bytes);
+        assert_eq!(idle.first_tools_bytes, off.first_tools_bytes);
+        assert_eq!(idle.total_bytes, off.total_bytes);
+        assert_eq!(idle.request_bytes, off.request_bytes, "0 B per turn");
+        assert_eq!(idle.stable_prefix_pct, off.stable_prefix_pct);
+
+        // The board sentence (156 B) left the cabin rules: the system prompt
+        // was 10,943 B before KB-04.
+        assert!(
+            off.first_system_bytes <= SYSTEM_BYTES_BEFORE_KB04 - 156,
+            "{} system bytes",
+            off.first_system_bytes
+        );
+
+        // Nothing about the board in the system prompt or the tool list.
+        assert_eq!(resume.requests, off.requests);
+        assert_eq!(resume.first_system_bytes, off.first_system_bytes);
+        assert_eq!(resume.first_tools_bytes, off.first_tools_bytes);
+        assert_eq!(resume.stable_prefix_pct, off.stable_prefix_pct);
+        // The resume turn: at most the block's cap, about 300 tokens.
+        let added = resume.request_bytes[0] - off.request_bytes[0];
+        assert!(added > 0, "the resume turn carries its note");
+        assert!(added <= RESUME_BLOCK_MAX, "{added} B on the resume turn");
+        assert!(
+            crate::tokens::estimate_token_bytes(added as u64) <= 300,
+            "{added} B"
+        );
+        assert_eq!(resume.first_history_bytes - off.first_history_bytes, added);
+        // The next request re-reads that turn from the cached head and adds
+        // nothing a cache has not seen.
+        assert_eq!(resume.fresh_bytes[1], off.fresh_bytes[1]);
+        assert_eq!(
+            resume.request_bytes[1] - off.request_bytes[1],
+            added,
+            "the follow-up sends no second note"
         );
     }
 
