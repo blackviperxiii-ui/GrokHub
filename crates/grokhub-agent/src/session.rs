@@ -648,15 +648,27 @@ pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
     }
     let mut info = load_session(&id)?;
     let visible = visible_slots(&info.records);
+    // An ask goes out as typed, or with a note the app put before or after it
+    // (a resume recap, a skill's follow-up). Exact matches win; the wrapped
+    // ones count only when there aren't enough exact ones to reach `later`.
+    let asks: Vec<(usize, String)> = visible
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, item))| user_text(item).map(|t| (i, squash(&t))))
+        .collect();
     let ask_at = |text: &str, later: usize| -> Option<usize> {
         let want = squash(text);
-        visible
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, item))| user_text(item).is_some_and(|t| squash(&t) == want))
-            .map(|(i, _)| i)
-            .rev()
-            .nth(later)
+        if want.is_empty() {
+            return None;
+        }
+        let pick = |hit: &dyn Fn(&str) -> bool| {
+            asks.iter()
+                .filter(|(_, t)| hit(t))
+                .map(|(i, _)| *i)
+                .rev()
+                .nth(later)
+        };
+        pick(&|t| t == want).or_else(|| pick(&|t| wraps(t, &want)))
     };
     let doomed: Vec<Slot> = match what {
         Forget::Ask { text, later } => match ask_at(text, later) {
@@ -761,6 +773,14 @@ fn is_reply_item(item: &InputItem) -> bool {
         InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. } => true,
         InputItem::ServerCompaction { .. } => false,
     }
+}
+
+/// `sent` is `ask` with a note before or after it, on a word boundary.
+fn wraps(sent: &str, ask: &str) -> bool {
+    sent == ask
+        || sent.starts_with(&format!("{ask} "))
+        || sent.ends_with(&format!(" {ask}"))
+        || sent.contains(&format!(" {ask} "))
 }
 
 /// Text compared for a match: whitespace runs read as one space.
@@ -1670,6 +1690,56 @@ mod tests {
 
     fn save(id: &str, items: &[InputItem]) {
         record_turn(id, "/work", "grok-4.7", items, &Usage::default(), "", "t").unwrap();
+    }
+
+    #[test]
+    fn forgetting_an_ask_finds_it_inside_a_note_the_app_added_but_prefers_an_exact_match() {
+        let (_dir, _guard) = isolated("forget-wrapped");
+        let id = "native-forget-wrapped";
+        save(
+            id,
+            &[
+                said("user", "Earlier: we planned a trip.\nbook the train"),
+                said("assistant", "booked"),
+            ],
+        );
+        save(id, &[said("user", "book"), said("assistant", "what?")]);
+        save(
+            id,
+            &[
+                said("user", "book the train please"),
+                said("assistant", "again"),
+            ],
+        );
+        // "book" is asked exactly once; the wrapped asks above it don't count.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        // No exact "book the train": the one sent with a recap before it is
+        // the newest that wraps it on a word boundary, then the older one.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book the train",
+                    later: 1
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let users: Vec<String> = seen(id)
+            .into_iter()
+            .filter(|(role, _)| role == "user")
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(users, vec!["book the train please".to_string()]);
     }
 
     #[test]

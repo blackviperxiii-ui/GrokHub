@@ -6,6 +6,27 @@ use crate::ui_kit::{setting_row, SettingRowControl};
 /// Status line when an action would archive, delete, pin, or rename Main.
 pub(super) const MAIN_STAYS: &str = "Main is your permanent chat and always stays put";
 
+/// Status after a bubble's Delete message….
+pub(super) const DELETED: &str = "Message deleted";
+/// Deleted from the chat; the saved history had no copy to take out (a cabin
+/// note, or a message already folded into a summary of older ones).
+pub(super) const DELETED_NOT_SAVED: &str =
+    "Message deleted from the chat. The assistant's saved history had no copy of it";
+pub(super) const DELETE_GONE: &str = "That message is already gone";
+pub(super) const DELETE_MOVED_ON: &str = "The chat changed, so nothing was deleted. Try again";
+
+/// A chat's messages, shared with the thread row they came from.
+type Transcript = Arc<Vec<(String, String)>>;
+
+/// A cheap fingerprint of a chat's messages: Delete message… only cuts the
+/// transcript it was asked about.
+fn transcript_mark(messages: &[(String, String)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    messages.hash(&mut h);
+    h.finish()
+}
+
 impl Cabin {
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
@@ -894,6 +915,134 @@ impl Cabin {
         }
         threads::forget_main_history();
         self.status = "Main chat cleared".into();
+        self.persist();
+    }
+
+    /// Chat `thread`'s messages: the open chat's live copy, or its stored row.
+    fn chat_messages_of(&self, thread: &str) -> Option<(usize, Transcript)> {
+        let idx = self.threads.iter().position(|t| t.id == thread)?;
+        let msgs = if idx == self.thread_idx && self.visible_thread_id() == thread {
+            self.messages.clone()
+        } else {
+            self.threads[idx].messages.clone()
+        };
+        Some((idx, msgs))
+    }
+
+    /// A turn is running in chat `thread`: its reply can't be cut yet.
+    fn turn_running_in(&self, thread: &str) -> bool {
+        self.running && self.chat_job_thread.as_deref() == Some(thread)
+    }
+
+    /// A bubble's Delete message… in chat `thread`, whose rows are `views`:
+    /// work out which messages it stands for and ask first.
+    pub(super) fn ask_delete_bubble_in(
+        &mut self,
+        thread: &str,
+        views: &[grokhub_core::ChatView],
+        view: usize,
+    ) {
+        if self.turn_running_in(thread) {
+            self.status = grokhub_agent::FORGET_BUSY.into();
+            return;
+        }
+        let Some((_, msgs)) = self.chat_messages_of(thread) else {
+            self.status = DELETE_GONE.into();
+            return;
+        };
+        let refs: Vec<(&str, &str)> = msgs.iter().map(|m| (m.0.as_str(), m.1.as_str())).collect();
+        let Some(cut) = grokhub_core::bubble_delete(&refs, views, view) else {
+            self.status = DELETE_GONE.into();
+            return;
+        };
+        self.confirm = Some(super::confirm::ConfirmKind::DeleteMessage {
+            thread: thread.to_string(),
+            mark: transcript_mark(&msgs),
+            cut,
+        });
+    }
+
+    /// [`Self::ask_delete_bubble_in`] for the open chat's row `view`.
+    pub(super) fn ask_delete_bubble(&mut self, view: usize) {
+        let thread = self.visible_thread_id();
+        let views = self.cached_chat_views().to_vec();
+        self.ask_delete_bubble_in(&thread, &views, view);
+    }
+
+    /// Take the bubble's messages out of the chat and out of the saved history
+    /// the model resumes from. Nothing goes if the chat changed since the ask.
+    pub(super) fn delete_bubble_confirmed(
+        &mut self,
+        thread: &str,
+        mark: u64,
+        cut: grokhub_core::BubbleDelete,
+    ) {
+        let Some((idx, msgs)) = self
+            .chat_messages_of(thread)
+            .filter(|(_, m)| transcript_mark(m) == mark)
+        else {
+            self.status = DELETE_MOVED_ON.into();
+            return;
+        };
+        if self.turn_running_in(thread) {
+            self.status = grokhub_agent::FORGET_BUSY.into();
+            return;
+        }
+        let text = |i: usize| msgs.get(i).map(|m| m.1.as_str()).unwrap_or("");
+        let (range, what) = match cut {
+            grokhub_core::BubbleDelete::Ask { at, later } => (
+                at..at + 1,
+                grokhub_agent::Forget::Ask {
+                    text: text(at),
+                    later,
+                },
+            ),
+            grokhub_core::BubbleDelete::Reply { from, to, ask } => (
+                from..to,
+                grokhub_agent::Forget::Reply {
+                    ask: ask.map(|(at, later)| (text(at), later)),
+                },
+            ),
+        };
+        if range.end > msgs.len() {
+            self.status = DELETE_MOVED_ON.into();
+            return;
+        }
+        let session = self.threads[idx]
+            .grok_session
+            .clone()
+            .filter(|id| !id.trim().is_empty());
+        let saved = match session.as_deref() {
+            Some(id) => {
+                // The engine re-reads the session file when it starts again.
+                if self.acp.as_ref().is_some_and(|h| h.session_id == id) {
+                    self.acp = None;
+                }
+                grokhub_agent::forget_message(id, what)
+            }
+            None => Ok(grokhub_agent::Forgotten::Removed),
+        };
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(err) => {
+                self.status = err;
+                return;
+            }
+        };
+        let mut left = msgs.as_ref().clone();
+        left.drain(range);
+        let left = Arc::new(left);
+        if idx == self.thread_idx && self.visible_thread_id() == thread {
+            // A cut before the tail: every cached view rebuilds.
+            self.messages_rev = self.messages_rev.wrapping_add(1);
+            self.messages_body_rev = self.messages_body_rev.wrapping_add(1);
+            self.messages = left.clone();
+        }
+        self.threads[idx].messages = left;
+        self.status = match saved {
+            grokhub_agent::Forgotten::Removed => DELETED.into(),
+            grokhub_agent::Forgotten::NotSaved => DELETED_NOT_SAVED.into(),
+        };
         self.persist();
     }
 

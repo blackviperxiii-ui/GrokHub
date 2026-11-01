@@ -114,6 +114,13 @@ pub(super) enum ConfirmKind {
     SleepPc,
     /// Main tab's Clear chat: Main's whole history goes for good.
     ClearMainChat,
+    /// A bubble's Delete message…: `cut` was read from chat `thread` while
+    /// its messages hashed to `mark`; if the chat changed since, nothing goes.
+    DeleteMessage {
+        thread: String,
+        mark: u64,
+        cut: grokhub_core::BubbleDelete,
+    },
     /// Legacy Marketplace confirm; CN2 uses the credentials hard card instead.
     #[expect(dead_code)]
     SaveKey {
@@ -133,6 +140,7 @@ impl ConfirmKind {
             | Self::Disconnect { .. }
             | Self::SleepPc
             | Self::ClearMainChat
+            | Self::DeleteMessage { .. }
             | Self::SaveKey { .. } => true,
         }
     }
@@ -219,6 +227,21 @@ pub(super) fn clear_main_chat_spec() -> ConfirmSpec {
         title: "Clear the Main chat?",
         consequence: "This is permanent. Every message in Main and the history the assistant reads back are deleted from this computer, and they can't be brought back.",
         primary: "Clear chat",
+        danger: true,
+    }
+}
+
+/// A bubble's Delete message…: a reply goes with everything the assistant
+/// did for it, so it gets its own question.
+pub(super) fn delete_message_spec(reply: bool) -> ConfirmSpec {
+    ConfirmSpec {
+        title: if reply {
+            "Delete this reply?"
+        } else {
+            "Delete this message?"
+        },
+        consequence: "It's removed from this chat and from the history the assistant reads back. This can't be undone.",
+        primary: "Delete",
         danger: true,
     }
 }
@@ -363,6 +386,13 @@ impl Cabin {
                 clear_main_chat_spec().title.to_string(),
                 CLEAR_MAIN_KEEPS.to_string(),
             ),
+            ConfirmKind::DeleteMessage { cut, .. } => {
+                let spec = delete_message_spec(matches!(
+                    cut,
+                    grokhub_core::BubbleDelete::Reply { .. }
+                ));
+                (spec, spec.title.to_string(), String::new())
+            }
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
                 format!("Save the key for {label}?"),
@@ -420,6 +450,9 @@ impl Cabin {
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
             ConfirmKind::SleepPc => self.sleep_pc_confirmed(),
             ConfirmKind::ClearMainChat => self.clear_main_chat(),
+            ConfirmKind::DeleteMessage { thread, mark, cut } => {
+                self.delete_bubble_confirmed(&thread, mark, cut)
+            }
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }
