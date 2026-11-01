@@ -89,7 +89,18 @@ function useImages(names: string[]): string[] {
   return urls;
 }
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+/** One picture full size, with Download; `video` plays a clip instead. */
+export function Lightbox({
+  src,
+  name,
+  video = false,
+  onClose,
+}: {
+  src: string;
+  name: string;
+  video?: boolean;
+  onClose: () => void;
+}) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     close.current?.focus();
@@ -101,7 +112,11 @@ function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: 
   }, [onClose]);
   return (
     <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
-      <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      {video ? (
+        <video src={src} controls autoPlay loop onClick={(e) => e.stopPropagation()} />
+      ) : (
+        <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      )}
       <div className="lightbox-buttons" onClick={(e) => e.stopPropagation()}>
         <a className="button quiet" href={src} download={name}>
           Download

@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod connectors;
 pub mod credential;
 pub mod history;
+pub mod imagine;
 pub mod interests;
 pub mod journal;
 pub mod library;
@@ -1479,6 +1480,56 @@ async fn pulse_act(
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
 }
 
+/// The Imagine page: the gallery (the cabin's wall) and whether chat can sign a call.
+#[tauri::command]
+async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::load(&dir, imagine::ready())).await?
+}
+
+/// Makes images, or one video, through chat's guarded media tool. Resolves
+/// once the results are saved and pinned; Stop ends it early.
+#[tauri::command]
+async fn imagine_generate(
+    state: State<'_, ShellState>,
+    prompt: String,
+    aspect: String,
+    count: u32,
+    kind: imagine::Kind,
+) -> Result<imagine::Made, String> {
+    let dir = state.config_dir.clone();
+    let req = imagine::Request {
+        prompt,
+        aspect,
+        count,
+        kind,
+    };
+    off_main(move || {
+        let bearer = imagine::bearer()?;
+        let run = imagine::start()?;
+        let api = grokhub_agent::imagine_client(&bearer);
+        imagine::generate(
+            &dir,
+            &req,
+            api.as_ref(),
+            &|| run.stopped(),
+            grokhub_core::now_ms(),
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+fn imagine_cancel() -> bool {
+    imagine::cancel()
+}
+
+#[tauri::command]
+async fn imagine_image(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::image(&dir, &name)).await?
+}
+
 #[tauri::command]
 async fn get_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
@@ -1850,6 +1901,16 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_imagine" => out(block_on(get_imagine(state))?),
+        "imagine_generate" => out(block_on(imagine_generate(
+            state,
+            arg(args, "prompt")?,
+            arg(args, "aspect")?,
+            arg(args, "count")?,
+            arg(args, "kind")?,
+        ))?),
+        "imagine_cancel" => out(imagine_cancel()),
+        "imagine_image" => out(block_on(imagine_image(state, arg(args, "name")?))?),
         "get_skills" => out(block_on(get_skills(state))?),
         "nyx_look" => out(nyx_look(
             state,
@@ -2375,6 +2436,10 @@ pub fn run() {
             get_feed_prompt,
             save_feed_prompt,
             pulse_image,
+            get_imagine,
+            imagine_generate,
+            imagine_cancel,
+            imagine_image,
             get_local_ai,
             save_local_ai,
             start_local_engine_download,

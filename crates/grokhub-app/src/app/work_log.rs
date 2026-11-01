@@ -9,13 +9,14 @@
 //! involved and nothing here reaches a prompt (KB-04).
 
 use super::*;
-use grokhub_core::work_item::{append_work_log, WorkKind};
+use grokhub_core::work_item::{append_work_log, WorkKind, WorkOrigin};
+use grokhub_core::work_resume::{self as res, HOST_CABIN};
 use grokhub_core::work_run::{self as wr, RunEnd};
 
 /// Native tools that write files. Their checkpoint step's files become refs.
 const FILE_TOOLS: &[&str] = &["write", "search_replace"];
 
-fn log_line(card_id: &str, kind: &str, text: &str) {
+pub(super) fn log_line(card_id: &str, kind: &str, text: &str) {
     let _ = append_work_log(
         &crate::work_store::work_dir(),
         card_id,
@@ -23,6 +24,14 @@ fn log_line(card_id: &str, kind: &str, text: &str) {
         kind,
         text,
     );
+}
+
+/// The progress log line of a run that ended Interrupted.
+pub(super) fn interrupted_log_text(end: &RunEnd) -> String {
+    match end {
+        RunEnd::Failed(why) => format!("interrupted: {}", why.trim()),
+        other => format!("interrupted: {}", other.log_text()),
+    }
 }
 
 /// `completed` is ok, `failed` is not; anything else is still running.
@@ -43,8 +52,13 @@ fn tool_name(card: &ToolCard) -> String {
 }
 
 impl Cabin {
-    fn run_model(&self) -> String {
-        grokhub_core::cabin_spawn_model(&self.cfg.model).to_string()
+    /// The model a run starts on: the cabin's model, or the device's tag while
+    /// the route falls back to Local AI. Resume compares against it (KB-03).
+    pub(super) fn run_model(&self) -> String {
+        res::run_model_tag(
+            grokhub_core::cabin_spawn_model(&self.cfg.model),
+            grokhub_agent::route::local::fallback_active(),
+        )
     }
 
     /// The native session a chat turn runs on, for its todos and changed files.
@@ -115,6 +129,7 @@ impl Cabin {
         let session = self.run_session(thread_id);
         let model = self.run_model();
         wr::begin_run(&mut self.board[idx], kind, &session, &model, now_ms());
+        res::claim_run(&mut self.board[idx], HOST_CABIN, self.permission_mode);
         let attempt = self.board[idx]
             .checkpoint
             .as_ref()
@@ -152,9 +167,36 @@ impl Cabin {
             return;
         }
         let session = self.run_session(&thread);
-        if self.checkpoint_tool(idx, card, ok, &session) {
+        let mut changed = self.checkpoint_tool(idx, card, ok, &session);
+        changed |= self.check_run_swap(idx);
+        if changed {
             self.flush_board();
         }
+    }
+
+    /// KB-03: the route moved this turn on or off the device since it started.
+    /// The first finished call re-reads the route (the start reading can be the
+    /// previous turn's); a later change cuts the turn on the next frame, so it
+    /// resumes from the checkpoint instead of replaying the chat to another model.
+    fn check_run_swap(&mut self, idx: usize) -> bool {
+        let on_device = grokhub_agent::route::local::fallback_active();
+        let started = self.board[idx]
+            .checkpoint
+            .as_ref()
+            .map(|c| c.model.clone())
+            .unwrap_or_default();
+        if !res::model_swapped(&started, on_device) {
+            return false;
+        }
+        if self.run_tools_logged.len() <= 1 {
+            let model = self.run_model();
+            if let Some(cp) = self.board[idx].checkpoint.as_mut() {
+                cp.model = model;
+            }
+            return true;
+        }
+        self.work_resume.swap_cut = true;
+        false
     }
 
     /// The final checkpoint on `thread_id`'s card while it is still in Doing,
@@ -184,7 +226,8 @@ impl Cabin {
 
     /// A background run started (`/bg` or a `BACKGROUND_TASK:` line): its own
     /// card in Doing.
-    pub(super) fn open_bg_card(&mut self, run_id: u64, title: &str, session: &str) {
+    /// `yours`: you started it with `/bg`, so it never resumes on its own.
+    pub(super) fn open_bg_card(&mut self, run_id: u64, title: &str, session: &str, yours: bool) {
         let model = self.run_model();
         let id = wr::open_run_card(
             &mut self.board,
@@ -194,6 +237,12 @@ impl Cabin {
             &model,
             now_ms(),
         );
+        if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
+            res::claim_run(c, HOST_CABIN, self.permission_mode);
+            if yours {
+                c.origin = Some(WorkOrigin::User);
+            }
+        }
         log_line(&id, wr::LOG_START, "attempt 1");
         self.bg.cards.push((run_id, id));
         self.flush_board();
@@ -217,12 +266,15 @@ impl Cabin {
             &model,
             now_ms(),
         );
+        let mode = self.permission_mode;
         let attempt = self
             .board
-            .iter()
+            .iter_mut()
             .find(|c| c.id == id)
-            .and_then(|c| c.checkpoint.as_ref())
-            .map(|c| c.attempt)
+            .map(|c| {
+                res::claim_run(c, HOST_CABIN, mode);
+                c.checkpoint.as_ref().map(|cp| cp.attempt).unwrap_or(1)
+            })
             .unwrap_or(1);
         log_line(&id, wr::LOG_START, &format!("attempt {attempt}"));
         self.bg.cards.push((run_id, id));
@@ -268,7 +320,15 @@ impl Cabin {
         if scheduled {
             return;
         }
-        if wr::finish_run_card(&mut self.board, &card_id, end, now_ms()) {
+        let now = now_ms();
+        let interrupted = self
+            .board
+            .iter_mut()
+            .find(|c| c.id == card_id)
+            .is_some_and(|c| res::interrupt_failed(c, end, now));
+        if interrupted {
+            log_line(&card_id, wr::LOG_END, &interrupted_log_text(end));
+        } else if wr::finish_run_card(&mut self.board, &card_id, end, now) {
             log_line(&card_id, wr::LOG_END, &end.log_text());
         }
     }
@@ -282,6 +342,21 @@ impl Cabin {
         report: bool,
     ) {
         let follow_up = *end == RunEnd::Done && report;
+        let now = now_ms();
+        let cut = self
+            .board
+            .iter_mut()
+            .rev()
+            .find(|c| {
+                c.automation.as_deref() == Some(automation_id)
+                    && c.status == BoardStatus::InProgress
+            })
+            .and_then(|c| res::interrupt_failed(c, end, now).then(|| c.id.clone()));
+        if let Some(id) = cut {
+            log_line(&id, wr::LOG_END, &interrupted_log_text(end));
+            self.flush_board();
+            return;
+        }
         if let Some(id) =
             wr::finish_automation_card(&mut self.board, automation_id, end, follow_up, now_ms())
         {

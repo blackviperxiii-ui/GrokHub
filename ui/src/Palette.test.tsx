@@ -35,6 +35,7 @@ describe("paletteRows", () => {
       "Chat",
       "History",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
       "Agents",
@@ -64,6 +65,7 @@ describe("paletteRows", () => {
     expect(labels(PHONE, "")).toEqual([
       "Chat",
       "History",
+      "Imagine",
       "Journal",
       "Automations",
       "Agents",
@@ -84,7 +86,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("puts the commands this shell can run after the pages", () => {
@@ -103,9 +105,10 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(10, 13)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(11, 14)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Chat",
+      "Imagine",
       "Automations",
       "Agents",
       "Memory",
@@ -163,7 +166,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(13, 19)).toEqual([
+    expect(rows.slice(14, 20)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -311,7 +314,7 @@ describe("Palette", () => {
       // Row 1 picked: row 2 (80-116) must show in the 100 px view.
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 16, behavior: "smooth" });
       await userEvent.keyboard("{ArrowDown}");
-      expect(screen.getByRole("option", { name: "Journal" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Imagine" })).toHaveAttribute("aria-selected", "true");
       // Row 3 ends at 156.
       expect(top()).toBe(56);
       await userEvent.keyboard("{ArrowUp}");
@@ -322,8 +325,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 20, the last, ends at 836.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 736, behavior: "auto" });
+      // Row 21, the last, ends at 876.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 776, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {
