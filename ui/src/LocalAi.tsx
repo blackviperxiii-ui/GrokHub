@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import {
   cancelLocalDrafterDownload,
   cancelLocalEngineDownload,
@@ -144,8 +144,26 @@ export function LocalAi() {
     setDeny(next.config.manual.denyApps.join("\n"));
   }
 
+  // Runs each time this section shows. With unsaved edits the form stays as it
+  // is and only the status refreshes.
+  const refresh = useEffectEvent((next: LocalAiView) => {
+    const base = view?.config;
+    const edited =
+      base !== undefined &&
+      (draft !== base ||
+        allow !== base.manual.allowApps.join("\n") ||
+        deny !== base.manual.denyApps.join("\n"));
+    if (!edited) return show(next);
+    setView(next);
+    setEngine(next.engine);
+    setDraftOffer(next.draftOffer);
+    setDraftProgress(next.draftProgress);
+  });
   useEffect(() => {
-    getLocalAi().then(show, (err) => setNote(String(err)));
+    getLocalAi().then(
+      (next) => refresh(next),
+      (err) => setNote(String(err)),
+    );
   }, []);
 
   useEffect(() => {
