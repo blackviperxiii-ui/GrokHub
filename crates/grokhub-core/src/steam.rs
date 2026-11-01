@@ -372,6 +372,45 @@ pub fn installed_games(root: &Path) -> Vec<SteamGame> {
     games.into_values().collect()
 }
 
+/// The `appmanifest_<id>.acf` for one game, from any library folder, and
+/// the folder it is in.
+fn app_manifest(root: &Path, app_id: u32) -> Option<(PathBuf, Vdf)> {
+    library_folders(root).into_iter().find_map(|folder| {
+        let text = std::fs::read_to_string(
+            folder
+                .join("steamapps")
+                .join(format!("appmanifest_{app_id}.acf")),
+        )
+        .ok()?;
+        Some((folder, parse_vdf(&text)))
+    })
+}
+
+/// Where Steam installed one game (`steamapps/common/<installdir>`).
+pub fn install_dir(root: &Path, app_id: u32) -> Option<PathBuf> {
+    let (folder, vdf) = app_manifest(root, app_id)?;
+    let dir = vdf
+        .get("AppState")?
+        .get("installdir")?
+        .str()?
+        .trim()
+        .to_string();
+    if dir.is_empty() || dir.contains(['/', '\\']) || dir == ".." {
+        return None;
+    }
+    Some(folder.join("steamapps").join("common").join(dir))
+}
+
+/// The game's current build (`buildid`), which changes with every update.
+pub fn build_id(root: &Path, app_id: u32) -> Option<String> {
+    let (_, vdf) = app_manifest(root, app_id)?;
+    vdf.get("AppState")?
+        .get("buildid")?
+        .str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// One Workshop item Steam has downloaded for a game.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkshopItem {
@@ -759,6 +798,17 @@ mod tests {
         std::fs::write(dir.join("appworkshop_294100.acf"), &text).unwrap();
         assert_eq!(workshop_items(&root, 294100).len(), 2);
         assert!(workshop_items(&root, 255710).is_empty());
+        std::fs::write(
+            root.join("steamapps/appmanifest_294100.acf"),
+            "\"AppState\" { \"appid\" \"294100\" \"installdir\" \"RimWorld\" \"buildid\" \"20555\" }",
+        )
+        .unwrap();
+        assert_eq!(
+            install_dir(&root, 294100),
+            Some(root.join("steamapps/common/RimWorld"))
+        );
+        assert_eq!(build_id(&root, 294100).as_deref(), Some("20555"));
+        assert_eq!(install_dir(&root, 1), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

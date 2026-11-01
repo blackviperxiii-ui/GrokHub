@@ -649,7 +649,11 @@ mod tests {
         assert_ne!(model_for_mode("max"), "grok-4-latest");
         assert_eq!(resolve_chat_model("max", "grok-3"), "grok-4.7");
         assert_eq!(resolve_chat_model("max", ""), "grok-4.7");
-        assert_eq!(resolve_chat_model("auto", "grok-3"), "grok-3");
+        assert_eq!(
+            resolve_chat_model("auto", "grok-3"),
+            "grok-4.3",
+            "a pin on retired grok-3 sends what xAI serves it with"
+        );
         assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
         assert_eq!(
             resolve_chat_model("auto", "gpt-4"),

@@ -17,6 +17,8 @@ serde_json.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 sha2 = { workspace = true }
+# Mod downloads: CurseForge publishes SHA-1. Already in the tree.
+sha1 = "0.11"
 # Release updates: verify `SHA256SUMS.minisig` against the shipped public key. No deps.
 minisign-verify = "0.3"
 # Personality presets (`assets/personalities.toml`, user copies in `{config}/personalities/`).
@@ -37,11 +39,11 @@ url = "2"
 
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.59", features = [
+windows = { version = "0.62", features = [
     "Win32_Networking_NetworkListManager",
     "Win32_System_Com",
 ] }
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",

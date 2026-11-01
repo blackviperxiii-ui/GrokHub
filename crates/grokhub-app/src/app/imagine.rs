@@ -1250,8 +1250,7 @@ impl Cabin {
 
     fn imagine_image_model_now(&self) -> String {
         match self.imagine_native.image_model {
-            1 => "grok-imagine-image-quality".into(),
-            2 => grokhub_core::FALLBACK_IMAGINE_MODEL.into(),
+            1 => grokhub_core::FALLBACK_IMAGINE_MODEL.into(),
             _ => grokhub_core::DEFAULT_IMAGINE_MODEL.into(),
         }
     }
@@ -1773,9 +1772,7 @@ impl Cabin {
 
     fn ui_imagine_more_image_model(&mut self, ui: &mut egui::Ui) {
         let n = &mut self.imagine_native;
-        if let Some(i) =
-            imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
-        {
+        if let Some(i) = imagine_more_seg(ui, "Model", &["2.0", "Original"], n.image_model) {
             n.image_model = i;
         }
     }

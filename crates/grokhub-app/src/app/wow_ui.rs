@@ -93,7 +93,7 @@ impl WowState {
 
 /// Every process's name and command line, the same no-handle reads the game
 /// guard uses.
-fn processes_now() -> Vec<(String, String)> {
+pub(super) fn processes_now() -> Vec<(String, String)> {
     #[cfg(target_os = "linux")]
     {
         super::local_signals::processes().unwrap_or_default()

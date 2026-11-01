@@ -308,7 +308,8 @@ fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
     );
     assert_eq!(
         super::slash::mode_status_line("auto", "grok-3"),
-        "Mode auto → grok-3"
+        "Mode auto → grok-4.3",
+        "a pin on retired grok-3 goes to grok-4.3, which xAI serves it with"
     );
     assert_eq!(
         super::slash::mode_status_line("think", "grok-3"),

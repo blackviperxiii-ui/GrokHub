@@ -1,6 +1,7 @@
 //! Mods: the user's moddable games and, for the picked one, search and
-//! browse over the sources the allowlist names for it. Read-only here:
-//! nothing is downloaded or installed from this page yet.
+//! browse over the sources the allowlist names for it. Installing waits for
+//! the user's click and then a second click on a sheet that lists every
+//! file ([`install`]); nothing is downloaded or written before the first.
 //!
 //! The rail is the Library's games joined with the allowlist, most recently
 //! played first. A game the allowlist blocks, or hasn't checked, sits under
@@ -9,6 +10,7 @@
 //! once and the fresh one replaces it when it comes.
 
 mod drawer;
+mod install;
 mod jobs;
 
 use std::path::{Path, PathBuf};
@@ -192,8 +194,8 @@ pub(super) struct Installed {
     pub link: Option<String>,
 }
 
-/// What a game has installed, read-only: Steam Workshop items and WoW
-/// addons. Mods Loadout installs itself will list here too.
+/// What a game has installed that Loadout didn't put there, read-only:
+/// Steam Workshop items and WoW addons.
 pub(super) fn installed_mods(game: &ModGame, steam_root: Option<&Path>) -> Vec<Installed> {
     let mut out = Vec::new();
     if let (Some(root), Some(app_id)) = (steam_root, game.entry.steam_app_id) {
@@ -312,6 +314,7 @@ impl Cabin {
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
+                install::recover_once(ui.ctx());
                 ui.label(
                     egui::RichText::new("Mods")
                         .font(crate::theme::title_font(28.0))
@@ -335,6 +338,7 @@ impl Cabin {
                 });
             });
         ui.ctx().data_mut(|d| d.insert_temp(id, view));
+        install::sheet(ui.ctx());
     }
 
     /// The right side for the picked game.
@@ -384,6 +388,7 @@ impl Cabin {
                 .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::amber()),
         );
+        install::status(ui);
         ui.add_space(10.0);
         let offline = grokhub_core::offline::enabled();
         search_row(ui, view, offline);
@@ -417,7 +422,7 @@ impl Cabin {
         if view.tab == Tab::Installed {
             self.installed_tab(ui, game, view);
         } else {
-            self.results(ui, entry.id, source, view, offline);
+            self.results(ui, game, source, view, offline);
         }
         ui.add_space(16.0);
         self.key_rows(ui, entry, view);
@@ -426,11 +431,12 @@ impl Cabin {
     fn results(
         &mut self,
         ui: &mut egui::Ui,
-        game_id: &'static str,
+        game: &ModGame,
         source: Source,
         view: &mut ModsView,
         offline: bool,
     ) {
+        let game_id = game.entry.id;
         let q = view.query();
         let slot = if offline {
             jobs::Slot {
@@ -526,7 +532,7 @@ impl Cabin {
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_width(DRAWER_W);
-                        match drawer::show(ui, game_id, source, &m, offline) {
+                        match drawer::show(ui, game, source, &m, offline) {
                             drawer::Act::None => {}
                             drawer::Act::Close => view.open = None,
                             drawer::Act::Failed(e) => self.status = e,
@@ -546,14 +552,22 @@ impl Cabin {
             let root = grokhub_core::steam::detect_root();
             view.installed = Some((game.entry.id, installed_mods(game, root.as_deref())));
         }
-        let rows = view
+        let ours = install::installed_now(game.entry.id);
+        let rows: Vec<Installed> = view
             .installed
             .as_ref()
             .map(|(_, rows)| rows.clone())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| {
+                !ours
+                    .iter()
+                    .any(|m| m.dirs.iter().any(|d| d.ends_with(&format!("/{}", r.name))))
+            })
+            .collect();
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(format!("{} on this PC", rows.len()))
+                egui::RichText::new(format!("{} on this PC", rows.len() + ours.len()))
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );
@@ -561,7 +575,25 @@ impl Cabin {
                 view.installed = None;
             }
         });
-        if rows.is_empty() {
+        for m in &ours {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&m.name)
+                        .size(crate::theme::TYPE_BODY)
+                        .strong()
+                        .color(crate::theme::fg()),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}, installed by Loadout", m.version))
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+                if !install::busy() && change_undo::click_pill(ui, "Uninstall") {
+                    install::start_remove(ui.ctx(), game, m);
+                }
+            });
+        }
+        if rows.is_empty() && ours.is_empty() {
             ui.label(
                 egui::RichText::new(
                     "No mods found for this game yet. Mods Loadout installs will list here too.",

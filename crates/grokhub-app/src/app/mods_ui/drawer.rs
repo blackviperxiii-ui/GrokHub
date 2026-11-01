@@ -1,11 +1,13 @@
 //! The open mod's drawer: what it is, its description as plain text, its
-//! files and what they need, and a link to its page on its own site.
-//! Installing comes later; the button shows but does nothing yet.
+//! files and what they need, a link to its page on its own site, and per
+//! file the one way to get it: Install (a direct link), Download on the
+//! site then "I downloaded it", or Subscribe in Steam.
 
 use eframe::egui;
+use grokhub_core::mods::install::Manifest;
 use grokhub_core::mods::{Download, ModFile, ModSummary, Source};
 
-use super::jobs;
+use super::{install, jobs, ModGame};
 
 pub(super) enum Act {
     None,
@@ -54,11 +56,12 @@ pub(super) fn file_line(f: &ModFile) -> String {
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    game_id: &'static str,
+    game: &ModGame,
     source: Source,
     m: &ModSummary,
     offline: bool,
 ) -> Act {
+    let game_id = game.entry.id;
     let mut act = Act::None;
     egui::Frame::NONE
         .fill(crate::theme::surface())
@@ -92,16 +95,6 @@ pub(super) fn show(
                     act = Act::Failed(e);
                 }
             }
-            ui.add_enabled_ui(false, |ui| {
-                let _ = crate::ui_kit::recipe::button(
-                    ui,
-                    None,
-                    "INSTALL (COMING SOON)",
-                    false,
-                    egui::vec2(ui.available_width(), 34.0),
-                    true,
-                );
-            });
             ui.add_space(8.0);
             if offline {
                 ui.label(
@@ -134,7 +127,9 @@ pub(super) fn show(
                 .max_height((ui.available_height() - 40.0).max(160.0))
                 .show(ui, |ui| {
                     if let Some(files) = &files.value {
-                        files_list(ui, files);
+                        if let Err(e) = files_list(ui, game, source, m, files) {
+                            act = Act::Failed(e);
+                        }
                     }
                     let text = detail
                         .value
@@ -156,11 +151,143 @@ pub(super) fn show(
     act
 }
 
-fn files_list(ui: &mut egui::Ui, files: &[ModFile]) {
-    if files.is_empty() {
-        return;
+/// What a file's row offers, given what is installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Offer {
+    Install,
+    Update(String),
+    Installed,
+    Browser(String),
+    Steam(String),
+    /// Loadout won't write this game; the line says why.
+    Blocked(String),
+}
+
+pub(super) fn offer(
+    f: &ModFile,
+    key: &str,
+    installed: &[Manifest],
+    blocked: Option<&str>,
+) -> Offer {
+    if let Download::Steam(id) = f.download {
+        return Offer::Steam(grokhub_core::mods::workshop::item_url(&id.to_string()));
     }
+    if let Some(why) = blocked {
+        return Offer::Blocked(why.to_string());
+    }
+    let version = if f.version.is_empty() {
+        &f.name
+    } else {
+        &f.version
+    };
+    match installed.iter().find(|i| i.mod_key == key) {
+        Some(i) if &i.version == version => Offer::Installed,
+        Some(i) => Offer::Update(i.version.clone()),
+        None => match &f.download {
+            Download::Direct(_) => Offer::Install,
+            Download::Browser(url) => Offer::Browser(url.clone()),
+            Download::Steam(_) => unreachable!("handled above"),
+        },
+    }
+}
+
+fn file_actions(
+    ui: &mut egui::Ui,
+    game: &ModGame,
+    source: Source,
+    m: &ModSummary,
+    f: &ModFile,
+    offer: Offer,
+) -> Result<(), String> {
+    let ctx = ui.ctx().clone();
+    let busy = install::busy();
+    let start = |url: &str| {
+        install::start(
+            &ctx,
+            game.clone(),
+            source,
+            m.clone(),
+            f.clone(),
+            install::Origin::Net(url.to_string()),
+        )
+    };
+    let url = match &f.download {
+        Download::Direct(u) => u.as_str(),
+        _ => "",
+    };
+    ui.horizontal(|ui| match offer {
+        Offer::Install => {
+            if !busy && super::super::change_undo::click_pill(ui, "Install") {
+                start(url);
+            }
+            Ok(())
+        }
+        Offer::Update(was) => {
+            if !busy && super::super::change_undo::click_pill(ui, "Update") {
+                start(url);
+            }
+            muted(ui, &format!("{was} installed"));
+            Ok(())
+        }
+        Offer::Installed => {
+            muted(ui, "Installed");
+            Ok(())
+        }
+        Offer::Steam(link) => {
+            if crate::cards::ghost_pill(ui, "Subscribe in Steam") {
+                return super::open_link(&link);
+            }
+            Ok(())
+        }
+        Offer::Browser(link) => {
+            let site = format!("Download on {}", source.label());
+            if crate::cards::ghost_pill(ui, &site) {
+                install::wait_for_browser(source, m, f);
+                return super::open_link(&link);
+            }
+            let waiting = install::pickup().is_some_and(|p| {
+                p.key == install::mod_key(source, &m.id) && p.file_name == f.file_name
+            });
+            if waiting && !busy && super::super::change_undo::click_pill(ui, "I downloaded it") {
+                install::picked_up(&ctx, game, source, m, f);
+            }
+            Ok(())
+        }
+        Offer::Blocked(_) => Ok(()),
+    })
+    .inner
+}
+
+fn muted(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
+    );
+}
+
+fn files_list(
+    ui: &mut egui::Ui,
+    game: &ModGame,
+    source: Source,
+    m: &ModSummary,
+    files: &[ModFile],
+) -> Result<(), String> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let key = install::mod_key(source, &m.id);
+    let installed = install::installed_now(game.entry.id);
+    let blocked = install::blocked(game);
     caption(ui, "FILES");
+    if let Some(why) = &blocked {
+        ui.label(
+            egui::RichText::new(why)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::amber()),
+        );
+    }
+    let mut out = Ok(());
     for f in files.iter().take(FILES_SHOWN) {
         let name = if f.name.is_empty() {
             &f.file_name
@@ -178,6 +305,10 @@ fn files_list(ui: &mut egui::Ui, files: &[ModFile]) {
                 .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::muted()),
         );
+        let o = offer(f, &key, &installed, blocked.as_deref());
+        if let Err(e) = file_actions(ui, game, source, m, f, o) {
+            out = Err(e);
+        }
     }
     let deps: Vec<&str> = files
         .iter()
@@ -194,4 +325,5 @@ fn files_list(ui: &mut egui::Ui, files: &[ModFile]) {
                 .color(crate::theme::fg()),
         );
     }
+    out
 }
