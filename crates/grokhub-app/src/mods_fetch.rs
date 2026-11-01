@@ -5,6 +5,7 @@
 //! Bodies are read up to a cap.
 
 use std::io::Read;
+use std::path::Path;
 use std::time::Duration;
 
 use grokhub_core::mods::{Fetch, Reply, Request, SourceError};
@@ -13,6 +14,8 @@ use grokhub_core::mods::{Fetch, Reply, Request, SourceError};
 const LIST_CAP: u64 = 96 * 1024 * 1024;
 /// Largest body read for anything else.
 const BODY_CAP: u64 = 8 * 1024 * 1024;
+/// Largest mod file Loadout downloads (the unpack limit is the same).
+const DOWNLOAD_CAP: u64 = 2 << 30;
 const HOPS: usize = 3;
 /// Headers the sources answer with that the adapters read.
 const KEPT: &[&str] = &[
@@ -63,8 +66,14 @@ fn cap_for(url: &str) -> u64 {
 pub(crate) struct ModsNet;
 
 impl ModsNet {
-    fn agent(url: &str) -> grokhub_core::http::Agent {
-        let overall = if cap_for(url) == LIST_CAP { 180 } else { 25 };
+    fn agent(url: &str, to_file: bool) -> grokhub_core::http::Agent {
+        let overall = if to_file {
+            1800
+        } else if cap_for(url) == LIST_CAP {
+            180
+        } else {
+            25
+        };
         grokhub_core::http::agent(grokhub_core::http::Opts {
             connect: Duration::from_secs(15),
             overall: Some(Duration::from_secs(overall)),
@@ -75,7 +84,8 @@ impl ModsNet {
         })
     }
 
-    fn once(req: &Request, url: &str) -> Result<Reply, SourceError> {
+    /// One request. With `sink`, a 2xx body is written there instead of kept.
+    fn once(req: &Request, url: &str, sink: Option<&Path>) -> Result<Reply, SourceError> {
         if cfg!(test) || !allowed(req, url) {
             return Err(SourceError::Net(format!(
                 "{} isn't one of {}'s own addresses",
@@ -96,7 +106,7 @@ impl ModsNet {
                 SourceError::Net(why)
             }
         })?;
-        let agent = Self::agent(url);
+        let agent = Self::agent(url, sink.is_some());
         let mut call = match &req.body {
             Some(_) => agent.post(url),
             None => agent.get(url),
@@ -129,6 +139,21 @@ impl ModsNet {
             .iter()
             .filter_map(|n| resp.header(n).map(|v| (n.to_string(), v.to_string())))
             .collect();
+        if let Some(path) = sink.filter(|_| (200..300).contains(&status)) {
+            let net = |e: std::io::Error| SourceError::Net(e.to_string());
+            let mut out = std::fs::File::create(path).map_err(net)?;
+            let n = std::io::copy(&mut resp.into_reader().take(DOWNLOAD_CAP + 1), &mut out)
+                .map_err(net)?;
+            if n > DOWNLOAD_CAP {
+                let _ = std::fs::remove_file(path);
+                return Err(SourceError::Net("the file is too large".into()));
+            }
+            return Ok(Reply {
+                status,
+                body: Vec::new(),
+                headers,
+            });
+        }
         let cap = cap_for(url);
         let mut body = Vec::new();
         resp.into_reader()
@@ -146,11 +171,23 @@ impl ModsNet {
     }
 }
 
-impl Fetch for ModsNet {
-    fn send(&self, req: &Request) -> Result<Reply, SourceError> {
+impl ModsNet {
+    /// Download one mod file to `dest`, after the user's click. Same rules
+    /// as every other request: the source's own hosts, the egress guard,
+    /// redirects only within the source.
+    pub(crate) fn download(&self, req: &Request, dest: &Path) -> Result<(), SourceError> {
+        let reply = Self::follow(req, Some(dest))?;
+        if (200..300).contains(&reply.status) {
+            Ok(())
+        } else {
+            Err(SourceError::Http(reply.status))
+        }
+    }
+
+    fn follow(req: &Request, sink: Option<&Path>) -> Result<Reply, SourceError> {
         let mut url = req.url.clone();
         for _ in 0..=HOPS {
-            let reply = Self::once(req, &url)?;
+            let reply = Self::once(req, &url, sink)?;
             if !(300..400).contains(&reply.status) {
                 return Ok(reply);
             }
@@ -166,6 +203,12 @@ impl Fetch for ModsNet {
                 })?;
         }
         Err(SourceError::Net("too many redirects".into()))
+    }
+}
+
+impl Fetch for ModsNet {
+    fn send(&self, req: &Request) -> Result<Reply, SourceError> {
+        Self::follow(req, None)
     }
 }
 
@@ -217,5 +260,8 @@ mod tests {
             "https://api.modrinth.com/v2/search".into(),
         );
         assert!(matches!(ModsNet.send(&req), Err(SourceError::Net(_))));
+        let dest = std::env::temp_dir().join(format!("mods-never-{}", std::process::id()));
+        assert!(ModsNet.download(&req, &dest).is_err());
+        assert!(!dest.exists());
     }
 }
