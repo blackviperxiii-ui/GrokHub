@@ -790,7 +790,7 @@ describe("Chat history", () => {
     rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-other", n: 1 }} />);
     expect(screen.getByText("pick a paint colour")).toBeVisible();
     rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-saved", n: 2 }} />);
-    expect(screen.queryByText("pick a paint colour")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
     const id = await startTurn("new start");
     expect(id).not.toBe("shell-saved");
   });
