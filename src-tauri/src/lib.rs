@@ -22,6 +22,7 @@ pub mod local_engine;
 mod md_fixtures;
 pub mod memory;
 pub mod models;
+pub mod nyx;
 pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
@@ -1149,6 +1150,31 @@ fn delete_personality(
     Ok(personalities(&state))
 }
 
+/// The chat's Nyx for the voice in use (or `voice`) and what the chat is
+/// doing: a running tool's title, else `mood`. Explicit art only with
+/// Adults-only personalities on.
+#[tauri::command]
+fn nyx_look(
+    state: State<'_, ShellState>,
+    voice: Option<String>,
+    mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
+) -> Option<nyx::NyxLook> {
+    let now = current(&state);
+    nyx::look(
+        &state.config_dir,
+        voice.as_deref().unwrap_or(&now.personality),
+        now.explicit_personalities,
+        nyx::activity(mood, tool.as_deref()),
+    )
+}
+
+/// Settings → Personality's pictures, by preset id.
+#[tauri::command]
+fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
+    nyx::tiles(&ids, current(&state).explicit_personalities)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -1711,6 +1737,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "nyx_look" => out(nyx_look(
+            state,
+            arg(args, "voice")?,
+            arg(args, "mood")?,
+            arg(args, "tool")?,
+        )),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -2246,6 +2278,8 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            nyx_look,
+            nyx_tiles,
             get_queue,
             stop_task,
             get_workboard,
