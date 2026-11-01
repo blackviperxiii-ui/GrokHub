@@ -45,6 +45,7 @@ vi.mock("./Automations", () => ({ Automations: () => null }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
     <p>
@@ -74,6 +75,7 @@ describe("App", () => {
     expect(tabs()).toEqual([
       "Chat",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
       "Memory",
@@ -97,14 +99,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
   });
 
   it("leaves the Journal off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Memory", "Connectors", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {

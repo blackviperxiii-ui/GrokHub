@@ -25,6 +25,7 @@ describe("paletteRows", () => {
     expect(labels(DESKTOP, "")).toEqual([
       "Chat",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
       "Memory",
@@ -44,6 +45,7 @@ describe("paletteRows", () => {
     ]);
     expect(labels(PHONE, "")).toEqual([
       "Chat",
+      "Imagine",
       "Journal",
       "Automations",
       "Memory",
@@ -57,7 +59,7 @@ describe("paletteRows", () => {
       "Settings: Permissions",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Chat", "Imagine", "Automations", "Memory", "Connectors", "Settings"]);
   });
 
   it("filters by the typed text and ends with Ask Grok", () => {
@@ -82,7 +84,7 @@ describe("Palette", () => {
     );
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onPick).toHaveBeenCalledWith({ kind: "view", view: "journal" });
+    expect(onPick).toHaveBeenCalledWith({ kind: "view", view: "imagine" });
   });
 
   it("Escape and a click outside close it without a pick", async () => {
@@ -137,7 +139,7 @@ describe("Palette", () => {
       // Row 1 picked: row 2 (80-116) must show in the 100 px view.
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 16, behavior: "smooth" });
       await userEvent.keyboard("{ArrowDown}");
-      expect(screen.getByRole("option", { name: "Automations" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Journal" })).toHaveAttribute("aria-selected", "true");
       // Row 3 ends at 156.
       expect(top()).toBe(56);
       await userEvent.keyboard("{ArrowUp}");
@@ -148,8 +150,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 11 starts at 440, row 12 ends at 516.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 416, behavior: "auto" });
+      // Row 12 starts at 480, row 13 ends at 556.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 456, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

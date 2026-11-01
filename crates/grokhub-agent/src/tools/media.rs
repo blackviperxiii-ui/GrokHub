@@ -281,6 +281,29 @@ pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) 
     }
 }
 
+/// The Imagine client for `bearer`. A blank bearer refuses without dialing.
+pub fn imagine_client(bearer: &str) -> Box<dyn ImagineApi> {
+    let bearer = bearer.trim();
+    if bearer.is_empty() {
+        Box::new(BlockedImagine)
+    } else {
+        Box::new(UreqImagine::new(bearer.to_string()))
+    }
+}
+
+/// One media tool run outside a chat turn, for a page of its own (the
+/// shell's Imagine page): the same request builders, EgressGuard and result
+/// saving as chat. Results are downloaded into `media_dir`.
+pub fn run_media_tool(
+    name: &str,
+    args: &Value,
+    api: &dyn ImagineApi,
+    stop: &dyn Fn() -> bool,
+    media_dir: &std::path::Path,
+) -> ToolOutput {
+    execute_with(name, args, api, stop, Some(media_dir))
+}
+
 #[cfg(test)]
 pub(crate) fn execute(name: &str, args: &Value, api: &dyn ImagineApi) -> ToolOutput {
     let (dir, _cfg) = tests::scratch_config();

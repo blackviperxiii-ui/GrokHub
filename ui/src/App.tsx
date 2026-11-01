@@ -15,12 +15,14 @@ import { applyTheme } from "./theme";
 // idle so that first click does not wait on the network or disk.
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
+const Imagine = lazy(loaders.imagine);
 const Journal = lazy(loaders.journal);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
@@ -189,6 +191,7 @@ export function App() {
             }}
           />
         )}
+        {view === "imagine" && <Imagine />}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
