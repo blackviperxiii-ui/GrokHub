@@ -52,6 +52,8 @@ export interface Capabilities {
   summonHotkey?: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications?: boolean;
+  /** The composer's push-to-talk mic (desktops and phones). */
+  voice?: boolean;
   /** The Library page: this computer's Steam games. */
   library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
@@ -255,6 +257,11 @@ export async function onFileDrop(handler: (paths: string[]) => void): Promise<Un
   return getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
   });
+}
+
+/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
+export function transcribe(wav: string): Promise<string> {
+  return invoke<string>("transcribe", { wav });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */

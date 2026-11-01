@@ -36,6 +36,7 @@ pub mod remote_tls;
 pub mod settings;
 pub mod shell_update;
 pub mod slash;
+pub mod voice;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -419,6 +420,25 @@ async fn chat_turn(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Push to talk: one recording (a WAV, as base64) to text for the draft.
+/// Nothing is sent to chat; the person presses Send.
+#[tauri::command]
+async fn transcribe(state: State<'_, ShellState>, wav: String) -> Result<String, String> {
+    use base64::Engine as _;
+    capabilities::needs(capabilities::current().voice, "Voice")?;
+    // Base64 is 4 bytes per 3: refuse a body past the cap unread.
+    if wav.len() / 4 * 3 > voice::WAV_MAX + 3 {
+        return Err(voice::TOO_BIG.into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(wav.trim())
+        .map_err(|_| voice::NOT_WAV.to_string())?;
+    let config_dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || voice::transcribe(&config_dir, &bytes))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1735,8 +1755,36 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     ));
     #[cfg(windows)]
     let builder = webview2_driver_overrides(builder);
-    builder.build()?;
+    let window = builder.build()?;
+    #[cfg(target_os = "linux")]
+    allow_microphone(&window);
+    #[cfg(not(target_os = "linux"))]
+    drop(window);
     Ok(())
+}
+
+/// WebKitGTK denies a page's mic unless the app says yes. The window shows
+/// only the app's own UI, so its push-to-talk gets the mic; a camera ask
+/// still gets the default no.
+#[cfg(target_os = "linux")]
+fn allow_microphone(window: &tauri::WebviewWindow) {
+    use webkit2gtk::glib::prelude::{Cast, ObjectExt};
+    use webkit2gtk::{PermissionRequestExt, UserMediaPermissionRequest, WebViewExt};
+    let _ = window.with_webview(|webview| {
+        webview.inner().connect_permission_request(|_, request| {
+            let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+                return false;
+            };
+            let audio: bool = media.property("is-for-audio-device");
+            let video: bool = media.property("is-for-video-device");
+            if audio && !video {
+                request.allow();
+                true
+            } else {
+                false
+            }
+        });
+    });
 }
 
 #[cfg(test)]
@@ -1917,6 +1965,7 @@ pub fn run() {
             poll_grok_sign_in,
             grok_sign_out,
             send_chat,
+            transcribe,
             answer_permission,
             answer_elicit,
             cancel_chat,
