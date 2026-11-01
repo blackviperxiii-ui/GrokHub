@@ -50,13 +50,7 @@ pub(super) fn paint_verdict(ui: &mut egui::Ui, v: &PulseVerdict) {
 /// the verdict found something, Options when it's normal. `None` for cards
 /// that keep Run.
 pub(super) fn fix_label(card: &grokhub_core::UpdateCard) -> Option<&'static str> {
-    if !grokhub_core::is_pc_health_card(card) {
-        return None;
-    }
-    Some(match card.pulse.verdict.as_ref().map(|v| v.tone) {
-        Some(VerdictTone::Watch | VerdictTone::Act) => "Fix it",
-        _ => "Options",
-    })
+    advice::fix_label(card)
 }
 
 /// What a row's button says for its kind and whether it is open.
@@ -99,14 +93,6 @@ fn row_button(kind: FixKind, open: bool, quiet_on: bool) -> &'static str {
     }
 }
 
-fn fmt_c(v: Option<u8>) -> String {
-    v.map(|c| format!("{c}°C")).unwrap_or_else(|| "–".into())
-}
-
-fn fmt_pct(v: Option<u8>) -> String {
-    v.map(|c| format!("{c}%")).unwrap_or_else(|| "–".into())
-}
-
 impl Cabin {
     /// Open the sheet for a card, with its session read from the ledger.
     pub(super) fn open_pulse_fix(&mut self, id: &str) {
@@ -132,23 +118,7 @@ impl Cabin {
         let Some(sheet) = self.pulse_view.fix.as_ref() else {
             return Vec::new();
         };
-        let stat = sheet.stat.clone().unwrap_or_default();
-        let opts = advice::fix_options(&stat, &sheet.history, &self.cfg.pc_health);
-        if sheet.stat.is_some() {
-            opts
-        } else {
-            opts.into_iter()
-                .filter(|o| {
-                    matches!(
-                        o.kind,
-                        FixKind::QuietWhenNormal
-                            | FixKind::WarnLines
-                            | FixKind::Pause
-                            | FixKind::Ask
-                    )
-                })
-                .collect()
-        }
+        advice::sheet_options(sheet.stat.as_ref(), &sheet.history, &self.cfg.pc_health)
     }
 
     /// A row's button. Steps, the table and the warn lines open in place;
@@ -392,18 +362,7 @@ impl Cabin {
 
 /// This session first, then the last few, newest first.
 fn paint_compare(ui: &mut egui::Ui, sheet: &FixSheet) {
-    let mut rows: Vec<&SessionStat> = Vec::new();
-    if let Some(s) = sheet.stat.as_ref() {
-        rows.push(s);
-    }
-    rows.extend(
-        sheet
-            .history
-            .iter()
-            .rev()
-            .filter(|s| sheet.stat.as_ref().is_none_or(|t| t.at_ms != s.at_ms))
-            .take(5),
-    );
+    let rows = advice::compare_rows(sheet.stat.as_ref(), &sheet.history);
     egui::Grid::new("pulse-fix-compare")
         .num_columns(5)
         .spacing(egui::vec2(16.0, 4.0))
@@ -416,21 +375,8 @@ fn paint_compare(ui: &mut egui::Ui, sheet: &FixSheet) {
                 );
             }
             ui.end_row();
-            for (i, s) in rows.iter().enumerate() {
-                let name = if i == 0 && sheet.stat.is_some() {
-                    "This one".to_string()
-                } else if s.label.is_empty() {
-                    s.game.clone()
-                } else {
-                    s.label.clone()
-                };
-                for cell in [
-                    name,
-                    format!("{} min", s.mins),
-                    fmt_c(s.max_gpu_c),
-                    fmt_c(s.max_cpu_c),
-                    fmt_pct(s.avg_gpu_pct),
-                ] {
+            for r in rows {
+                for cell in [r.session, r.time, r.gpu_peak, r.cpu_peak, r.gpu_busy] {
                     ui.label(
                         RichText::new(cell)
                             .size(crate::theme::FONT_TIP)

@@ -1354,6 +1354,14 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
     off_main(move || pulse::why(&dir, &id)).await?
 }
 
+/// A PC health card's options window. Read only.
+#[tauri::command]
+async fn pulse_fix(state: State<'_, ShellState>, id: String) -> Result<pulse::FixView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::fix(&dir, &id)).await?
+}
+
 #[tauri::command]
 async fn get_feed_prompt(state: State<'_, ShellState>) -> Result<pulse::Prompt, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -1809,6 +1817,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
         "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "pulse_fix" => out(block_on(pulse_fix(state, arg(args, "id")?))?),
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
@@ -2338,6 +2347,7 @@ pub fn run() {
             pulse_act,
             pulse_discuss,
             pulse_why,
+            pulse_fix,
             get_feed_prompt,
             save_feed_prompt,
             pulse_image,

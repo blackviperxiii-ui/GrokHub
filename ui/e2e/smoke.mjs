@@ -551,11 +551,20 @@ async function pulse(s, config) {
   });
   const labels = [];
   for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
-  if (labels.join("|") !== "Let's do it|More like this|Not interested") {
+  if (labels.join("|") !== "More like this") {
     throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
   }
+  const rowButtons = await wd("POST", `${s}/elements`, {
+    using: "xpath",
+    value: `${written}//div[contains(@class,'idea-buttons')]/button`,
+  });
+  const buttonLabels = [];
+  for (const b of rowButtons) buttonLabels.push(await wd("GET", `${s}/element/${b[ELEMENT]}/text`));
+  if (buttonLabels.join("|") !== "Let's do it|Not interested") {
+    throw new Error(`the idea buttons say ${JSON.stringify(buttonLabels)}`);
+  }
   await shot(s, "pulse-ideas");
-  await wd("POST", `${s}/element/${items[1][ELEMENT]}/click`, {});
+  await wd("POST", `${s}/element/${items[0][ELEMENT]}/click`, {});
   await waitFor("More like this kept", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
