@@ -44,12 +44,14 @@ function usePhone(): boolean {
 export function useHidingBar(pinned: boolean): boolean {
   const phone = usePhone();
   const [state, setState] = useState(SHOWN);
+  const [wasPhone, setWasPhone] = useState(phone);
+  if (phone !== wasPhone) {
+    setWasPhone(phone);
+    setState(SHOWN);
+  }
 
   useEffect(() => {
-    if (!phone) {
-      setState(SHOWN);
-      return;
-    }
+    if (!phone) return;
     const last = new WeakMap<Element, number>();
     let userAt = -Infinity;
     const user = () => {

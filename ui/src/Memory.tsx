@@ -51,12 +51,13 @@ export function Memory() {
     });
   }
 
+  // Runs each time Memory shows; an editor with unsaved changes keeps them.
   useEffect(() => {
     getMemory().then(
-      (next) => show(next, SCOPES),
+      (next) => show(next, []),
       fail,
     );
-  }, []);
+  }, [fail]);
 
   async function save(scope: Scope) {
     setSaving(true);
