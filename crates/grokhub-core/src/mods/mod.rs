@@ -25,6 +25,7 @@ pub mod modrinth;
 pub mod nexus;
 pub mod pickup;
 pub mod source;
+pub mod suggest;
 pub mod thunderstore;
 pub mod workshop;
 
