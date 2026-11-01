@@ -1,0 +1,4 @@
+- Shell: outside links (Pulse sources, connector sign-in pages) open in your browser; the web app opens them in a new tab on that device.
+- Shell: Pulse and Activity menus close on Esc or a click outside; Pulse posts can be snoozed until 9 AM, dismissed, or marked Not this.
+- Shell: errors on Pulse, Connectors, Journal, Settings, Memory and Labs read in the error colour; chat offers Open Settings only for key or sign-in trouble.
+- Shell: Pulse Delete and Automations Remove ask first; "Auto effort" is a label, not a button that does nothing.

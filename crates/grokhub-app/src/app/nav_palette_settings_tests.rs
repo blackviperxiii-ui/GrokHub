@@ -738,7 +738,7 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     for want in [
         "Search pages and commands",
         "Automations",
-        "Skills and Connectors",
+        "Objectives",
         "Pulse",
     ] {
         assert!(
