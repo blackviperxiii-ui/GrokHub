@@ -11,6 +11,7 @@ import {
   type PulsePage,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
+import { StatusLine, useNote } from "./ui";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
 export const IDEAS_EMPTY = "Nothing for you yet. I'll add one when I spot something worth doing.";
@@ -86,7 +87,7 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   const [page, setPage] = useState<PulsePage | null>(null);
   const [tab, setTab] = useState<Tab>("feed");
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail, clear } = useNote();
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [shown, setShown] = useState(PAGE_SIZE);
@@ -94,7 +95,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
-    getPulse().then(setPage, (err) => setNote(String(err)));
+    getPulse().then(setPage, fail);
     const timers = polls.current;
     return () => timers.forEach(clearTimeout);
   }, []);
@@ -119,10 +120,10 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
     setBusy(true);
     try {
       setPage(await pulseAct(id, what));
-      setNote(done ?? null);
+      ok(done ?? null);
       return true;
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       // The card may be gone; show what is left. Wait for it, so a later
       // action can't be overwritten by this older page.
       await getPulse().then(setPage, () => {});
@@ -139,7 +140,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   /** Ideas are written in the background, so the tab reads the page again. */
   function openIdeas() {
     setTab("ideas");
-    setNote(null);
+    clear();
     getPulse().then(setPage, () => {});
   }
 
@@ -147,7 +148,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
     try {
       onRun(await pulseDiscuss(id));
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -162,7 +163,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           getPulse().then(
             (next) => {
               setPage(next);
-              if (next.feed.some((p) => !before.has(p.id))) setNote(null);
+              if (next.feed.some((p) => !before.has(p.id))) clear();
               else if (left > 1) look(left - 1);
             },
             () => {},
@@ -181,7 +182,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
         <div className="switch" role="group" aria-label="Pulse view">
           <button type="button" aria-pressed={tab === "feed"} onClick={() => {
               setTab("feed");
-              setNote(null);
+              clear();
             }}
           >
             Feed
@@ -219,16 +220,12 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           onClose={() => setEditing(false)}
           onSaved={() => {
             setEditing(false);
-            setNote(SAVED_NOTE);
+            ok(SAVED_NOTE);
             watchForPost();
           }}
         />
       )}
-      {note && (
-        <p className="status" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} />
       {tab === "feed" && (
         <ul className="rows feed" aria-busy={page === null}>
           {page === null && !note && <SkeletonRows />}
@@ -241,6 +238,9 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
               onDiscuss={() => void discuss(post.id)}
               onDelete={() => void act(post.id, "delete", "Deleted.")}
               onWhy={() => pulseWhy(post.id)}
+              onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
+              onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
+              onNotThis={() => void act(post.id, "notThis", "Got it. Fewer posts like that.")}
             />
           ))}
           {more && (
