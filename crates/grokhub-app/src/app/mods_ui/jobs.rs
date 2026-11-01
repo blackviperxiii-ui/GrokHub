@@ -76,6 +76,20 @@ fn client(j: &mut Jobs) -> Arc<ModClient> {
         .clone()
 }
 
+/// The one client the page and the chat's mod tools share.
+pub(super) fn shared_client() -> Arc<ModClient> {
+    client(&mut jobs())
+}
+
+/// A mod's files, when the drawer already fetched them this session.
+pub(super) fn files_seen(game_id: &str, source: Source, id: &str) -> Vec<ModFile> {
+    jobs()
+        .files
+        .get(&mod_key(game_id, source, id))
+        .and_then(|s| s.value.clone())
+        .unwrap_or_default()
+}
+
 /// Whether the user (or the build) has a key for this source.
 pub(super) fn has_key(source: Source) -> bool {
     let c = client(&mut jobs());
