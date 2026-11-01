@@ -48,10 +48,6 @@ export function ModelPicker({
   }
 
   useEffect(() => {
-    if (open) void load(false);
-  }, [open]);
-
-  useEffect(() => {
     if (!open) return;
     function onDown(event: MouseEvent) {
       if (box.current && !box.current.contains(event.target as Node)) close();
@@ -59,6 +55,12 @@ export function ModelPicker({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  // The list loads as the picker opens, from the click, not from an effect.
+  function openList() {
+    setOpen(true);
+    void load(false);
+  }
 
   function close() {
     setOpen(false);
@@ -103,7 +105,7 @@ export function ModelPicker({
         aria-expanded={open}
         title={chip ? "Model for the next message" : undefined}
         disabled={disabled}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => (open ? close() : openList())}
       >
         {chip ? `Model: ${modelLabel(value, list)}` : modelLabel(value, list)}
       </button>

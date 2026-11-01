@@ -52,6 +52,8 @@ pub(super) struct FocusState {
     pub stardew: super::stardew_ui::StardewState,
     /// The Loadout ESO addon and what it saved.
     pub eso: super::eso_ui::EsoUi,
+    /// Rocket League's Stats API, read while the game runs.
+    pub rl: super::rl_ui::RlUi,
 }
 
 impl Cabin {
@@ -63,6 +65,7 @@ impl Cabin {
         self.tick_wind_down();
         self.tick_downloads_tidy();
         self.tick_backup();
+        self.tick_board_store();
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();
@@ -74,6 +77,7 @@ impl Cabin {
         self.tick_elite();
         self.tick_stardew();
         self.tick_eso();
+        self.tick_rl();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

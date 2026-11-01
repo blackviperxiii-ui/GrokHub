@@ -81,23 +81,15 @@ describe("paletteRows", () => {
   });
 
   it("puts the commands this shell can run after the pages", () => {
-    expect(withExtras(DESKTOP, "").slice(0, 13)).toEqual([
-      "Chat",
-      "Pulse",
-      "Journal",
-      "Automations",
-      "Memory",
-      "Connectors",
-      "Workboard",
-      "Library",
-      "Settings",
-      "New chat",
-      "Halt",
-      "Sign in",
-      "Shortcuts",
-    ]);
+    // The commands follow the last page, however many pages this shell has.
+    const afterPages = (rows: string[], n: number) =>
+      rows.slice(rows.indexOf("Settings") + 1, rows.indexOf("Settings") + 1 + n);
+    const rows = withExtras(DESKTOP, "");
+    const pages = labels(DESKTOP, "");
+    expect(rows.slice(0, rows.indexOf("Settings") + 1)).toEqual(pages.slice(0, pages.indexOf("Settings") + 1));
+    expect(afterPages(rows, 4)).toEqual(["New chat", "Halt", "Sign in", "Shortcuts"]);
     // Only the runners the shell hands over get rows.
-    expect(withExtras(DESKTOP, "", { ...EXTRAS, runners: { shortcuts: run } }).slice(9, 11)).toEqual([
+    expect(afterPages(withExtras(DESKTOP, "", { ...EXTRAS, runners: { shortcuts: run } }), 2)).toEqual([
       "Shortcuts",
       "Settings: General",
     ]);

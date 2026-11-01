@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type CSSProperties } from "react";
 import { getLibrary, libraryCover, libraryPlay, type CoverShape, type LibraryGame, type LibraryPage } from "./api";
 
 export type LibraryTab = "all" | "installed" | "backlog";
@@ -75,18 +75,17 @@ function Tile({
   onWant: () => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
-  const want = useRef(onWant);
-  want.current = onWant;
+  const want = useEffectEvent(onWant);
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") {
-      want.current();
+      want();
       return;
     }
     const seen = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
-          want.current();
+          want();
           seen.disconnect();
         }
       },
@@ -134,9 +133,11 @@ export function Library() {
   const game = shown.find((g) => g.appId === picked) ?? shown[0];
 
   // The detail column's header art, once per game picked.
+  const gameId = game?.appId;
+  const wantWide = useEffectEvent((appId: number) => want(appId, "wide"));
   useEffect(() => {
-    if (game) want(game.appId, "wide");
-  }, [game?.appId]);
+    if (gameId !== undefined) wantWide(gameId);
+  }, [gameId]);
 
   async function play(g: LibraryGame) {
     setBusy(true);

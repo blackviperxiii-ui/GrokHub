@@ -2,7 +2,7 @@
 // menus, a status line that reads as an error when it is one, an inline
 // "are you sure" row for destructive actions, and outside links that open in
 // the browser.
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { openExternal } from "./external";
 
 /** Close a pop-up on Escape or on a press outside `ref`. Only listens while open. */
@@ -36,12 +36,16 @@ export type Note = { text: string; error: boolean } | null;
 
 export function useNote() {
   const [note, setNote] = useState<Note>(null);
-  return {
-    note,
-    ok: (text: string | null | undefined) => setNote(text ? { text, error: false } : null),
-    fail: (err: unknown) => setNote({ text: String(err), error: true }),
-    clear: () => setNote(null),
-  };
+  // The same functions every render, so an effect can list them as deps and still run once.
+  const set = useMemo(
+    () => ({
+      ok: (text: string | null | undefined) => setNote(text ? { text, error: false } : null),
+      fail: (err: unknown) => setNote({ text: String(err), error: true }),
+      clear: () => setNote(null),
+    }),
+    [],
+  );
+  return { note, ...set };
 }
 
 /** The note under a page's buttons, in the error colour when it is one. */
