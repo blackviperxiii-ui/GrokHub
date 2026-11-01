@@ -1,0 +1,1 @@
+- The palette test checks that commands follow the last page, so a new page in the shell no longer breaks it.
