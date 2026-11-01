@@ -10,6 +10,7 @@ mod paint;
 mod pc_sheet;
 #[cfg(test)]
 mod tile_tests;
+mod updates;
 
 use std::path::{Path, PathBuf};
 

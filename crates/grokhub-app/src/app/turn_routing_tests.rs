@@ -2168,6 +2168,33 @@ fn halt_work_stops_a_running_turn() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+#[test]
+fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-spares-bg");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let fg_id = format!("native-stop-fg-{}", std::process::id());
+    let bg_id = format!("native-stop-bg-{}", std::process::id());
+    let fg = grokhub_agent::CancelToken::new();
+    let bg = grokhub_agent::CancelToken::new();
+    grokhub_agent::watch_cancel(&fg_id, fg.clone());
+    grokhub_agent::watch_cancel(&bg_id, bg.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let idx = cabin.thread_idx;
+    cabin.threads[idx].grok_session = Some(fg_id.clone());
+    cabin.running = true;
+    cabin.halt_work("Stopped");
+    assert!(fg.is_cancelled(), "Stop ends this chat's run");
+    assert!(!bg.is_cancelled(), "Stop leaves a background run going");
+    cabin.halt_everything("Halted");
+    assert!(bg.is_cancelled(), "tray Halt stops background runs too");
+    grokhub_agent::forget_session(&fg_id);
+    grokhub_agent::forget_session(&bg_id);
+    drop(cabin);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #160.
 #[test]
 fn worktree_stays_off_a_send() {
