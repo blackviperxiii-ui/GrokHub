@@ -3403,6 +3403,9 @@ label.toggle-row {
 @media (hover: none) {
   .msg-more {
     opacity: 1;
+  }
+}
+
 /* Home: the cabin's tile grid. A Large tile spans two columns and two rows,
    a Medium two columns, a Small one; a phone stacks them. */
 .home,
