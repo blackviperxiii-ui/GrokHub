@@ -1,0 +1,1 @@
+- Shell: scheduled automations fire from the shell, window open or in the tray, while the cabin is closed. The cabin keeps priority through a heartbeat lease, a job is claimed before it runs so it never fires twice, and after a sleep each job runs once. Each job can be edited in place.

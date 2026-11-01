@@ -1,7 +1,10 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AutomationRow, RunResult } from "./api";
+import { act } from "react";
+import type { AutomationRow, RunResult, ScheduledRun } from "./api";
+
+const ranHandlers = vi.hoisted(() => [] as ((run: ScheduledRun) => void)[]);
 
 const api = vi.hoisted(() => ({
   listAutomations: vi.fn<() => Promise<AutomationRow[]>>(),
@@ -9,6 +12,13 @@ const api = vi.hoisted(() => ({
   setAutomationEnabled: vi.fn<(id: string, enabled: boolean) => Promise<AutomationRow[]>>(),
   removeAutomation: vi.fn<(id: string) => Promise<AutomationRow[]>>(),
   runAutomation: vi.fn<(id: string) => Promise<RunResult>>(),
+  editAutomation: vi.fn<(id: string, text: string) => Promise<AutomationRow[]>>(),
+  onAutomationRan: vi.fn((handler: (run: ScheduledRun) => void) => {
+    ranHandlers.push(handler);
+    return Promise.resolve(() => {
+      ranHandlers.splice(ranHandlers.indexOf(handler), 1);
+    });
+  }),
 }));
 
 vi.mock("./api", () => api);
@@ -23,13 +33,25 @@ function row(over: Partial<AutomationRow>): AutomationRow {
     enabled: true,
     summary: "weekdays at 09:00 · next today 9:00 AM",
     health: null,
+    describe: "every weekday at 9am summarize my inbox",
+    cabinOnly: false,
     ...over,
   };
 }
 
 describe("Automations", () => {
   beforeEach(() => {
-    for (const fn of Object.values(api)) fn.mockReset();
+    for (const fn of Object.values(api)) fn.mockClear();
+    for (const fn of [
+      api.listAutomations,
+      api.addAutomation,
+      api.setAutomationEnabled,
+      api.removeAutomation,
+      api.runAutomation,
+      api.editAutomation,
+    ])
+      fn.mockReset();
+    ranHandlers.length = 0;
   });
 
   it("lists jobs with their schedule and health", async () => {
@@ -157,6 +179,96 @@ describe("Automations", () => {
     ]);
   });
 });
+
+describe("Automations edit and schedule", () => {
+  beforeEach(() => {
+    for (const fn of [api.listAutomations, api.editAutomation]) fn.mockReset();
+    ranHandlers.length = 0;
+  });
+
+  it("Edit opens the row's words, saves the new ones, and keeps the box on a miss", async () => {
+    api.listAutomations.mockResolvedValue([row({})]);
+    api.editAutomation
+      .mockRejectedValueOnce('Say when, like "every weekday at 9am summarize my inbox".')
+      .mockResolvedValueOnce([
+        row({
+          name: "summarize my mail",
+          instructions: "every day at 7am summarize my mail",
+          summary: "daily at 07:00 · next Wed 7:00 AM",
+          describe: "every day at 7am summarize my mail",
+        }),
+      ]);
+    render(<Automations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const box = screen.getByLabelText("Edit summarize my inbox");
+    expect(box).toHaveValue("every weekday at 9am summarize my inbox");
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "summarize my mail{Enter}");
+    expect(api.editAutomation).toHaveBeenLastCalledWith("auto-1", "summarize my mail");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Say when");
+    expect(screen.getByLabelText("Edit summarize my inbox")).toHaveValue("summarize my mail");
+
+    await userEvent.clear(box);
+    await userEvent.type(box, " every day at 7am summarize my mail {Enter}");
+    expect(api.editAutomation).toHaveBeenLastCalledWith("auto-1", "every day at 7am summarize my mail");
+    const edited = await screen.findByRole("listitem", { name: "summarize my mail" });
+    expect(edited).toHaveTextContent("daily at 07:00 · next Wed 7:00 AM");
+    expect(screen.queryByRole("textbox", { name: /^Edit / })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("Cancel closes the box without saving", async () => {
+    api.listAutomations.mockResolvedValue([row({})]);
+    render(<Automations />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Edit summarize my inbox")).toBeNull();
+    expect(api.editAutomation).not.toHaveBeenCalled();
+  });
+
+  it("marks cabin-only jobs and hides Edit when words can't say the schedule", async () => {
+    api.listAutomations.mockResolvedValue([
+      row({ id: "auto-gated", name: "tidy", cabinOnly: true }),
+      row({ id: "auto-weekly", name: "weekly review", describe: null, summary: "weekly at 09:00" }),
+      row({}),
+    ]);
+    render(<Automations />);
+    const gated = await screen.findByRole("listitem", { name: "tidy" });
+    expect(within(gated).getByText("Runs in the cabin")).toBeInTheDocument();
+    const weekly = screen.getByRole("listitem", { name: "weekly review" });
+    expect(within(weekly).queryByRole("button", { name: "Edit" })).toBeNull();
+    const inbox = screen.getByRole("listitem", { name: "summarize my inbox" });
+    expect(within(inbox).queryByText("Runs in the cabin")).toBeNull();
+    expect(screen.getByText(/While the Loadout cabin is open, the cabin runs them\./)).toBeInTheDocument();
+  });
+
+  it("a scheduled run shows its reply and reloads the row while the tab shows", async () => {
+    api.listAutomations
+      .mockResolvedValueOnce([row({})])
+      .mockResolvedValueOnce([row({ summary: "weekdays at 09:00 · next Wed 9:00 AM · 1 run" })]);
+    render(<Automations />);
+    await screen.findByRole("listitem", { name: "summarize my inbox" });
+    await waitForHandler();
+    act(() => {
+      ranHandlers[0]({
+        id: "auto-1",
+        name: "summarize my inbox",
+        result: { text: "3 new mails.", error: "", stop: "end_turn" },
+      });
+    });
+    expect(await screen.findByText("3 new mails.")).toBeInTheDocument();
+    expect(await screen.findByText("weekdays at 09:00 · next Wed 9:00 AM · 1 run")).toBeInTheDocument();
+    expect(api.listAutomations).toHaveBeenCalledTimes(2);
+  });
+});
+
+async function waitForHandler() {
+  for (let i = 0; i < 20 && ranHandlers.length === 0; i++) await Promise.resolve();
+  expect(ranHandlers.length).toBe(1);
+}
 
 describe("wallClock", () => {
   it("reads the local weekday, hour and minute", async () => {
