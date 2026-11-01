@@ -421,7 +421,11 @@ fn seed_board(cfg: &Path) {
         attempt: 1,
         ..Default::default()
     });
-    claim_run(&mut tray, HOST_CABIN, grokhub_core::wire::PermissionMode::Auto);
+    claim_run(
+        &mut tray,
+        HOST_CABIN,
+        grokhub_core::wire::PermissionMode::Auto,
+    );
     interrupt_card(&mut tray, InterruptCause::Restart, BOARD_NOW);
     cards.push(tray);
     let _ = std::fs::create_dir_all(cfg);
@@ -429,7 +433,10 @@ fn seed_board(cfg: &Path) {
         board.extend(cards);
     });
     for (id, text) in [
-        (BOARD_RESUME_ID, "Read src/tray.rs: the icon is drawn at 16 px"),
+        (
+            BOARD_RESUME_ID,
+            "Read src/tray.rs: the icon is drawn at 16 px",
+        ),
         (BOARD_RESUME_ID, "Started the DPI patch"),
         ("w-bench-done", "Cleared 2.1 GB of shader cache"),
     ] {

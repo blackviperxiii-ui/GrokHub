@@ -131,7 +131,10 @@ mod tests {
             }
         }
         assert!(crate::workboard::parse_work_pin("WORK_PIN: Flash the pi | write image").is_some());
-        assert!(crate::workboard::parse_work_update("WORK_UPDATE: Flash the pi | status=done").is_some());
+        assert!(
+            crate::workboard::parse_work_update("WORK_UPDATE: Flash the pi | status=done")
+                .is_some()
+        );
     }
 
     #[test]
