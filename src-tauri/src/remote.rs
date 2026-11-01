@@ -847,6 +847,10 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "get_autostart",
+            "set_autostart",
+            "set_summon_hotkey",
+            "set_notifications",
         ] {
             assert!(!web_command(name), "{name}");
         }
