@@ -2189,6 +2189,7 @@ fn quiet_cabin() -> Cabin {
         geom_dirty: false,
         geom_applied: false,
         geom_apply_frames: 0,
+        native_maximize_due: false,
         imagine_want_focus: false,
         composer_want_focus: false,
         settings_sec: super::SettingsSec::Account,
