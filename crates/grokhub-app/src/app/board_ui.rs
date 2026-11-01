@@ -58,8 +58,11 @@ pub(super) struct BoardView {
     /// Settings' tidy row, read from `workboard-tidy.json` when first shown and
     /// again after each sweep, never per frame.
     pub tidy: Option<grokhub_core::work_file::BoardTidy>,
+<<<<<<< HEAD
     /// The queue and the block and steps editors.
     pub triage: super::board_triage::TriageView,
+=======
+>>>>>>> origin/beta
 }
 
 /// A sweep's result once its thread ends: `Some(None)` when another writer
