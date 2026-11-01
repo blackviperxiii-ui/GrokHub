@@ -149,17 +149,13 @@ pub fn absorb_cabin(state: &mut LearningState) {
                 );
             }
             "workboard" if note.key.starts_with("paused:") => {
+                // KB-04: the board's own rule only. Nothing about the board
+                // reaches the chat's system prompt; a resume carries its note.
                 push(
                     &mut next,
                     "workboard",
                     &format!("keep:{}", note.key),
                     "Leave paused cards visible. That is where they resume.",
-                );
-                push(
-                    &mut next,
-                    "chat",
-                    &format!("resume:{}", note.key),
-                    "A paused workboard card is still open. Resume it when they come back.",
                 );
             }
             _ => {}
@@ -323,7 +319,10 @@ mod tests {
         note_part(&mut s, "workboard", "paused:harbor", "Harbor");
         absorb_cabin(&mut s);
         assert!(brief_for(&s, "workboard").contains("paused cards"));
-        assert!(brief_for(&s, "chat").contains("paused workboard"));
+        assert!(
+            !brief_for(&s, "chat").contains("workboard"),
+            "nothing about the board in the chat's prompt"
+        );
     }
 
     #[test]
