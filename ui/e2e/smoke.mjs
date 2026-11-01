@@ -265,7 +265,25 @@ async function tab(s, label) {
       value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
     }),
   );
-  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  try {
+    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  } catch (e) {
+    const probe = await wd("POST", `${s}/execute/sync`, {
+      script: `const b = arguments[0]; const r = b.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const tabs = b.parentElement.getBoundingClientRect();
+        return JSON.stringify({ now: performance.now(), active: window.__vtActive, vt: (window.__vt || []).slice(-4),
+          rect: [r.left, r.top, r.width, r.height], tabs: [tabs.left, tabs.right, b.parentElement.scrollLeft],
+          hit: document.elementsFromPoint(x, y).slice(0, 4).map((n) => n.tagName + '.' + n.className) });`,
+      args: [el],
+    });
+    console.log(`DIAG ${label} click failed (${e.message}): ${probe}`);
+    await new Promise((r) => setTimeout(r, 500));
+    const again = await wd("POST", `${s}/execute/sync`, {
+      script: "return JSON.stringify({ now: performance.now(), active: window.__vtActive });", args: [] });
+    console.log(`DIAG after 500ms: ${again}`);
+    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    console.log(`DIAG ${label} retry click ok`);
+  }
   await onView(s, label);
 }
 
@@ -1182,6 +1200,18 @@ async function main() {
     session = created.sessionId;
     const s = `/session/${session}`;
     if (windowsEngineProof()) await setWindowSize(s, 1280, 900);
+    // DIAG: log every view transition's start and end.
+    await wd("POST", `${s}/execute/sync`, {
+      script: `window.__vt = []; const d = document; const orig = d.startViewTransition;
+        console.log('vt support', typeof orig);
+        if (orig) d.startViewTransition = function (...a) {
+          const t0 = performance.now(); const vt = orig.apply(d, a); const rec = { t0 }; window.__vt.push(rec);
+          window.__vtActive = (window.__vtActive || 0) + 1;
+          vt.finished.finally(() => { rec.t1 = performance.now(); window.__vtActive--; });
+          return vt; };
+        return typeof orig;`,
+      args: [],
+    }).then((r) => console.log(`DIAG startViewTransition: ${r}`));
 
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
