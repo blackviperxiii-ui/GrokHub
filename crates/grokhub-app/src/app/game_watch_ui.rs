@@ -273,6 +273,7 @@ impl Cabin {
         if !self.cfg.game_watch {
             return;
         }
+        let elite = self.elite_line();
         let w = &self.focus.watch;
         let listening = match (&w.server, w.listening_for) {
             (Some(_), Some(game)) => format!("Listening while {} runs.", game.name()),
@@ -294,6 +295,9 @@ impl Cabin {
             .flatten()
             .collect();
         ui.indent("game-watch", |ui| {
+            if let Some(elite) = &elite {
+                crate::cards::help_text(ui, elite);
+            }
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
             }
