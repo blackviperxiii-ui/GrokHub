@@ -5445,6 +5445,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             ),
             "Stardew Valley",
         ));
+        rows.push((
+            "session_card",
+            crate::eso_addon::session_card(
+                &crate::eso_addon::EsoSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "The Elder Scrolls Online",
+        ));
         rows
     }
 
