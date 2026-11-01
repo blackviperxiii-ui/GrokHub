@@ -8,22 +8,23 @@ import {
   setAutostart,
   setNotifications,
   setSummonHotkey,
-  type Approvals,
   type Capabilities,
   type Settings as Shape,
 } from "./api";
 import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
-import { APPROVALS } from "./approvals";
+import { Background } from "./Background";
+import { Behavior } from "./Behavior";
+import { Defaults } from "./Defaults";
 import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
-import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
+import { Privacy } from "./Privacy";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
@@ -33,6 +34,9 @@ import { StatusLine, useNote } from "./ui";
 
 export const DESKTOP_NOTE =
   `${PRODUCT_NAME} can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.`;
+
+export const GENERAL_EMPTY =
+  "Nothing here on this device. The model, work folder and approvals are in Defaults.";
 
 /** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
 export const SUMMON_KEYS =
@@ -52,10 +56,6 @@ export function Settings({
   onClose?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
-  const [model, setModel] = useState("");
-  const [closeToTray, setCloseToTray] = useState(true);
-  const [workspace, setWorkspace] = useState("");
-  const [approvals, setApprovals] = useState<Approvals>("ask");
   const [desktopControl, setDesktopControl] = useState(false);
   /** As the OS has it; null until read. */
   const [autostart, setAutostartShown] = useState<boolean | null>(null);
@@ -79,23 +79,15 @@ export function Settings({
 
   function show(next: Shape) {
     setSettings(next);
-    setModel(next.model);
-    setCloseToTray(next.closeToTray);
-    setWorkspace(next.workspace);
-    setApprovals(next.approvals);
     setDesktopControl(next.desktopControl);
   }
 
-  // Runs each time Settings shows. A field changed here and not saved keeps the
-  // edit; an untouched one takes the fresh value (Chat's chips save approvals too).
+  // Runs each time Settings shows. Desktop control changed here and not saved
+  // keeps the edit; untouched, it takes the fresh value.
   const refresh = useEffectEvent((next: Shape) => {
     const was = settings;
     if (!was) return show(next);
     setSettings(next);
-    if (model === was.model) setModel(next.model);
-    if (closeToTray === was.closeToTray) setCloseToTray(next.closeToTray);
-    if (workspace === was.workspace) setWorkspace(next.workspace);
-    if (approvals === was.approvals) setApprovals(next.approvals);
     if (desktopControl === was.desktopControl) setDesktopControl(next.desktopControl);
   });
   useEffect(() => {
@@ -131,10 +123,11 @@ export function Settings({
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (!settings) return;
+    // Defaults and Behavior save the model, tray, folder and approvals themselves.
+    const { model, closeToTray, workspace, approvals } = settings;
     try {
-      show(
-        await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals, desktopControl),
-      );
+      show(await saveSettings(model, closeToTray, workspace, approvals, desktopControl));
       ok("Settings saved.");
     } catch (err) {
       fail(err);
@@ -226,12 +219,21 @@ export function Settings({
         {section === "general" && general()}
         {section === "account" && account()}
         <StatusLine note={note} className="note" />
+        {section === "defaults" && <Defaults settings={loaded} onSaved={show} />}
+        {section === "behavior" && (
+          <Behavior
+            tray={caps.tray}
+            onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
+          />
+        )}
         {section === "appearance" && (
           <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
         )}
         {section === "personality" && <Personality />}
         {section === "playbooks" && <Playbooks />}
         {section === "permissions" && <Permissions />}
+        {section === "privacy" && <Privacy />}
+        {section === "background" && <Background />}
         {section === "pulse" && caps.pulse && <Interests />}
         {section === "localAi" && caps.localAi && <LocalAi />}
         {section === "webAccess" && caps.webAccess && <WebAccess />}
@@ -243,51 +245,18 @@ export function Settings({
   );
 
   function general() {
+    const onThisComputer = basics();
+    if (!caps.desktopControl) return onThisComputer ?? <p className="note">{GENERAL_EMPTY}</p>;
     return (
       <>
-      <form onSubmit={save}>
-        <div className="field">
-          <span id="model-label">Model</span>
-          <ModelPicker value={model} onPick={setModel} labelledBy="model-label" />
-        </div>
-        <label>
-          Work folder
-          <input
-            value={workspace}
-            placeholder={loaded.workspacePath}
-            onChange={(e) => setWorkspace(e.target.value)}
-          />
-        </label>
-        <p className="note">
-          {PRODUCT_NAME} works in <code>{loaded.workspacePath}</code>.
-        </p>
-        <label>
-          Approvals
-          <select value={approvals} onChange={(e) => setApprovals(e.target.value as Approvals)}>
-            {(Object.keys(APPROVALS) as Approvals[]).map((value) => (
-              <option key={value} value={value}>
-                {APPROVALS[value].label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className={approvals === "always" ? "note warn" : "note"}>
-          {APPROVALS[approvals].note}
-        </p>
-        {caps.desktopControl && (
+        <form onSubmit={save}>
           <Toggle checked={desktopControl} onChange={setDesktopControl}>
             Let {PRODUCT_NAME} control the desktop
           </Toggle>
-        )}
-        {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
-        {caps.tray && (
-          <Toggle checked={closeToTray} onChange={setCloseToTray}>
-            Closing the window keeps {PRODUCT_NAME} in the tray
-          </Toggle>
-        )}
-        <button type="submit">Save settings</button>
-      </form>
-      {basics()}
+          {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+          <button type="submit">Save settings</button>
+        </form>
+        {onThisComputer}
       </>
     );
   }
@@ -383,19 +352,19 @@ function RemoteSettings({ settings }: { settings: Shape }) {
     <section className="settings" aria-label="Settings">
       <p className="note">{REMOTE_NOTE}</p>
       <dl>
-        <dt>Model</dt>
-        <dd>{settings.model}</dd>
-        <dt>Work folder</dt>
-        <dd>
-          <code>{settings.workspacePath}</code>
-        </dd>
-        <dt>Approvals</dt>
-        <dd>{APPROVALS[settings.approvals].label}</dd>
         <dt>xAI API key</dt>
         <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
         <dt>Grok sign-in</dt>
         <dd>{settings.signedIn ? "Signed in on your computer." : "Not signed in."}</dd>
       </dl>
+      <h2>{SECTION_LABELS.defaults}</h2>
+      <Defaults settings={settings} readOnly />
+      <h2>{SECTION_LABELS.behavior}</h2>
+      <Behavior tray readOnly />
+      <h2>{SECTION_LABELS.privacy}</h2>
+      <Privacy readOnly />
+      <h2>{SECTION_LABELS.background}</h2>
+      <Background />
     </section>
   );
 }

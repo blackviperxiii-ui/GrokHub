@@ -6,7 +6,7 @@ Your chats, memory, and keys stay on your computer.
 
 ## On-device model
 
-When the on-device model is on in Settings → Privacy & data:
+When the on-device model is on in Settings → AI models:
 
 - Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work.
 - Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.

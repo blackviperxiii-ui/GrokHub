@@ -1,0 +1,1 @@
+- Memory: the first message after a memory file changes no longer waits on an index rebuild. Only the changed notes are reindexed, in one transaction, and the search index follows row by row (release, 314 notes: about 270 ms down to about 4 ms). `examples/memory_index_bench.rs` measures it.

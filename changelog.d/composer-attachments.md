@@ -1,0 +1,1 @@
+- Shell chat: attach files and pictures with the + button, a drop or a paste. Pictures go to the model as image input; text files and PDFs go in as a file the agent reads. Up to 10 per message, nothing sent until you press Send.

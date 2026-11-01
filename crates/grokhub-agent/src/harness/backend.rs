@@ -314,7 +314,7 @@ pub fn park_desk_call(
         "type" => typed_action(args, class),
         // The file manager does not say which files are selected.
         "key" if class == HardClass::Delete.as_str() => format!(
-            "press {} on the files selected in {} (the cabin can't see which)",
+            "press {} on the files selected in {} (the app can't see which)",
             args["keys"].as_str().unwrap_or(""),
             args["window"].as_str().unwrap_or("a file manager")
         ),

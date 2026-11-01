@@ -31,6 +31,7 @@ vi.mock("./api", () => ({
     return Promise.resolve(() => {});
   },
   onEventGap: () => Promise.resolve(() => {}),
+  onFileDrop: () => Promise.resolve(() => {}),
   // The turn stays open, so its events keep landing.
   sendChat: (conversationId: string) => {
     api.sentTo.push(conversationId);
@@ -74,6 +75,8 @@ describe("App pages", () => {
   it("Settings keeps an unsaved edit after Chat, and an untouched field takes the fresh value", async () => {
     render(<App />);
     await userEvent.click(tab("Settings"));
+    const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+    await userEvent.click(within(nav).getByRole("button", { name: "Defaults" }));
     const folder = await screen.findByLabelText("Work folder");
     await userEvent.clear(folder);
     await userEvent.type(folder, "/home/user/kept");
@@ -105,7 +108,7 @@ describe("App pages", () => {
     await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
     await waitFor(() => expect(api.sentTo).toHaveLength(1));
     await userEvent.click(tab("Settings"));
-    expect(await screen.findByLabelText("Model")).toBeVisible();
+    expect(await screen.findByRole("navigation", { name: "Settings sections" })).toBeVisible();
 
     act(() => {
       for (const handler of api.chatHandlers) {

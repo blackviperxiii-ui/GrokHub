@@ -28,6 +28,7 @@ vi.mock("./api", () => ({
     return Promise.resolve(() => {});
   },
   onEventGap: () => Promise.resolve(() => {}),
+  onFileDrop: () => Promise.resolve(() => {}),
 }));
 
 vi.mock("./Modes", async (load) => {
