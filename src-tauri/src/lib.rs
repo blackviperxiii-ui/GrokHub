@@ -18,6 +18,7 @@ pub mod local_engine;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
+pub mod opener;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -144,6 +145,11 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    opener::open(&url)
 }
 
 #[tauri::command]
@@ -1330,6 +1336,7 @@ pub fn run() {
             get_settings,
             save_settings,
             set_theme,
+            open_external,
             set_api_key,
             clear_api_key,
             send_chat,

@@ -9,6 +9,8 @@ import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
 import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
+import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
+import { TabIcon } from "./TabIcon";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -113,15 +115,21 @@ export function App() {
   return (
     <div className={barAway ? "app bar-away" : "app"}>
       <header className="topbar">
+        <div className="brand-mark">
+          <img src={LOGO_MARK_URL} alt="" width={22} height={22} />
+          <span>{PRODUCT_NAME}</span>
+        </div>
         <nav className="tabs" aria-label="Views">
           {views(caps).map((name) => (
             <button
               key={name}
               type="button"
               aria-pressed={view === name}
+              title={VIEW_LABELS[name]}
               onClick={() => setView(name)}
             >
-              {VIEW_LABELS[name]}
+              <TabIcon view={name} />
+              <span className="tab-label">{VIEW_LABELS[name]}</span>
             </button>
           ))}
         </nav>
