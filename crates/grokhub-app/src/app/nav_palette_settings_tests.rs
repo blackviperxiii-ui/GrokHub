@@ -566,7 +566,7 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
         .collect();
     assert_eq!(copied.len(), 1, "{copied:?}");
     assert!(
-        copied[0].starts_with("app GrokHub\nversion "),
+        copied[0].starts_with("app Loadout\nversion "),
         "{}",
         copied[0]
     );
@@ -738,7 +738,7 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     for want in [
         "Search pages and commands",
         "Automations",
-        "Skills and Connectors",
+        "Objectives",
         "Pulse",
     ] {
         assert!(

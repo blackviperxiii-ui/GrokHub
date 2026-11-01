@@ -4,10 +4,7 @@
 use std::path::Path;
 
 /// Literals that may still say GrokHub, and why.
-const ALLOWED: &[&str] = &[
-    // Names the ~/GrokHub/models folder, which keeps its name on a rename.
-    "\"GrokHub models\"",
-];
+const ALLOWED: &[&str] = &[];
 
 fn names_in_literals(src: &str, name: &str) -> Vec<String> {
     src.lines()
@@ -58,7 +55,11 @@ fn guard_catches_a_hardcoded_name() {
         ),
         vec!["let t = \"Show GrokHub\";".to_string()]
     );
-    assert!(names_in_literals("Source::Folder => \"GrokHub models\",", "GrokHub").is_empty());
+    // The models folder label takes the brand now, so it is caught too.
+    assert_eq!(
+        names_in_literals("Source::Folder => \"GrokHub models\",", "GrokHub").len(),
+        1
+    );
 }
 
 #[test]

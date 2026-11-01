@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use grokhub_agent::public_only_resolve;
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
@@ -322,13 +321,15 @@ struct HttpEngineFetch {
     url: String,
 }
 
-fn runtime_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(120))
-        .resolver(public_only_resolve)
-        .build()
+fn runtime_agent() -> grokhub_core::http::Agent {
+    // Redirects are followed by hand so every hop is checked; public IPs only.
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(20),
+        read: Some(Duration::from_secs(120)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 fn redirect_target(from: &str, location: &str) -> String {
@@ -355,21 +356,12 @@ impl rd::Fetch for HttpEngineFetch {
             runtime_download_url_ok(&url)?;
             let mut req = runtime_agent()
                 .get(&url)
-                .set("user-agent", grokhub_agent::USER_AGENT);
+                .header("user-agent", grokhub_agent::USER_AGENT);
             if hop == 0 && offset > 0 {
-                req = req.set("range", &format!("bytes={offset}-"));
+                req = req.header("range", &format!("bytes={offset}-"));
             }
-            let resp = match req.call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(status, resp)) if is_redirect(status) => {
-                    let loc = resp.header("location").ok_or_else(|| {
-                        format!("engine download redirect missing Location (HTTP {status})")
-                    })?;
-                    url = redirect_target(&url, loc);
-                    continue;
-                }
-                Err(e) => return Err(e.to_string()),
-            };
+            // With redirects: 0 a 3xx comes back as the answer, handled below.
+            let resp = req.call().map_err(|e| e.to_string())?;
             let status = resp.status();
             if is_redirect(status) {
                 let loc = resp.header("location").ok_or_else(|| {

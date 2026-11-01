@@ -10,6 +10,7 @@ import {
   type PluginRow,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
 export const CHANNEL_NOTE =
@@ -40,7 +41,7 @@ export function Labs() {
   const [source, setSource] = useState("");
   const [marketUrl, setMarketUrl] = useState("");
   const [entries, setEntries] = useState<PluginEntry[]>([]);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -49,7 +50,7 @@ export function Labs() {
         setPage(loaded);
         setMarketUrl(loaded.marketUrl);
       },
-      (err) => setNote(String(err)),
+      fail,
     );
   }, []);
 
@@ -58,10 +59,10 @@ export function Labs() {
     try {
       const done = await work();
       setPage(done);
-      setNote(done.note || null);
+      ok(done.note || null);
       return done;
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       return null;
     } finally {
       setBusy(false);
@@ -111,11 +112,7 @@ export function Labs() {
           Install
         </button>
       </form>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} className="note" />
       {page === null && !note && <p className="empty">Loading plugins…</p>}
       {page && page.rows.length === 0 && (
         <p className="empty">{PLUGINS_EMPTY}</p>
