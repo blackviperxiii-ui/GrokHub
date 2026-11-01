@@ -4,36 +4,47 @@
 //! first message in the main chat box and moves the card to Doing; nothing
 //! is sent for you. The in-card chat (Say, Stop) stays in the cabin.
 //!
-//! Every change reloads the file first under one process lock, so a card the
-//! cabin changed since the page loaded is kept. A file that does not parse is
-//! an error and is never written over. The cabin keeps its board in memory
-//! and writes it whole, so a cabin that is open at the same time can still
-//! write over a change made here.
+//! Every change goes through `grokhub_core::work_file`: the one board lock
+//! that the cabin, the shell and the agent's `work_*` tools all take, a
+//! re-read under it, and the per-card merge (the higher `rev` wins), so no
+//! writer loses another's change. A file that does not parse is an error and
+//! is never written over. A change that changes nothing writes nothing.
+//!
+//! The page shows each card's steps, where it left off and who owns it. A
+//! card's progress log is read only when the card is opened, and only its
+//! tail. Resume only drafts a short first message that you send yourself.
+//!
+//! Token budget (KB-04): all of this is local file work. Nothing here reaches
+//! a prompt or the tool list.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 
-use grokhub_core::{BoardCard, BoardStatus, KanbanColumn};
+use grokhub_core::work_file::{board_stamp, read_board, read_work_log_tail, update_board};
+use grokhub_core::work_item::{clip_line, remove_work_log};
+use grokhub_core::{
+    BoardCard, BoardStatus, KanbanColumn, StepStatus, WorkKind, WorkLogEvent, WorkOrigin,
+};
 use serde::{Deserialize, Serialize};
 
 pub const FILE: &str = "workboard.json";
-/// The cabin's own cap for its JSON stores.
-const STORE_CAP: u64 = 32 * 1024 * 1024;
 /// The cabin's caps on a card's title and detail.
 const TITLE_MAX: usize = 120;
 const DETAIL_MAX: usize = 2000;
+/// Lines the log shows, newest last (the cabin's drawer shows as many).
+pub const LOG_LINES: usize = 20;
+/// Most of a progress log the page reads: its tail, never the whole file.
+pub const LOG_READ_MAX: u64 = 32 * 1024;
+/// Longest Resume draft. KB-04's `RESUME_BLOCK_MAX` (1,200 B) caps the real
+/// resume block KB-03 sends; the draft stays inside the same cap.
+pub const RESUME_DRAFT_MAX: usize = 1200;
 pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
-
-/// One read-change-write at a time in this process; the temp file is this
-/// process's own.
-static STORE: Mutex<()> = Mutex::new(());
-
-fn store() -> MutexGuard<'static, ()> {
-    STORE.lock().unwrap_or_else(|err| err.into_inner())
-}
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
+}
+
+fn work_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("work")
 }
 
 /// A column on the page: the Follow up row, then the four kanban columns.
@@ -70,6 +81,23 @@ impl Lane {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub text: String,
+    /// planned, doing, done, skipped or failed.
+    pub status: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeftOff {
+    pub goal: String,
+    pub next: String,
+    pub blocker: String,
+    pub refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Card {
     pub id: String,
     pub title: String,
@@ -81,6 +109,21 @@ pub struct Card {
     pub fresh: bool,
     /// A Follow up card's latest report from its automation.
     pub report: String,
+    /// "Agent" or "You", as the cabin's badge reads.
+    pub owner: &'static str,
+    /// Automation, Background, Episode or Flow; a plain task has none.
+    pub kind: Option<&'static str>,
+    /// Where the work left off, the same line the cabin shows.
+    pub left_off: Option<String>,
+    pub steps: Vec<Step>,
+    pub checkpoint: Option<LeftOff>,
+    /// Steps done (or skipped) and in all; the column's place without steps.
+    pub progress: [u32; 2],
+    /// A paused or interrupted run: Resume and Hand back apply.
+    pub can_resume: bool,
+    /// The cabin chat that works it.
+    pub chat: Option<String>,
+    pub updated_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,8 +139,10 @@ pub struct Column {
 pub struct Page {
     /// Follow up first (newest run first), then Todo, Doing, Blocked, Done.
     pub columns: Vec<Column>,
-    /// Archived cards, off the board.
+    /// Archived cards, off the board, newest first.
     pub archived: Vec<Card>,
+    /// The file's mtime, for the view's change check.
+    pub stamp: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,12 +159,19 @@ pub enum Act {
     Notes {
         notes: String,
     },
+    /// To the end of a column.
     Move {
         to: Lane,
     },
+    /// One place up or down in its column, through `rank` like the cabin.
+    Rank {
+        up: bool,
+    },
+    /// A paused run becomes yours: back to Todo, and the sweep leaves it.
+    HandBack,
     Archive,
     Restore,
-    /// For good. The UI asks first.
+    /// For good, with its progress log. The UI asks first.
     Delete,
 }
 
@@ -131,6 +183,85 @@ pub struct Work {
     pub page: Page,
 }
 
+/// What Resume puts in the chat box, and the chat it goes to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resume {
+    /// The chat to open: the card's own, else the new one passed in.
+    pub conversation_id: String,
+    /// The first message, put in the chat box for you to send.
+    pub prompt: String,
+    pub page: Page,
+}
+
+fn step_status(s: StepStatus) -> &'static str {
+    match s {
+        StepStatus::Planned => "planned",
+        StepStatus::Doing => "doing",
+        StepStatus::Done => "done",
+        StepStatus::Skipped => "skipped",
+        StepStatus::Failed => "failed",
+    }
+}
+
+fn kind_label(kind: WorkKind) -> Option<&'static str> {
+    match kind {
+        WorkKind::Task => None,
+        WorkKind::Automation => Some("Automation"),
+        WorkKind::Background => Some("Background"),
+        WorkKind::Episode => Some("Episode"),
+        WorkKind::Flow => Some("Flow"),
+    }
+}
+
+/// The checkpoint's next step, else the step being done, else the first step
+/// not started. Done and archived cards have none (the cabin's rule).
+fn left_off(card: &BoardCard) -> Option<String> {
+    if matches!(card.status, BoardStatus::Done | BoardStatus::Dismissed) {
+        return None;
+    }
+    if let Some(next) = card
+        .checkpoint
+        .as_ref()
+        .map(|c| c.next.trim())
+        .filter(|n| !n.is_empty())
+    {
+        return Some(next.to_string());
+    }
+    let step = |want: StepStatus| card.steps.iter().find(|s| s.status == want);
+    step(StepStatus::Doing)
+        .or_else(|| step(StepStatus::Planned))
+        .map(|s| s.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+fn can_resume(card: &BoardCard) -> bool {
+    card.status == BoardStatus::Blocked
+        && (card.run || card.checkpoint.as_ref().is_some_and(|c| !c.is_empty()))
+}
+
+/// Steps done or skipped over all steps; without steps, the column's place.
+fn progress(card: &BoardCard) -> [u32; 2] {
+    if card.steps.is_empty() {
+        return match card.status.column() {
+            Some(KanbanColumn::Done) => [4, 4],
+            Some(KanbanColumn::Blocked) => [2, 4],
+            Some(KanbanColumn::Doing) => [2, 4],
+            Some(KanbanColumn::Todo) | Some(KanbanColumn::FollowUp) | None => [0, 4],
+        };
+    }
+    let total = card.steps.len() as u32;
+    if card.status == BoardStatus::Done {
+        return [total, total];
+    }
+    let filled = card
+        .steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped))
+        .count() as u32;
+    [filled, total]
+}
+
 fn card(c: &BoardCard) -> Card {
     Card {
         id: c.id.clone(),
@@ -140,63 +271,80 @@ fn card(c: &BoardCard) -> Card {
         priority: c.priority.clone(),
         fresh: c.fresh,
         report: c.report.clone(),
+        owner: match c.origin {
+            Some(WorkOrigin::Agent) => "Agent",
+            Some(WorkOrigin::User) | None => "You",
+        },
+        kind: kind_label(c.kind),
+        left_off: left_off(c),
+        steps: c
+            .steps
+            .iter()
+            .map(|s| Step {
+                text: s.text.clone(),
+                status: step_status(s.status),
+            })
+            .collect(),
+        checkpoint: c
+            .checkpoint
+            .as_ref()
+            .filter(|k| !k.is_empty())
+            .map(|k| LeftOff {
+                goal: k.goal.clone(),
+                next: k.next.clone(),
+                blocker: k.blocker.clone(),
+                refs: k.refs.clone(),
+            }),
+        progress: progress(c),
+        can_resume: can_resume(c),
+        chat: c.thread_id.clone(),
+        updated_ms: c.updated_ms.max(c.active_ms),
     }
 }
 
-fn page(cards: &[BoardCard]) -> Page {
+/// A column's cards in board order: lowest rank first, file order on a tie.
+fn in_column(cards: &[BoardCard], column: KanbanColumn) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..cards.len())
+        .filter(|&i| cards[i].status.column() == Some(column))
+        .collect();
+    idx.sort_by_key(|&i| cards[i].rank);
+    idx
+}
+
+/// The rank that puts a card at the end of `column`.
+fn end_rank(cards: &[BoardCard], column: KanbanColumn) -> i64 {
+    in_column(cards, column)
+        .last()
+        .map(|&j| cards[j].rank.saturating_add(1))
+        .unwrap_or(0)
+}
+
+fn page(cards: &[BoardCard], stamp: u64) -> Page {
     let columns = Lane::ALL
         .iter()
         .map(|&lane| {
             let col = lane.column();
-            let mut here: Vec<&BoardCard> = cards
-                .iter()
-                .filter(|c| c.status.column() == Some(col))
-                .collect();
+            let mut here = in_column(cards, col);
             if lane == Lane::FollowUp {
-                here.sort_by_key(|c| std::cmp::Reverse(c.updated_ms));
+                here.sort_by_key(|&i| std::cmp::Reverse(cards[i].updated_ms));
             }
             Column {
                 lane,
                 label: col.label().to_string(),
-                cards: here.into_iter().map(card).collect(),
+                cards: here.into_iter().map(|i| card(&cards[i])).collect(),
             }
         })
         .collect();
+    let mut archived: Vec<&BoardCard> = cards
+        .iter()
+        .filter(|c| c.status == BoardStatus::Dismissed)
+        .collect();
+    archived.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
     Page {
         columns,
-        archived: cards
-            .iter()
-            .filter(|c| c.status == BoardStatus::Dismissed)
-            .map(card)
-            .collect(),
+        archived: archived.into_iter().map(card).collect(),
+        stamp,
     }
-}
-
-fn load_unlocked(config_dir: &Path) -> Result<Vec<BoardCard>, String> {
-    let path = path(config_dir);
-    if !path.is_file() {
-        return Ok(Vec::new());
-    }
-    let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
-    if len > STORE_CAP {
-        return Err(format!("{FILE} is too large to be a workboard."));
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-    if raw.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    serde_json::from_str(raw).map_err(|e| format!("{FILE}: {e}"))
-}
-
-/// Writes through a temp file and a rename, like the cabin. Callers hold
-/// [`STORE`].
-fn save(config_dir: &Path, cards: &[BoardCard]) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    let raw = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
-    let tmp = config_dir.join(format!("{FILE}.shell-{}.tmp", std::process::id()));
-    std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -204,22 +352,131 @@ fn clip(text: &str, max: usize) -> String {
 }
 
 pub fn load(config_dir: &Path) -> Result<Page, String> {
-    let _held = store();
-    Ok(page(&load_unlocked(config_dir)?))
+    let path = path(config_dir);
+    let cards = read_board(&path)?;
+    Ok(page(&cards, board_stamp(&path)))
 }
 
-/// Adds a card to Todo, as the cabin's New card does.
+/// The file's mtime, so the view reloads only after a save.
+pub fn stamp(config_dir: &Path) -> u64 {
+    board_stamp(&path(config_dir))
+}
+
+/// The newest [`LOG_LINES`] lines of a card's log, reading at most its last
+/// [`LOG_READ_MAX`] bytes.
+pub fn log_tail(config_dir: &Path, id: &str) -> Vec<WorkLogEvent> {
+    read_work_log_tail(&work_dir(config_dir), id, LOG_READ_MAX, LOG_LINES)
+}
+
+/// One read-change-write under the board lock; the page as it is on disk after.
+fn change<R>(
+    config_dir: &Path,
+    edit: impl FnOnce(&mut Vec<BoardCard>) -> Result<R, String>,
+) -> Result<(R, Page), String> {
+    let path = path(config_dir);
+    let (out, cards) = update_board(&path, edit)?;
+    Ok((out, page(&cards, board_stamp(&path))))
+}
+
+/// Adds a card to the end of Todo, as the cabin's New card does.
 pub fn add(config_dir: &Path, title: &str, detail: &str) -> Result<Page, String> {
     if title.trim().is_empty() {
         return Err("Type a title first.".into());
     }
-    let _held = store();
-    let mut cards = load_unlocked(config_dir)?;
-    let mut new = BoardCard::new(title, detail, "");
-    new.status = BoardStatus::Todo;
-    cards.push(new);
-    save(config_dir, &cards)?;
-    Ok(page(&cards))
+    let ((), page) = change(config_dir, |cards| {
+        let mut new = BoardCard::new(&clip(title, TITLE_MAX), &clip(detail, DETAIL_MAX), "");
+        new.status = BoardStatus::Todo;
+        new.rank = end_rank(cards, KanbanColumn::Todo);
+        cards.push(new);
+        Ok(())
+    })?;
+    Ok(page)
+}
+
+fn find(cards: &[BoardCard], id: &str) -> Result<usize, String> {
+    cards.iter().position(|c| c.id == id).ok_or(GONE.into())
+}
+
+/// Applies `act`; true when it changed the card. A no-op (a drop on the
+/// card's own column, a rank past the end) changes nothing and writes nothing.
+fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bool, String> {
+    let i = find(cards, id)?;
+    let changed = match act {
+        Act::Edit { title, detail } => {
+            let (title, detail) = (clip(title, TITLE_MAX), clip(detail, DETAIL_MAX));
+            let c = &mut cards[i];
+            let changed = c.title != title || c.detail != detail;
+            c.title = title;
+            c.detail = detail;
+            changed
+        }
+        Act::Notes { notes } => {
+            let notes = grokhub_core::clean_card_notes(notes);
+            let changed = cards[i].notes != notes;
+            cards[i].notes = notes;
+            changed
+        }
+        Act::Move { to } => {
+            let column = to.column();
+            if cards[i].status.column() == Some(column) {
+                false
+            } else {
+                let rank = end_rank(cards, column);
+                let c = &mut cards[i];
+                c.status = column.status();
+                c.rank = rank;
+                true
+            }
+        }
+        Act::Rank { up } => match cards[i].status.column() {
+            Some(column) => {
+                let order = in_column(cards, column);
+                let at = order.iter().position(|&j| j == i).unwrap_or(0);
+                let other = if *up {
+                    at.checked_sub(1)
+                } else {
+                    Some(at + 1).filter(|&n| n < order.len())
+                };
+                match other {
+                    Some(other) => {
+                        // Number the column 1..n in its order, then swap the two.
+                        for (n, &j) in order.iter().enumerate() {
+                            cards[j].rank = n as i64 + 1;
+                        }
+                        let (a, b) = (order[at], order[other]);
+                        let ra = cards[a].rank;
+                        cards[a].rank = cards[b].rank;
+                        cards[b].rank = ra;
+                        true
+                    }
+                    None => false,
+                }
+            }
+            None => false,
+        },
+        Act::HandBack => {
+            let c = &mut cards[i];
+            if can_resume(c) || c.origin == Some(WorkOrigin::Agent) {
+                c.origin = Some(WorkOrigin::User);
+                c.status = BoardStatus::Todo;
+                true
+            } else {
+                false
+            }
+        }
+        Act::Archive => grokhub_core::archive_work_card(cards, id, now),
+        Act::Restore => grokhub_core::restore_work_card(cards, id, now),
+        Act::Delete => grokhub_core::delete_work_card(cards, id),
+    };
+    // A change you made is yours, so the sweep leaves the card.
+    let yours = matches!(
+        act,
+        Act::Edit { .. } | Act::Notes { .. } | Act::Move { .. } | Act::Rank { .. } | Act::HandBack
+    );
+    if changed && yours {
+        grokhub_core::mark_touched(cards, id, now);
+    }
+    Ok(changed)
 }
 
 pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
@@ -228,75 +485,97 @@ pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
             return Err("A card needs a title.".into());
         }
     }
-    let _held = store();
-    let mut cards = load_unlocked(config_dir)?;
-    let at = cards.iter().position(|c| c.id == id).ok_or(GONE)?;
-    let changed = match act {
-        Act::Edit { title, detail } => {
-            let c = &mut cards[at];
-            c.title = clip(&title, TITLE_MAX);
-            c.detail = clip(&detail, DETAIL_MAX);
-            true
-        }
-        Act::Notes { notes } => {
-            cards[at].notes = grokhub_core::clean_card_notes(&notes);
-            true
-        }
-        Act::Move { to } => {
-            let c = &mut cards[at];
-            // Dropping a card on the column it is in changes nothing.
-            if c.status.column() == Some(to.column()) {
-                false
-            } else {
-                c.status = to.column().status();
-                true
-            }
-        }
-        Act::Archive => {
-            cards[at].status = BoardStatus::Dismissed;
-            true
-        }
-        Act::Restore => {
-            cards[at].status = BoardStatus::Todo;
-            true
-        }
-        Act::Delete => {
-            cards.remove(at);
-            true
-        }
-    };
-    if changed {
-        save(config_dir, &cards)?;
+    let now = grokhub_core::now_ms();
+    let (changed, page) = change(config_dir, |cards| apply(cards, id, &act, now))?;
+    if changed && matches!(act, Act::Delete) {
+        remove_work_log(&work_dir(config_dir), id);
     }
-    Ok(page(&cards))
+    Ok(page)
 }
 
 /// The card's first message for the main chat, with its notes. As the
-/// cabin's Work on it does, the card moves to Doing unless it is done or an
-/// automation's Follow up, and stops being new. The chat is the shell's own,
-/// so the card is not linked to a cabin chat.
+/// cabin's Work on it does, the card moves to the end of Doing unless it is
+/// done or an automation's Follow up, and stops being new. The chat is the
+/// shell's own, so the card is not linked to a cabin chat.
 pub fn work(config_dir: &Path, id: &str) -> Result<Work, String> {
-    let _held = store();
-    let mut cards = load_unlocked(config_dir)?;
-    let c = cards.iter_mut().find(|c| c.id == id).ok_or(GONE)?;
-    let prompt = grokhub_core::card_work_prompt(c);
-    let before = (c.status, c.fresh);
-    if c.status != BoardStatus::Done && c.automation.is_none() {
-        c.status = BoardStatus::InProgress;
+    let (prompt, page) = change(config_dir, |cards| {
+        let i = find(cards, id)?;
+        let prompt = grokhub_core::card_work_prompt(&cards[i]);
+        let to_doing = cards[i].status != BoardStatus::Done
+            && cards[i].automation.is_none()
+            && cards[i].status.column() != Some(KanbanColumn::Doing);
+        let rank = end_rank(cards, KanbanColumn::Doing);
+        let c = &mut cards[i];
+        if to_doing {
+            c.status = BoardStatus::InProgress;
+            c.rank = rank;
+        }
+        c.fresh = false;
+        Ok(prompt)
+    })?;
+    Ok(Work { prompt, page })
+}
+
+/// The first message Resume puts in the chat box: the card and where it left
+/// off, within [`RESUME_DRAFT_MAX`].
+fn resume_draft(card: &BoardCard) -> String {
+    let mut text = format!("Resume the work card \"{}\".", clip_line(&card.title, 120));
+    if let Some(next) = left_off(card) {
+        text.push_str(&format!("\nLeft off: {}", clip_line(&next, 200)));
     }
-    c.fresh = false;
-    if (c.status, c.fresh) != before {
-        save(config_dir, &cards)?;
+    if let Some(blocker) = card
+        .checkpoint
+        .as_ref()
+        .map(|c| c.blocker.trim())
+        .filter(|b| !b.is_empty())
+    {
+        text.push_str(&format!("\nBlocked on: {}", clip_line(blocker, 160)));
     }
-    Ok(Work {
+    cap_bytes(&text, RESUME_DRAFT_MAX)
+}
+
+fn cap_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// Resume a paused or interrupted run. Today this marks the card touched and
+/// drafts the first message in its chat, the way the cabin's stub continues in
+/// the card's chat. KB-03 replaces this body with the real resume (the capped
+/// resume block sent in the turn input); the command and its reply stay.
+pub fn resume(config_dir: &Path, id: &str, new_conversation: &str) -> Result<Resume, String> {
+    let now = grokhub_core::now_ms();
+    let ((conversation_id, prompt), page) = change(config_dir, |cards| {
+        let i = find(cards, id)?;
+        if !can_resume(&cards[i]) {
+            return Err("Only a paused or interrupted run can resume.".into());
+        }
+        let conversation = cards[i]
+            .thread_id
+            .clone()
+            .unwrap_or_else(|| new_conversation.trim().to_string());
+        let prompt = resume_draft(&cards[i]);
+        grokhub_core::mark_touched(cards, id, now);
+        Ok((conversation, prompt))
+    })?;
+    Ok(Resume {
+        conversation_id,
         prompt,
-        page: page(&cards),
+        page,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::work_item::append_work_log;
+    use grokhub_core::{Checkpoint, WorkStep};
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -325,19 +604,70 @@ mod tests {
         dir
     }
 
-    fn titles(page: &Page, lane: Lane) -> Vec<String> {
-        page.columns
+    fn lane(page: &Page, lane: Lane) -> &[Card] {
+        &page
+            .columns
             .iter()
             .find(|c| c.lane == lane)
             .expect("lane")
             .cards
-            .iter()
-            .map(|c| c.title.clone())
-            .collect()
+    }
+
+    fn titles(page: &Page, l: Lane) -> Vec<String> {
+        lane(page, l).iter().map(|c| c.title.clone()).collect()
+    }
+
+    fn ids(page: &Page, l: Lane) -> Vec<String> {
+        lane(page, l).iter().map(|c| c.id.clone()).collect()
     }
 
     fn raw(dir: &Path) -> Vec<BoardCard> {
         serde_json::from_str(&std::fs::read_to_string(path(dir)).expect("read")).expect("parse")
+    }
+
+    fn board_card(id: &str, status: BoardStatus) -> BoardCard {
+        let mut c = BoardCard::new(id, "", "");
+        c.id = id.into();
+        c.title = format!("Card {id}");
+        c.status = status;
+        c
+    }
+
+    fn paused(id: &str) -> BoardCard {
+        let mut c = board_card(id, BoardStatus::Blocked);
+        c.run = true;
+        c.origin = Some(WorkOrigin::Agent);
+        c.thread_id = Some(format!("chat-{id}"));
+        c.steps = vec![
+            WorkStep {
+                text: "Read the spec".into(),
+                status: StepStatus::Done,
+            },
+            WorkStep {
+                text: "Write the parser".into(),
+                status: StepStatus::Doing,
+            },
+            WorkStep {
+                text: "Test it".into(),
+                status: StepStatus::Planned,
+            },
+        ];
+        c.checkpoint = Some(Checkpoint {
+            goal: "Parse .tsa files".into(),
+            next: "Finish the lexer".into(),
+            blocker: "Which grammar?".into(),
+            ..Default::default()
+        });
+        c
+    }
+
+    /// The cabin's save of a whole board, as `serde_json::to_string_pretty`.
+    fn cabin_writes(config: &Path, cards: &[BoardCard]) {
+        std::fs::write(path(config), serde_json::to_string_pretty(cards).unwrap()).unwrap();
+    }
+
+    fn on_disk(config: &Path) -> Vec<BoardCard> {
+        read_board(&path(config)).unwrap()
     }
 
     #[test]
@@ -375,6 +705,7 @@ mod tests {
             ("Two new mails need a reply.", true)
         );
         assert_eq!(page.columns[2].cards[0].notes, "Start with the lint job");
+        assert!(page.stamp > 0);
         // Loading writes nothing.
         assert_eq!(std::fs::read_to_string(path(&dir)).expect("kept"), CABIN);
     }
@@ -384,7 +715,9 @@ mod tests {
         let dir = temp_dir("add");
         let empty = load(&dir).expect("empty");
         assert!(empty.columns.iter().all(|c| c.cards.is_empty()));
-        assert!(!path(&dir).exists());
+        assert!(empty.archived.is_empty());
+        assert_eq!(empty.stamp, 0);
+        assert!(!path(&dir).exists(), "loading writes nothing");
 
         assert_eq!(
             add(&dir, "   ", "x"),
@@ -399,9 +732,58 @@ mod tests {
         assert_eq!(saved[0].status, BoardStatus::Todo);
         assert_eq!(saved[0].detail, "in the shell");
         assert!(saved[0].id.starts_with('w'), "{}", saved[0].id);
-        assert!(!dir
-            .join(format!("{FILE}.shell-{}.tmp", std::process::id()))
-            .exists());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp") || n.ends_with(".lock"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+
+        let page = add(&dir, "Second", "").expect("add");
+        assert_eq!(
+            titles(&page, Lane::Todo),
+            vec!["Ship the board", "Second"],
+            "a new card goes to the end of Todo"
+        );
+    }
+
+    #[test]
+    fn a_card_made_by_the_cabin_shows_its_run_in_the_shell() {
+        let config = temp_dir("cabin-card");
+        let mut follow = board_card("f", BoardStatus::FollowUp);
+        follow.automation = Some("daily".into());
+        // Saved before owners: loading fills the owner and the kind.
+        follow.origin = None;
+        let mut gone = board_card("z", BoardStatus::Dismissed);
+        gone.archived_ms = 5;
+        cabin_writes(
+            &config,
+            &[
+                board_card("a", BoardStatus::Todo),
+                paused("p"),
+                follow,
+                gone,
+            ],
+        );
+        let b = load(&config).unwrap();
+        assert_eq!(lane(&b, Lane::Todo)[0].title, "Card a");
+        assert_eq!(lane(&b, Lane::Todo)[0].owner, "You");
+        let p = &lane(&b, Lane::Blocked)[0];
+        assert_eq!(p.owner, "Agent");
+        assert!(p.can_resume);
+        assert_eq!(p.left_off.as_deref(), Some("Finish the lexer"));
+        assert_eq!(p.progress, [1, 3]);
+        assert_eq!(p.steps[1].status, "doing");
+        assert_eq!(p.checkpoint.as_ref().unwrap().blocker, "Which grammar?");
+        assert_eq!(p.chat.as_deref(), Some("chat-p"));
+        assert_eq!(
+            lane(&b, Lane::FollowUp)[0].kind,
+            Some("Automation"),
+            "migrated on read"
+        );
+        assert_eq!(b.archived[0].id, "z");
+        assert!(b.stamp > 0);
     }
 
     #[test]
@@ -433,6 +815,9 @@ mod tests {
         assert_eq!(saved[0].notes_sent, 42);
         assert_eq!(saved[3].automation.as_deref(), Some("auto-1"));
         assert_eq!(saved[3].updated_ms, 1_800_000_000_000);
+        // The move is yours, and wins the cabin's merge.
+        assert!(saved[1].touched);
+        assert!(saved[1].rev > saved[2].rev);
     }
 
     #[test]
@@ -477,6 +862,41 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_move_survives_a_cabin_save() {
+        let config = temp_dir("merge");
+        cabin_writes(
+            &config,
+            &[
+                board_card("a", BoardStatus::Todo),
+                board_card("b", BoardStatus::Todo),
+            ],
+        );
+        // The cabin loads the board, then the shell moves a card.
+        let cabin_base = on_disk(&config);
+        let b = act(&config, "a", Act::Move { to: Lane::Doing }).unwrap();
+        assert_eq!(ids(&b, Lane::Doing), ["a"]);
+        let moved = on_disk(&config);
+        assert!(moved[0].touched, "a move is yours");
+        assert!(moved[0].rev > cabin_base[0].rev);
+
+        // The cabin edits b from its stale copy and saves through the merge.
+        let base = grokhub_core::work_item::board_base(&cabin_base);
+        let mut mine = cabin_base.clone();
+        mine[1].notes = "check the cable".into();
+        grokhub_core::work_item::stamp_changes(&mut mine, &base, 1);
+        let merged = grokhub_core::work_item::merge_cards(&base, &mine, &moved);
+        cabin_writes(&config, &merged);
+
+        let b = load(&config).unwrap();
+        assert_eq!(ids(&b, Lane::Doing), ["a"], "the shell's move kept");
+        assert_eq!(
+            lane(&b, Lane::Todo)[0].notes,
+            "check the cable",
+            "the cabin's edit kept"
+        );
+    }
+
+    #[test]
     fn a_broken_file_is_an_error_and_is_left_alone() {
         let dir = temp_dir("broken");
         std::fs::write(path(&dir), "[{not json").expect("seed");
@@ -486,6 +906,7 @@ mod tests {
         assert!(add(&dir, "New", "").is_err());
         assert!(act(&dir, "w-1", Act::Archive).is_err());
         assert!(work(&dir, "w-1").is_err());
+        assert!(resume(&dir, "w-1", "x").is_err());
         assert_eq!(
             std::fs::read_to_string(path(&dir)).expect("kept"),
             "[{not json"
@@ -493,14 +914,16 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_that_card_only() {
+    fn delete_removes_that_card_only_with_its_log() {
         let dir = seed("delete");
+        append_work_log(&work_dir(&dir), "w-3", 1, "step", "did it").unwrap();
         let page = act(&dir, "w-3", Act::Delete).expect("delete");
         assert_eq!(titles(&page, Lane::Blocked), Vec::<String>::new());
         assert_eq!(
             raw(&dir).iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             vec!["w-1", "w-2", "w-4", "w-5"]
         );
+        assert!(log_tail(&dir, "w-3").is_empty(), "its log is gone too");
         assert_eq!(act(&dir, "w-3", Act::Delete), Err(GONE.to_string()));
     }
 
@@ -545,6 +968,49 @@ mod tests {
             vec!["Write release notes", "New idea"]
         );
         assert_eq!(raw(&dir)[4].detail, "Try it");
+    }
+
+    #[test]
+    fn rank_reorders_within_a_column_and_the_ends_change_nothing() {
+        let config = temp_dir("rank");
+        cabin_writes(
+            &config,
+            &[
+                board_card("a", BoardStatus::Todo),
+                board_card("b", BoardStatus::Todo),
+                board_card("c", BoardStatus::Todo),
+            ],
+        );
+        let b = act(&config, "c", Act::Rank { up: true }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["a", "c", "b"]);
+        let before = std::fs::read_to_string(path(&config)).unwrap();
+        let b = act(&config, "a", Act::Rank { up: true }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["a", "c", "b"]);
+        assert_eq!(
+            std::fs::read_to_string(path(&config)).unwrap(),
+            before,
+            "the top card going up writes nothing"
+        );
+        let b = act(&config, "a", Act::Rank { up: false }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["c", "a", "b"]);
+        // A moved card goes to the end of its new column.
+        act(&config, "b", Act::Move { to: Lane::Done }).unwrap();
+        let b = act(&config, "c", Act::Move { to: Lane::Done }).unwrap();
+        assert_eq!(ids(&b, Lane::Done), ["b", "c"]);
+    }
+
+    #[test]
+    fn hand_back_makes_a_paused_run_yours() {
+        let config = temp_dir("hand-back");
+        cabin_writes(&config, &[paused("p"), board_card("t", BoardStatus::Todo)]);
+        let b = act(&config, "p", Act::HandBack).unwrap();
+        let p = lane(&b, Lane::Todo).iter().find(|c| c.id == "p").unwrap();
+        assert_eq!(p.owner, "You");
+        assert!(on_disk(&config)[0].touched);
+        // Your own card has nothing to hand back.
+        let before = std::fs::read_to_string(path(&config)).unwrap();
+        act(&config, "t", Act::HandBack).unwrap();
+        assert_eq!(std::fs::read_to_string(path(&config)).unwrap(), before);
     }
 
     #[test]
@@ -597,6 +1063,47 @@ mod tests {
     }
 
     #[test]
+    fn resume_drafts_the_message_in_the_cards_chat() {
+        let config = temp_dir("resume");
+        let mut no_chat = paused("q");
+        no_chat.thread_id = None;
+        cabin_writes(
+            &config,
+            &[paused("p"), no_chat, board_card("t", BoardStatus::Todo)],
+        );
+        let r = resume(&config, "p", "shell-new").unwrap();
+        assert_eq!(r.conversation_id, "chat-p");
+        assert_eq!(
+            r.prompt,
+            "Resume the work card \"Card p\".\nLeft off: Finish the lexer\nBlocked on: Which grammar?"
+        );
+        assert!(on_disk(&config)[0].touched);
+        assert_eq!(
+            resume(&config, "q", "shell-new").unwrap().conversation_id,
+            "shell-new"
+        );
+        assert_eq!(
+            resume(&config, "t", "x").unwrap_err(),
+            "Only a paused or interrupted run can resume."
+        );
+        let mut huge = paused("h");
+        huge.title = "t".repeat(5000);
+        assert!(resume_draft(&huge).len() <= RESUME_DRAFT_MAX);
+    }
+
+    #[test]
+    fn the_log_is_read_on_ask_and_only_its_tail() {
+        let config = temp_dir("log");
+        for i in 0..30 {
+            append_work_log(&work_dir(&config), "p", i, "step", &format!("line {i}")).unwrap();
+        }
+        let lines = log_tail(&config, "p");
+        assert_eq!(lines.len(), LOG_LINES);
+        assert_eq!(lines.last().unwrap().text, "line 29");
+        assert!(log_tail(&config, "../escape").is_empty());
+    }
+
+    #[test]
     fn acts_arrive_as_the_ui_sends_them() {
         let parsed: Act = serde_json::from_str(r#"{"kind":"move","to":"followUp"}"#).expect("move");
         assert!(matches!(parsed, Act::Move { to: Lane::FollowUp }));
@@ -605,5 +1112,9 @@ mod tests {
         assert!(matches!(parsed, Act::Edit { title, detail } if title == "A" && detail == "B"));
         let parsed: Act = serde_json::from_str(r#"{"kind":"delete"}"#).expect("delete");
         assert!(matches!(parsed, Act::Delete));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"rank","up":true}"#).expect("rank");
+        assert!(matches!(parsed, Act::Rank { up: true }));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"handBack"}"#).expect("hand back");
+        assert!(matches!(parsed, Act::HandBack));
     }
 }

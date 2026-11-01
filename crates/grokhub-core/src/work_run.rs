@@ -7,15 +7,13 @@
 //! Everything here is a plain local call. No model reads or writes any of it,
 //! and nothing here goes into a prompt (KB-04).
 
-use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
+use crate::work_file::{lock_board, write_board};
 use crate::work_item::{
-    archive_card, board_base, clean_card, clean_steps, clip_line, migrate_cards, open_private,
-    stamp_changes, Checkpoint, StepStatus, WorkKind, WorkOrigin, WorkStep, CHECKPOINT_BLOCKER_MAX,
-    CHECKPOINT_NEXT_MAX, CHECKPOINT_REFS_MAX, CHECKPOINT_REF_MAX,
+    archive_card, board_base, clean_card, clean_steps, clip_line, stamp_changes, Checkpoint,
+    StepStatus, WorkKind, WorkOrigin, WorkStep, CHECKPOINT_BLOCKER_MAX, CHECKPOINT_NEXT_MAX,
+    CHECKPOINT_REFS_MAX, CHECKPOINT_REF_MAX,
 };
 use crate::workboard::{follow_up_title, BoardCard, BoardStatus};
 
@@ -328,115 +326,9 @@ pub fn work_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("work")
 }
 
-/// A lock older than this was left by a writer that died; it is broken.
-const LOCK_STALE: Duration = Duration::from_secs(5);
-/// Give up on the lock after this long.
-const LOCK_WAIT: Duration = Duration::from_secs(7);
-/// Bigger than this is not a board file.
-const BOARD_READ_CAP: u64 = 32 * 1024 * 1024;
-
-/// Held while a writer re-reads, changes and writes the board. Removed on drop.
-pub struct BoardLock(PathBuf);
-
-impl Drop for BoardLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-pub fn lock_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".lock");
-    path.with_file_name(name)
-}
-
-/// Take `<file>.lock` with an exclusive create. A lock older than five seconds
-/// is stale and broken. Every writer of the board (the cabin, the shell, the
-/// agent's `work_*` tools) takes this same lock.
-pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
-    let lock = lock_path(path);
-    if let Some(dir) = lock.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let start = Instant::now();
-    loop {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-        {
-            Ok(mut f) => {
-                let _ = write!(f, "{}", std::process::id());
-                return Ok(BoardLock(lock));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let stale = fs::metadata(&lock)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|age| age >= LOCK_STALE);
-                if stale {
-                    let _ = fs::remove_file(&lock);
-                    continue;
-                }
-                if start.elapsed() >= LOCK_WAIT {
-                    return Err("workboard.json is locked by another writer".into());
-                }
-                std::thread::sleep(Duration::from_millis(15));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-}
-
-/// The cards on disk. A missing or empty file is an empty board; one too big or
-/// not a board is an error, so a writer never replaces cards it failed to read.
-pub fn read_board_file(path: &Path) -> Result<Vec<BoardCard>, String> {
-    let meta = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.to_string()),
-    };
-    if meta.len() > BOARD_READ_CAP {
-        return Err("workboard.json is too large to be a board".into());
-    }
-    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-    if raw.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut cards: Vec<BoardCard> =
-        serde_json::from_str(raw).map_err(|e| format!("workboard.json: {e}"))?;
-    migrate_cards(&mut cards, crate::now_ms());
-    Ok(cards)
-}
-
-fn write_board_file(path: &Path, cards: &[BoardCard]) -> Result<(), String> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| "the board needs a folder".to_string())?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
-    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = dir.join(format!(".workboard.json.{}-{n}.tmp", std::process::id()));
-    let mut f = open_private(&tmp, false).map_err(|e| e.to_string())?;
-    f.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
-    f.sync_all().map_err(|e| e.to_string())?;
-    drop(f);
-    let mut renamed = fs::rename(&tmp, path);
-    for _ in 0..5 {
-        if renamed.is_ok() || !cfg!(windows) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-        renamed = fs::rename(&tmp, path);
-    }
-    renamed.map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        e.to_string()
-    })
-}
+/// The board file's reader, lock and writer all live in `work_file`, shared by
+/// every writer; this name stays for the callers that read through `work_run`.
+pub use crate::work_file::read_board as read_board_file;
 
 /// One change to the board file by a writer that holds no copy of its own (the
 /// shell, the agent's `work_*` tools): take the lock, read, `edit`, bump `rev`
@@ -455,7 +347,7 @@ pub fn edit_board_file<R>(
     stamp_changes(&mut cards, &base, now);
     let after = serde_json::to_string(&cards).map_err(|e| e.to_string())?;
     if after != before {
-        write_board_file(path, &cards)?;
+        write_board(path, &cards)?;
     }
     Ok(out)
 }
@@ -463,6 +355,9 @@ pub fn edit_board_file<R>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::work_file::lock_path;
+    use std::fs;
+    use std::time::Duration;
 
     fn todos(rows: &[(&str, &str)]) -> Vec<(String, String)> {
         rows.iter()

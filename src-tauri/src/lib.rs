@@ -1264,6 +1264,36 @@ async fn journal_to_mission(
     off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
 }
 
+/// The board file's mtime; the page reloads only when it changes.
+#[tauri::command]
+async fn workboard_stamp(state: State<'_, ShellState>) -> Result<u64, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::stamp(&dir)).await
+}
+
+/// A card's progress log tail, read when its drawer opens.
+#[tauri::command]
+async fn workboard_log(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<Vec<grokhub_core::WorkLogEvent>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::log_tail(&dir, &id)).await
+}
+
+/// Resume a paused run. A stub until KB-03 fills in the real resume.
+#[tauri::command]
+async fn workboard_resume(
+    state: State<'_, ShellState>,
+    id: String,
+    conversation_id: String,
+) -> Result<workboard::Resume, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::resume(&dir, &id, &conversation_id)).await?
+}
+
+/// Workboard: the cabin's work cards from the same file, through the shared
+/// board lock and merge.
 #[tauri::command]
 async fn get_workboard(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
     let dir = state.config_dir.clone();
@@ -2138,6 +2168,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "act")?,
         ))?),
         "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
+        "workboard_stamp" => out(block_on(workboard_stamp(state))?),
+        "workboard_log" => out(block_on(workboard_log(state, arg(args, "id")?))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2701,6 +2733,9 @@ pub fn run() {
             workboard_add,
             workboard_act,
             workboard_work,
+            workboard_stamp,
+            workboard_log,
+            workboard_resume,
             get_behavior,
             save_behavior,
             save_defaults,

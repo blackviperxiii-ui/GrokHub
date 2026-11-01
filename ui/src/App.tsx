@@ -3,6 +3,7 @@ import {
   CORE_ONLY,
   getCapabilities,
   getSettings,
+  getWorkboard,
   haltDesktop,
   onAutomationRan,
   onChatEvent,
@@ -10,7 +11,7 @@ import {
   shareSchedulerClock,
   type Capabilities,
 } from "./api";
-import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
+import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
@@ -35,6 +36,7 @@ const loaders = {
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
   home: () => import("./Home").then((m) => ({ default: m.Home })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
@@ -43,7 +45,6 @@ const loaders = {
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
-  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
@@ -94,6 +95,9 @@ export function App() {
   const [askClear, setAskClear] = useState(false);
   const [clear, setClear] = useState<{ n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // Which work card each chat works, from the Workboard's last load.
+  const [cardChats, setCardChats] = useState<Record<string, string>>({});
+  const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
   const [desktopOn, setDesktopOn] = useState(false);
   const [haltNote, setHaltNote] = useState<string>();
   // Halt is the computer's own: phones and the web app have no desktop control.
@@ -126,6 +130,11 @@ export function App() {
       .then(setCaps);
     getSettings().then(
       (s) => applyTheme(s.theme),
+      () => {},
+    );
+    // A local read, so a chat's dock item can open its work card.
+    getWorkboard().then(
+      (board) => setCardChats(cardsByChat(board)),
       () => {},
     );
   }, []);
@@ -318,6 +327,11 @@ export function App() {
           items={Object.values(activity)}
           onOpenChat={() => setView("chat")}
           onOpenAutomations={() => setView("automations")}
+          cardFor={(chat) => cardChats[chat]}
+          onOpenCard={(id) => {
+            setOpenCard((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+            setView("workboard");
+          }}
         />
         <button
           type="button"
@@ -417,6 +431,20 @@ export function App() {
           <Pulse onRun={ask} />
         </Page>
       )}
+      {opened.has("workboard") && (
+        <Page shown={view === "workboard"}>
+          <Workboard
+            onWork={ask}
+            resumable={!caps.remote}
+            openCard={openCard}
+            onCards={setCardChats}
+            onResume={({ prompt, conversationId }) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
+        </Page>
+      )}
       {opened.has("journal") && !caps.remote && (
         <Page shown={view === "journal"}>
           <Journal
@@ -458,11 +486,6 @@ export function App() {
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
-        </Page>
-      )}
-      {opened.has("workboard") && (
-        <Page shown={view === "workboard"}>
-          <Workboard onWork={ask} />
         </Page>
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (

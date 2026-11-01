@@ -103,7 +103,11 @@ pub const WEB_COMMANDS: &[&str] = &[
     "nyx_look",
     "get_queue",
     "stop_task",
+    // The Workboard: every change goes through the shared board lock and merge.
+    // Resume stays in the desktop shell.
     "get_workboard",
+    "workboard_stamp",
+    "workboard_log",
     "workboard_add",
     "workboard_act",
     "workboard_work",
@@ -1015,6 +1019,21 @@ mod tests {
         ] {
             assert!(!web_command(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_web_has_the_workboard_but_not_resume() {
+        for name in [
+            "get_workboard",
+            "workboard_stamp",
+            "workboard_log",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
+        ] {
+            assert!(web_command(name), "{name}");
+        }
+        assert!(!web_command("workboard_resume"));
     }
 
     #[test]

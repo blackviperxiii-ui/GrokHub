@@ -1,6 +1,7 @@
 //! `workboard.json` shared by several writers (the cabin, the shell, the self MCP
 //! process). Each card's progress log lives under [`work_dir`]; its file work is
-//! in `grokhub_core::work_item` so every writer shares it.
+//! in `grokhub_core::work_item`, and the lock in `grokhub_core::work_file`, so
+//! every writer shares them.
 //!
 //! A save takes `workboard.json.lock`, re-reads the file, merges card by card
 //! (the higher `rev` wins) and writes through `atomic_write`, so one writer never
@@ -12,10 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use grokhub_core::work_file::lock_board;
 use grokhub_core::work_item::{
     board_base, merge_cards, migrate_cards, remove_work_log, stamp_changes, BoardBase,
 };
-use grokhub_core::work_run::lock_board;
 use grokhub_core::{now_ms, BoardCard};
 
 use crate::config::{atomic_write, peek_json, JSON_STORE_CAP};
@@ -189,7 +190,7 @@ pub fn delete_card(cards: &mut Vec<BoardCard>, id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_core::work_run::lock_path;
+    use grokhub_core::work_file::lock_path;
     use grokhub_core::BoardStatus;
 
     fn root(label: &str) -> PathBuf {
