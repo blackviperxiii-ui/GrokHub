@@ -20,6 +20,7 @@ mod search_replace;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;
 mod write;
@@ -123,6 +124,12 @@ pub fn bind_deferred_session(session: &str) {
 /// Reset loaded deferred schemas for a new user turn.
 pub fn begin_deferred_turn(session: &str) {
     registry::begin_turn(session);
+}
+
+/// LO-45: give the chat's Brief to the tool router. The first Brief picks the
+/// chat's tool profile; a later work Brief upgrades a Talk chat.
+pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
+    registry::note_brief(session, brief);
 }
 
 pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {

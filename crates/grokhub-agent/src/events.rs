@@ -351,7 +351,8 @@ impl Engine for NativeEngine {
             });
             return Ok(());
         }
-        self.write_brief(text, image.is_some());
+        let brief = self.write_brief(text, image.is_some());
+        crate::tools::note_turn_brief(&self.conversation_id, &brief);
         if let Some(seed) = self
             .episode_seed
             .clone()
