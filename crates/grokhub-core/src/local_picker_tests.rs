@@ -481,5 +481,5 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     // The pinned engine is new enough for every row, and its x86 builds carry
     // the AVX-only CPU variants.
     let pinned = crate::runtime_download::manifest_for_key("linux-x86_64").expect("pinned");
-    assert_eq!(build_number(&pinned.version), Some(11_602));
+    assert_eq!(build_number(&pinned.version), Some(12_017));
 }

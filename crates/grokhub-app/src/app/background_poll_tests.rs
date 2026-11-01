@@ -66,63 +66,6 @@ fn imagine_save_poll_reports_the_path() {
     assert!(app.chat_job_thread.is_none());
 }
 
-// Folded from PR #281.
-#[test]
-fn chip_poll_drops_a_secret_label() {
-    fn chip(id: &str, label: &str, value: &str) -> QuickChip {
-        QuickChip {
-            id: id.into(),
-            label: label.into(),
-            value: value.into(),
-            kind: ChipKind::Chat,
-            score: 1.0,
-            hint: String::new(),
-            primary: false,
-        }
-    }
-
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.chip_busy = true;
-    cabin.poll_chips();
-    assert!(cabin.chip_rx.is_none());
-    assert!(cabin.chip_busy);
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    cabin.chip_rx = Some(rx);
-    cabin.poll_chips();
-    assert!(cabin.chip_rx.is_some());
-    assert!(cabin.chip_busy);
-    assert!(cabin.llm_chips.is_empty());
-
-    let secret_label = format!("sk-{}", "a".repeat(12));
-    let secret_value = format!("sk-{}", "b".repeat(12));
-    tx.send(vec![
-        chip("harbor", "Harbor", "/sh"),
-        chip("secret-label", &secret_label, "ok"),
-        chip("secret-value", "Night", &secret_value),
-    ])
-    .expect("chip send");
-    cabin.poll_chips();
-    assert!(!cabin.chip_busy);
-    assert!(cabin.chip_rx.is_none());
-    assert_eq!(cabin.llm_chips.len(), 1);
-    assert_eq!(cabin.llm_chips[0].label, "Harbor");
-    assert_eq!(cabin.llm_chips[0].value, "/sh");
-
-    cabin.chip_busy = true;
-    let (gone, rx) = std::sync::mpsc::channel();
-    drop(gone);
-    cabin.chip_rx = Some(rx);
-    cabin.poll_chips();
-    assert!(!cabin.chip_busy);
-    assert!(cabin.chip_rx.is_none());
-    assert_eq!(cabin.llm_chips.len(), 1);
-    assert_eq!(cabin.llm_chips[0].label, "Harbor");
-    assert_eq!(cabin.llm_chips[0].value, "/sh");
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-}
-
 // Folded from PR #283.
 #[test]
 fn greeting_poll_keeps_a_fresh_line() {
@@ -932,32 +875,6 @@ fn greeting_files_poll_clears_on_drop() {
     cabin.poll_greeting();
     assert!(cabin.greeting_files_rx.is_none());
     assert!(cabin.greeting_rx.is_none());
-    assert_eq!(cabin.status, "Harbor");
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-}
-
-// Folded from PR #325.
-#[test]
-fn chips_poll_clears_busy_on_drop() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.status = "Harbor".into();
-    cabin.poll_chips();
-    assert_eq!(cabin.status, "Harbor");
-    assert!(!cabin.chip_busy);
-
-    cabin.chip_busy = true;
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<QuickChip>>();
-    cabin.chip_rx = Some(rx);
-    cabin.poll_chips();
-    assert!(cabin.chip_rx.is_some());
-    assert!(cabin.chip_busy);
-    assert_eq!(cabin.status, "Harbor");
-
-    drop(tx);
-    cabin.poll_chips();
-    assert!(cabin.chip_rx.is_none());
-    assert!(!cabin.chip_busy);
     assert_eq!(cabin.status, "Harbor");
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());

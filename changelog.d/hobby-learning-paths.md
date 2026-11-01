@@ -1,1 +1,0 @@
-- Pulse: optional bite-sized learning paths from Know me hobby tags (3D printing, Blender, Rust, game modding, digital art, CAD). Opt in per hobby under Settings → Pulse; Done / Skip / Too easy / Too hard adapt the next tip; tips prefer the app you were just in when Focus help is on.

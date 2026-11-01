@@ -142,11 +142,11 @@ mod tests {
         } else {
             let _ = std::fs::remove_file(config_path(dir));
         }
-        if deferred {
-            std::fs::write(registry::config_path(dir), "enabled = true\n").unwrap();
-        } else {
-            let _ = std::fs::remove_file(registry::config_path(dir));
-        }
+        std::fs::write(
+            registry::config_path(dir),
+            format!("enabled = {deferred}\n"),
+        )
+        .unwrap();
         ConfigGuard::set(dir)
     }
 

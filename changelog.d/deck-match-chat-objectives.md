@@ -1,1 +1,0 @@
-- Settings → Appearance has "Objectives beside chat", the chat-first layout from slide 10: chats show the open objective's steps and recent chats on the left and a PC snapshot on the right, in place of the companion dock. Off by default.

@@ -1,1 +1,0 @@
-- Buttons, tabs, cards and the rail now follow the deck's state recipes in the Loadout themes: red 1.5 px outlines, a gray lift on hover, a darker gray when selected, and amber with dark ink for the main action. Cards round at 12 and buttons at 8, the selected rail item gets an amber bar, and the send button is amber instead of white.

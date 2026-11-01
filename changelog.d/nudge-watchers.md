@@ -1,1 +1,0 @@
-- Opt-in local nudge watchers post Pulse suggestions for game updates, GPU drivers, low disk, crash spikes, OS updates, and peripherals, with 24h cooldown, 7-day dismiss snooze, and a daily cap.

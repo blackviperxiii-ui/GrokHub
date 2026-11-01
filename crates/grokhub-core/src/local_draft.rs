@@ -87,7 +87,7 @@ pub fn pair_for_file(file: &str) -> Option<Pair> {
 }
 
 /// The draft flags this engine's `llama-server --help` lists, by the name it
-/// uses. Flags the help marks as removed don't count.
+/// uses. Flags the help marks as removed or deprecated don't count.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DraftFlags {
     pub model: Option<String>,
@@ -110,37 +110,74 @@ impl DraftFlags {
     }
 }
 
-/// Reads the option lines of `llama-server --help`.
-pub fn parse_help(help: &str) -> DraftFlags {
+/// One option of `llama-server --help`: the names that lead its line, and
+/// whether its description says it was removed or is deprecated.
+struct HelpOption<'a> {
+    line: &'a str,
+    names: Vec<&'a str>,
+    retired: bool,
+}
+
+/// The option lines of `llama-server --help`, each with its description
+/// (the indented lines up to the next option).
+fn help_options(help: &str) -> Vec<HelpOption<'_>> {
     let lines: Vec<&str> = help.lines().collect();
-    let mut f = DraftFlags::default();
+    let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if !line.starts_with('-') {
             continue;
         }
-        // A notice on the next line belongs to this option only when it
-        // continues the description rather than starting another option.
-        let next = lines
-            .get(i + 1)
-            .copied()
-            .filter(|n| !n.starts_with('-'))
-            .unwrap_or("");
-        if line.contains("has been removed") || next.contains("has been removed") {
-            continue;
-        }
+        let description = lines[i + 1..].iter().take_while(|n| !n.starts_with('-'));
+        let retired = std::iter::once(line)
+            .chain(description)
+            .any(|l| l.contains("has been removed") || l.contains("(DEPRECATED)"));
         // The option names lead the line; a metavar (`N`, `FNAME`) may sit
-        // between them; the first plain word starts the description.
+        // between them; the first plain word starts the description. A
+        // section rule (`----- speculative params -----`) names nothing.
         let names: Vec<&str> = line
             .split_whitespace()
             .map(|t| t.trim_end_matches(','))
             .take_while(|t| {
                 t.starts_with('-') || t.chars().all(|c| c.is_ascii_uppercase() || c == '_')
             })
-            .filter(|t| t.starts_with('-'))
+            .filter_map(|t| t.strip_prefix('-').map(|rest| (t, rest)))
+            .filter(|(_, rest)| {
+                rest.trim_start_matches('-')
+                    .starts_with(|c: char| c.is_ascii_alphanumeric())
+            })
+            .map(|(t, _)| t)
             .collect();
+        out.push(HelpOption {
+            line,
+            names,
+            retired,
+        });
+    }
+    out
+}
+
+/// Every option name `llama-server --help` lists, mapped to `true` when the
+/// help says it was removed or is deprecated.
+pub fn help_flags(help: &str) -> BTreeMap<String, bool> {
+    let mut all = BTreeMap::new();
+    for o in help_options(help) {
+        // A name a live option also uses stays live.
+        for n in o.names {
+            all.entry(n.to_string())
+                .and_modify(|r: &mut bool| *r &= o.retired)
+                .or_insert(o.retired);
+        }
+    }
+    all
+}
+
+/// Reads the option lines of `llama-server --help`.
+pub fn parse_help(help: &str) -> DraftFlags {
+    let mut f = DraftFlags::default();
+    for o in help_options(help).into_iter().filter(|o| !o.retired) {
         let pick = |want: &[&str]| {
             want.iter()
-                .find(|w| names.contains(w))
+                .find(|w| o.names.contains(w))
                 .map(|w| w.to_string())
         };
         if let Some(n) = pick(&["--spec-draft-model", "--model-draft", "-md"]) {
@@ -157,7 +194,7 @@ pub fn parse_help(help: &str) -> DraftFlags {
         if let Some(n) = pick(&["--spec-draft-n-max", "--draft-max"]) {
             f.max = Some(n);
         }
-        if let Some(rest) = line.strip_prefix("--spec-type ") {
+        if let Some(rest) = o.line.strip_prefix("--spec-type ") {
             f.spec_type = Some("--spec-type".into());
             let list = rest.split_whitespace().next().unwrap_or("");
             f.kinds = list.split(',').map(str::to_string).collect();

@@ -1,12 +1,12 @@
 //! Tool registry (Reason harness R4): optional deferred native schemas.
 //!
-//! Off by default (`{config_dir}/deferred_tools.toml`). When enabled, rarely used
+//! On by default; `enabled = false` in `{config_dir}/deferred_tools.toml` turns it off. When enabled, rarely used
 //! native tools are listed in a compact index; the model calls `load_tool_schema`
 //! to pull a full schema into the volatile tail of the tools list so the stable
 //! prefix stays byte-identical across turns when only loaded tools change.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -28,10 +28,40 @@ pub struct Settings {
 
 thread_local! {
     static SESSION: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-fn loaded_by_session() -> &'static Mutex<BTreeMap<String, BTreeSet<String>>> {
-    static MAP: OnceLock<Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
+/// Test hook for this thread: `Some(true|false)` overrides the file; `None` reads it again.
+#[cfg(test)]
+pub fn set_enabled_for_tests(on: Option<bool>) {
+    TEST_OVERRIDE.with(|cell| cell.set(on));
+}
+
+/// Pins deferred tools and the stable prompt off on this thread until dropped,
+/// for tests that check the full tool list or the per-turn system rewrite.
+#[cfg(test)]
+pub struct LegacyPromptGuard;
+
+#[cfg(test)]
+impl LegacyPromptGuard {
+    pub fn set() -> Self {
+        set_enabled_for_tests(Some(false));
+        crate::prefix_cache::set_enabled_for_tests(Some(false));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for LegacyPromptGuard {
+    fn drop(&mut self) {
+        set_enabled_for_tests(None);
+        crate::prefix_cache::set_enabled_for_tests(None);
+    }
+}
+
+/// Deferred schemas each chat has loaded, in load order.
+fn loaded_by_session() -> &'static Mutex<BTreeMap<String, Vec<String>>> {
+    static MAP: OnceLock<Mutex<BTreeMap<String, Vec<String>>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
@@ -40,14 +70,17 @@ pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
 }
 
 pub fn settings(config_dir: &Path) -> Settings {
+    if let Some(on) = TEST_OVERRIDE.with(|cell| cell.get()) {
+        return Settings { enabled: on };
+    }
     let Ok(text) = std::fs::read_to_string(config_path(config_dir)) else {
-        return Settings::default();
+        return Settings { enabled: true };
     };
     parse_file(&text)
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = false;
+    let mut enabled = true;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -56,8 +89,8 @@ fn parse_file(text: &str) -> Settings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            enabled = true;
+        if key.trim().eq_ignore_ascii_case("enabled") {
+            enabled = !value.trim().eq_ignore_ascii_case("false");
         }
     }
     Settings { enabled }
@@ -70,20 +103,23 @@ pub fn bind_session(session: &str) {
     });
 }
 
-/// Clear loaded schemas for a new user turn (same chat, fresh tool list).
+/// Start a user turn. Schemas this chat already loaded stay, in load order,
+/// so the tool list only ever grows at its end and the cached prefix holds;
+/// clearing them each turn shrank the tail, broke the cache and cost a reload.
 pub fn begin_turn(session: &str) {
     bind_session(session);
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(session.to_string(), BTreeSet::new());
+        .entry(session.to_string())
+        .or_default();
 }
 
 fn current_session() -> Option<String> {
     SESSION.with(|cell| cell.borrow().clone())
 }
 
-fn loaded_names(session: &str) -> BTreeSet<String> {
+fn loaded_names(session: &str) -> Vec<String> {
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -93,12 +129,13 @@ fn loaded_names(session: &str) -> BTreeSet<String> {
 }
 
 fn remember_loaded(session: &str, name: &str) {
-    loaded_by_session()
+    let mut map = loaded_by_session()
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(session.to_string())
-        .or_default()
-        .insert(name.to_string());
+        .unwrap_or_else(|e| e.into_inner());
+    let names = map.entry(session.to_string()).or_default();
+    if !names.iter().any(|n| n == name) {
+        names.push(name.to_string());
+    }
 }
 
 /// Stable tool schemas (eager natives, session tools, spawn, meta, MCP) for prefix-cache tests.
@@ -335,11 +372,14 @@ mod tests {
     const OFF: Settings = Settings { enabled: false };
 
     #[test]
-    fn settings_default_off_and_file_enables() {
-        assert!(!parse_file("").enabled);
+    fn settings_default_on_and_file_disables() {
+        assert!(parse_file("").enabled);
         assert!(parse_file("enabled = true").enabled);
+        assert!(!parse_file("enabled = false").enabled);
         let dir = crate::harness::test_dir("deferred-tools-default");
         let _ = std::fs::remove_file(config_path(&dir));
+        assert!(settings(&dir).enabled);
+        std::fs::write(config_path(&dir), "enabled = false\n").unwrap();
         assert!(!settings(&dir).enabled);
         std::fs::write(config_path(&dir), "enabled = true\n").unwrap();
         assert!(settings(&dir).enabled);
@@ -390,6 +430,29 @@ mod tests {
         let after = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
         assert_eq!(before, after, "stable tool prefix must stay byte-identical");
         assert_eq!(volatile_schemas(&gate, ON).len(), 2);
+    }
+
+    #[test]
+    fn loaded_schemas_stay_for_the_chat_in_load_order() {
+        let gate = chat(false, false);
+        begin_turn("conv-keep");
+        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        let first = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
+        // Next user turn in the same chat: the loaded tool is still offered and a
+        // later load appends after it, so the earlier request is a byte prefix.
+        begin_turn("conv-keep");
+        run_load_tool_schema(&json!({"name": "scheduler_list"}));
+        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        let names: Vec<_> = volatile_schemas(&gate, ON)
+            .iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(names, ["web_fetch", "scheduler_list"]);
+        let second = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
+        assert!(
+            second.starts_with(first.trim_end_matches(']')),
+            "the tool list must only grow at its end"
+        );
     }
 
     #[test]
@@ -611,7 +674,8 @@ mod tests {
             "connection_add",
             "skill_create",
         ] {
-            begin_turn("conv-moved");
+            // A fresh chat per tool: loaded schemas now stay for the whole chat.
+            begin_turn(&format!("conv-moved-{name}"));
             let out = run_load_tool_schema(&json!({"name": name}));
             assert!(!out.failed, "{name}: {}", out.text);
             let volatile = volatile_schemas(&desk, ON);

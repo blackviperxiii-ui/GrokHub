@@ -346,6 +346,11 @@ pub struct AppConfig {
     /// It routes nothing until a local runtime is installed.
     #[serde(default)]
     pub local_model: bool,
+    /// `app.json` only (`briefModelFallback`). Off by default: an ask that
+    /// neither the Brief rules nor the local scorer can sort gets the default
+    /// Brief. On, it costs one fast-model call instead.
+    #[serde(default)]
+    pub brief_model_fallback: bool,
     /// Router R3b: the model on a provider you added (`<provider>/<model>`)
     /// for your own chats. Used only while its key and your grant exist.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -824,6 +829,7 @@ impl Default for AppConfig {
             mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
+            brief_model_fallback: false,
             provider_model: String::new(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
@@ -1805,6 +1811,11 @@ mod tests {
         );
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        // Brain 1: the Brief's model fallback is opt-in; `briefModelFallback` turns it on.
+        assert!(!loaded.brief_model_fallback && !old.brief_model_fallback);
+        let fallback: AppConfig =
+            serde_json::from_str(r#"{"briefModelFallback":true}"#).expect("briefModelFallback on");
+        assert!(fallback.brief_model_fallback);
         assert!(
             !old.setup_done && body.contains("\"setupDone\": false"),
             "{body}"

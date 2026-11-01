@@ -4,6 +4,7 @@
 mod browser;
 mod config;
 mod elicit;
+mod headers;
 mod http;
 mod names;
 mod oauth;
@@ -35,6 +36,7 @@ use crate::tools::ToolOutput;
 
 use config::TransportDef;
 use rpc::RawTool;
+pub use rpc::{ToolHints, ToolIcon};
 
 /// Individual tool schemas at this count. Above it, `search_tool` and
 /// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
@@ -133,9 +135,52 @@ struct ToolRec {
     server: String,
     raw: String,
     qualified: String,
+    title: Option<String>,
     description: String,
     schema: Value,
-    read_only: bool,
+    output_schema: Option<Value>,
+    hints: ToolHints,
+    icons: Vec<ToolIcon>,
+}
+
+/// One connected MCP tool as its server's `tools/list` describes it, for a
+/// connectors view. Every field is the server's word, so treat it as untrusted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolInfo {
+    pub server: String,
+    /// The server's own tool name.
+    pub name: String,
+    /// The `server__tool` name the model calls.
+    pub qualified: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub hints: ToolHints,
+    pub icons: Vec<ToolIcon>,
+    pub output_schema: Option<Value>,
+}
+
+impl ToolInfo {
+    /// The tool's `title` when it has one, else its name.
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// Every connected MCP tool (connecting servers that are not yet).
+pub fn tool_list() -> Vec<ToolInfo> {
+    current_tools()
+        .into_iter()
+        .map(|tool| ToolInfo {
+            server: tool.server,
+            name: tool.raw,
+            qualified: tool.qualified,
+            title: tool.title,
+            description: tool.description,
+            hints: tool.hints,
+            icons: tool.icons,
+            output_schema: tool.output_schema,
+        })
+        .collect()
 }
 
 struct SlotInner {
@@ -195,6 +240,9 @@ struct State {
     mtime: Option<SystemTime>,
     /// Hash of enabled plugins. A disable or content change drops plugin servers.
     server_stamp: String,
+    /// Offline only when the slots were built: a flip drops every connection,
+    /// so a third-party stdio server stops and the rest reconnect.
+    offline: bool,
     loaded: bool,
     workspace: PathBuf,
     slots: BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>,
@@ -207,6 +255,7 @@ impl State {
             gen: 0,
             mtime: None,
             server_stamp: String::new(),
+            offline: false,
             loaded: false,
             workspace: PathBuf::new(),
             slots: BTreeMap::new(),
@@ -289,6 +338,12 @@ pub fn doctor() -> Vec<DoctorRow> {
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
             "connected"
+        } else if inner
+            .last_error
+            .as_deref()
+            .is_some_and(grokhub_core::offline::is_refusal)
+        {
+            "paused"
         } else if inner.last_error.is_some() {
             "error"
         } else {
@@ -546,9 +601,10 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
     let tools = current_tools();
     let mut lines = Vec::new();
     for tool in &tools {
-        let hay = format!("{} {}", tool.qualified, tool.description).to_ascii_lowercase();
+        let about = model_description(tool, usize::MAX);
+        let hay = format!("{} {about}", tool.qualified).to_ascii_lowercase();
         if query.is_empty() || hay.contains(&query) {
-            lines.push(format!("{} — {}", tool.qualified, tool.description));
+            lines.push(format!("{} — {about}", tool.qualified));
         }
         if lines.len() == 50 {
             break;
@@ -562,7 +618,7 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
 }
 
 enum Resolved {
-    Known(String),
+    Known { name: String, destructive: bool },
     Missing(String),
 }
 
@@ -575,51 +631,89 @@ pub(crate) fn permission(
 ) -> Option<Decision> {
     match resolve(name, arguments)? {
         Resolved::Missing(target) => Some(Decision::Refuse(format!("unknown tool `{target}`"))),
-        Resolved::Known(target) => Some(decide_mcp(gate, &target, latched_always, policy)),
+        Resolved::Known { name, destructive } => {
+            Some(decide_mcp(gate, &name, destructive, latched_always, policy))
+        }
     }
 }
 
 pub(crate) fn is_mcp_call(name: &str, arguments: &str) -> bool {
-    matches!(resolve(name, arguments), Some(Resolved::Known(_)))
+    matches!(resolve(name, arguments), Some(Resolved::Known { .. }))
+}
+
+/// An MCP call whose server marks the tool `destructiveHint: true`. The
+/// auto-review judge leaves its card to the user.
+pub(crate) fn is_destructive_call(name: &str, arguments: &str) -> bool {
+    matches!(
+        resolve(name, arguments),
+        Some(Resolved::Known {
+            destructive: true,
+            ..
+        })
+    )
 }
 
 pub(crate) fn has_ask_rule(policy: &Policy, name: &str, arguments: &str) -> bool {
-    let Some(Resolved::Known(target)) = resolve(name, arguments) else {
+    let Some(Resolved::Known { name: target, .. }) = resolve(name, arguments) else {
         return false;
     };
     rule(policy, &target, Action::Ask)
 }
 
-fn decide_mcp(gate: &Gate, name: &str, latched_always: bool, policy: Option<&Policy>) -> Decision {
+/// Why a destructive MCP tool did not run while nobody was there to approve it.
+fn destructive_unattended(name: &str) -> String {
+    format!(
+        "Tool `{name}` was not executed: its server marks it destructive, and nobody is here to approve it"
+    )
+}
+
+fn decide_mcp(
+    gate: &Gate,
+    name: &str,
+    destructive: bool,
+    latched_always: bool,
+    policy: Option<&Policy>,
+) -> Decision {
     // A server `readOnlyHint` does not grant a run. An allow rule does.
     if gate.readonly_session {
         return Decision::Refuse(gate::readonly_refusal(name));
     }
+    // Always (the mode or the card's latch) skips the card, except for a tool
+    // its server marks destructive: that one asks every time.
+    let always = !destructive && (gate.mode == PermMode::Always || latched_always);
+    let away = || {
+        if destructive {
+            Decision::Refuse(destructive_unattended(name))
+        } else {
+            Decision::Refuse(gate::mcp_policy_deny(name))
+        }
+    };
     if let Some(policy) = policy {
         if rule(policy, name, Action::Deny) {
             return Decision::Refuse(gate::mcp_policy_deny(name));
         }
         if rule(policy, name, Action::Ask) {
             // Always Allow: an ask rule is not a hard class, so it runs.
-            return if gate.attended && (gate.mode == PermMode::Always || latched_always) {
+            return if gate.attended && always {
                 Decision::Run
             } else if gate.attended {
                 Decision::Ask
             } else {
-                Decision::Refuse(gate::mcp_policy_deny(name))
+                away()
             };
         }
+        // The user's own allow rule for this tool is their standing approval.
         if rule(policy, name, Action::Allow) {
             return Decision::Run;
         }
     }
-    if gate.mode == PermMode::Always || latched_always {
+    if always {
         return Decision::Run;
     }
     if gate.attended {
         return Decision::Ask;
     }
-    Decision::Refuse(gate::mcp_policy_deny(name))
+    away()
 }
 
 fn rule(policy: &Policy, name: &str, action: Action) -> bool {
@@ -639,16 +733,21 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
         if target.is_empty() {
             return Some(Resolved::Missing("use_tool".into()));
         }
-        if tools.iter().any(|tool| tool.qualified == target) {
-            return Some(Resolved::Known(target));
-        }
-        return Some(Resolved::Missing(target));
+        return Some(match tools.iter().find(|tool| tool.qualified == target) {
+            Some(tool) => Resolved::Known {
+                destructive: tool.hints.is_destructive(),
+                name: target,
+            },
+            None => Resolved::Missing(target),
+        });
     }
-    if tools.iter().any(|tool| tool.qualified == name) {
-        Some(Resolved::Known(name.to_string()))
-    } else {
-        None
-    }
+    tools
+        .iter()
+        .find(|tool| tool.qualified == name)
+        .map(|tool| Resolved::Known {
+            name: name.to_string(),
+            destructive: tool.hints.is_destructive(),
+        })
 }
 
 fn arg_name(arguments: &str) -> String {
@@ -726,14 +825,32 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     }
 }
 
-fn one_schema(tool: &ToolRec) -> Value {
-    let mut description = clip_chars(&tool.description, 1024);
-    if tool.read_only {
+/// `Title: description (server hint: …)` for the model, the description
+/// clipped to `max` chars.
+fn model_description(tool: &ToolRec, max: usize) -> String {
+    let body = clip_chars(&tool.description, max);
+    let mut description = match tool.title.as_deref() {
+        Some(title) if body.is_empty() => title.to_string(),
+        Some(title) if !body.starts_with(title) => format!("{title}: {body}"),
+        _ => body,
+    };
+    let mut hint = |note: &str| {
         if !description.is_empty() {
             description.push(' ');
         }
-        description.push_str("(server hint: read-only)");
+        description.push_str(note);
+    };
+    if tool.hints.read_only {
+        hint("(server hint: read-only)");
     }
+    if tool.hints.is_destructive() {
+        hint("(server hint: destructive; asks you every time)");
+    }
+    description
+}
+
+fn one_schema(tool: &ToolRec) -> Value {
+    let description = model_description(tool, 1024);
     let parameters = if tool.schema.is_object() {
         tool.schema.clone()
     } else {
@@ -813,7 +930,9 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
     let stamp = crate::plugins::listing_stamp(&workspace);
     let path = config::config_file();
     let (gen, mtime) = fingerprint(&path);
+    let offline = grokhub_core::offline::enabled();
     if !held.loaded
+        || held.offline != offline
         || held.path != path
         || held.gen != gen
         || held.mtime != mtime
@@ -838,6 +957,7 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
         held.gen = gen;
         held.mtime = mtime;
         held.server_stamp = stamp;
+        held.offline = offline;
     }
     (held.slots.clone(), workspace)
 }
@@ -880,6 +1000,16 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             env,
             cwd,
         } => {
+            let exe = std::env::current_exe().ok();
+            if let Some(why) = offline_paused(
+                name,
+                command,
+                args,
+                exe.as_deref(),
+                grokhub_core::offline::enabled(),
+            ) {
+                return Err(why);
+            }
             let dir = stdio::workspace_or(cwd.clone(), workspace);
             let mut env = env.clone();
             if let (Some(token_name), Some(var)) = (&def.token_ref, &def.token_env) {
@@ -933,6 +1063,28 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
     }
 }
 
+/// The app's own stdio servers (`<this exe> --mcp-cua`, `--mcp-self`). They
+/// never reach the internet, so Offline only leaves them running.
+fn own_server(name: &str, command: &str, args: &[String], exe: Option<&Path>) -> bool {
+    [grokhub_core::CUA_MCP_SERVER, grokhub_core::SELF_MCP_SERVER].contains(&name)
+        && args.first().is_some_and(|a| a.starts_with("--mcp-"))
+        && exe.is_some_and(|exe| Path::new(command) == exe)
+}
+
+/// Offline only pauses a third-party stdio server: it can reach the internet
+/// on its own, so it doesn't start while the switch is on. Its row reads
+/// `paused` with [`grokhub_core::offline::OFFLINE_MSG`].
+fn offline_paused(
+    name: &str,
+    command: &str,
+    args: &[String],
+    exe: Option<&Path>,
+    on: bool,
+) -> Option<String> {
+    (on && !own_server(name, command, args, exe))
+        .then(|| grokhub_core::offline::OFFLINE_MSG.to_string())
+}
+
 fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
     let mut guards = Vec::new();
     let mut pairs = Vec::new();
@@ -949,33 +1101,26 @@ fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
         map.insert((item.server, item.tool), item.name);
     }
     for guard in &mut guards {
-        guard.tools.clear();
         let server = guard.name.clone();
-        let raw: Vec<(String, String, Value, bool)> = guard
+        let tools: Vec<ToolRec> = guard
             .raw
             .iter()
-            .map(|tool| {
-                (
-                    tool.name.clone(),
-                    clip_chars(&tool.description, 4000),
-                    tool.input_schema.clone(),
-                    tool.read_only,
-                )
+            .filter_map(|tool| {
+                let qname = map.get(&(server.clone(), tool.name.clone()))?;
+                Some(ToolRec {
+                    server: server.clone(),
+                    raw: tool.name.clone(),
+                    qualified: qname.clone(),
+                    title: tool.title.clone(),
+                    description: clip_chars(&tool.description, 4000),
+                    schema: tool.input_schema.clone(),
+                    output_schema: tool.output_schema.clone(),
+                    hints: tool.hints.clone(),
+                    icons: tool.icons.clone(),
+                })
             })
             .collect();
-        for (name, description, schema, read_only) in raw {
-            let Some(qname) = map.get(&(server.clone(), name.clone())) else {
-                continue;
-            };
-            guard.tools.push(ToolRec {
-                server: server.clone(),
-                raw: name,
-                qualified: qname.clone(),
-                description,
-                schema,
-                read_only,
-            });
-        }
+        guard.tools = tools;
     }
 }
 
@@ -1044,11 +1189,50 @@ pub(crate) fn install_test_tools(rows: &[(&str, &str, &str, bool)]) -> TestGuard
             server: item.server,
             raw: item.tool,
             qualified: item.name,
+            title: None,
             description,
             schema: json!({"type": "object", "properties": {}}),
-            read_only,
+            output_schema: None,
+            hints: ToolHints {
+                read_only,
+                ..ToolHints::default()
+            },
+            icons: Vec::new(),
         });
     }
+    install_test_recs(tools)
+}
+
+/// Test tools straight from one server's `tools/list` result.
+#[cfg(test)]
+pub(crate) fn install_test_listing(server: &str, listing: &Value) -> TestGuard {
+    let (raw, _) = rpc::parse_tools(listing);
+    let pairs: Vec<(String, String)> = raw
+        .iter()
+        .map(|tool| (server.to_string(), tool.name.clone()))
+        .collect();
+    let tools = names::qualify_all(&pairs)
+        .into_iter()
+        .filter_map(|item| {
+            let tool = raw.iter().find(|tool| tool.name == item.tool)?.clone();
+            Some(ToolRec {
+                server: item.server,
+                raw: tool.name,
+                qualified: item.name,
+                title: tool.title,
+                description: tool.description,
+                schema: tool.input_schema,
+                output_schema: tool.output_schema,
+                hints: tool.hints,
+                icons: tool.icons,
+            })
+        })
+        .collect();
+    install_test_recs(tools)
+}
+
+#[cfg(test)]
+fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
     let prev = TEST_TOOLS.with(|slot| slot.borrow_mut().replace(tools));
     TestGuard { prev }
 }
@@ -1307,6 +1491,177 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn rich_listing() -> serde_json::Value {
+        json!({"tools": [
+            {
+                "name": "rebuild",
+                "title": "Rebuild Index",
+                "description": "Rebuild the search index",
+                "inputSchema": {"type": "object"},
+                "annotations": {"destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
+                "icons": [{"src": "https://example.com/rebuild.png", "mimeType": "image/png"}, {"src": "http://example.com/x.png"}]
+            },
+            {
+                "name": "list",
+                "description": "List indexes",
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": true, "destructiveHint": false}
+            }
+        ]})
+    }
+
+    #[test]
+    fn destructive_hint_asks_under_always_and_refuses_unattended() {
+        let _tools = super::install_test_listing("box", &rich_listing());
+        let ws = Path::new(".");
+        let decide = |mode, attended, latched, policy: Option<&Policy>| {
+            decide_with(
+                &gate(mode, false, attended),
+                "box__rebuild",
+                "{}",
+                latched,
+                None,
+                ws,
+                policy,
+            )
+        };
+        let away = Decision::Refuse(
+            "Tool `box__rebuild` was not executed: its server marks it destructive, and nobody is here to approve it"
+                .into(),
+        );
+        assert_eq!(decide(PermMode::Always, true, false, None), Decision::Ask);
+        assert_eq!(decide(PermMode::Ask, true, true, None), Decision::Ask);
+        assert_eq!(decide(PermMode::Always, false, false, None), away);
+        let ask = policy(&[("MCPTool(box__rebuild)", Action::Ask)]);
+        assert_eq!(
+            decide(PermMode::Always, true, false, Some(&ask)),
+            Decision::Ask
+        );
+        assert_eq!(decide(PermMode::Always, false, false, Some(&ask)), away);
+        let deny = policy(&[("MCPTool(box__rebuild)", Action::Deny)]);
+        assert_eq!(
+            decide(PermMode::Always, true, false, Some(&deny)),
+            Decision::Refuse(mcp_policy_deny("box__rebuild"))
+        );
+        // The user's own allow rule for the tool is their approval.
+        let allow = policy(&[("MCPTool(box__rebuild)", Action::Allow)]);
+        assert_eq!(
+            decide(PermMode::Ask, false, false, Some(&allow)),
+            Decision::Run
+        );
+        // `use_tool` resolves to the same tool and the same card.
+        assert_eq!(
+            decide_with(
+                &gate(PermMode::Always, false, true),
+                "use_tool",
+                r#"{"name":"box__rebuild"}"#,
+                false,
+                None,
+                ws,
+                None,
+            ),
+            Decision::Ask
+        );
+        // `destructiveHint: false` (and read-only) keeps Always as it was.
+        assert_eq!(
+            decide_with(
+                &gate(PermMode::Always, false, true),
+                "box__list",
+                "{}",
+                false,
+                None,
+                ws,
+                None,
+            ),
+            Decision::Run
+        );
+        // Auto mode's judge never sees it: the card stays the user's.
+        let judge = Scripted {
+            text: "sure, allow it".into(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let cancel = crate::CancelToken::new();
+        let halt = || false;
+        let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
+            client: &judge,
+            cancel: &cancel,
+            halt: &halt,
+            gate: &gate(PermMode::Auto, false, true),
+            name: "box__rebuild",
+            arguments: "{}",
+            workspace: ws,
+            policy: None,
+            latched_always: false,
+            desk: None,
+            history: &[],
+            conversation_id: "s",
+            base: Decision::Ask,
+            timeout: std::time::Duration::from_secs(2),
+        });
+        assert_eq!(reviewed.decision, Decision::Ask);
+        assert_eq!(judge.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(super::is_destructive_call("box__rebuild", "{}"));
+        assert!(super::is_destructive_call(
+            "use_tool",
+            r#"{"name":"box__rebuild"}"#
+        ));
+        assert!(!super::is_destructive_call("box__list", "{}"));
+    }
+
+    #[test]
+    fn titles_hints_and_icons_reach_the_model_and_the_tool_list() {
+        let _tools = super::install_test_listing("box", &rich_listing());
+        let schemas = schema_tools(0);
+        let described: Vec<(&str, &str)> = schemas
+            .iter()
+            .map(|tool| {
+                (
+                    tool["name"].as_str().unwrap(),
+                    tool["description"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                ("box__list", "List indexes (server hint: read-only)"),
+                (
+                    "box__rebuild",
+                    "Rebuild Index: Rebuild the search index (server hint: destructive; asks you every time)"
+                ),
+            ]
+        );
+        assert_eq!(
+            search_output(&json!({"query": "rebuild index"})).text,
+            "box__rebuild — Rebuild Index: Rebuild the search index (server hint: destructive; asks you every time)"
+        );
+        let listed = super::tool_list();
+        let rebuild = listed.iter().find(|t| t.name == "rebuild").unwrap();
+        assert_eq!(rebuild.display_name(), "Rebuild Index");
+        assert_eq!(rebuild.qualified, "box__rebuild");
+        assert_eq!(
+            rebuild.hints,
+            super::ToolHints {
+                read_only: false,
+                destructive: Some(true),
+                idempotent: Some(false),
+                open_world: Some(false),
+            }
+        );
+        assert_eq!(
+            rebuild.icons,
+            vec![super::ToolIcon {
+                src: "https://example.com/rebuild.png".into(),
+                mime_type: Some("image/png".into()),
+                sizes: Vec::new(),
+            }]
+        );
+        let list = listed.iter().find(|t| t.name == "list").unwrap();
+        assert_eq!(list.display_name(), "list");
+        assert_eq!(list.output_schema, Some(json!({"type": "object"})));
+    }
+
     #[test]
     fn read_only_hint_does_not_skip_the_gate() {
         let _tools = install_test_tools(&[("box", "peek", "Peek a file", true)]);
@@ -1434,6 +1789,8 @@ mod tests {
     /// and a deferred hard tool still parks through `harness::decide`.
     #[test]
     fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let desk_on = Gate {
             desktop: true,
             ..gate(PermMode::Always, false, true)
@@ -1659,6 +2016,55 @@ mod tests {
         assert!(restart("linear")
             .unwrap_err()
             .ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
+        use super::{doctor, invalidate, offline_paused, shutdown_all};
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        let exe = Path::new("/opt/loadout/grokhub");
+        let cua = vec!["--mcp-cua".to_string()];
+        let npx = vec!["-y".to_string(), "weather-mcp".to_string()];
+        assert_eq!(
+            offline_paused("grokhub-cua", "/opt/loadout/grokhub", &cua, Some(exe), true),
+            None
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), true),
+            Some(MSG.to_string())
+        );
+        assert_eq!(
+            offline_paused("grokhub-cua", "/tmp/other", &cua, Some(exe), true),
+            Some(MSG.to_string()),
+            "the name alone doesn't make a server the app's own"
+        );
+        assert_eq!(
+            offline_paused("weather", "npx", &npx, Some(exe), false),
+            None
+        );
+
+        let dir = crate::harness::test_dir("mcp-offline-only");
+        let _guard = ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers": {
+            "weather": {"command": "definitely-not-a-real-mcp-binary", "args": ["--stdio"]},
+            "remote": {"url": "https://mcp.example.com/mcp", "type": "http"}
+        }}"#;
+        std::fs::write(dir.join("mcp.json"), doc).unwrap();
+        invalidate();
+        let _on = grokhub_core::offline::force_for_thread(true);
+        let rows: Vec<(String, String, String)> = doctor()
+            .into_iter()
+            .map(|r| (r.name, r.status, r.last_error))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("remote".to_string(), "paused".to_string(), MSG.to_string()),
+                ("weather".to_string(), "paused".to_string(), MSG.to_string()),
+            ]
+        );
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

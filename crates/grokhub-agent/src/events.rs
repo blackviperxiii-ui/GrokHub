@@ -120,7 +120,8 @@ impl NativeEngine {
         }
     }
 
-    /// Let an unclear ask's Brief come from one fast-model call.
+    /// Let an ask that neither the rules nor the local scorer can sort get its
+    /// Brief from one fast-model call (the app's opt-in `briefModelFallback`).
     pub fn set_brief_model(&mut self, on: bool) {
         self.brief_model = on;
     }
@@ -173,19 +174,29 @@ impl NativeEngine {
         self.auth_kind = auth_kind;
     }
 
+    /// The model's window in tokens, when the caller knows it better than the
+    /// built-in default (a local model's context size). [`Self::set_route`] resets it.
+    pub fn set_context_length(&mut self, tokens: u64) {
+        self.context_length = tokens;
+    }
+
     pub fn set_halt(&mut self, halt: Box<dyn HaltCheck + Send>) {
         self.halt = halt;
     }
 
     /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
-    /// The Brief changes nothing about the run or its reply.
-    fn write_brief(&self, text: &str, has_image: bool) {
+    /// The Brief changes nothing about the run or its reply. It is returned so
+    /// the turn's router can read its intent, care, domain and confidence.
+    fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
         use crate::harness::Origin;
         let recent: Vec<String> = self
             .history
             .iter()
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
-            .map(crate::compact::message_text)
+            .map(|item| {
+                let text = crate::compact::message_text(item);
+                crate::prefix_cache::visible_user_text(&text).to_string()
+            })
             .rev()
             .take(2)
             .collect::<Vec<_>>()
@@ -289,6 +300,7 @@ impl NativeEngine {
             playbook_id,
         };
         let _ = crate::brain::record_brief(&dir, &line);
+        line.brief
     }
 
     /// Replace the in-memory transcript with a session file. The next prompt continues it.
@@ -399,11 +411,13 @@ impl Engine for NativeEngine {
                 started,
                 usage,
                 error,
+                server,
             } => {
                 emit(AcpEvent::Compact {
                     started,
                     usage: grok_usage(&usage, kind, meter_used, meter_limit),
                     error,
+                    server,
                 });
             }
             LoopEvent::Usage(total) => {
@@ -609,6 +623,7 @@ impl NativeEngine {
             started: true,
             usage: grok_usage(&self.usage, kind, used, limit),
             error: None,
+            server: None,
         });
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
         let compact_result = crate::compact::compact_after_flush(
@@ -630,8 +645,8 @@ impl NativeEngine {
             ));
         }
         match compact_result {
-            Ok(extra) => {
-                self.usage.add(&extra);
+            Ok(done) => {
+                self.usage.add(&done.usage);
                 let delta = self.usage.saturating_delta(&before);
                 let _ = crate::session::record_compaction(
                     &session,
@@ -647,6 +662,7 @@ impl NativeEngine {
                     started: false,
                     usage: usage.clone(),
                     error: None,
+                    server: done.server,
                 });
                 emit(AcpEvent::Usage(usage));
                 emit(AcpEvent::Done {
@@ -658,6 +674,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some("cancelled".into()),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "cancelled".into(),
@@ -668,6 +685,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some(message),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "end_turn".into(),
@@ -969,6 +987,8 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1340,7 +1360,7 @@ mod tests {
         )));
         assert!(events.iter().any(|ev| matches!(
             ev,
-            AcpEvent::Compact { started: false, error: None, usage }
+            AcpEvent::Compact { started: false, error: None, usage, server: None }
                 if usage.cost_in_usd_ticks == 4
                     && usage.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
                     && usage.context_tokens_used > 0
@@ -1359,7 +1379,10 @@ mod tests {
                 .contains("This session is being continued")));
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "remember the harbor"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "remember the harbor"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item).contains("/compact")));
@@ -1397,7 +1420,10 @@ mod tests {
         let input = loaded.input();
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "keep this"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "keep this"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item)

@@ -9,6 +9,11 @@ use super::{confine, str_field, u32_field, ToolOutput};
 const DEFAULT_LIMIT: u32 = 2000;
 const MAX_LIMIT: u32 = 5000;
 const IMAGE_MAX_BYTES: usize = 1_500_000;
+/// One read returns at most this much text (about 12k tokens). Whole lines
+/// only; the note says which offset continues, so nothing is out of reach.
+const READ_CHARS: usize = 50_000;
+/// A single line longer than this (minified code, a base64 blob) is cut.
+const LINE_CHARS: usize = 2_000;
 
 pub fn schema() -> Value {
     json!({
@@ -61,11 +66,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         ));
     }
     let end = (start + limit as usize).min(lines.len());
-    let mut out = String::new();
-    for (i, line) in lines[start..end].iter().enumerate() {
-        let n = start + i + 1;
-        out.push_str(&format!("{n}|{line}\n"));
-    }
+    let out = numbered_lines(&lines, start, end);
     // Workspace reads stay plain for coding. Outside-workspace text (if a
     // future path allows it) is fenced as untrusted data.
     ToolOutput::ok(super::fence::fence_if_outside(
@@ -74,6 +75,36 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         "read_file",
         &out,
     ))
+}
+
+/// `n|line` rows from `start` to `end`, stopping early at [`READ_CHARS`] with a
+/// note naming the offset that continues.
+fn numbered_lines(lines: &[&str], start: usize, end: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for (i, line) in lines[start..end].iter().enumerate() {
+        let n = start + i + 1;
+        let row = match line.char_indices().nth(LINE_CHARS) {
+            Some((cut, _)) => format!(
+                "{n}|{} …[line cut at {LINE_CHARS} of {} chars]\n",
+                &line[..cut],
+                line.chars().count()
+            ),
+            None => format!("{n}|{line}\n"),
+        };
+        let len = row.chars().count();
+        if i > 0 && used + len > READ_CHARS {
+            out.push_str(&format!(
+                "(stopped at line {} of {} to keep this read small; read again with offset {n} to continue)\n",
+                n - 1,
+                lines.len()
+            ));
+            return out;
+        }
+        used += len;
+        out.push_str(&row);
+    }
+    out
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -147,6 +178,75 @@ mod tests {
     use crate::tools::execute;
     use image::ImageEncoder;
     use std::fs;
+
+    #[test]
+    fn a_big_file_reads_in_capped_pages_that_reach_the_end() {
+        let dir = crate::harness::test_dir("read-capped");
+        let body: String = (1..=3000)
+            .map(|i| {
+                format!(
+                    "2026-10-31 INFO service heartbeat ok seq={i:05} {}\n",
+                    "x".repeat(40)
+                )
+            })
+            .collect();
+        fs::write(dir.join("big.log"), &body).unwrap();
+        let first = run(&dir, &json!({"target_file": "big.log"}));
+        assert!(!first.failed);
+        assert!(
+            first.text.chars().count() <= READ_CHARS + 200,
+            "{}",
+            first.text.len()
+        );
+        assert!(first.text.starts_with("1|"), "{}", &first.text[..40]);
+        let note = first.text.lines().last().unwrap();
+        assert!(note.contains("read again with offset"), "{note}");
+        let next: u32 = note
+            .split("offset ")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Paging on from the offset the note names reaches the last line.
+        let mut offset = next;
+        let mut last = String::new();
+        for _ in 0..20 {
+            let page = run(&dir, &json!({"target_file": "big.log", "offset": offset}));
+            last = page.text.clone();
+            match page
+                .text
+                .lines()
+                .last()
+                .and_then(|l| l.split("offset ").nth(1))
+            {
+                Some(rest) => offset = rest.split_whitespace().next().unwrap().parse().unwrap(),
+                None => break,
+            }
+        }
+        assert!(last.contains("seq=03000"), "{last}");
+    }
+
+    #[test]
+    fn a_huge_single_line_is_cut_and_says_so() {
+        let dir = crate::harness::test_dir("read-long-line");
+        fs::write(dir.join("min.js"), format!("{}\nend\n", "é".repeat(10_000))).unwrap();
+        let out = run(&dir, &json!({"target_file": "min.js"}));
+        assert!(
+            out.text.contains("[line cut at 2000 of 10000 chars]"),
+            "{}",
+            &out.text[..80]
+        );
+        assert!(out.text.contains("2|end"), "{}", out.text);
+    }
+
+    #[test]
+    fn a_small_file_reads_whole_with_no_note() {
+        let dir = crate::harness::test_dir("read-small");
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        let out = run(&dir, &json!({"target_file": "a.txt"}));
+        assert_eq!(out.text, "1|one\n2|two\n");
+    }
 
     #[test]
     fn workspace_read_is_not_fenced() {

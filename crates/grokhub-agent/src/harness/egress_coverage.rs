@@ -32,11 +32,12 @@ const BUILDERS: &[&str] = &[
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
 const WRAPPED: &[(&str, usize, &str)] = &[
-    ("grokhub-agent/src/client.rs", 1, "XaiClient::once: guard_egress (chat, personal) to api.x.ai"),
+    ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns and /v1/responses/compact): XAI_MODEL_ENDPOINTS + guard_egress (chat, personal) to api.x.ai"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
-    ("grokhub-agent/src/route/local_http.rs", 1, "HttpLocalRuntime: loopback-only chat/completions; no egress line (on-device)"),
+    ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),
     ("grokhub-agent/src/route/local_sidecar.rs", 1, "Sidecar health_ok: loopback /health with bearer token; no egress line"),
+    ("grokhub-agent/src/route/local_effort.rs", 1, "fetch_levels: loopback-only /props with bearer token; no egress line"),
     ("grokhub-agent/src/route/local_spec.rs", 1, "measure: the speed test's loopback chat/completions to the sidecar it just started; no egress line"),
     ("grokhub-agent/src/route/sources.rs", 1, "XaiApiSource::get / XaiProbeTransport::send: guard_egress (no user data) to api.x.ai"),
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
@@ -50,7 +51,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before ureq AgentBuilder; DDG/SearXNG go through PageFetch"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/local_ai_ui.rs", 1, "HttpRuntimeFetch::open: runtime_download_url_ok + egress_ok on every hop to GitHub"),
-    ("grokhub-app/src/app/library_ui/game_art.rs", 1, "fetch_art: egress_ok (no user data) to Steam's store CDN, no redirects, public IPs only"),
+    ("grokhub-app/src/app/library_ui/game_art.rs", 1, "fetch_art: egress_ok (no user data) to Steam's store CDN and store details, no redirects, public IPs only"),
     ("grokhub-app/src/app/print_alerts_ui.rs", 1, "get_json / post_control: egress_ok (no user data) to the user's LAN printer"),
     ("grokhub-app/src/app/pulse_ui.rs", 1, "source_preview / cache_image: egress_ok (chat)"),
     ("grokhub-app/src/app/pulse_sources_ui.rs", 1, "fetch_source: egress_ok on every hop (chat for a topic search, else no user data)"),
@@ -205,4 +206,43 @@ fn an_unwrapped_fetch_fails_the_coverage_check() {
         vec!["grokhub-demo/src/feed.rs: 2 outbound builder(s), 1 listed as wrapped".to_string()]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// The model client posts only from `post_guarded`, after the endpoint allowlist and
+/// the guard, and every xAI URL it names is on [`XAI_MODEL_ENDPOINTS`] (compaction too).
+///
+/// [`XAI_MODEL_ENDPOINTS`]: crate::harness::XAI_MODEL_ENDPOINTS
+#[test]
+fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
+    let raw = fs::read_to_string(crates_dir().join("grokhub-agent/src/client.rs")).unwrap();
+    let text = production_text(&raw);
+    assert_eq!(text.matches(".post(").count(), 1, "one POST site");
+    let body = text
+        .split("fn post_guarded(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ").next())
+        .expect("post_guarded");
+    let allow = body
+        .find("XAI_MODEL_ENDPOINTS.contains(")
+        .expect("allowlist check");
+    let guard = body.find("guard_egress(").expect("guard");
+    let post = body.find(".post(url)").expect("post");
+    assert!(allow < guard && guard < post, "{body}");
+    let urls: Vec<&str> = text
+        .match_indices("\"https://api.x.ai/")
+        .map(|(at, _)| {
+            let rest = &text[at + 1..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    assert_eq!(
+        urls,
+        vec![
+            "https://api.x.ai/v1/responses",
+            "https://api.x.ai/v1/responses/compact"
+        ]
+    );
+    for url in &urls {
+        assert!(crate::harness::XAI_MODEL_ENDPOINTS.contains(url), "{url}");
+    }
 }

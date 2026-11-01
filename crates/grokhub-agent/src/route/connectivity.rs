@@ -54,7 +54,8 @@ static STATE: AtomicU8 = AtomicU8::new(NetState::Online as u8);
 
 /// Current connectivity (tests may force Offline via [`ForceOffline`]).
 pub fn state() -> NetState {
-    if test_offline() {
+    // Offline only (LU-13) reads as Offline whatever the network says.
+    if test_offline() || grokhub_core::offline::enabled() {
         return NetState::Offline;
     }
     NetState::from_u8(STATE.load(Ordering::SeqCst))
@@ -107,6 +108,9 @@ pub fn cloud_queue_note(class: &str) -> String {
         "prepare:hard" => "a hard prepare step",
         other => other,
     };
+    if grokhub_core::offline::enabled() {
+        return format!("Offline only is on: {what} needs the internet.");
+    }
     format!("Waiting for the network: {what} needs the cloud.")
 }
 

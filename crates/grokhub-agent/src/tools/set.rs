@@ -223,6 +223,8 @@ mod tests {
 
     #[test]
     fn background_is_subset_of_chat_and_at_least_30_percent_smaller() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let gate = chat_gate();
         let chat = schemas_for_job(&gate, &ToolSet::FULL);
         let bg = schemas_for_job(&gate, &ToolSet::background());
@@ -247,6 +249,25 @@ mod tests {
             !names(&bg).iter().any(|n| n.contains("__")),
             "MCP qualified tools stay out unless declared"
         );
+    }
+
+    #[test]
+    fn with_lazy_tools_background_stays_a_smaller_subset_of_chat() {
+        crate::tools::registry::set_enabled_for_tests(Some(true));
+        let gate = chat_gate();
+        let chat = schemas_for_job(&gate, &ToolSet::FULL);
+        let bg = schemas_for_job(&gate, &ToolSet::background());
+        crate::tools::registry::set_enabled_for_tests(None);
+        let chat_names: BTreeSet<_> = names(&chat).into_iter().collect();
+        for name in names(&bg) {
+            assert!(
+                chat_names.contains(name),
+                "background `{name}` missing from chat"
+            );
+        }
+        let chat_bytes = serde_json::to_vec(&chat).unwrap().len();
+        let bg_bytes = serde_json::to_vec(&bg).unwrap().len();
+        assert!(bg_bytes < chat_bytes, "chat={chat_bytes} bg={bg_bytes}");
     }
 
     #[test]

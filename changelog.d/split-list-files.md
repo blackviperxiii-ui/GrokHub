@@ -1,1 +1,0 @@
-- Repo: deck-match proof pages, CI guards and the deck-shot list are split so changes stop conflicting on shared lists (one page per change under docs/design/deck-match/, one guard per file under scripts/ci-guards.d/, and a union-merged scripts/deck-shots.list.ps1).

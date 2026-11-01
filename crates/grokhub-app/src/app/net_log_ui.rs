@@ -54,6 +54,7 @@ pub(in crate::app) fn jitter_ms(samples: &[u32]) -> Option<u32> {
 
 /// The connect time to the first resolver that answers, or `None`.
 fn probe() -> Option<u32> {
+    grokhub_core::offline::refuse().ok()?;
     nl::PROBE_HOSTS.iter().find_map(|host| {
         let addr: SocketAddr = host.parse().ok()?;
         let start = Instant::now();
@@ -64,6 +65,7 @@ fn probe() -> Option<u32> {
 
 /// Bytes read and milliseconds taken for one speed-test download.
 fn speed_test() -> Result<(u64, u64), String> {
+    grokhub_core::offline::refuse()?;
     let client = grokhub_core::connectivity::default_http_client().map_err(|e| e.to_string())?;
     let start = Instant::now();
     let mut resp = client

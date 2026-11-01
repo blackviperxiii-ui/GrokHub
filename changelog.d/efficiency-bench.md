@@ -1,0 +1,1 @@
+- Added an offline efficiency bench (`cargo run -p grokhub-agent --example efficiency_bench`). For a fixed set of chats it reports how many model requests are made, how many bytes and estimated tokens are sent, how much of each request is cache-stable, whether early facts survive, the wall time, and the peak memory. The baseline is in docs/efficiency/baseline.md.
