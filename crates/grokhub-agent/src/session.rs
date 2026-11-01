@@ -605,6 +605,189 @@ fn fork_headers() -> Vec<(String, String)> {
     out
 }
 
+/// A message the person deleted from a chat. The ask is found by its text;
+/// `later` counts the same text asked again after it, so a message hidden by
+/// a compaction never shifts which one is meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forget<'a> {
+    /// That user message.
+    Ask { text: &'a str, later: usize },
+    /// The reply after that user message: its assistant messages, tool calls
+    /// and tool results, up to the next user message. `None` is the reply
+    /// before any user message.
+    Reply { ask: Option<(&'a str, usize)> },
+}
+
+/// What [`forget_message`] did to the saved session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forgotten {
+    /// The records are gone; the model won't read them again.
+    Removed,
+    /// Nothing saved matched: the message never reached the model, or it is
+    /// already folded into an earlier compaction's summary.
+    NotSaved,
+}
+
+/// The reply still running in this chat: deleting under it would race its writes.
+pub const FORGET_BUSY: &str = "Wait for the reply to finish, then delete the message.";
+
+/// Take one message out of a saved session so the model never reads it again.
+/// Records kept by an earlier compaction are searched too; a call and its
+/// output always go together. Refuses while a run is live on `id`.
+pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
+    let id = safe_id(id)?.to_string();
+    if runs()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(&id)
+    {
+        return Err(FORGET_BUSY.into());
+    }
+    if !session_file(&id)?.is_file() {
+        return Ok(Forgotten::NotSaved);
+    }
+    let mut info = load_session(&id)?;
+    let visible = visible_slots(&info.records);
+    // An ask goes out as typed, or with a note the app put before or after it
+    // (a resume recap, a skill's follow-up). Exact matches win; the wrapped
+    // ones count only when there aren't enough exact ones to reach `later`.
+    let asks: Vec<(usize, String)> = visible
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, item))| user_text(item).map(|t| (i, squash(&t))))
+        .collect();
+    let ask_at = |text: &str, later: usize| -> Option<usize> {
+        let want = squash(text);
+        if want.is_empty() {
+            return None;
+        }
+        let pick = |hit: &dyn Fn(&str) -> bool| {
+            asks.iter()
+                .filter(|(_, t)| hit(t))
+                .map(|(i, _)| *i)
+                .rev()
+                .nth(later)
+        };
+        pick(&|t| t == want).or_else(|| pick(&|t| wraps(t, &want)))
+    };
+    let doomed: Vec<Slot> = match what {
+        Forget::Ask { text, later } => match ask_at(text, later) {
+            Some(i) => vec![visible[i].0],
+            None => Vec::new(),
+        },
+        Forget::Reply { ask } => {
+            let start = match ask {
+                Some((text, later)) => ask_at(text, later).map(|i| i + 1),
+                None => Some(0),
+            };
+            match start {
+                Some(start) => visible[start..]
+                    .iter()
+                    .take_while(|(_, item)| user_text(item).is_none())
+                    .filter(|(_, item)| is_reply_item(item))
+                    .map(|(slot, _)| *slot)
+                    .collect(),
+                None => Vec::new(),
+            }
+        }
+    };
+    if doomed.is_empty() {
+        return Ok(Forgotten::NotSaved);
+    }
+    drop_slots(&mut info.records, &doomed);
+    write_session(&info)?;
+    bump_history();
+    Ok(Forgotten::Removed)
+}
+
+/// Where a visible item sits: a top-level record, or item `j` of the
+/// compaction record at `i`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Top(usize),
+    Kept(usize, usize),
+}
+
+/// The items the model reads, in order, with where each one is stored.
+fn visible_slots(records: &[Record]) -> Vec<(Slot, InputItem)> {
+    let mut out = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        match record {
+            Record::Compaction { items } => {
+                out.clear();
+                for (j, item) in items.iter().enumerate() {
+                    out.push((Slot::Kept(i, j), item.clone()));
+                }
+            }
+            Record::Item(item) => out.push((Slot::Top(i), item.clone())),
+            Record::Usage { .. } => {}
+        }
+    }
+    out
+}
+
+fn drop_slots(records: &mut Vec<Record>, doomed: &[Slot]) {
+    let mut kept: Vec<(usize, Vec<usize>)> = Vec::new();
+    for slot in doomed {
+        if let Slot::Kept(i, j) = *slot {
+            match kept.iter_mut().find(|(at, _)| *at == i) {
+                Some((_, js)) => js.push(j),
+                None => kept.push((i, vec![j])),
+            }
+        }
+    }
+    for (i, js) in kept {
+        if let Some(Record::Compaction { items }) = records.get_mut(i) {
+            let mut j = 0;
+            items.retain(|_| {
+                let keep = !js.contains(&j);
+                j += 1;
+                keep
+            });
+        }
+    }
+    let mut i = 0;
+    records.retain(|_| {
+        let keep = !doomed.contains(&Slot::Top(i));
+        i += 1;
+        keep
+    });
+}
+
+/// The person's words in a user message; `None` for anything else.
+fn user_text(item: &InputItem) -> Option<String> {
+    match item {
+        InputItem::Message { role, content } if role == "user" => {
+            let text = visible_text(role, content);
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    }
+}
+
+/// Part of a reply: what the model said and the tools it ran. System notes
+/// and xAI's opaque compaction items stay.
+fn is_reply_item(item: &InputItem) -> bool {
+    match item {
+        InputItem::Message { role, .. } => role == "assistant",
+        InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. } => true,
+        InputItem::ServerCompaction { .. } => false,
+    }
+}
+
+/// `sent` is `ask` with a note before or after it, on a word boundary.
+fn wraps(sent: &str, ask: &str) -> bool {
+    sent == ask
+        || sent.starts_with(&format!("{ask} "))
+        || sent.ends_with(&format!(" {ask}"))
+        || sent.contains(&format!(" {ask} "))
+}
+
+/// Text compared for a match: whitespace runs read as one space.
+fn squash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn export_markdown(id: &str) -> Result<String, String> {
     let info = load_session(id)?;
     let mut out = format!("# {}\n", info.title);
@@ -1478,6 +1661,253 @@ mod tests {
         assert!(session_file("native-other").unwrap().is_file());
         assert!(session_file(&unrelated.id).unwrap().is_file());
         assert!(delete_forks_of(&["native-main".to_string()]).is_empty());
+    }
+
+    fn said(role: &str, text: &str) -> InputItem {
+        InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    fn ran(call: &str) -> [InputItem; 2] {
+        [
+            InputItem::FunctionCall {
+                call_id: call.into(),
+                name: "read".into(),
+                arguments: "{}".into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: call.into(),
+                output: format!("{call} done"),
+            },
+        ]
+    }
+
+    fn seen(id: &str) -> Vec<(String, String)> {
+        transcript_pairs(&load_session(id).unwrap())
+    }
+
+    fn save(id: &str, items: &[InputItem]) {
+        record_turn(id, "/work", "grok-4.7", items, &Usage::default(), "", "t").unwrap();
+    }
+
+    #[test]
+    fn forgetting_an_ask_finds_it_inside_a_note_the_app_added_but_prefers_an_exact_match() {
+        let (_dir, _guard) = isolated("forget-wrapped");
+        let id = "native-forget-wrapped";
+        save(
+            id,
+            &[
+                said("user", "Earlier: we planned a trip.\nbook the train"),
+                said("assistant", "booked"),
+            ],
+        );
+        save(id, &[said("user", "book"), said("assistant", "what?")]);
+        save(
+            id,
+            &[
+                said("user", "book the train please"),
+                said("assistant", "again"),
+            ],
+        );
+        // "book" is asked exactly once; the wrapped asks above it don't count.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        // No exact "book the train": the one sent with a recap before it is
+        // the newest that wraps it on a word boundary, then the older one.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "book the train",
+                    later: 1
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let users: Vec<String> = seen(id)
+            .into_iter()
+            .filter(|(role, _)| role == "user")
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(users, vec!["book the train please".to_string()]);
+    }
+
+    #[test]
+    fn forgetting_an_ask_takes_only_that_message_counting_repeats_from_the_end() {
+        let (_dir, _guard) = isolated("forget-ask");
+        let id = "native-forget-ask";
+        save(id, &[said("user", "continue"), said("assistant", "one")]);
+        save(
+            id,
+            &[
+                said("user", "the code is kumquat"),
+                said("assistant", "two"),
+            ],
+        );
+        save(id, &[said("user", "continue"), said("assistant", "three")]);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "the  code is kumquat\n",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        // The first "continue" of two: one more comes after it.
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "continue",
+                    later: 1
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let pairs = seen(id);
+        assert_eq!(
+            pairs,
+            vec![
+                ("assistant".to_string(), "one".to_string()),
+                ("assistant".into(), "two".into()),
+                ("user".into(), "continue".into()),
+                ("assistant".into(), "three".into()),
+            ]
+        );
+        assert!(!format!("{:?}", resume_input(id).unwrap()).contains("kumquat"));
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "never said",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::NotSaved)
+        );
+    }
+
+    #[test]
+    fn forgetting_a_reply_takes_its_messages_and_tool_pairs_up_to_the_next_ask() {
+        let (_dir, _guard) = isolated("forget-reply");
+        let id = "native-forget-reply";
+        let [call, out] = ran("c1");
+        save(
+            id,
+            &[
+                said("user", "look"),
+                call,
+                out,
+                said("assistant", "found it"),
+            ],
+        );
+        save(id, &[said("user", "thanks"), said("assistant", "anytime")]);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Reply {
+                    ask: Some(("look", 0))
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        assert_eq!(
+            seen(id),
+            vec![
+                ("user".to_string(), "look".to_string()),
+                ("user".into(), "thanks".into()),
+                ("assistant".into(), "anytime".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn forgetting_reaches_into_what_a_compaction_kept_and_skips_what_it_folded() {
+        let (_dir, _guard) = isolated("forget-compact");
+        let id = "native-forget-compact";
+        save(
+            id,
+            &[said("user", "old ask"), said("assistant", "old reply")],
+        );
+        record_compaction(
+            id,
+            "/work",
+            "grok-4.7",
+            &[said("user", "kept ask"), said("assistant", "summary")],
+            &Usage::default(),
+            "",
+        )
+        .unwrap();
+        save(
+            id,
+            &[said("user", "new ask"), said("assistant", "new reply")],
+        );
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "old ask",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::NotSaved),
+            "folded into the summary, so there is no record to take out"
+        );
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "kept ask",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
+        let input = format!("{:?}", resume_input(id).unwrap());
+        assert!(
+            !input.contains("kept ask") && input.contains("summary") && input.contains("new ask")
+        );
+    }
+
+    #[test]
+    fn forgetting_waits_for_a_running_reply() {
+        let (_dir, _guard) = isolated("forget-busy");
+        let id = "native-forget-busy";
+        save(id, &[said("user", "hi"), said("assistant", "hello")]);
+        let run = attach_run(id, CancelToken::new());
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "hi",
+                    later: 0
+                }
+            ),
+            Err(FORGET_BUSY.to_string())
+        );
+        drop(run);
+        assert_eq!(
+            forget_message(
+                id,
+                Forget::Ask {
+                    text: "hi",
+                    later: 0
+                }
+            ),
+            Ok(Forgotten::Removed)
+        );
     }
 
     #[test]

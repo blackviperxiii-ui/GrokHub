@@ -346,6 +346,16 @@ export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
 }
 
+/** Takes one message out of a saved chat after the page asked: the ask
+ * `text`, or with `reply` the reply to it (no `text`: the reply before any
+ * ask). False when the saved chat had no copy. A running reply refuses. */
+export function forgetMessage(
+  id: string,
+  cut: { reply: boolean; text: string | null; later: number },
+): Promise<boolean> {
+  return invoke<boolean>("forget_message", { id, reply: cut.reply, text: cut.text, later: cut.later });
+}
+
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
