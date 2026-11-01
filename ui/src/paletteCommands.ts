@@ -14,13 +14,15 @@ export type CommandRunners = Partial<Record<CommandId, () => void>>;
 /** What the palette knows when it lists the commands. */
 export interface CommandState {
   runners: CommandRunners;
-  /** No API key yet: the Sign in row shows. */
+  /** Neither an API key nor a Grok sign-in yet: the Sign in row shows. */
   signedOut: boolean;
 }
 
 interface Command {
   id: CommandId;
   label: string;
+  /** A label that depends on the platform, in place of `label`. */
+  labelOn?: (caps: Capabilities) => string;
   keys?: string;
   /** Whether the row shows on this platform, in this state. */
   shows: (caps: Capabilities, state: CommandState) => boolean;
@@ -38,7 +40,12 @@ export const COMMANDS: readonly Command[] = [
     shows: (caps) => caps.desktopControl && !caps.remote,
   },
   // The web app signs in on the computer, so it has no Sign in row.
-  { id: "sign-in", label: "Sign in", shows: (caps, state) => state.signedOut && !caps.remote },
+  {
+    id: "sign-in",
+    label: "Sign in",
+    labelOn: (caps) => (caps.grokSignIn ? "Sign in with Grok" : "Sign in"),
+    shows: (caps, state) => state.signedOut && !caps.remote,
+  },
   { id: "shortcuts", label: "Shortcuts", keys: "Ctrl+/", shows: always },
 ];
 
@@ -47,7 +54,7 @@ export const SETTINGS_KEYS = "Ctrl+,";
 
 export function commandRows(caps: Capabilities, state: CommandState): PaletteRow[] {
   return COMMANDS.filter((c) => state.runners[c.id] && c.shows(caps, state)).map((c) => ({
-    label: c.label,
+    label: c.labelOn?.(caps) ?? c.label,
     keys: c.keys,
     action: { kind: "command", id: c.id },
   }));

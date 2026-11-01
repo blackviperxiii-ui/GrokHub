@@ -102,9 +102,13 @@ describe("paletteRows", () => {
     ]);
   });
 
+  it("names Grok's sign-in where this device offers it", () => {
+    expect(withExtras({ ...DESKTOP, grokSignIn: true }, "sign")).toEqual(["Sign in with Grok", "Ask Loadout: sign"]);
+  });
+
   it("shows Sign in only while signed out", () => {
-    expect(withExtras(DESKTOP, "sign", { ...EXTRAS, signedOut: false })).toEqual(["Ask Grok: sign"]);
-    expect(withExtras(DESKTOP, "sign")).toEqual(["Sign in", "Ask Grok: sign"]);
+    expect(withExtras(DESKTOP, "sign", { ...EXTRAS, signedOut: false })).toEqual(["Ask Loadout: sign"]);
+    expect(withExtras(DESKTOP, "sign")).toEqual(["Sign in", "Ask Loadout: sign"]);
   });
 
   it("shows each row's key at its right", () => {
@@ -118,10 +122,10 @@ describe("paletteRows", () => {
   });
 
   it("finds rows by the cabin's older words", () => {
-    expect(withExtras(DESKTOP, "feed")).toEqual(["Pulse", "Ask Grok: feed"]);
-    expect(withExtras(DESKTOP, "sched")).toEqual(["Automations", "Ask Grok: sched"]);
-    expect(withExtras(DESKTOP, "keys")).toEqual(["Shortcuts", "Ask Grok: keys"]);
-    expect(withExtras(DESKTOP, "hotk")).toEqual(["Shortcuts", "Ask Grok: hotk"]);
+    expect(withExtras(DESKTOP, "feed")).toEqual(["Pulse", "Ask Loadout: feed"]);
+    expect(withExtras(DESKTOP, "sched")).toEqual(["Automations", "Ask Loadout: sched"]);
+    expect(withExtras(DESKTOP, "keys")).toEqual(["Shortcuts", "Ask Loadout: keys"]);
+    expect(withExtras(DESKTOP, "hotk")).toEqual(["Shortcuts", "Ask Loadout: hotk"]);
     // A synonym answers to its start, not to any part of it.
     expect(answersTo("Pulse", "eed")).toBe(false);
   });
@@ -136,7 +140,7 @@ describe("paletteRows", () => {
     const chats = [{ id: "c1", title: "plans" }];
     expect(paletteRows(DESKTOP, "/pl", { ...EXTRAS, slash, chats })).toEqual([
       { label: "/plan", action: { kind: "ask", text: "/plan " } },
-      { label: "Ask Grok: /pl", action: { kind: "ask", text: "/pl" } },
+      { label: "Ask Loadout: /pl", action: { kind: "ask", text: "/pl" } },
     ]);
   });
 
@@ -153,10 +157,10 @@ describe("paletteRows", () => {
     ]);
   });
 
-  it("filters by the typed text and ends with Ask Grok", () => {
-    expect(labels(DESKTOP, "  ACCO ")).toEqual(["Settings: Account", "Ask Grok: ACCO"]);
+  it("filters by the typed text and ends with Ask Loadout", () => {
+    expect(labels(DESKTOP, "  ACCO ")).toEqual(["Settings: Account", "Ask Loadout: ACCO"]);
     expect(paletteRows(DESKTOP, "zzz")).toEqual([
-      { label: "Ask Grok: zzz", action: { kind: "ask", text: "zzz" } },
+      { label: "Ask Loadout: zzz", action: { kind: "ask", text: "zzz" } },
     ]);
   });
 });

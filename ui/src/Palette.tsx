@@ -17,6 +17,7 @@ import {
 } from "./paletteCommands";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
+import { PRODUCT_NAME } from "./brand";
 
 export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
 
@@ -81,7 +82,7 @@ export function views(caps: Capabilities): View[] {
 }
 
 /** The rows for `query`, in order: pages, commands, slash commands (for a
- * query that starts with `/`), recent chats, Settings sections, then Ask Grok
+ * query that starts with `/`), recent chats, Settings sections, then Ask
  * with the typed text, which puts it in the chat box like the cabin's palette. */
 export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
@@ -105,7 +106,7 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     ...named(settings),
   ];
   if (!q) return all;
-  return [...all, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+  return [...all, { label: `Ask ${PRODUCT_NAME}: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
 }
 
 const NOTHING_FOUND = { chats: [], slash: [] };

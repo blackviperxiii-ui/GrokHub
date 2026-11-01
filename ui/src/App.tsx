@@ -69,9 +69,10 @@ export function App() {
       () => {},
     );
   }, []);
-  // The palette's Sign in row follows the key, which Settings may have added.
+  // The palette's Sign in row follows the key and the Grok sign-in, which
+  // Settings may have added.
   useEffect(() => {
-    if (palette) getSettings().then((s) => setSignedOut(!s.hasApiKey), () => {});
+    if (palette) getSettings().then((s) => setSignedOut(!s.hasApiKey && !s.signedIn), () => {});
   }, [palette]);
   // The Activity Dock follows every chat turn, whichever view is open.
   useEffect(() => {
@@ -201,6 +202,7 @@ export function App() {
           notice={notice}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
+          grokSignIn={Boolean(caps.grokSignIn)}
         />
       </div>
       <div hidden={view !== "automations"}>
