@@ -317,9 +317,8 @@ pub fn draft_progress() -> Option<DraftProgress> {
     })
 }
 
-struct HttpEngineFetch {
-    url: String,
-}
+/// The engine archive download; `download_engine` names each asset's URL.
+struct HttpEngineFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {
     // Redirects are followed by hand so every hop is checked; public IPs only.
@@ -350,8 +349,8 @@ fn is_redirect(status: u16) -> bool {
 }
 
 impl rd::Fetch for HttpEngineFetch {
-    fn open(&self, offset: u64) -> Result<md::Opened, String> {
-        let mut url = self.url.clone();
+    fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
+        let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
             runtime_download_url_ok(&url)?;
             let mut req = runtime_agent()
@@ -507,9 +506,7 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
             message: None,
         },
     );
-    let fetch = HttpEngineFetch {
-        url: manifest.asset.url.clone(),
-    };
+    let fetch = HttpEngineFetch;
     let man = manifest.clone();
     let cfg = config_dir.clone();
     let app2 = app.clone();
