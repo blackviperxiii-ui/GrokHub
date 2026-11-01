@@ -348,9 +348,21 @@ fn settings_defaults_section() {
 #[test]
 fn ai_models_holds_every_model_setting_once() {
     let settings = include_str!("settings.rs");
-    assert!(settings.contains(
-        "(SettingsSec::Account, \"Account\"),\n            (SettingsSec::AiModels, \"AI models\")"
-    ));
+    // Right under Account in the nav. Windows checks out CRLF, so compare
+    // positions rather than a literal newline.
+    let account = settings
+        .find("(SettingsSec::Account, \"Account\"),")
+        .expect("Account nav row");
+    let models = settings
+        .find("(SettingsSec::AiModels, \"AI models\"),")
+        .expect("AI models nav row");
+    let next = settings
+        .find("(SettingsSec::Privacy, \"Privacy & data\"),")
+        .expect("Privacy nav row");
+    assert!(
+        account < models && models < next,
+        "AI models sits right under Account"
+    );
     assert!(settings.contains("SettingsSec::AiModels => \"AI models\""));
     let models = settings_arm(
         settings,
