@@ -61,10 +61,10 @@ describe("paletteRows", () => {
     expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
   });
 
-  it("filters by the typed text and ends with Ask Grok", () => {
-    expect(labels(DESKTOP, "  ACCO ")).toEqual(["Settings: Account", "Ask Grok: ACCO"]);
+  it("filters by the typed text and ends with Ask Loadout", () => {
+    expect(labels(DESKTOP, "  ACCO ")).toEqual(["Settings: Account", "Ask Loadout: ACCO"]);
     expect(paletteRows(DESKTOP, "zzz")).toEqual([
-      { label: "Ask Grok: zzz", action: { kind: "ask", text: "zzz" } },
+      { label: "Ask Loadout: zzz", action: { kind: "ask", text: "zzz" } },
     ]);
   });
 });
