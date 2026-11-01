@@ -1133,6 +1133,27 @@ async function appearance(s, config) {
   );
 }
 
+/** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
+ * Activity dock and Command must fit it without the page scrolling sideways:
+ * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
+ * a WebDriver click on Send, just above it, for a scrollbar press (mousedown
+ * and mouseup, no click, nothing sent). Checked once the capability report
+ * has added every tab (Pulse is the last to arrive) and the dock shows. */
+async function noSidewaysScroll(s, when) {
+  await waitFor("the Pulse tab", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Pulse']",
+    }),
+  );
+  const [wide, fits] = await wd("POST", `${s}/execute/sync`, {
+    script: "const r = document.documentElement; return [r.scrollWidth, r.clientWidth];",
+    args: [],
+  });
+  if (wide > fits) throw new Error(`the page scrolls sideways ${when}: ${wide}px wide in a ${fits}px window`);
+  console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -1185,6 +1206,7 @@ async function main() {
     }
     await shot(s, "chat-permission-card");
     console.log(`permission card shown: ${JSON.stringify(asked.split("\n")[0])}`);
+    await noSidewaysScroll(s, "with the permission card waiting");
 
     // Without an answer the write must not run and the turn must not go on.
     await sleep(1500);

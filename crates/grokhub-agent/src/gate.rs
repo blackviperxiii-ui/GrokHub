@@ -30,6 +30,9 @@ const READONLY: &[&str] = &[
     "exit_plan_mode",
     "diagnose",
     "local_ai_status",
+    "mods_search",
+    "mods_detail",
+    "mods_installed",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -42,6 +45,7 @@ const CONTROL: &[&str] = &[
     "connection_disable",
     "connection_delete",
     "local_ai_selftest",
+    "mods_prepare_install",
     "spawn_subagent",
     "send_subagent_message",
 ];

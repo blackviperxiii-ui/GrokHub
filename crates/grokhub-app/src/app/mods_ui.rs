@@ -9,6 +9,7 @@
 //! Every lookup runs off the UI thread ([`jobs`]); the cached page shows at
 //! once and the fresh one replaces it when it comes.
 
+pub(super) mod agent;
 mod drawer;
 mod install;
 mod jobs;
@@ -322,6 +323,9 @@ impl Cabin {
                         .color(crate::theme::fg()),
                 );
                 ui.add_space(12.0);
+                if let Err(e) = requested_card(ui) {
+                    self.status = e;
+                }
                 let offline = grokhub_core::offline::enabled();
                 let ranked = suggest::suggestions(ui.ctx(), &rail, self.adult_ok(), offline);
                 suggest::row(ui, &rail, &mut view, &ranked);
@@ -712,6 +716,63 @@ impl Cabin {
             }
         });
     }
+}
+
+/// The mod the chat asked to set up: one card, the same one way to get the
+/// file as in the drawer, and Dismiss. Nothing has been fetched yet.
+fn requested_card(ui: &mut egui::Ui) -> Result<(), String> {
+    let Some(r) = install::requested() else {
+        return Ok(());
+    };
+    let key = install::mod_key(r.source, &r.m.id);
+    let installed = install::installed_now(r.game.entry.id);
+    let blocked = install::blocked(&r.game);
+    let offer = drawer::offer(&r.f, &key, &installed, blocked.as_deref());
+    let mut out = Ok(());
+    egui::Frame::NONE
+        .fill(crate::theme::surface())
+        .stroke(egui::Stroke::new(1.0, crate::theme::amber()))
+        .corner_radius(crate::theme::RADIUS_SM)
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width().min(720.0));
+            ui.label(
+                egui::RichText::new(format!("Install {} for {}?", r.m.name, r.game.entry.name))
+                    .size(crate::theme::TYPE_LABEL)
+                    .strong()
+                    .color(crate::theme::fg()),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} · {} · from {} · asked for in chat",
+                    r.f.file_name,
+                    drawer::file_line(&r.f),
+                    r.source.label()
+                ))
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::muted()),
+            );
+            ui.label(
+                egui::RichText::new(r.game.entry.risk)
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::amber()),
+            );
+            if let drawer::Offer::Blocked(why) = &offer {
+                ui.label(
+                    egui::RichText::new(why)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::amber()),
+                );
+            }
+            ui.horizontal(|ui| {
+                out = drawer::file_actions(ui, &r.game, r.source, &r.m, &r.f, offer);
+                if crate::cards::ghost_pill(ui, "Dismiss") {
+                    install::drop_request();
+                }
+            });
+        });
+    ui.add_space(12.0);
+    out
 }
 
 /// Approve, then seal the key, off the UI thread.

@@ -41,7 +41,7 @@ impl Cert {
             .map_err(|e| format!("Couldn't make the web access certificate: {e}"))?;
         Ok(Cert {
             cert_pem: made.cert.pem(),
-            key_pem: made.key_pair.serialize_pem(),
+            key_pem: made.signing_key.serialize_pem(),
         })
     }
 

@@ -1714,10 +1714,57 @@ fn command_floor(cmd: &str) -> Option<String> {
     None
 }
 
+/// Game folders mods go into, lowercase with `/`. A write or a command that
+/// names one parks a card: only the Mods page's own install writes there.
+static MOD_ROOTS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+fn norm_path(p: &str) -> String {
+    p.trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+/// The app names the game folders it may install mods into.
+pub fn set_mod_roots(roots: &[std::path::PathBuf]) {
+    let roots = roots
+        .iter()
+        .map(|r| norm_path(&r.to_string_lossy()))
+        .filter(|r| r.len() > 3)
+        .collect();
+    *MOD_ROOTS.write().unwrap_or_else(|e| e.into_inner()) = roots;
+}
+
+/// A write, edit or command that touches a game's mod folder.
+fn touches_mod_root(name: &str, arguments: &str) -> bool {
+    let roots = MOD_ROOTS.read().unwrap_or_else(|e| e.into_inner());
+    if roots.is_empty() {
+        return false;
+    }
+    let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let texts: Vec<String> = if SHELL_TOOLS.contains(&name) {
+        command_arg(arguments).into_iter().collect()
+    } else if matches!(name, "write" | "search_replace") {
+        ["path", "file_path", "target_file"]
+            .iter()
+            .filter_map(|k| v.get(*k).and_then(|p| p.as_str()).map(str::to_string))
+            .collect()
+    } else {
+        return false;
+    };
+    texts.iter().any(|t| {
+        let t = norm_path(t);
+        roots.iter().any(|r| t.contains(r.as_str()))
+    })
+}
+
 /// Hard class for a tool call. Read-only tools are never hard class.
 pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if crate::gate::is_readonly(name) {
         return None;
+    }
+    if touches_mod_root(name, arguments) {
+        return Some(HardClass::IrreversibleOs);
     }
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments)
@@ -3565,5 +3612,44 @@ mod tests {
             HardHit::None
         );
         assert_eq!(classify("use_tool", "not json"), HardHit::None);
+    }
+
+    #[test]
+    fn writes_and_commands_in_a_game_mod_folder_park_a_card() {
+        set_mod_roots(&[std::path::PathBuf::from(
+            "C:\\Steam\\steamapps\\common\\Stardew Valley",
+        )]);
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell(r#"unzip mod.zip -d "c:/steam/steamapps/common/stardew valley/Mods""#)
+            ),
+            Some(HardClass::IrreversibleOs)
+        );
+        assert_eq!(
+            hard_class(
+                "write",
+                &serde_json::json!({"path": "C:\\Steam\\steamapps\\common\\Stardew Valley\\Mods\\x.dll", "content": ""}).to_string()
+            ),
+            Some(HardClass::IrreversibleOs)
+        );
+        assert_eq!(hard_class("run_terminal_command", &shell("ls")), None);
+        assert_eq!(
+            hard_class(
+                "read_file",
+                &serde_json::json!({"path": "C:/Steam/steamapps/common/Stardew Valley/a"})
+                    .to_string()
+            ),
+            None
+        );
+        set_mod_roots(&[]);
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell("cp a c:/steam/steamapps/common/stardew valley/Mods")
+            ),
+            None
+        );
     }
 }

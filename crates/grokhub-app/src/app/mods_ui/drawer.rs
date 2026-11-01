@@ -191,7 +191,7 @@ pub(super) fn offer(
     }
 }
 
-fn file_actions(
+pub(super) fn file_actions(
     ui: &mut egui::Ui,
     game: &ModGame,
     source: Source,

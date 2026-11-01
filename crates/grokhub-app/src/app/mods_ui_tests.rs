@@ -331,6 +331,43 @@ fn each_file_offers_one_way_to_get_it() {
 }
 
 #[test]
+fn a_mod_the_chat_asked_for_waits_on_a_card_until_the_user_clicks() {
+    let rim = mod_rail(&[game(294100, "RimWorld", 1, 1)], &[], false).games[0].clone();
+    install::request(install::Requested {
+        game: rim,
+        source: Source::Workshop,
+        m: ModSummary {
+            id: "818773962".into(),
+            name: "HugsLib".into(),
+            ..Default::default()
+        },
+        f: ModFile {
+            id: "818773962".into(),
+            name: "HugsLib".into(),
+            file_name: "HugsLib".into(),
+            version: String::new(),
+            size: 0,
+            hash: None,
+            download: Download::Steam(818773962),
+            game_versions: vec![],
+            deps: vec![],
+            primary: true,
+            uploaded: 0,
+        },
+    });
+    let mut cabin = Cabin::quiet_for_test();
+    let shown = texts(&mut cabin, |_, ui| {
+        let _ = requested_card(ui);
+    });
+    install::drop_request();
+    for want in [
+        "Install HugsLib for RimWorld?",
+        "Subscribe in Steam",
+        "Dismiss",
+    ] {
+        assert!(shown.iter().any(|t| t == want), "{want}: {shown:?}");
+    }
+    assert!(!shown.iter().any(|t| t == "Install"), "{shown:?}");
 fn for_you_cards_say_why_and_offer_not_interested() {
     use grokhub_core::mods::suggest::{Candidate, Suggestion, Why};
     let rail = mod_rail(&[game(413150, "Stardew Valley", 1, 1)], &[], false);
