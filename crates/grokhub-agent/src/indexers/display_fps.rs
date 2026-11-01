@@ -12,8 +12,15 @@
 //! probe that only this user's group can run and gives that one file
 //! CAP_PERFMON. The app runs it as `--fps-probe`, asks it for the counts once
 //! a second over a pipe, and closing the pipe ends it.
+//!
+//! On Windows the count comes from the graphics kernel's present events
+//! instead (see `present`), again from outside every game.
 
+use std::collections::HashMap;
 use std::time::Instant;
+
+#[cfg(windows)]
+mod present;
 
 /// CRTCs counted. amdgpu has at most 6, i915 4.
 pub const MAX_CRTCS: u32 = 6;
@@ -61,14 +68,67 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// The SID of the built-in Performance Log Users group (same in every
+/// language, unlike its name).
+pub const PERF_LOG_USERS_SID: &str = "S-1-5-32-559";
+
+/// Windows processes whose presents are never the game: the desktop
+/// compositor, and the kernel's own process for work it does on its threads.
+const NOT_GAMES: [&str; 2] = ["dwm.exe", "System"];
+
+/// The PowerShell lines (run once, as administrator) that put `account` in
+/// Performance Log Users. The account is named so an elevated prompt under a
+/// different admin still adds the right user.
+pub fn windows_setup(account: &str) -> String {
+    format!(
+        "Add-LocalGroupMember -SID '{PERF_LOG_USERS_SID}' -Member {}\n\
+         # Then sign out of Windows and back in.",
+        ps_quote(account)
+    )
+}
+
+/// The line that undoes [`windows_setup`].
+pub fn windows_undo(account: &str) -> String {
+    format!(
+        "Remove-LocalGroupMember -SID '{PERF_LOG_USERS_SID}' -Member {}",
+        ps_quote(account)
+    )
+}
+
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The busiest presenter in a round of counts, leaving out Loadout itself and
+/// anything in [`NOT_GAMES`]. The two columns are DxgKrnl and DXGI counts of
+/// the same presents, so the larger one is the process's count.
+pub fn busiest_presenter(
+    counts: &HashMap<u32, [u64; 2]>,
+    own_pid: u32,
+    name: &mut impl FnMut(u32) -> Option<String>,
+) -> Option<(u32, u64)> {
+    let mut ranked: Vec<(u32, u64)> = counts
+        .iter()
+        .filter(|(pid, _)| **pid != own_pid && **pid != 0)
+        .map(|(pid, c)| (*pid, c[0].max(c[1])))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    ranked.into_iter().find(|(pid, _)| {
+        name(*pid).is_none_or(|n| !NOT_GAMES.iter().any(|x| n.eq_ignore_ascii_case(x)))
+    })
+}
+
 /// Why the counter couldn't open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FpsBlock {
-    /// Not Linux.
+    /// Neither Linux nor Windows.
     Unsupported,
-    /// The kernel has no DRM flip tracepoint (no DRM driver, or tracing off).
+    /// The kernel has no DRM flip tracepoint (no DRM driver, or tracing off),
+    /// or Windows wouldn't start the present trace for another reason.
     NoTracepoint,
-    /// The tracepoint id or the perf counters need the one-time permission.
+    /// Linux: the tracepoint id or the perf counters need the one-time setup.
+    /// Windows: starting a trace needs Performance Log Users.
     NeedsPermission,
 }
 
@@ -124,6 +184,9 @@ enum Source {
     /// The CAP_PERFMON probe, asked over a pipe.
     #[cfg(target_os = "linux")]
     Probe(probe::Probe),
+    /// The Windows graphics kernel's present events.
+    #[cfg(windows)]
+    Etw(present::Session),
 }
 
 #[cfg(target_os = "linux")]
@@ -158,15 +221,41 @@ impl FlipCounter {
             };
             Ok(FlipCounter { source, last: None })
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            Ok(FlipCounter {
+                source: Source::Etw(present::Session::start()?),
+                last: None,
+            })
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             Err(FpsBlock::Unsupported)
+        }
+    }
+
+    /// On Windows, the exe name of the process the last rate came from.
+    pub fn presenter(&self) -> Option<&str> {
+        match &self.source {
+            #[cfg(windows)]
+            Source::Etw(s) => s.presenter.as_deref(),
+            #[allow(unreachable_patterns)]
+            _ => None,
         }
     }
 
     /// The busiest screen's frames per second since the last call. The first
     /// call only sets the baseline; `None` too when the probe went away.
     pub fn sample(&mut self) -> Option<f32> {
+        match &mut self.source {
+            #[cfg(windows)]
+            Source::Etw(s) => s.rate(),
+            #[allow(unreachable_patterns)]
+            _ => self.sample_counts(),
+        }
+    }
+
+    fn sample_counts(&mut self) -> Option<f32> {
         let now = Instant::now();
         let counts = self.counts()?;
         let rate = self.last.as_ref().and_then(|(at, prev)| {
@@ -505,6 +594,36 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_busiest_presenter_skips_loadout_and_the_compositor() {
+        let counts: HashMap<u32, [u64; 2]> = [
+            (10, [300, 0]),
+            (20, [0, 144]),
+            (30, [500, 500]),
+            (40, [900, 0]),
+        ]
+        .into();
+        let names: HashMap<u32, &str> = [(10, "dwm.exe"), (20, "game.exe"), (30, "DWM.EXE")].into();
+        let mut name = |pid: u32| names.get(&pid).map(|n| n.to_string());
+        // 40 is Loadout itself; 30 and 10 are the compositor.
+        assert_eq!(
+            super::busiest_presenter(&counts, 40, &mut name),
+            Some((20, 144))
+        );
+        assert_eq!(
+            super::busiest_presenter(&HashMap::new(), 1, &mut name),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_setup_names_the_group_by_sid_and_quotes_the_account() {
+        let set = super::windows_setup("PC\\O'Brien");
+        assert!(set.contains("Add-LocalGroupMember -SID 'S-1-5-32-559' -Member 'PC\\O''Brien'"));
+        assert!(set.contains("sign out"));
+        let undo = super::windows_undo("PC\\O'Brien");
+        assert!(undo.starts_with("Remove-LocalGroupMember -SID 'S-1-5-32-559'"));
+    }
 
     #[test]
     fn the_busiest_screen_sets_the_rate() {
