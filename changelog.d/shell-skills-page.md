@@ -1,0 +1,1 @@
+- Shell: a Skills page lists the cabin, project, user, plugin and built-in skills chat can use, with search; Use puts a skill's trigger in the chat box, Open folder shows its folder, and the web app lists them read only.

@@ -1306,6 +1306,32 @@ export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
+/** The Skills page (src-tauri/src/skills.rs). Read only. */
+export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** What Use puts in the chat box. */
+  trigger: string;
+  source: SkillSource;
+  /** The skill's folder, empty for a built-in. */
+  folder: string;
+}
+
+export interface SkillPage {
+  rows: SkillRow[];
+}
+
+export function getSkills(): Promise<SkillPage> {
+  return invoke<SkillPage>("get_skills");
+}
+
+/** The shell finds the folder from the source and name itself. */
+export function openSkillFolder(source: SkillSource, name: string): Promise<void> {
+  return invoke<void>("open_skill_folder", { source, name });
+}
+
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 
