@@ -600,6 +600,46 @@ select:focus-visible {
   resize: none;
 }
 
+/* Files waiting on the composer; they wrap on a phone. */
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip.attach {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.chip.attach > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip.attach.warn {
+  border-color: var(--danger-text);
+}
+
+.attach-status {
+  color: var(--danger-text);
+}
+
+.attach-chips .note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.composer .attach-plus {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.2em;
+}
+
 /* The sections stay put on the left; each page scrolls inside its own pane. */
 .settings-page {
   display: flex;
@@ -2056,6 +2096,15 @@ label.toggle-row {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
 }
 
+/* Chat's cards sit in <ViewTransition>: one that arrives, changes or goes
+   eases over 150ms. A webview without view transitions just shows the change. */
+::view-transition-group(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 150ms;
+  animation-timing-function: var(--ease-out);
+}
+
 /* People who ask for less motion get none: state changes still happen, instantly. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2066,6 +2115,13 @@ label.toggle-row {
     transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+
+  /* `*` does not reach the view transition's pseudo-elements. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 

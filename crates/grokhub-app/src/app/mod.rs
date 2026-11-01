@@ -237,6 +237,7 @@ mod release_radar_ui;
 mod repaint_timer_tests;
 mod repair_ui;
 mod rhythm_ui;
+mod rl_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Activity, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
@@ -47,6 +47,17 @@ function preloadViews() {
   for (const load of Object.values(loaders)) void load().catch(() => {});
 }
 
+/** A page that stays mounted once it has opened. Hidden, it keeps its state
+ * (a half-typed form stays) and its effects stop; they run again when it
+ * shows, so its lists reload. */
+function Page({ shown, children }: { shown: boolean; children: ReactNode }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <Suspense fallback={null}>{children}</Suspense>
+    </Activity>
+  );
+}
+
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<Prefill>();
@@ -57,6 +68,9 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // The pages opened so far. Each mounts the first time it opens, not before.
+  const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
+  if (!opened.has(view)) setOpened(new Set(opened).add(view));
   const barAway = useHidingBar(palette);
   // Closing Settings goes back to the screen that was open before it.
   const before = useRef<View>("chat");
@@ -271,25 +285,43 @@ export function App() {
           }}
         />
       </div>
-      <Suspense fallback={null}>
-        {view === "pulse" && caps.pulse && (
-          <Pulse
-            onRun={ask}
-          />
-        )}
-        {view === "journal" && !caps.remote && (
+      {/* Chat and Automations are not in <Activity>: hidden there, their
+          listeners would stop and a reply landing meanwhile would be lost. */}
+      {opened.has("pulse") && caps.pulse && (
+        <Page shown={view === "pulse"}>
+          <Pulse onRun={ask} />
+        </Page>
+      )}
+      {opened.has("journal") && !caps.remote && (
+        <Page shown={view === "journal"}>
           <Journal
             onMission={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");
             }}
           />
-        )}
-        {view === "memory" && <Memory />}
-        {view === "connectors" && <Connectors />}
-        {view === "library" && caps.library && <Library />}
-        {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
-      </Suspense>
+        </Page>
+      )}
+      {opened.has("memory") && (
+        <Page shown={view === "memory"}>
+          <Memory />
+        </Page>
+      )}
+      {opened.has("connectors") && (
+        <Page shown={view === "connectors"}>
+          <Connectors />
+        </Page>
+      )}
+      {opened.has("library") && caps.library && (
+        <Page shown={view === "library"}>
+          <Library />
+        </Page>
+      )}
+      {opened.has("settings") && (
+        <Page shown={view === "settings"}>
+          <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
+        </Page>
+      )}
     </div>
   );
 }
