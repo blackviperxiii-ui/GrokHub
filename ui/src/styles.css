@@ -3014,6 +3014,43 @@ label.toggle-row {
   color: var(--muted);
 }
 
+/* The Skills page (Skills.tsx): one centered column like Connectors. */
+.skills {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.skills input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-group h3 {
+  margin: 4px 0 8px;
+}
+
+.skills .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.skill {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
 /* A card's one-line read of its own numbers: a dot in its tone, then the line. */
 .verdict {
   display: flex;
