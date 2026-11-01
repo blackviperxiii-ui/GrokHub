@@ -135,6 +135,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "factorio",
+        name: "Factorio",
+        steam_app_id: Some(427520),
+        protection: Protection::None,
+        channels: &[Channel::OfficialAddon(
+            "a Loadout mod through Factorio's mod API that writes a summary to script-output, installed only when you click",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -248,5 +258,6 @@ mod tests {
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
         assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
         assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
+        assert_eq!(by_id("factorio").unwrap().steam_app_id, Some(427520));
     }
 }

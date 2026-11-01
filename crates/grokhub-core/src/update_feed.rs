@@ -5445,6 +5445,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             ),
             "Stardew Valley",
         ));
+        rows.push((
+            "session_card",
+            crate::factorio_state::session_card(
+                &crate::factorio_state::FactorioSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "Factorio",
+        ));
         rows
     }
 

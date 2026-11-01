@@ -168,6 +168,7 @@ mod downloads_tidy_ui;
 mod elite_ui;
 mod episode_ui;
 mod evidence_ui;
+mod factorio_ui;
 mod feed_ui;
 mod file_writes;
 mod findings_ui;
