@@ -2233,7 +2233,6 @@ pub fn run() {
             run_local_speed_test,
             get_web_access,
             set_web_access,
-            open_url,
             get_update_status,
             set_update_channel,
             check_shell_update,
