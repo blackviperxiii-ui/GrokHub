@@ -72,6 +72,8 @@ pub const WEB_COMMANDS: &[&str] = &[
     "add_memory",
     "search_memory",
     "edit_memory_row",
+    "slash_hits",
+    "run_slash",
     "forget_memory_row",
     "approve_memory_row",
     "reject_memory_row",
