@@ -24,7 +24,7 @@ pub(super) const LOOPBACK_SECS: u64 = 300;
 const BODY_CAP: u64 = 256 * 1024;
 const REQUEST_SECS: u64 = 20;
 
-fn read_capped(resp: ureq::Response) -> Value {
+fn read_capped(resp: grokhub_core::http::Response) -> Value {
     let mut buf = Vec::new();
     let _ = resp.into_reader().take(BODY_CAP).read_to_end(&mut buf);
     serde_json::from_slice(&buf).unwrap_or(Value::Null)
@@ -35,13 +35,14 @@ fn get_json(url: &str) -> Result<Option<Value>, String> {
     guard_handshake(url)?;
     let resp = agent(Duration::from_secs(REQUEST_SECS))
         .get(url)
-        .set("Accept", "application/json")
+        .header("Accept", "application/json")
         .timeout(Duration::from_secs(REQUEST_SECS))
+        .any_status()
         .call();
     match resp {
+        Ok(r) if r.status() >= 400 => Ok(None),
         Ok(r) => Ok(Some(read_capped(r)).filter(Value::is_object)),
-        Err(ureq::Error::Status(..)) => Ok(None),
-        Err(ureq::Error::Transport(err)) => Err(err.to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -49,14 +50,14 @@ fn post(url: &str, ctype: &str, body: &str) -> Result<(bool, Value), String> {
     guard_handshake(url)?;
     let resp = agent(Duration::from_secs(REQUEST_SECS))
         .post(url)
-        .set("Content-Type", ctype)
-        .set("Accept", "application/json")
+        .header("Content-Type", ctype)
+        .header("Accept", "application/json")
         .timeout(Duration::from_secs(REQUEST_SECS))
+        .any_status()
         .send_string(body);
     match resp {
-        Ok(r) => Ok((true, read_capped(r))),
-        Err(ureq::Error::Status(_, r)) => Ok((false, read_capped(r))),
-        Err(ureq::Error::Transport(err)) => Err(err.to_string()),
+        Ok(r) => Ok((r.status() < 400, read_capped(r))),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -77,13 +78,14 @@ fn probe(url: &str) -> Option<String> {
     let body = rpc::request(0, "initialize", rpc::initialize_params()).to_string();
     let resp = agent(Duration::from_secs(REQUEST_SECS))
         .post(url)
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json, text/event-stream")
-        .set("MCP-Protocol-Version", rpc::LATEST)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", rpc::LATEST)
         .timeout(Duration::from_secs(REQUEST_SECS))
+        .any_status()
         .send_string(&body);
     match resp {
-        Err(ureq::Error::Status(401, r)) => r.header("www-authenticate").map(str::to_string),
+        Ok(r) if r.status() == 401 => r.header("www-authenticate").map(str::to_string),
         _ => None,
     }
 }

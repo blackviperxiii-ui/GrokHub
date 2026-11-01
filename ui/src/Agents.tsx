@@ -42,10 +42,15 @@ export function Agents({
   const [queue, setQueue] = useState<Queue | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-
-  useEffect(() => {
+  // A different chat starts from nothing, not from the last chat's queue.
+  const [shownFor, setShownFor] = useState(conversationId);
+  if (shownFor !== conversationId) {
+    setShownFor(conversationId);
     setQueue(null);
     setNote(null);
+  }
+
+  useEffect(() => {
     if (!conversationId) return;
     const id = conversationId;
     let gone = false;

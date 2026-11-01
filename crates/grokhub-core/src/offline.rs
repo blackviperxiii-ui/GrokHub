@@ -32,7 +32,7 @@ pub const OFFLINE_ENV: &str = "GROKHUB_OFFLINE_ONLY";
 /// What every refused call says (chat, MCP rows, downloads, updates).
 pub static OFFLINE_MSG: LazyLock<&'static str> = LazyLock::new(|| {
     crate::brand::filled(
-        "Offline only is on, so {product} can't reach the internet. Turn it off in Settings → Privacy & data to use this.",
+        "Offline only is on, so {product} can't reach the internet. Turn it off in Settings → AI models to use this.",
     )
 });
 
@@ -295,7 +295,7 @@ pub fn is_refusal(text: &str) -> bool {
 mod tests {
     use super::*;
 
-    const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+    const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

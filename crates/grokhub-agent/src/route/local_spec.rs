@@ -310,13 +310,14 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
         "temperature": 0,
         "stream": false,
     });
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(300))
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(5),
+        read: Some(Duration::from_secs(300)),
+        ..Default::default()
+    });
     let text = agent
         .post(&format!("{base_url}/v1/chat/completions"))
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .send_json(body)
         .map_err(|e| format!("speed test request failed: {e}"))?
         .into_string()

@@ -1,0 +1,1 @@
+- The desktop app's chat has a push-to-talk mic: hold it (or Ctrl+G), speak, let go, and your words land in the draft through xAI speech to text. It never sends by itself, and Offline only blocks it.
