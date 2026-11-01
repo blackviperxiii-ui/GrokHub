@@ -275,7 +275,7 @@ fn frame_rate_tile_is_honest_about_not_reading_games() {
         ("144 FPS", "Frames on screen")
     );
     let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NeedsPermission)));
-    assert_eq!(t.caption, "Needs a one-time permission");
+    assert_eq!(t.caption, "Needs a sudo setup first");
     let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)));
     assert_eq!(t.caption, "This driver doesn't report screen frames");
 }

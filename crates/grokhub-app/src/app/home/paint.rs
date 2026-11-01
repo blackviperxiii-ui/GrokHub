@@ -906,8 +906,8 @@ pub(super) fn frame_rate_text(linux: Option<FpsState>) -> TileText {
         },
         FpsState::Blocked(FpsBlock::NeedsPermission) => TileText {
             big: "Not read".into(),
-            caption: "Needs a one-time permission".into(),
-            detail: Some("Copy the setup and run it once in a terminal".into()),
+            caption: "Needs a sudo setup first".into(),
+            detail: Some("Copy setup, read it, run it in a terminal".into()),
             tone: Tone::Warn,
         },
         FpsState::Blocked(_) => TileText {
@@ -932,12 +932,15 @@ fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
         header(ui, false, "Frame Rate", "", crate::theme::muted());
         paint_tile_text(ui, &t, size);
         if needs_setup && size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Copy setup") {
+            let exe = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "/usr/bin/grokhub".into());
             ui.ctx()
-                .copy_text(grokhub_agent::indexers::display_fps::LINUX_SETUP.to_string());
+                .copy_text(grokhub_agent::indexers::display_fps::linux_setup(&exe));
         }
     })
     .on_hover_text(if linux.is_some() {
-        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The one-time setup lets normal apps read that kernel counter."
+        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) copies Loadout to a small frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. Nothing else on your PC gets it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf"
     } else {
         "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone."
     });

@@ -6,8 +6,12 @@
 //! anti-cheat has nothing to see.
 //!
 //! Counting mode only (no samples, no ring buffer). It needs system-wide perf
-//! counters (`kernel.perf_event_paranoid` at 0 or lower, or CAP_PERFMON) and a
-//! readable tracepoint id under tracefs, which [`LINUX_SETUP`] grants once.
+//! counters and a readable tracepoint id under tracefs. The system-wide perf
+//! setting (`kernel.perf_event_paranoid`) is never lowered: that would let any
+//! local process watch every CPU. Instead [`linux_setup`] copies Loadout to a
+//! probe that only this user's group can run and gives that one file
+//! CAP_PERFMON. The app runs it as `--fps-probe`, asks it for the counts once
+//! a second over a pipe, and closing the pipe ends it.
 
 use std::time::Instant;
 
@@ -19,11 +23,42 @@ const TRACEPOINT_IDS: [&str; 2] = [
     "/sys/kernel/debug/tracing/events/drm/drm_vblank_event_delivered/id",
 ];
 
-/// The one-time permission, as commands the user pastes into a terminal.
-/// Loadout never runs them itself. Works in bash, zsh and fish.
-pub const LINUX_SETUP: &str = "printf 'kernel.perf_event_paranoid = 0\\n' | sudo tee /etc/sysctl.d/60-loadout-fps.conf\n\
-printf 'z /sys/kernel/tracing 0755 - - -\\nz /sys/kernel/tracing/events 0755 - - -\\nz /sys/kernel/tracing/events/drm 0755 - - -\\nz /sys/kernel/tracing/events/drm/drm_vblank_event_delivered 0755 - - -\\nz /sys/kernel/tracing/events/drm/drm_vblank_event_delivered/id 0444 - - -\\n' | sudo tee /etc/tmpfiles.d/loadout-fps.conf\n\
-sudo sysctl -p /etc/sysctl.d/60-loadout-fps.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/loadout-fps.conf";
+/// The argument that runs the binary as the counting probe and nothing else.
+pub const PROBE_ARG: &str = "--fps-probe";
+
+/// Where [`linux_setup`] puts the probe.
+pub const PROBE_PATH: &str = "/usr/local/lib/loadout/fps-probe";
+
+/// The setup, as commands the user pastes into a terminal: a copy of `exe` as
+/// the probe (root-owned, runnable only by the user's group) with CAP_PERFMON
+/// on that file alone, and tracefs opened just far enough to read the one
+/// tracepoint id (folders traversable, not listable). Re-running it after an
+/// update refreshes the probe.
+pub fn linux_setup(exe: &str) -> String {
+    let dirs = [
+        "/sys/kernel/tracing",
+        "/sys/kernel/tracing/events",
+        "/sys/kernel/tracing/events/drm",
+        "/sys/kernel/tracing/events/drm/drm_vblank_event_delivered",
+    ];
+    let mut tmpfiles: String = dirs
+        .iter()
+        .map(|d| format!("z {d} 0711 - - -\\n"))
+        .collect();
+    tmpfiles
+        .push_str("z /sys/kernel/tracing/events/drm/drm_vblank_event_delivered/id 0444 - - -\\n");
+    format!(
+        "sudo install -D -m 0750 -o root -g \"$(id -gn)\" {exe} {PROBE_PATH}\n\
+         sudo setcap cap_perfmon+ep {PROBE_PATH}\n\
+         printf '{tmpfiles}' | sudo tee /etc/tmpfiles.d/loadout-fps.conf\n\
+         sudo systemd-tmpfiles --create /etc/tmpfiles.d/loadout-fps.conf",
+        exe = shell_quote(exe),
+    )
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 
 /// Why the counter couldn't open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,17 +112,50 @@ pub fn parse_cpu_list(text: &str) -> Vec<u32> {
 
 /// Open counters for each CRTC on each CPU, read as one count per CRTC.
 pub struct FlipCounter {
-    #[cfg(target_os = "linux")]
-    fds: Vec<(usize, std::os::fd::OwnedFd)>,
-    crtcs: usize,
+    source: Source,
     last: Option<(Instant, Vec<u64>)>,
 }
 
+enum Source {
+    /// Counters this process opened itself (the system already allows it).
+    #[cfg(target_os = "linux")]
+    Direct(Counters),
+    /// The CAP_PERFMON probe, asked over a pipe.
+    #[cfg(target_os = "linux")]
+    Probe(probe::Probe),
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct Counters {
+    fds: Vec<(usize, std::os::fd::OwnedFd)>,
+    crtcs: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl Counters {
+    fn counts(&self) -> Vec<u64> {
+        let mut out = vec![0u64; self.crtcs];
+        for (crtc, fd) in &self.fds {
+            out[*crtc] += linux::read_count(fd);
+        }
+        out
+    }
+}
+
 impl FlipCounter {
+    /// Counters opened here when the system allows it, else the probe when
+    /// the setup has been run.
     pub fn open() -> Result<Self, FpsBlock> {
         #[cfg(target_os = "linux")]
         {
-            linux::open()
+            let source = match linux::open() {
+                Ok(c) => Source::Direct(c),
+                Err(FpsBlock::NeedsPermission) if std::path::Path::new(PROBE_PATH).exists() => {
+                    Source::Probe(probe::Probe::spawn()?)
+                }
+                Err(e) => return Err(e),
+            };
+            Ok(FlipCounter { source, last: None })
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -96,10 +164,10 @@ impl FlipCounter {
     }
 
     /// The busiest screen's frames per second since the last call. The first
-    /// call only sets the baseline.
+    /// call only sets the baseline; `None` too when the probe went away.
     pub fn sample(&mut self) -> Option<f32> {
         let now = Instant::now();
-        let counts = self.counts();
+        let counts = self.counts()?;
         let rate = self.last.as_ref().and_then(|(at, prev)| {
             busiest_rate(prev, &counts, now.duration_since(*at).as_secs_f64())
         });
@@ -107,14 +175,106 @@ impl FlipCounter {
         rate
     }
 
-    fn counts(&self) -> Vec<u64> {
-        #[allow(unused_mut)]
-        let mut out = vec![0u64; self.crtcs];
-        #[cfg(target_os = "linux")]
-        for (crtc, fd) in &self.fds {
-            out[*crtc] += linux::read_count(fd);
+    fn counts(&mut self) -> Option<Vec<u64>> {
+        match &mut self.source {
+            #[cfg(target_os = "linux")]
+            Source::Direct(c) => Some(c.counts()),
+            #[cfg(target_os = "linux")]
+            Source::Probe(p) => p.ask(),
+            #[allow(unreachable_patterns)]
+            _ => None,
         }
-        out
+    }
+}
+
+/// Counts as the probe writes them: one number per CRTC, space separated.
+pub fn parse_counts(line: &str) -> Option<Vec<u64>> {
+    let out: Option<Vec<u64>> = line.split_whitespace().map(|n| n.parse().ok()).collect();
+    out.filter(|v| !v.is_empty())
+}
+
+/// The body of `--fps-probe`: open the counters, then answer each line on
+/// stdin with the counts, until stdin closes. Exit code 2 when the counters
+/// won't open.
+pub fn run_probe() -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::{BufRead, Write};
+        let Ok(counters) = linux::open() else {
+            return 2;
+        };
+        let stdin = std::io::stdin();
+        let mut out = std::io::stdout().lock();
+        for line in stdin.lock().lines() {
+            if line.is_err() {
+                break;
+            }
+            let text: Vec<String> = counters.counts().iter().map(u64::to_string).collect();
+            if writeln!(out, "{}", text.join(" ")).is_err() || out.flush().is_err() {
+                break;
+            }
+        }
+        0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        2
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod probe {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+    use super::{parse_counts, FpsBlock, PROBE_ARG, PROBE_PATH};
+
+    pub(super) struct Probe {
+        child: Child,
+        stdin: ChildStdin,
+        out: BufReader<ChildStdout>,
+    }
+
+    impl Probe {
+        /// Starts the probe and checks it answers.
+        pub(super) fn spawn() -> Result<Self, FpsBlock> {
+            let mut child = Command::new(PROBE_PATH)
+                .arg(PROBE_ARG)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|_| FpsBlock::NeedsPermission)?;
+            let (Some(stdin), Some(out)) = (child.stdin.take(), child.stdout.take()) else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(FpsBlock::NeedsPermission);
+            };
+            let mut probe = Probe {
+                child,
+                stdin,
+                out: BufReader::new(out),
+            };
+            match probe.ask() {
+                Some(_) => Ok(probe),
+                None => Err(FpsBlock::NeedsPermission),
+            }
+        }
+
+        pub(super) fn ask(&mut self) -> Option<Vec<u64>> {
+            self.stdin.write_all(b"\n").ok()?;
+            self.stdin.flush().ok()?;
+            let mut line = String::new();
+            self.out.read_line(&mut line).ok()?;
+            parse_counts(&line)
+        }
+    }
+
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -145,7 +305,7 @@ mod linux {
         config1: u64,
     }
 
-    pub(super) fn open() -> Result<FlipCounter, FpsBlock> {
+    pub(super) fn open() -> Result<Counters, FpsBlock> {
         let id = tracepoint_id()?;
         let cpus = std::fs::read_to_string("/sys/devices/system/cpu/online")
             .map(|t| parse_cpu_list(&t))
@@ -183,10 +343,9 @@ mod linux {
                 fds.push((0, perf_open(id, cpu)?));
             }
         }
-        Ok(FlipCounter {
+        Ok(Counters {
             fds,
             crtcs: if filtered { MAX_CRTCS as usize } else { 1 },
-            last: None,
         })
     }
 
@@ -271,9 +430,22 @@ mod tests {
     }
 
     #[test]
-    fn setup_only_opens_the_one_tracepoint_id() {
-        assert!(LINUX_SETUP.contains("perf_event_paranoid = 0"));
-        assert!(LINUX_SETUP.contains("drm_vblank_event_delivered/id 0444"));
-        assert!(!LINUX_SETUP.contains("chmod -R"));
+    fn setup_scopes_the_grant_to_the_probe() {
+        let s = linux_setup("/opt/Loadout's/grokhub");
+        assert!(!s.contains("perf_event_paranoid"), "{s}");
+        assert!(s.contains("setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe"));
+        assert!(s.contains("-m 0750 -o root"));
+        assert!(s.contains("'/opt/Loadout'\\''s/grokhub'"), "{s}");
+        assert!(s.contains("drm_vblank_event_delivered 0711"));
+        assert!(s.contains("drm_vblank_event_delivered/id 0444"));
+        assert!(!s.contains("0755"), "folders stay unlistable: {s}");
+        assert!(!s.contains("chmod -R"));
+    }
+
+    #[test]
+    fn probe_lines_parse() {
+        assert_eq!(parse_counts("1 0 240\n"), Some(vec![1, 0, 240]));
+        assert_eq!(parse_counts(""), None);
+        assert_eq!(parse_counts("1 x"), None);
     }
 }

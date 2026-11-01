@@ -111,6 +111,11 @@ fn cabin_shutdown_last_resort() {
 }
 
 fn main() {
+    // The Home frame-rate probe (a CAP_PERFMON copy of this binary): count
+    // screen flips for the parent over a pipe and do nothing else.
+    if env::args().nth(1).as_deref() == Some(grokhub_agent::indexers::display_fps::PROBE_ARG) {
+        std::process::exit(grokhub_agent::indexers::display_fps::run_probe());
+    }
     startup::begin();
     // `sudo`'s helper (card 34): answer it and leave before anything else starts.
     let args: Vec<String> = env::args().collect();
