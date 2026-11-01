@@ -315,6 +315,31 @@ export function saveMemory(
   return invoke("save_memory", { global, text, base });
 }
 
+/** A row of the composer's command list. `disabled` says why it can't run. */
+export interface SlashHit {
+  cmd: string;
+  hint: string;
+  insert: string;
+  runOnPick: boolean;
+  disabled: string | null;
+}
+
+/** What a slash line asked the chat to do. Slash lines never reach the model. */
+export type SlashEffect =
+  | { kind: "newChat" }
+  | { kind: "mode"; mode: SessionMode; text: string | null }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
+  | { kind: "modelSet"; id: string; text: string }
+  | { kind: "notice"; text: string };
+
+export function slashHits(draft: string): Promise<SlashHit[]> {
+  return invoke<SlashHit[]>("slash_hits", { draft });
+}
+
+export function runSlash(line: string): Promise<SlashEffect> {
+  return invoke<SlashEffect>("run_slash", { line });
+}
+
 export function addMemory(
   text: string,
   global: boolean,

@@ -30,6 +30,7 @@ pub mod remote;
 pub mod remote_tls;
 pub mod settings;
 pub mod shell_update;
+pub mod slash;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -201,6 +202,33 @@ fn set_model(state: State<'_, ShellState>, id: String) -> Result<SettingsView, S
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// The composer's command list for a draft that starts with `/`.
+#[tauri::command]
+fn slash_hits(draft: String) -> Vec<slash::Hit> {
+    slash::hits(&draft, false)
+}
+
+/// Runs a slash line instead of sending it. Nothing reaches the model.
+#[tauri::command]
+fn run_slash(state: State<'_, ShellState>, line: String) -> Result<slash::Effect, String> {
+    run_slash_line(&state, &line, false)
+}
+
+fn run_slash_line(state: &ShellState, line: &str, remote: bool) -> Result<slash::Effect, String> {
+    let action = slash::parse(line, remote)?;
+    let settings = current(state);
+    slash::apply(action, &workspace(state), &settings.model, |id| {
+        let next = ShellSettings {
+            model: models::clean_id(id)?,
+            ..current(state)
+        };
+        settings::save(&state.config_dir, &next)?;
+        let id = next.model.clone();
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+        Ok(id)
+    })
 }
 
 #[tauri::command]
@@ -1164,6 +1192,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "base")?,
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
+        "slash_hits" => out(slash::hits(&arg::<String>(args, "draft")?, true)),
+        "run_slash" => out(run_slash_line(&state, &arg::<String>(args, "line")?, true)?),
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
         "edit_memory_row" => out(edit_memory_row(
             state,
@@ -1501,6 +1531,8 @@ pub fn run() {
             set_api_key,
             list_models,
             set_model,
+            slash_hits,
+            run_slash,
             clear_api_key,
             send_chat,
             answer_permission,

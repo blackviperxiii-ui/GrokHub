@@ -18,6 +18,7 @@ import {
   setModel,
   onChatEvent,
   onEventGap,
+  runSlash,
   saveSettings,
   sendChat,
   type Answer,
@@ -26,12 +27,15 @@ import {
   type ElicitAction,
   type SessionMode,
   type Settings,
+  type SlashEffect,
+  type SlashHit,
   type Suggestion,
 } from "./api";
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
+import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 
 export type Item =
@@ -49,6 +53,8 @@ export type Item =
     }
   | { kind: "suggest"; items: Suggestion[] }
   | ({ kind: "notice" } & RunNotice)
+  /** What a slash command did. It stays in the log and never reaches the model. */
+  | { kind: "slash"; command: string; text: string }
   | ElicitItem;
 
 /** How much of a run's reply its notice shows; Automations has the rest. */
@@ -342,6 +348,13 @@ function LogItem({
           </div>
         </div>
       );
+    case "slash":
+      return (
+        <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
+          <span className="card-title">{item.command}</span>
+          <p className="card-detail-line plain">{item.text}</p>
+        </div>
+      );
     case "suggest":
       return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
   }
@@ -358,6 +371,7 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenAutomations,
+  onOpenView,
   prefill,
   notice,
   active = true,
@@ -367,6 +381,8 @@ export function Chat({
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
   onOpenAutomations?: () => void;
+  /** `/memory`, `/connectors` and the like open their page. */
+  onOpenView?: (view: Extract<SlashEffect, { kind: "open" }>["view"]) => void;
   prefill?: Prefill;
   notice?: RunNotice & { n: number };
   active?: boolean;
@@ -382,6 +398,12 @@ export function Chat({
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const slashRows = useSlashHits(draft);
+  const [slashAt, setSlashAt] = useState(0);
+  // Escape hides the list until the draft changes.
+  const [slashShut, setSlashShut] = useState<string | null>(null);
+  const slashOpen = slashRows.length > 0 && slashShut !== draft;
+  const slashPick = Math.min(slashAt, slashRows.length - 1);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -474,19 +496,26 @@ export function Chat({
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
-  /** Sends the draft, or `picked` from a suggestion (the draft stays). */
-  async function send(event?: FormEvent, picked?: string) {
-    event?.preventDefault();
-    const text = (picked ?? draft).trim();
+  function startOver() {
+    if (busy) return;
+    void closeChat(conversationId);
+    setItems([]);
+    setError(null);
+    setConversationId(newConversationId());
+  }
+
+  /** Sends `text` in the current mode, or in `as` (`/plan <text>`).
+   * `fromDraft` empties the box; a picked suggestion leaves it. */
+  async function deliver(text: string, fromDraft: boolean, as?: SessionMode) {
     if (!text || busy) return;
     // Suggestions belong to the reply they followed.
     setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
-    if (picked === undefined) setDraft("");
+    if (fromDraft) setDraft("");
     setError(null);
     busyRef.current = true;
     setBusy(true);
     try {
-      await sendChat(conversationId, text, mode);
+      await sendChat(conversationId, text, as ?? mode);
     } catch (err) {
       setError(String(err));
     }
@@ -522,23 +551,101 @@ export function Chat({
     }
   }
 
+  /** Runs a slash line and applies what it did. */
+  async function slash(line: string) {
+    setError(null);
+    let effect: SlashEffect;
+    try {
+      effect = await runSlash(line);
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    setDraft("");
+    const command = line.split(/\s+/)[0];
+    switch (effect.kind) {
+      case "newChat":
+        startOver();
+        break;
+      case "mode":
+        setMode(effect.mode);
+        if (effect.text) void deliver(effect.text.trim(), false, effect.mode);
+        break;
+      case "open":
+        onOpenView?.(effect.view);
+        break;
+      case "modelSet":
+        getSettings().then(setSettings, () => {});
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+      case "notice":
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+    }
+  }
+
+  /** Tab fills a row in; Enter or a click runs one that takes no text. */
+  function pickSlash(hit: SlashHit | undefined, run: boolean) {
+    if (!hit) return;
+    if (hit.disabled) {
+      setError(`${hit.cmd}: ${hit.disabled}`);
+      return;
+    }
+    if (run && hit.runOnPick) void slash(hit.cmd);
+    else setDraft(hit.insert);
+  }
+
+  // Declared after what they call: React Compiler skips a component that
+  // calls a function declared further down.
+  /** Sends the draft, or `picked` from a suggestion (the draft stays).
+   * A slash line runs instead of going to the model. */
+  async function send(event?: FormEvent, picked?: string) {
+    event?.preventDefault();
+    const text = (picked ?? draft).trim();
+    if (!text || busy) return;
+    if (picked === undefined && isSlashCommand(text)) {
+      await slash(text);
+      return;
+    }
+    await deliver(text, picked === undefined);
+  }
+
   function pick(prompt: string) {
     void send(undefined, prompt);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (slashOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setSlashAt((slashPick + step + slashRows.length) % slashRows.length);
+        return;
+      }
+      if (event.key === "Tab" && !event.shiftKey) {
+        event.preventDefault();
+        pickSlash(slashRows[slashPick], false);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashShut(draft);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        const hit = slashRows[slashPick];
+        // A typed full command runs as typed; otherwise the pick is used.
+        if (hit && hit.cmd !== draft.trim().toLowerCase()) {
+          event.preventDefault();
+          pickSlash(hit, true);
+          return;
+        }
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
     }
-  }
-
-  function startOver() {
-    if (busy) return;
-    void closeChat(conversationId);
-    setItems([]);
-    setError(null);
-    setConversationId(newConversationId());
   }
 
   // The "…" bubble shows only while nothing else in the log is moving.
@@ -596,13 +703,28 @@ export function Chat({
         model={settings?.model ?? null}
         onModel={(id) => void pickModel(id)}
       />
-      <form className="composer" onSubmit={send}>
+      <form className="composer slash-wrap" onSubmit={send}>
+        {slashOpen && (
+          <SlashMenu
+            hits={slashRows}
+            at={slashPick}
+            onHover={setSlashAt}
+            onPick={(hit) => pickSlash(hit, true)}
+          />
+        )}
         <textarea
           aria-label="Message"
           placeholder={PLACEHOLDERS[mode]}
           value={draft}
           rows={2}
-          onChange={(e) => setDraft(e.target.value)}
+          role={slashOpen ? "combobox" : undefined}
+          aria-expanded={slashOpen ? true : undefined}
+          aria-controls={slashOpen ? "slash-menu" : undefined}
+          aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setSlashAt(0);
+          }}
           onKeyDown={onKeyDown}
         />
         {busy ? (
