@@ -19,6 +19,8 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// Settings → Account → Sign in with Grok. Android waits for a keychain.
+    pub grok_sign_in: bool,
     /// Settings → General → start at login (the OS's login items).
     pub autostart: bool,
     /// Settings → General → the summon hotkey. Wayland gives an app no global
@@ -48,6 +50,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        grok_sign_in: desktop || os == "ios",
         autostart: desktop,
         summon_hotkey: desktop && !(os == "linux" && wayland),
         notifications: desktop,
@@ -95,6 +98,7 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            grok_sign_in: true,
             autostart: true,
             summon_hotkey: true,
             notifications: true,
@@ -114,13 +118,20 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            grok_sign_in: false,
             autostart: false,
             summon_hotkey: false,
             notifications: false,
             library: false,
         };
         assert_eq!(for_os("android"), none);
-        assert_eq!(for_os("ios"), none);
+        assert_eq!(
+            for_os("ios"),
+            Capabilities {
+                grok_sign_in: true,
+                ..none
+            }
+        );
         assert_eq!(for_env("android", true), none);
     }
 
@@ -169,6 +180,7 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "grokSignIn": false,
                 "autostart": false,
                 "summonHotkey": false,
                 "notifications": false,

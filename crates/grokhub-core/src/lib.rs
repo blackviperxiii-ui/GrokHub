@@ -152,6 +152,7 @@ pub mod situation;
 pub mod skill;
 pub mod slash;
 pub mod ssrf;
+pub mod stardew_saves;
 pub mod state;
 pub mod steam;
 pub mod steam_achievements;
