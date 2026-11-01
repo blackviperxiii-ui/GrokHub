@@ -1095,7 +1095,6 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     }
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 fn get_update_status(state: State<'_, ShellState>) -> shell_update::UpdateView {
     shell_update::UpdateView::now(&state.config_dir)
@@ -1170,6 +1169,7 @@ fn watch_for_updates(app: AppHandle, config_dir: PathBuf) {
     });
 }
 
+#[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
