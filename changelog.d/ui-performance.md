@@ -1,0 +1,1 @@
+The app loads less up front and stays quick in long chats: Settings, Pulse, Memory, Journal and Connectors load the first time they open (and quietly when the app is idle), cutting the first download by about 20%, and chat messages only repaint when they change, so typing in a long conversation costs less.

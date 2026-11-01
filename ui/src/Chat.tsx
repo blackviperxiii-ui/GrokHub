@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   answerElicit,
   answerPermission,
@@ -165,6 +165,49 @@ const ANSWERED: Record<Answer | "ended", string> = {
   deny: "Denied",
   ended: "Not run: the turn ended",
 };
+
+// Typing in the composer re-renders Chat, and a reply streaming in re-renders it
+// on every chunk. These take plain values and are memoized, so only the message
+// that changed repaints and a long conversation stays cheap to type under.
+const UserBubble = memo(function UserBubble({ text }: { text: string }) {
+  return (
+    <div className="bubble user" data-role="user">
+      {text}
+    </div>
+  );
+});
+
+const AssistantBubble = memo(function AssistantBubble({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
+  return (
+    <div className={`bubble assistant${streaming ? " streaming" : ""}`} data-role="assistant">
+      {text}
+    </div>
+  );
+});
+
+const ToolCard = memo(function ToolCard({
+  title,
+  status,
+  detail,
+}: {
+  title: string;
+  status: string;
+  detail?: string;
+}) {
+  return (
+    <div className="card tool" data-status={status}>
+      <span className="card-title">{title}</span>
+      <span className="card-status">{status}</span>
+      {detail && <pre className="card-detail">{detail}</pre>}
+    </div>
+  );
+});
 
 function PermissionCard({
   item,
@@ -391,28 +434,12 @@ export function Chat({
         {items.map((item, i) => {
           switch (item.kind) {
             case "user":
-              return (
-                <div key={i} className="bubble user" data-role="user">
-                  {item.text}
-                </div>
-              );
+              return <UserBubble key={i} text={item.text} />;
             case "assistant":
-              return (
-                <div
-                  key={i}
-                  className={`bubble assistant${item.streaming ? " streaming" : ""}`}
-                  data-role="assistant"
-                >
-                  {item.text}
-                </div>
-              );
+              return <AssistantBubble key={i} text={item.text} streaming={Boolean(item.streaming)} />;
             case "tool":
               return (
-                <div key={i} className="card tool" data-status={item.status}>
-                  <span className="card-title">{item.title}</span>
-                  <span className="card-status">{item.status}</span>
-                  {item.detail && <pre className="card-detail">{item.detail}</pre>}
-                </div>
+                <ToolCard key={i} title={item.title} status={item.status} detail={item.detail} />
               );
             case "permission":
               return (
