@@ -136,6 +136,47 @@ describe("Pulse", () => {
     expect(container.querySelector(".lightbox")).toBeNull();
   });
 
+  it("the menu snoozes, dismisses or says not this, and closes on Escape or a click outside", async () => {
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    const more = within(card).getByRole("button", { name: "More" });
+    await userEvent.click(more);
+    expect(within(card).getByRole("menu")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
+
+    await userEvent.click(more);
+    await userEvent.click(document.body);
+    expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
+
+    for (const [label, act, note] of [
+      ["Snooze until 9 AM", "snooze", "Snoozed until 9 AM."],
+      ["Dismiss", "dismiss", "Dismissed."],
+      ["Not this", "notThis", "Got it. Fewer posts like that."],
+    ] as const) {
+      await userEvent.click(more);
+      await userEvent.click(within(card).getByRole("menuitem", { name: label }));
+      expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", act);
+      expect(await screen.findByRole("status")).toHaveTextContent(note);
+    }
+  });
+
+  it("an error reads as an error, not as a result", async () => {
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockRejectedValue("That card is gone.");
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    await userEvent.click(within(card).getByRole("button", { name: "More" }));
+    await userEvent.click(within(card).getByRole("menuitem", { name: "Dismiss" }));
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("That card is gone.");
+    expect(status).toHaveClass("status--error");
+  });
+
   it("the menu shows the date, why, and Delete takes the post away", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseWhy.mockResolvedValue("You follow Rust.");
@@ -151,7 +192,9 @@ describe("Pulse", () => {
     expect(await within(card).findByRole("note")).toHaveTextContent("You follow Rust.");
 
     await userEvent.click(within(card).getByRole("button", { name: "More" }));
-    await userEvent.click(within(card).getByRole("menuitem", { name: "Delete" }));
+    await userEvent.click(within(card).getByRole("menuitem", { name: "Delete…" }));
+    expect(api.pulseAct).not.toHaveBeenCalled();
+    await userEvent.click(within(card).getByRole("button", { name: "Delete" }));
     expect(api.pulseAct).toHaveBeenCalledWith("post-1", "delete");
     expect(await screen.findByRole("status")).toHaveTextContent("Deleted.");
     expect(screen.queryByRole("listitem", { name: TITLE })).not.toBeInTheDocument();

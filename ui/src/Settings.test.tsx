@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
   setTheme: vi.fn<(theme: string) => Promise<Shape>>(),
+  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -67,10 +68,22 @@ describe("Settings", () => {
     );
     render(<Settings caps={DESKTOP} />);
 
+    api.listModels.mockResolvedValue({
+      current: "grok-4.7",
+      options: [{ id: "grok-4.7", label: "Grok 4.7", source: "catalog" }],
+      note: null,
+    });
     const model = await screen.findByLabelText("Model");
-    expect(model).toHaveValue("grok-4.7");
-    await userEvent.clear(model);
-    await userEvent.type(model, " grok-5 ");
+    expect(model).toHaveTextContent("grok-4.7");
+    await userEvent.click(model);
+    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
+    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
+    await userEvent.click(screen.getByRole("button", { name: "Use" }));
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
     await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
