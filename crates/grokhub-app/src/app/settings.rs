@@ -632,7 +632,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         self.pull_account_oauth_from_disk();
-        let authed = self.has_key();
+        // The Grok sign-in, not "any key": Sign out here only signs out of Grok.
+        let authed = self.account_chrome_now().connected;
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
@@ -726,7 +727,8 @@ impl Cabin {
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
-        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
+        self.renew_account_oauth();
+        let account_auth = self.account_chrome_now();
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
             "Saved in cabin config."
