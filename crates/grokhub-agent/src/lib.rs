@@ -139,6 +139,7 @@ pub use tasks::{
     session_is_live, watch_cancel, TaskRow, TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
+pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
     imagine_client, is_readonly, public_only_resolve, run_media_tool, schemas_for, schemas_for_job,
