@@ -165,6 +165,7 @@ mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
+mod elite_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
@@ -460,6 +461,10 @@ pub struct Cabin {
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
     turn_retried: bool,
+    /// The bearer xAI last turned away (401/403). While it is still the one
+    /// on file, chats go to Local AI when it is ready; a new sign-in or key
+    /// is a different bearer and goes back to the cloud. Memory only.
+    rejected_bearer: Option<String>,
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
@@ -1121,6 +1126,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
@@ -1604,6 +1610,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
