@@ -18,6 +18,8 @@ import {
   type Suggestion,
 } from "./api";
 import type { RunNotice } from "./Automations";
+import { Markdown } from "./Markdown";
+import { displayText } from "./md";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
@@ -184,9 +186,10 @@ const AssistantBubble = memo(function AssistantBubble({
   text: string;
   streaming: boolean;
 }) {
+  // Capped like the cabin's bubble, so a runaway stream can't stall the page.
   return (
     <div className={`bubble assistant${streaming ? " streaming" : ""}`} data-role="assistant">
-      {text}
+      <Markdown text={displayText(text)} />
     </div>
   );
 });

@@ -248,12 +248,32 @@ describe("Chat", () => {
     emit("someone-else", { kind: "text", text: "nope" });
     emit(id, { kind: "text", text: "Hi from " });
     emit(id, { kind: "text", text: "Grok" });
-    expect(screen.getByText("Hi from Grok")).toHaveClass("streaming");
+    // The reply renders as Markdown, so its text sits in a paragraph inside the bubble.
+    const bubble = () => screen.getByText("Hi from Grok").closest(".bubble");
+    expect(bubble()).toHaveClass("streaming");
     expect(screen.queryByText(/nope/)).toBeNull();
 
     finish();
-    await waitFor(() => expect(screen.getByText("Hi from Grok")).not.toHaveClass("streaming"));
-    expect(screen.getByText("Hi from Grok")).toHaveAttribute("data-role", "assistant");
+    await waitFor(() => expect(bubble()).not.toHaveClass("streaming"));
+    expect(bubble()).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("renders the reply as Markdown and keeps the person's message plain", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("**mine** <b>x</b>");
+    emit(id, { kind: "text", text: "## Plan\n- **one**\n<script>alert(1)</script>" });
+    finish();
+    const reply = await screen.findByRole("heading", { level: 2, name: "Plan" });
+    const bubble = reply.closest(".bubble")!;
+    expect(bubble).toHaveAttribute("data-role", "assistant");
+    expect(within(bubble as HTMLElement).getByRole("listitem")).toHaveTextContent("one");
+    expect(bubble.querySelector("strong")).toHaveTextContent("one");
+    expect(bubble.querySelector("script")).toBeNull();
+    expect(within(bubble as HTMLElement).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    const mine = screen.getByText("**mine** <b>x</b>");
+    expect(mine).toHaveAttribute("data-role", "user");
+    expect(mine.querySelector("strong, b")).toBeNull();
   });
 
   it("shows a permission card and Allow once answers it", async () => {

@@ -171,6 +171,14 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** Opens a reply's http(s) link in the default browser (`open_url`, which
+ * refuses anything else). Shell only: in the web app links open in a new tab
+ * and never reach the computer. */
+export function openUrl(url: string): Promise<void> {
+  if (!inShell()) return Promise.reject(new Error("Links open in this browser's own tabs."));
+  return invoke<void>("open_url", { url });
+}
+
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
