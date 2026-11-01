@@ -543,6 +543,16 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 }
 
 fn end_chat(state: &ShellState, conversation_id: &str) {
+    drop_worker(state, conversation_id);
+    if current(state).last_chat == conversation_id {
+        set_last_chat(state, "");
+    }
+    state.trays.forget(conversation_id);
+}
+
+/// Ends the chat's worker only: the chat stays open and keeps its tray, and
+/// its next message starts a worker that resumes from the saved file.
+fn drop_worker(state: &ShellState, conversation_id: &str) {
     let removed = state
         .chats
         .lock()
@@ -551,10 +561,6 @@ fn end_chat(state: &ShellState, conversation_id: &str) {
     if let Some(session) = removed {
         session.cancel();
     }
-    if current(state).last_chat == conversation_id {
-        set_last_chat(state, "");
-    }
-    state.trays.forget(conversation_id);
 }
 
 /// The chat model's input kinds, for the chips' notes.
@@ -702,6 +708,25 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     off_main(move || history::delete(&dir, &doomed)).await??;
     end_chat(&state, &id);
     Ok(())
+}
+
+/// A bubble's Delete message…, after the page asked. The ask `text` goes
+/// alone; with `reply` its reply goes whole. A reply still running refuses.
+/// The idle worker ends, so the next message resumes from the trimmed file.
+#[tauri::command]
+async fn forget_message(
+    state: State<'_, ShellState>,
+    id: String,
+    reply: bool,
+    text: Option<String>,
+    later: usize,
+) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    let key = id.clone();
+    let removed =
+        off_main(move || history::forget(&dir, &key, reply, text.as_deref(), later)).await??;
+    drop_worker(&state, &id);
+    Ok(removed)
 }
 
 /// Agents: the open chat's to-dos and background tasks.
@@ -2378,6 +2403,7 @@ pub fn run() {
             get_last_chat,
             rename_chat,
             delete_chat,
+            forget_message,
             stage_attachment,
             stage_attachment_paths,
             pick_attachments,

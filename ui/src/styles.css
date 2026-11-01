@@ -3337,3 +3337,42 @@ label.toggle-row {
 .confirm-window .confirm-keeps {
   color: var(--muted);
 }
+
+/* A bubble's ··· (DeleteMessage.tsx): quiet until the bubble is hovered or
+   the button has focus, beside the bubble's top corner. */
+.bubble {
+  position: relative;
+}
+
+.msg-more {
+  position: absolute;
+  top: 2px;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 1px;
+  opacity: 0;
+  transition: opacity var(--t-base) var(--ease-out);
+}
+
+.bubble.assistant .msg-more {
+  right: -34px;
+}
+
+.bubble.user .msg-more {
+  left: -34px;
+}
+
+.bubble:hover .msg-more,
+.msg-more:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .msg-more {
+    opacity: 1;
+  }
+}

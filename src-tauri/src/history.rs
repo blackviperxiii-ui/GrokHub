@@ -213,6 +213,32 @@ pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Takes one message out of a saved shell chat, so the model never reads it
+/// again: the ask `text` (`later` counts the same ask sent after it), or with
+/// `reply` the reply to that ask (no `text`: the reply before any ask).
+/// False when the saved chat had no copy of it. A running reply refuses.
+pub fn forget(
+    config_dir: &Path,
+    id: &str,
+    reply: bool,
+    text: Option<&str>,
+    later: usize,
+) -> Result<bool, String> {
+    let id = shell_id(id)?;
+    let _config = ConfigGuard::set(config_dir);
+    let what = match (reply, text) {
+        (true, ask) => grokhub_agent::Forget::Reply {
+            ask: ask.map(|text| (text, later)),
+        },
+        (false, Some(text)) => grokhub_agent::Forget::Ask { text, later },
+        (false, None) => return Err(NO_MESSAGE.into()),
+    };
+    Ok(grokhub_agent::forget_message(id, what)? == grokhub_agent::Forgotten::Removed)
+}
+
+/// Delete message… with no message named.
+pub const NO_MESSAGE: &str = "Pick the message to delete.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +500,49 @@ mod tests {
         assert_eq!(ids(search(&config, "TRIP")), vec!["shell-history-s2"]);
         assert_eq!(ids(search(&config, "kayak")), Vec::<String>::new());
         assert_eq!(search(&config, " ").len(), 2);
+    }
+
+    #[test]
+    fn forgetting_a_message_keeps_it_from_the_next_turn() {
+        let (config, workspace) = (temp_dir("forget-cfg"), temp_dir("forget-ws"));
+        let id = "shell-history-forget";
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Hi.", false),
+            "keep this",
+        );
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Noted the fruit.", false),
+            "the code is kumquat",
+        );
+        assert_eq!(forget(&config, id, false, None, 0), Err(NO_MESSAGE.into()));
+        assert_eq!(
+            forget(&config, "native-cabin-1", false, Some("x"), 0),
+            Err(NOT_SHELL.into())
+        );
+        assert_eq!(
+            forget(&config, id, false, Some("the code is kumquat"), 0),
+            Ok(true)
+        );
+        // The reply to "keep this" goes whole; the later reply now follows it.
+        assert_eq!(forget(&config, id, true, Some("keep this"), 0), Ok(true));
+        assert_eq!(forget(&config, id, false, Some("never said"), 0), Ok(false));
+        let shown = load(&config, id, LOAD_CAP).expect("load");
+        assert_eq!(shown.lines, vec![line(Role::User, "keep this")]);
+
+        let next = Model::new("Ok.", false);
+        turn(id, &config, &workspace, Arc::clone(&next), "what now");
+        let sent = format!("{:?}", next.messages(0));
+        assert!(
+            !sent.contains("kumquat") && !sent.contains("fruit"),
+            "{sent}"
+        );
+        assert!(sent.contains("keep this"), "{sent}");
     }
 
     #[test]

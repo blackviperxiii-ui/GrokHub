@@ -15,6 +15,7 @@ import {
   cancelChat,
   closeChat,
   deleteChat,
+  forgetMessage,
   getLastChat,
   getSettings,
   loadChat,
@@ -36,6 +37,15 @@ import {
   type Transcript,
 } from "./api";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
+import {
+  type Cut,
+  cutFor,
+  DELETE_NEEDS_EARLIER,
+  DeleteMessageDialog,
+  MESSAGE_MENU_LABEL,
+  MessageMenu,
+  withoutCut,
+} from "./DeleteMessage";
 import type { RunNotice } from "./Automations";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -232,10 +242,41 @@ const ANSWERED: Record<Answer | "ended", string> = {
 // Typing in the composer re-renders Chat, and a reply streaming in re-renders it
 // on every chunk. These take plain values and are memoized, so only the message
 // that changed repaints and a long conversation stays cheap to type under.
-const UserBubble = memo(function UserBubble({ text }: { text: string }) {
+/** Opens a bubble's menu at a point on the page. */
+type MenuAt = (x: number, y: number) => void;
+
+/** Right-click opens the bubble's menu where the pointer is. */
+function contextMenuAt(onMenu?: MenuAt) {
+  if (!onMenu) return undefined;
+  return (event: React.MouseEvent) => {
+    event.preventDefault();
+    onMenu(event.clientX, event.clientY);
+  };
+}
+
+/** The quiet ··· on a bubble; its menu opens under it. */
+function MoreButton({ onMenu }: { onMenu: MenuAt }) {
   return (
-    <div className="bubble user" data-role="user">
+    <button
+      type="button"
+      className="msg-more"
+      aria-label={MESSAGE_MENU_LABEL}
+      title={MESSAGE_MENU_LABEL}
+      onClick={(event) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        onMenu(box.left, box.bottom);
+      }}
+    >
+      ···
+    </button>
+  );
+}
+
+const UserBubble = memo(function UserBubble({ text, onMenu }: { text: string; onMenu?: MenuAt }) {
+  return (
+    <div className="bubble user" data-role="user" onContextMenu={contextMenuAt(onMenu)}>
       {text}
+      {onMenu && <MoreButton onMenu={onMenu} />}
     </div>
   );
 });
@@ -243,14 +284,21 @@ const UserBubble = memo(function UserBubble({ text }: { text: string }) {
 const AssistantBubble = memo(function AssistantBubble({
   text,
   streaming,
+  onMenu,
 }: {
   text: string;
   streaming: boolean;
+  onMenu?: MenuAt;
 }) {
   // Capped like the cabin's bubble, so a runaway stream can't stall the page.
   return (
-    <div className={`bubble assistant${streaming ? " streaming" : ""}`} data-role="assistant">
+    <div
+      className={`bubble assistant${streaming ? " streaming" : ""}`}
+      data-role="assistant"
+      onContextMenu={contextMenuAt(onMenu)}
+    >
       <Markdown text={displayText(text)} />
+      {onMenu && <MoreButton onMenu={onMenu} />}
     </div>
   );
 });
@@ -313,6 +361,7 @@ function PermissionCard({
 function LogItem({
   item,
   busy,
+  onMenu,
   onAnswer,
   onAnswerCard,
   onPick,
@@ -322,6 +371,8 @@ function LogItem({
 }: {
   item: Item;
   busy: boolean;
+  /** The bubble's Delete message… menu; absent where it can't be offered. */
+  onMenu?: MenuAt;
   /** Nyx's face beside each reply, when Nyx is on. */
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
@@ -333,16 +384,18 @@ function LogItem({
   "use memo";
   switch (item.kind) {
     case "user":
-      return <UserBubble text={item.text} />;
-    case "assistant":
+      return <UserBubble text={item.text} onMenu={busy ? undefined : onMenu} />;
+    case "assistant": {
+      const menu = busy || item.streaming ? undefined : onMenu;
       if (nyxUrl)
         return (
           <div className="nyx-row">
             <NyxFace url={nyxUrl} size={32} />
-            <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />
+            <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />
           </div>
         );
-      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />;
+      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
+    }
     case "tool":
       return (
         <ViewTransition>
@@ -505,6 +558,27 @@ export function Chat({
           settings.desktopControl,
         ),
       );
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  /** A bubble's open menu, and the delete waiting on its confirm. */
+  const [msgMenu, setMsgMenu] = useState<{ i: number; at: { x: number; y: number } } | null>(null);
+  const [askDelete, setAskDelete] = useState<Cut | null>(null);
+
+  function pickDelete(i: number) {
+    const cut = cutFor(items, i, earlier);
+    if (cut) setAskDelete(cut);
+    else setError(DELETE_NEEDS_EARLIER);
+  }
+
+  /** The saved chat first: if it refuses, the log keeps the message. */
+  async function deleteMessage(cut: Cut) {
+    setAskDelete(null);
+    try {
+      await forgetMessage(conversationId, cut);
+      setItems((now) => withoutCut(now, cut));
     } catch (err) {
       setError(String(err));
     }
@@ -866,6 +940,7 @@ export function Chat({
             key={i}
             item={item}
             busy={busy}
+            onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
@@ -881,6 +956,16 @@ export function Chat({
         )}
         <div ref={endRef} />
       </div>
+      {msgMenu && (
+        <MessageMenu at={msgMenu.at} onDelete={() => pickDelete(msgMenu.i)} onClose={() => setMsgMenu(null)} />
+      )}
+      {askDelete && (
+        <DeleteMessageDialog
+          reply={askDelete.reply}
+          onConfirm={() => void deleteMessage(askDelete)}
+          onClose={() => setAskDelete(null)}
+        />
+      )}
       {error && (
         <div className="error" role="alert">
           <span>{error}</span>
