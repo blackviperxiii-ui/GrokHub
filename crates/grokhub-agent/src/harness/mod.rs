@@ -153,9 +153,9 @@ pub use evidence::{
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,
     click_target_in, credential_action, credential_field, credential_hint, delete_files_action,
-    delete_targets, desk_classify, hard_class, hard_floor, needs_window, ClickRule, ClickTarget,
-    HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES, NO_BIN_HINT,
-    TARGET_HINT,
+    delete_targets, desk_classify, hard_class, hard_floor, needs_window, set_mod_roots, ClickRule,
+    ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    NO_BIN_HINT, TARGET_HINT,
 };
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use mindcheck::{

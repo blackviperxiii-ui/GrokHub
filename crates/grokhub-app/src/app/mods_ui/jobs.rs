@@ -76,6 +76,11 @@ fn client(j: &mut Jobs) -> Arc<ModClient> {
         .clone()
 }
 
+/// The one client the page and the chat's mod tools share.
+pub(super) fn shared_client() -> Arc<ModClient> {
+    client(&mut jobs())
+}
+
 /// Whether the user (or the build) has a key for this source.
 pub(super) fn has_key(source: Source) -> bool {
     let c = client(&mut jobs());
