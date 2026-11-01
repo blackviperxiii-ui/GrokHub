@@ -1,6 +1,7 @@
 //! Host, connector, consult, and leftover JobOut poll.
 
 use super::*;
+use grokhub_core::work_resume::InterruptCause;
 use std::time::Duration;
 
 /// One harness fix-plan shell step, synchronously (Phase C). Does not start a chat job.
@@ -300,7 +301,7 @@ impl Cabin {
                 }
                 self.status = self.apply_job_fail(&fail);
                 self.finish_hub_dispatch(&e, false);
-                self.abandon_turn_card();
+                self.interrupt_turn_card(InterruptCause::from_failure(&e));
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
@@ -315,7 +316,7 @@ impl Cabin {
                 self.imagine_pending = false;
                 self.status = self.apply_job_fail(worker_gone_status());
                 self.finish_hub_dispatch(worker_gone_status(), false);
-                self.abandon_turn_card();
+                self.interrupt_turn_card(InterruptCause::WorkerGone);
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();

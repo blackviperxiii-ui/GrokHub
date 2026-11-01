@@ -123,8 +123,8 @@ pub use run::{
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,
     history_generation, list_sessions, load_session, local_title, merge_history, record_compaction,
-    record_turn, rename_session, resume_input, session_file, transcript_pairs, usage_label,
-    HistoryRow, RunGuard, SessionInfo,
+    record_turn, rename_session, resume_input, session_file, session_intact, transcript_pairs,
+    usage_label, HistoryRow, RunGuard, SessionInfo,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
