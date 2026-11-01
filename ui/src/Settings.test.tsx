@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
   setTheme: vi.fn<(theme: string) => Promise<Shape>>(),
+  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -84,8 +85,13 @@ describe("Settings", () => {
     api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
     render(<Settings caps={DESKTOP} />);
 
+    api.listModels.mockResolvedValue({
+      current: "grok-4.7",
+      options: [{ id: "grok-4.7", label: "Grok 4.7", source: "catalog" }],
+      note: null,
+    });
     const model = await screen.findByLabelText("Model");
-    expect(model).toHaveValue("grok-4.7");
+    expect(model).toHaveTextContent("grok-4.7");
     // The folder, approvals and tray moved out of General.
     expect(screen.queryByLabelText("Work folder")).toBeNull();
     expect(screen.queryByLabelText("Approvals")).toBeNull();
@@ -100,8 +106,15 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
 
     await openSection("General");
-    await userEvent.clear(screen.getByLabelText("Model"));
-    await userEvent.type(screen.getByLabelText("Model"), " grok-5 ");
+    await userEvent.click(screen.getByLabelText("Model"));
+    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
+    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
+    await userEvent.click(screen.getByRole("button", { name: "Use" }));
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", false);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();

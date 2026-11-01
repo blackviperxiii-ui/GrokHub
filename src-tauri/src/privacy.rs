@@ -145,6 +145,9 @@ pub fn open_data_folder(config_dir: &Path) -> Result<(), String> {
     };
     let mut child = std::process::Command::new(opener)
         .arg(config_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("Couldn't open {}: {e}", config_dir.display()))?;
     // Reap the helper so it never lingers as a zombie.

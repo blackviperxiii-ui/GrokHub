@@ -35,7 +35,6 @@ export function sections(caps: Capabilities): Section[] {
     "permissions",
     "privacy",
     "background",
-    // Update (LU-06) goes here, after Background.
     ...(caps.pulse ? (["pulse"] as const) : []),
     ...(caps.localAi ? (["localAi"] as const) : []),
     ...(caps.webAccess ? (["webAccess"] as const) : []),

@@ -4,7 +4,7 @@ import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
 
 /** Settings → Defaults: where Grok works and how chat handles changes. The
- * model row (LO-17e) joins them here. `readOnly` is the web app's view. */
+ * model picker stays in General. `readOnly` is the web app's view. */
 export function Defaults({
   settings,
   readOnly = false,

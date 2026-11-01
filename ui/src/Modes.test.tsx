@@ -54,7 +54,9 @@ describe("ModeChips", () => {
         "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
       ],
     ]);
-    expect(screen.getByText("Auto effort")).toHaveAttribute("title", EFFORT_TIP);
+    // Effort is automatic: a label with its tip, not a button.
+    expect(screen.getByText("Effort: auto")).toHaveAttribute("title", EFFORT_TIP);
+    expect(screen.queryByRole("button", { name: /effort/i })).not.toBeInTheDocument();
   });
 
   it("picks a mode and an approval", async () => {
@@ -98,7 +100,12 @@ describe("ElicitCard", () => {
         onAnswer={onAnswer}
       />,
     );
-    expect(screen.getByText("https://example.com/auth")).toBeVisible();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const link = screen.getByRole("link", { name: "Open https://example.com/auth" });
+    expect(link).toHaveAttribute("href", "https://example.com/auth");
+    await userEvent.click(link);
+    expect(open).toHaveBeenCalledWith("https://example.com/auth", "_blank", "noopener,noreferrer");
+    open.mockRestore();
     await userEvent.click(screen.getByRole("button", { name: "I've finished" }));
     await userEvent.click(screen.getByRole("button", { name: "Decline" }));
     expect(onAnswer.mock.calls).toEqual([
