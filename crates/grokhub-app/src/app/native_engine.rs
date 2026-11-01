@@ -25,6 +25,8 @@ struct LiveCfg {
     episode: Option<grokhub_agent::EpisodeSeed>,
     /// Cabin chat thread that owns this native session (G4 panel drain).
     cabin_thread_id: String,
+    /// `briefModelFallback`: an ask the rules and local scorer can't sort asks the model.
+    brief_model_fallback: bool,
 }
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
@@ -365,6 +367,7 @@ impl Cabin {
             origin: self.harness.turn_origin,
             episode: self.native_episode_seed(),
             cabin_thread_id,
+            brief_model_fallback: self.cfg.brief_model_fallback,
         };
         live_map()
             .lock()
@@ -693,9 +696,9 @@ fn serve_native(
         engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
-        // Brain 1: an unclear ask's Brief costs one fast call. App tests
-        // script each reply, so they keep the rules-only default.
-        engine.set_brief_model(!cfg!(test));
+        // Brain 1: the rules and the local scorer sort the ask in-process; a
+        // model call for what they can't sort is opt-in (off by default).
+        engine.set_brief_model(cfg.brief_model_fallback);
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         #[cfg(test)]
         let client = match test_responses_url() {

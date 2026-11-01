@@ -257,6 +257,7 @@ mod tests {
                 done: vec!["services".into(), "packages".into()],
                 domain: "system".into(),
                 by: "rules".into(),
+                confidence: 100,
             },
             policy: None,
             playbook: "Linux repair".into(),
