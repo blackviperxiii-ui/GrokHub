@@ -2446,7 +2446,7 @@ mod fetch_agent_tests {
             "Pulse image agent must not auto-follow redirects: {arm}"
         );
         assert!(
-            !arm.contains("try_proxy_from_env"),
+            !arm.contains("proxy_from_env"),
             "env proxy would skip public_only_resolve on the target: {arm}"
         );
     }
