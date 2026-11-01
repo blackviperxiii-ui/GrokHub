@@ -960,6 +960,39 @@ export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
 }
 
+/** A browser paired with Web access right now (src-tauri/src/remote_devices.rs). */
+export interface PairedBrowser {
+  /** The browser and its system, like "Firefox on Android". */
+  name: string;
+  /** Unix ms. */
+  firstSeen: number;
+  /** Unix ms. */
+  lastCall: number;
+  /** Chats it sent a message in. */
+  chats: number;
+}
+
+/** The Devices page; desktop only, kept in memory only. */
+export interface Devices {
+  /** This computer's name. */
+  computer: string;
+  /** Whether web access is on. */
+  on: boolean;
+  /** The web app's LAN address without the code; empty while off. */
+  lan: string;
+  /** The most recently used first. */
+  browsers: PairedBrowser[];
+}
+
+export function getDevices(): Promise<Devices> {
+  return invoke<Devices>("get_devices");
+}
+
+/** Signs out every browser: a new pairing code ends every pairing. */
+export function forgetAllDevices(): Promise<Devices> {
+  return invoke<Devices>("forget_all_devices");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;
