@@ -51,7 +51,7 @@ pub(super) fn paint_module(
         "updates" => paint_updates(cabin, ui, size, &mut actions),
         "speeds" => paint_speeds(cabin, ui, size, &mut actions),
         "frame_rate" => paint_frame_rate(ui, size),
-        "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
+        "workboard" => paint_workboard(cabin, ui, size, name, &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
         _ => match module_kind(module_id) {
             ModuleKind::Link { cta, to } => {
@@ -341,6 +341,63 @@ fn paint_nav_stub(
             actions.push(ModuleAction::Nav(nav));
         }
     });
+}
+
+/// Workboard counts from the cards already in memory: no disk, no model.
+fn paint_workboard(
+    cabin: &Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    name: &str,
+    actions: &mut Vec<ModuleAction>,
+) {
+    let n = super::super::board_ui::board_counts(&cabin.board);
+    let resp = card(ui, |ui| {
+        header(ui, false, name, "", crate::theme::fg());
+        let rows = [
+            ("Doing", n.doing, crate::theme::fg()),
+            ("Interrupted", n.interrupted, crate::theme::amber()),
+            ("Needs you", n.needs_you, crate::theme::signal_red()),
+        ];
+        if size == ModuleSize::Small {
+            let line = rows
+                .iter()
+                .map(|(label, count, _)| format!("{count} {}", label.to_lowercase()))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            ui.label(
+                RichText::new(line)
+                    .size(crate::theme::TYPE_BODY)
+                    .color(crate::theme::fg()),
+            );
+            return;
+        }
+        for (label, count, tone) in rows {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(count.to_string())
+                        .size(crate::theme::TYPE_BODY)
+                        .strong()
+                        .color(if count > 0 {
+                            tone
+                        } else {
+                            crate::theme::muted()
+                        }),
+                );
+                ui.label(
+                    RichText::new(label)
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::muted()),
+                );
+            });
+        }
+        if crate::cards::ghost_pill(ui, "Open Workboard") {
+            actions.push(ModuleAction::Nav("workboard"));
+        }
+    });
+    if size == ModuleSize::Small && card_clicked(ui, &resp, "workboard-tile", "Open Workboard") {
+        actions.push(ModuleAction::Nav("workboard"));
+    }
 }
 
 fn paint_objectives(

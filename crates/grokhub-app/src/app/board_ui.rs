@@ -14,8 +14,8 @@ use super::pages::{BoardAct, BoardDrag};
 use super::*;
 use crate::ui_kit::{badge, card_frame, BadgeTone, CardVariant};
 use grokhub_core::{
-    encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, ThoughtFold,
-    UpdateAction,
+    encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, StepStatus,
+    ThoughtFold, UpdateAction, WorkKind, WorkLogEvent, WorkOrigin,
 };
 
 /// Chat height inside an open card: a column card, and a full-width Follow up card.
@@ -41,6 +41,12 @@ pub(super) struct BoardView {
     pub keys_held: bool,
     /// A line under one card: why Send or Work on it did not go through.
     pub note: Option<(String, String)>,
+    /// The card whose log drawer is open, and its lines as read when it opened.
+    /// The log is read from disk only then (and on Refresh), never per frame.
+    pub log: Option<(String, Vec<WorkLogEvent>)>,
+    /// Paused runs already told to the bell. `None` until the first look, so
+    /// cards that were paused before this session stay quiet.
+    pub paused_seen: Option<std::collections::HashSet<String>>,
 }
 
 pub(super) fn board_chat_edit_id(id: &str) -> egui::Id {
@@ -51,9 +57,15 @@ fn board_notes_edit_id(id: &str) -> egui::Id {
     egui::Id::new(("board-notes-edit", id))
 }
 
-/// The short line under a card's title: what it has, not buttons.
+/// The short line under a card's title: where it left off, then what it has.
 pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
+    if let Some(next) = card_left_off(card) {
+        parts.push(format!(
+            "Left off: {}",
+            grokhub_core::work_item::clip_line(&next, META_LEFT_OFF_MAX)
+        ));
+    }
     if card.automation.is_some() {
         parts.push(if card.updated_ms == 0 {
             "From an automation".into()
@@ -72,6 +84,204 @@ pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
         parts.push("Notes".into());
     }
     parts.join(" · ")
+}
+
+/// Longest "Left off" text on a compact card's meta line, in bytes.
+const META_LEFT_OFF_MAX: usize = 60;
+/// Lines the log drawer shows, newest last.
+pub(super) const LOG_DRAWER_LINES: usize = 20;
+/// Most of a progress log the drawer reads: its tail, never the whole file.
+pub(super) const LOG_DRAWER_READ_MAX: u64 = 32 * 1024;
+
+/// Where the work left off: the checkpoint's next step, else the step being
+/// done, else the first step not started yet. Done and archived cards have none.
+pub(super) fn card_left_off(card: &BoardCard) -> Option<String> {
+    if matches!(card.status, BoardStatus::Done | BoardStatus::Dismissed) {
+        return None;
+    }
+    let next = card
+        .checkpoint
+        .as_ref()
+        .map(|c| c.next.trim())
+        .filter(|n| !n.is_empty());
+    if let Some(n) = next {
+        return Some(n.to_string());
+    }
+    let step = |want: StepStatus| card.steps.iter().find(|s| s.status == want);
+    step(StepStatus::Doing)
+        .or_else(|| step(StepStatus::Planned))
+        .map(|s| s.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Who owns the card: the agent filed it, or it is yours.
+pub(super) fn card_owner_label(card: &BoardCard) -> &'static str {
+    match card.origin {
+        Some(WorkOrigin::Agent) => "Agent",
+        Some(WorkOrigin::User) | None => "You",
+    }
+}
+
+/// The kind chip. A plain task shows none.
+pub(super) fn work_kind_label(kind: WorkKind) -> Option<&'static str> {
+    match kind {
+        WorkKind::Task => None,
+        WorkKind::Automation => Some("Automation"),
+        WorkKind::Background => Some("Background"),
+        WorkKind::Episode => Some("Episode"),
+        WorkKind::Flow => Some("Flow"),
+    }
+}
+
+/// The owner badge, then the kind chip, as the compact card paints them.
+pub(super) fn card_badges(card: &BoardCard) -> Vec<(&'static str, BadgeTone)> {
+    let owner = card_owner_label(card);
+    let tone = if owner == "Agent" {
+        BadgeTone::Accent
+    } else {
+        BadgeTone::Neutral
+    };
+    let mut out = vec![(owner, tone)];
+    if let Some(kind) = work_kind_label(card.kind) {
+        out.push((kind, BadgeTone::Neutral));
+    }
+    out
+}
+
+/// Ring fill: the card's steps when it has any (done and skipped count as
+/// filled), else its column. A Done card is always full.
+pub(super) fn card_progress(card: &BoardCard) -> (u32, u32) {
+    if card.steps.is_empty() {
+        return board_card_progress(card.status);
+    }
+    let total = card.steps.len() as u32;
+    if card.status == BoardStatus::Done {
+        return (total, total);
+    }
+    let filled = card
+        .steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped))
+        .count() as u32;
+    (filled, total)
+}
+
+/// A run that stopped part way (Paused or Interrupted): it sits in Blocked and
+/// either was a run or saved where it left off. Only these show Resume.
+pub(super) fn card_can_resume(card: &BoardCard) -> bool {
+    card.status == BoardStatus::Blocked
+        && (card.run || card.checkpoint.as_ref().is_some_and(|c| !c.is_empty()))
+}
+
+/// The mark in front of a step in the open card.
+pub(super) fn step_mark(status: StepStatus) -> &'static str {
+    match status {
+        StepStatus::Done => "✓",
+        StepStatus::Doing => "→",
+        StepStatus::Planned => "·",
+        StepStatus::Skipped => "–",
+        StepStatus::Failed => "×",
+    }
+}
+
+/// The live card for a chat, so an Activity row can open it.
+pub(super) fn board_card_for_chat(cards: &[BoardCard], chat_id: &str) -> Option<String> {
+    if chat_id.is_empty() {
+        return None;
+    }
+    cards
+        .iter()
+        .rev()
+        .find(|c| c.status != BoardStatus::Dismissed && c.thread_id.as_deref() == Some(chat_id))
+        .map(|c| c.id.clone())
+}
+
+/// What the Home Workboard module counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct BoardCounts {
+    pub doing: usize,
+    /// Paused or interrupted runs: Resume brings them back.
+    pub interrupted: usize,
+    /// Blocked on you, or a Follow up waiting for you to read it.
+    pub needs_you: usize,
+}
+
+pub(super) fn board_counts(cards: &[BoardCard]) -> BoardCounts {
+    let mut n = BoardCounts::default();
+    for c in cards {
+        match c.status {
+            BoardStatus::InProgress => n.doing += 1,
+            BoardStatus::Blocked if card_can_resume(c) => n.interrupted += 1,
+            BoardStatus::Blocked | BoardStatus::FollowUp => n.needs_you += 1,
+            _ => {}
+        }
+    }
+    n
+}
+
+/// The bell line for a sweep, or none when it archived nothing.
+pub(super) fn sweep_notice_text(report: &grokhub_core::SweepReport) -> Option<String> {
+    let done = report.archived_done.len();
+    let idle = report.archived_idle.len();
+    let plural = |n: usize| if n == 1 { "card" } else { "cards" };
+    match (done, idle) {
+        (0, 0) => None,
+        (d, 0) => Some(format!("Archived {d} finished {}", plural(d))),
+        (0, i) => Some(format!("Archived {i} {} idle for 30 days", plural(i))),
+        (d, i) => Some(format!(
+            "Archived {} {}: {d} finished, {i} idle for 30 days",
+            d + i,
+            plural(d + i)
+        )),
+    }
+}
+
+/// One log drawer line: "5m ago · step · Wrote the parser".
+pub(super) fn log_line_text(ev: &WorkLogEvent, now_ms: u64) -> String {
+    let ago = grokhub_core::pulse::ago_label(ev.at, now_ms);
+    if ev.kind.trim().is_empty() {
+        format!("{ago} · {}", ev.text)
+    } else {
+        format!("{ago} · {} · {}", ev.kind, ev.text)
+    }
+}
+
+/// The newest `lines` events of a card's progress log, reading at most the last
+/// `max_bytes` of the file. Called when the drawer opens, never per frame.
+pub(super) fn read_log_tail(
+    dir: &std::path::Path,
+    id: &str,
+    max_bytes: u64,
+    lines: usize,
+) -> Vec<WorkLogEvent> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Some(name) = grokhub_core::work_item::work_log_file_name(id) else {
+        return Vec::new();
+    };
+    let Ok(mut f) = std::fs::File::open(dir.join(name)) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(max_bytes);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if f.take(max_bytes).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let mut body = String::from_utf8_lossy(&buf).into_owned();
+    if start > 0 {
+        // The first line was cut by the seek.
+        body = body
+            .split_once('\n')
+            .map(|(_, r)| r.to_string())
+            .unwrap_or_default();
+    }
+    let mut events = grokhub_core::work_item::parse_work_log(&body);
+    let skip = events.len().saturating_sub(lines);
+    events.drain(..skip);
+    events
 }
 
 /// Flo status chip copy for a board column status.
@@ -417,7 +627,8 @@ impl Cabin {
         let id = card.id.clone();
         let dragging = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let meta = card_meta_line(card, now_ms());
-        let (filled, total) = board_card_progress(card.status);
+        let (filled, total) = card_progress(card);
+        let badges = card_badges(card);
         let chips = board_presence_chips(card);
         // Flo compact cards used `sheet_shadow()`; kit `card_frame` paints lift via `kit_shadow`.
         let _ = crate::theme::sheet_shadow();
@@ -459,6 +670,9 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
                         paint_status_chip(ui, card.status);
+                        for (label, tone) in &badges {
+                            badge(ui, label, *tone);
+                        }
                         if !meta.is_empty() {
                             ui.add(
                                 egui::Label::new(
@@ -635,6 +849,7 @@ impl Cabin {
                     .wrap(),
                 );
             }
+            self.paint_card_work(ui, card, busy_here, act);
             ui.add_space(8.0);
             let chat_h = if wide { FOLLOW_CHAT_H } else { CARD_CHAT_H };
             match thread.as_deref() {
@@ -665,6 +880,233 @@ impl Cabin {
         resp.rect
     }
 
+    /// The work part of an open card: its steps, where it left off, Resume and
+    /// Hand back on a paused run, a way to its live row in Activity, and the log
+    /// drawer. Nothing here goes to the model.
+    fn paint_card_work(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &BoardCard,
+        busy_here: bool,
+        act: &mut Option<BoardAct>,
+    ) {
+        let id = card.id.clone();
+        let small = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text)
+                        .size(crate::theme::FONT_TIP)
+                        .color(color),
+                )
+                .wrap(),
+            );
+        };
+        let label = |ui: &mut egui::Ui, text: &str| {
+            ui.add_space(crate::theme::SPACING_4);
+            ui.label(
+                RichText::new(text)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::subtle()),
+            );
+        };
+        if !card.steps.is_empty() {
+            let (filled, total) = card_progress(card);
+            label(ui, &format!("Steps {filled} / {total}"));
+            for step in &card.steps {
+                let color = match step.status {
+                    StepStatus::Done | StepStatus::Skipped => crate::theme::muted(),
+                    StepStatus::Failed => crate::theme::setup(),
+                    StepStatus::Doing | StepStatus::Planned => crate::theme::fg(),
+                };
+                small(
+                    ui,
+                    &format!("{} {}", step_mark(step.status), step.text),
+                    color,
+                );
+            }
+        }
+        if let Some(cp) = card.checkpoint.as_ref().filter(|c| !c.is_empty()) {
+            label(ui, "Where it left off");
+            for (name, value) in [
+                ("Goal", cp.goal.as_str()),
+                ("Next", cp.next.as_str()),
+                ("Blocked by", cp.blocker.as_str()),
+            ] {
+                if !value.trim().is_empty() {
+                    small(ui, &format!("{name}: {value}"), crate::theme::fg());
+                }
+            }
+            if !cp.refs.is_empty() {
+                small(
+                    ui,
+                    &format!("Refs: {}", cp.refs.join(", ")),
+                    crate::theme::muted(),
+                );
+            }
+        }
+        ui.add_space(crate::theme::SPACING_4);
+        ui.horizontal_wrapped(|ui| {
+            if card_can_resume(card) {
+                let resume = ui
+                    .push_id(("board-resume", id.as_str()), |ui| {
+                        crate::cards::white_pill(ui, "Resume")
+                    })
+                    .inner;
+                if resume {
+                    *act = Some(BoardAct::Resume(id.clone()));
+                }
+                let hand_back = ui
+                    .push_id(("board-hand-back", id.as_str()), |ui| {
+                        crate::cards::ghost_pill(ui, "Hand back")
+                    })
+                    .inner;
+                if hand_back {
+                    *act = Some(BoardAct::HandBack(id.clone()));
+                }
+            }
+            if busy_here && crate::cards::ghost_pill(ui, "Show in Activity") {
+                self.activity.open = true;
+            }
+            let log_open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
+            let log_label = if log_open { "Hide log" } else { "Log" };
+            let log = ui
+                .push_id(("board-log", id.as_str()), |ui| {
+                    crate::cards::ghost_pill(ui, log_label)
+                })
+                .inner;
+            if log {
+                *act = Some(BoardAct::ToggleLog(id.clone()));
+            }
+        });
+        let lines = self
+            .board_view
+            .log
+            .as_ref()
+            .filter(|(l, _)| *l == id)
+            .map(|(_, lines)| lines.clone());
+        if let Some(lines) = lines {
+            let now = now_ms();
+            if lines.is_empty() {
+                small(ui, "No progress logged yet", crate::theme::muted());
+            }
+            for ev in &lines {
+                small(ui, &log_line_text(ev, now), crate::theme::muted());
+            }
+            if crate::cards::ghost_pill(ui, "Refresh log") {
+                self.board_view.log = Some((id.clone(), self.read_card_log(&id)));
+            }
+        }
+    }
+
+    /// The tail of a card's progress log, for the drawer.
+    pub(super) fn read_card_log(&self, id: &str) -> Vec<WorkLogEvent> {
+        read_log_tail(
+            &crate::work_store::work_dir(),
+            id,
+            LOG_DRAWER_READ_MAX,
+            LOG_DRAWER_LINES,
+        )
+    }
+
+    /// Resume a paused or interrupted card.
+    ///
+    /// Stub for KB-03, which replaces the body with the capped resume block
+    /// (KB-04: at most `RESUME_BLOCK_MAX` bytes, sent once in the turn input and
+    /// never in the system prompt). Until then it carries on in the card's chat
+    /// the way "Work on it" does, so it adds no new board text to any turn. A
+    /// refusal (a chat already running, no agent) lands in the bell as "Resume
+    /// failed" with a way back to the card.
+    pub(super) fn resume_work_card(&mut self, id: &str) -> bool {
+        self.board_view.open = Some(id.to_string());
+        if self.say_on_card(id, "") {
+            return true;
+        }
+        let title = self
+            .board
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.trim().to_string())
+            .unwrap_or_default();
+        let why = self
+            .board_view
+            .note
+            .as_ref()
+            .filter(|(n, _)| n == id)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default();
+        let text = if why.is_empty() {
+            format!("Resume failed: {title}")
+        } else {
+            format!("Resume failed: {title}. {why}")
+        };
+        self.notify(
+            super::notices::NoticeKind::Error,
+            text,
+            Some(super::notices::NoticeAction::OpenCard(id.to_string())),
+        );
+        false
+    }
+
+    /// Each frame, from memory only: a run that just paused or was interrupted
+    /// goes to the bell once, with a way to its card. Cards already paused when
+    /// this session first looked stay quiet, and so do cards you touched.
+    pub(super) fn tick_board_notices(&mut self) {
+        let paused: Vec<(String, String)> = self
+            .board
+            .iter()
+            .filter(|c| card_can_resume(c) && !c.touched)
+            .map(|c| (c.id.clone(), c.title.trim().to_string()))
+            .collect();
+        let Some(seen) = self.board_view.paused_seen.as_mut() else {
+            self.board_view.paused_seen = Some(paused.into_iter().map(|(id, _)| id).collect());
+            return;
+        };
+        let fresh: Vec<(String, String)> = paused
+            .iter()
+            .filter(|(id, _)| !seen.contains(id))
+            .cloned()
+            .collect();
+        seen.retain(|id| paused.iter().any(|(p, _)| p == id));
+        for (id, _) in &fresh {
+            seen.insert(id.clone());
+        }
+        for (id, title) in fresh {
+            self.notify(
+                super::notices::NoticeKind::Info,
+                format!("Interrupted: {title}. Resume it from the Workboard."),
+                Some(super::notices::NoticeAction::OpenCard(id)),
+            );
+        }
+    }
+
+    /// The sweep archived cards: say so in the bell, with Undo.
+    pub(super) fn note_board_sweep(&mut self, report: &grokhub_core::SweepReport) {
+        let Some(text) = sweep_notice_text(report) else {
+            return;
+        };
+        let ids: Vec<String> = report
+            .archived_done
+            .iter()
+            .chain(&report.archived_idle)
+            .cloned()
+            .collect();
+        self.notify(
+            super::notices::NoticeKind::Info,
+            text,
+            Some(super::notices::NoticeAction::RestoreCards(ids)),
+        );
+    }
+
+    /// Open one card on the Workboard (from the bell or an Activity row).
+    pub(super) fn open_board_card(&mut self, id: &str) {
+        if !self.board.iter().any(|c| c.id == id) {
+            self.status = "That card is gone".into();
+            return;
+        }
+        self.select_main_nav("workboard");
+        self.board_view.open = Some(id.to_string());
+    }
+
     /// Everything that is not talking to the agent.
     fn board_card_menu(
         &mut self,
@@ -681,6 +1123,14 @@ impl Cabin {
             }
         } else if card.status != BoardStatus::Done && ui.button("Work on it").clicked() {
             chosen = Some(BoardAct::Work(id.clone()));
+        }
+        if card_can_resume(card) {
+            if ui.button("Resume").clicked() {
+                chosen = Some(BoardAct::Resume(id.clone()));
+            }
+            if ui.button("Hand back").clicked() {
+                chosen = Some(BoardAct::HandBack(id.clone()));
+            }
         }
         let notes_label = if card.notes.trim().is_empty() {
             "Add notes"
@@ -971,6 +1421,9 @@ impl Cabin {
         }
         if v.note.as_ref().is_some_and(|(n, _)| n == id) {
             v.note = None;
+        }
+        if v.log.as_ref().is_some_and(|(n, _)| n == id) {
+            v.log = None;
         }
         if self.board_edit.as_deref() == Some(id) {
             self.board_edit = None;
