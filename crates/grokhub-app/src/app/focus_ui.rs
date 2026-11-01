@@ -58,6 +58,8 @@ pub(super) struct FocusState {
     pub factorio: super::factorio_ui::FactorioUi,
     /// Guild Wars 2 through ArenaNet's web API.
     pub gw2: super::gw2_ui::Gw2Ui,
+    /// Destiny 2 through Bungie.net's web API.
+    pub destiny: super::destiny_ui::DestinyUi,
 }
 
 impl Cabin {
@@ -86,6 +88,7 @@ impl Cabin {
         self.tick_rl();
         self.tick_factorio();
         self.tick_gw2();
+        self.tick_destiny();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

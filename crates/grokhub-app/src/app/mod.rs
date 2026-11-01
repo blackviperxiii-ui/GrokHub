@@ -162,6 +162,7 @@ mod daily_drop_ui;
 mod day_brief_ui;
 mod desktop_anim;
 mod desktop_nyx;
+mod destiny_ui;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
