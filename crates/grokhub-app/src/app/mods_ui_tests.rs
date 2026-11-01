@@ -368,6 +368,9 @@ fn a_mod_the_chat_asked_for_waits_on_a_card_until_the_user_clicks() {
         assert!(shown.iter().any(|t| t == want), "{want}: {shown:?}");
     }
     assert!(!shown.iter().any(|t| t == "Install"), "{shown:?}");
+}
+
+#[test]
 fn for_you_cards_say_why_and_offer_not_interested() {
     use grokhub_core::mods::suggest::{Candidate, Suggestion, Why};
     let rail = mod_rail(&[game(413150, "Stardew Valley", 1, 1)], &[], false);
