@@ -22,6 +22,7 @@ pub mod local_engine;
 mod md_fixtures;
 pub mod memory;
 pub mod models;
+pub mod nyx;
 pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
@@ -33,6 +34,7 @@ pub mod plugins;
 pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
+pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
@@ -611,6 +613,31 @@ fn remove_attachment(state: State<'_, ShellState>, conversation_id: String, path
     state.trays.remove(&conversation_id, &path);
 }
 
+/// Agents: the open chat's to-dos and background tasks.
+#[tauri::command]
+async fn get_queue(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || queue::queue(&dir, &conversation_id)).await
+}
+
+/// Agents → Stop: one task by id, or every task of the chat without one.
+#[tauri::command]
+async fn stop_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: Option<String>,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::stop(&conversation_id, task_id.as_deref())?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
     clock.at(grokhub_core::now_ms())
 }
@@ -1123,6 +1150,31 @@ fn delete_personality(
     Ok(personalities(&state))
 }
 
+/// The chat's Nyx for the voice in use (or `voice`) and what the chat is
+/// doing: a running tool's title, else `mood`. Explicit art only with
+/// Adults-only personalities on.
+#[tauri::command]
+fn nyx_look(
+    state: State<'_, ShellState>,
+    voice: Option<String>,
+    mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
+) -> Option<nyx::NyxLook> {
+    let now = current(&state);
+    nyx::look(
+        &state.config_dir,
+        voice.as_deref().unwrap_or(&now.personality),
+        now.explicit_personalities,
+        nyx::activity(mood, tool.as_deref()),
+    )
+}
+
+/// Settings → Personality's pictures, by preset id.
+#[tauri::command]
+fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
+    nyx::tiles(&ids, current(&state).explicit_personalities)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -1626,6 +1678,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             close_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "get_queue" => out(block_on(get_queue(state, own(args)?))?),
+        "stop_task" => out(block_on(stop_task(
+            state,
+            own(args)?,
+            arg(args, "taskId")?,
+        ))?),
         "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
         "add_automation" => out(add_automation(
             state,
@@ -1688,6 +1746,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "nyx_look" => out(nyx_look(
+            state,
+            arg(args, "voice")?,
+            arg(args, "mood")?,
+            arg(args, "tool")?,
+        )),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -2224,6 +2288,10 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            nyx_look,
+            nyx_tiles,
+            get_queue,
+            stop_task,
             get_workboard,
             workboard_add,
             workboard_act,
