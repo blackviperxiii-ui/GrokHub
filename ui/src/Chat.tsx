@@ -5,6 +5,7 @@ import {
   cancelChat,
   closeChat,
   getSettings,
+  setModel,
   onChatEvent,
   onEventGap,
   saveSettings,
@@ -139,6 +140,13 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     }
     case "permission":
       return [...items, { ...event, answer: null }];
+    // Deny on a notification: the card shows what ran, unless the turn already ended.
+    case "answered":
+      return items.map((item) =>
+        item.kind === "permission" && item.id === event.id && item.answer !== "ended"
+          ? { ...item, answer: event.answer }
+          : item,
+      );
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
@@ -281,6 +289,14 @@ export function Chat({
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
+
+  async function pickModel(id: string) {
+    try {
+      setSettings(await setModel(id));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   async function setApprovals(approvals: Approvals) {
     if (!settings) return;
@@ -526,6 +542,8 @@ export function Chat({
         onApprovals={(a) => void setApprovals(a)}
         busy={busy}
         remote={remote}
+        model={settings?.model ?? null}
+        onModel={(id) => void pickModel(id)}
       />
       <form className="composer" onSubmit={send}>
         <textarea
