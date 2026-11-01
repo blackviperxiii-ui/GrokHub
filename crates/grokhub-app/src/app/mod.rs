@@ -167,6 +167,7 @@ mod dock_ui;
 mod downloads_tidy_ui;
 mod elite_ui;
 mod episode_ui;
+mod eso_ui;
 mod evidence_ui;
 mod feed_ui;
 mod file_writes;
@@ -308,6 +309,7 @@ enum Nav {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
+    AiModels,
     Privacy,
     Appearance,
     Behavior,
@@ -4973,7 +4975,10 @@ impl Cabin {
                     self.cfg.close_to_tray_tip_seen = true;
                 }
                 self.unmap_to_tray(ctx);
-                self.status = "In the tray — Show cabin to sit down".into();
+                self.status = format!(
+                    "In the tray — Show {} to sit down",
+                    grokhub_core::brand::product_name()
+                );
             }
         }
     }

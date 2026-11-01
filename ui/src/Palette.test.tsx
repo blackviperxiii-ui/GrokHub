@@ -32,10 +32,14 @@ describe("paletteRows", () => {
       "Settings",
       "Settings: General",
       "Settings: Account",
+      "Settings: Defaults",
+      "Settings: Behavior",
       "Settings: Appearance",
       "Settings: Personality",
       "Settings: Playbooks",
       "Settings: Permissions",
+      "Settings: Privacy & data",
+      "Settings: Background",
       "Settings: Pulse",
       "Settings: Local AI",
       "Settings: Web access",
@@ -51,10 +55,14 @@ describe("paletteRows", () => {
       "Settings",
       "Settings: General",
       "Settings: Account",
+      "Settings: Defaults",
+      "Settings: Behavior",
       "Settings: Appearance",
       "Settings: Personality",
       "Settings: Playbooks",
       "Settings: Permissions",
+      "Settings: Privacy & data",
+      "Settings: Background",
       "Settings: About",
     ]);
     expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
@@ -148,8 +156,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 11 starts at 440, row 12 ends at 516.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 416, behavior: "auto" });
+      // Row 16, the last, ends at 676.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 576, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {
