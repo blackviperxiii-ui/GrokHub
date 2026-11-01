@@ -240,24 +240,24 @@ export function Settings({
       <>
         {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} onChange={show} />}
         <div className="key">
-        <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
-        <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
-        <input
-          type="password"
-          aria-label="API key"
-          placeholder="xai-…"
-          autoComplete="off"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="button" onClick={saveKey} disabled={!key.trim()}>
-          Save key
-        </button>
-        {loaded.hasApiKey && (
-          <button type="button" className="quiet" onClick={removeKey}>
-            Remove key
+          <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
+          <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
+          <input
+            type="password"
+            aria-label="API key"
+            placeholder="xai-…"
+            autoComplete="off"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <button type="button" onClick={saveKey} disabled={!key.trim()}>
+            Save key
           </button>
-        )}
+          {loaded.hasApiKey && (
+            <button type="button" className="quiet" onClick={removeKey}>
+              Remove key
+            </button>
+          )}
         </div>
       </>
     );

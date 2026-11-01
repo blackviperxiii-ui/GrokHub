@@ -159,6 +159,7 @@ export function App() {
           notice={notice}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
+          grokSignIn={Boolean(caps.grokSignIn)}
         />
       </div>
       <div hidden={view !== "automations"}>

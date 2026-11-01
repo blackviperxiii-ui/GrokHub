@@ -153,6 +153,20 @@ describe("Settings", () => {
     expect(await screen.findByText("No key saved yet.")).toBeInTheDocument();
   });
 
+  it("offers Sign in with Grok above the key where the device has it", async () => {
+    render(<Settings caps={{ ...DESKTOP, grokSignIn: true }} />);
+    await openSection("Account");
+    expect(await screen.findByRole("region", { name: "Sign in with Grok" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Or use an xAI API key" })).toBeInTheDocument();
+  });
+
+  it("Android has no Grok sign-in yet, only the key", async () => {
+    render(<Settings caps={PHONE} />);
+    await openSection("Account");
+    expect(await screen.findByRole("heading", { name: "xAI API key" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Sign in with Grok" })).toBeNull();
+  });
+
   it("shows a keychain error instead of hanging", async () => {
     api.setApiKey.mockRejectedValue("No system keychain is available.");
     render(<Settings caps={DESKTOP} />);
