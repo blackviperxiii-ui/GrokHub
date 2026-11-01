@@ -588,7 +588,7 @@ describe("applyEvent", () => {
       signedIn: { name: "Sam", email: null },
     });
     render(<Chat onOpenSettings={() => {}} grokSignIn />);
-    expect(await screen.findByText("Ask Grok anything.")).toBeVisible();
+    expect(await screen.findByText("Ask Loadout anything.")).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
   });
 

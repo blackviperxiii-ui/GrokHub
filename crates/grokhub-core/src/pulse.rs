@@ -67,7 +67,9 @@ fn is_false(v: &bool) -> bool {
 }
 
 pub const PULSE_TITLE: &str = "Pulse";
-pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
+pub static PULSE_SUBTITLE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled("What I'd do next, from how you use {product}.")
+});
 /// Pulse with no ideas, no posts, and nothing running.
 pub const PULSE_EMPTY: &str =
     "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing.";

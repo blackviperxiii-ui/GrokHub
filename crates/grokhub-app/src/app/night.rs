@@ -89,7 +89,7 @@ impl Cabin {
     /// Skills Suggested Add — same door as Automations Add → `save_schedule`.
     pub(super) fn add_suggested_skill(&mut self, item: &grokhub_core::LearnedSuggestion) {
         let Some(parsed) = skill_from_suggestion(item) else {
-            self.status = "Need a cabin-real skill name and steps".into();
+            self.status = "Need a real skill name and steps".into();
             return;
         };
         let written = parsed.clone();

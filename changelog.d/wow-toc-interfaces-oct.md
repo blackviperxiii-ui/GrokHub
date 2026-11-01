@@ -1,0 +1,1 @@
+- WoW addon: the repo copy of the Loadout addon now lists the current Classic (5.5.4), Classic Era (1.15.9) and Anniversary (2.5.6) clients in `## Interface`, so manual installs on those flavors aren't flagged out of date.
