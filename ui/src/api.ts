@@ -127,6 +127,28 @@ export function saveSettings(
   });
 }
 
+/** Where a model in the picker came from. */
+export type ModelSource = "catalog" | "account" | "custom";
+
+export type ModelOption = { id: string; label: string; source: ModelSource };
+
+export type ModelList = {
+  current: string;
+  options: ModelOption[];
+  /** Why the account's models are missing, when they are. */
+  note: string | null;
+};
+
+/** The chat models to pick from; `refresh` skips the 10-minute cache. */
+export function listModels(refresh = false): Promise<ModelList> {
+  return invoke<ModelList>("list_models", { refresh });
+}
+
+/** Saves the chat model for the next message. */
+export function setModel(id: string): Promise<Settings> {
+  return invoke<Settings>("set_model", { id });
+}
+
 export function setApiKey(key: string): Promise<Settings> {
   return invoke<Settings>("set_api_key", { key });
 }
@@ -971,4 +993,42 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
+}
+
+/** Settings → About → Updates (src-tauri/src/shell_update.rs). */
+export type UpdateChannel = "stable" | "beta";
+
+export interface UpdateView {
+  version: string;
+  channel: UpdateChannel;
+  /** The AppImage and the Windows installer update themselves. */
+  updatable: boolean;
+  /** Why this install doesn't update itself. */
+  note: string | null;
+  /** The version a check found, ready to install. */
+  available: string | null;
+}
+
+/** Emitted when the background check (every 2 hours) finds an update. */
+export const UPDATE_EVENT = "update://available";
+
+export function getUpdateStatus(): Promise<UpdateView> {
+  return invoke<UpdateView>("get_update_status");
+}
+
+export function setUpdateChannel(channel: UpdateChannel): Promise<UpdateView> {
+  return invoke<UpdateView>("set_update_channel", { channel });
+}
+
+export function checkShellUpdate(): Promise<UpdateView> {
+  return invoke<UpdateView>("check_shell_update");
+}
+
+/** Downloads, verifies and installs the update, then restarts into it. */
+export function installShellUpdate(): Promise<void> {
+  return invoke<void>("install_shell_update");
+}
+
+export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
+  return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
