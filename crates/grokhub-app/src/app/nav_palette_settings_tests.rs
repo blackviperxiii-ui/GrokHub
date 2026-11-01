@@ -298,6 +298,15 @@ fn general_section_opens_account() {
     );
 }
 
+/// The slice of settings.rs that paints one section, up to the next arm.
+fn settings_arm<'a>(settings: &'a str, start: &str, next: &str) -> &'a str {
+    settings
+        .split(start)
+        .nth(1)
+        .and_then(|s| s.split(next).next())
+        .expect("settings arm")
+}
+
 #[test]
 fn settings_defaults_section() {
     let settings = include_str!("settings.rs");
@@ -305,21 +314,21 @@ fn settings_defaults_section() {
         settings.contains("(SettingsSec::Defaults, \"Defaults\")"),
         "Defaults is a Settings section"
     );
-    let defaults = settings
-        .split("SettingsSec::Defaults => {")
-        .nth(1)
-        .and_then(|s| s.split("if let Some(s) = next_sec").next())
-        .expect("defaults arm");
-    for label in ["ROW_MODEL", "ROW_PERMISSION", "ROW_SESSION", "ROW_COLLAPSE"] {
+    let defaults = settings_arm(
+        settings,
+        "SettingsSec::Defaults => {",
+        "if let Some(s) = next_sec",
+    );
+    for label in ["ROW_PERMISSION", "ROW_SESSION", "ROW_COLLAPSE"] {
         assert!(defaults.contains(label), "missing {label}: {defaults}");
     }
-    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
+    // Permission and Session mode; the model rows live on AI models.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 2);
     assert!(defaults.contains("settings_toggle"));
     assert!(
         !defaults.contains("effort"),
         "R1: no effort row: {defaults}"
     );
-    assert!(defaults.contains("cabin_default_model_id"));
     assert!(defaults.contains("set_permission_mode"));
     assert!(defaults.contains("set_session_mode"));
     assert!(defaults.contains("always_collapse_thoughts"));
@@ -334,6 +343,101 @@ fn settings_defaults_section() {
     );
 }
 
+/// Viper: one Settings page for every AI model change and setting, instead
+/// of rows spread over Account, Defaults, Privacy and Behavior.
+#[test]
+fn ai_models_holds_every_model_setting_once() {
+    let settings = include_str!("settings.rs");
+    // Right under Account in the nav. Windows checks out CRLF, so compare
+    // positions rather than a literal newline.
+    let account = settings
+        .find("(SettingsSec::Account, \"Account\"),")
+        .expect("Account nav row");
+    let models = settings
+        .find("(SettingsSec::AiModels, \"AI models\"),")
+        .expect("AI models nav row");
+    let next = settings
+        .find("(SettingsSec::Privacy, \"Privacy & data\"),")
+        .expect("Privacy nav row");
+    assert!(
+        account < models && models < next,
+        "AI models sits right under Account"
+    );
+    assert!(settings.contains("SettingsSec::AiModels => \"AI models\""));
+    let models = settings_arm(
+        settings,
+        "SettingsSec::AiModels => {",
+        "SettingsSec::Appearance => {",
+    );
+    for row in [
+        "account_auth.action",
+        "self.ui_provider_rows(ui)",
+        "ROW_MODEL",
+        "cabin_default_model_id",
+        "self.refresh_models_now()",
+        "self.how_auto_picks_lines()",
+        "paint_offline_row(ui)",
+        "self.ui_local_model_rows(ui)",
+        "local_notes(",
+        "self.ui_spend_rows(ui)",
+        "\"Steady effort\"",
+        "\"Daily token budget\"",
+        "\"Pause scheduled work over budget\"",
+    ] {
+        assert!(models.contains(row), "AI models paints {row}");
+    }
+    // Each of those rows is painted from AI models and nowhere else.
+    let account = settings_arm(
+        settings,
+        "SettingsSec::Account => {",
+        "SettingsSec::AiModels => {",
+    );
+    let behavior = settings_arm(
+        settings,
+        "SettingsSec::Behavior => {",
+        "SettingsSec::Update => {",
+    );
+    let defaults = settings_arm(
+        settings,
+        "SettingsSec::Defaults => {",
+        "if let Some(s) = next_sec",
+    );
+    for (name, arm) in [
+        ("Account", account),
+        ("Behavior", behavior),
+        ("Defaults", defaults),
+    ] {
+        for row in [
+            "account_auth",
+            "ui_provider_rows",
+            "ROW_MODEL",
+            "ui_local_model_rows",
+            "ui_spend_rows",
+            "how_auto_picks_lines",
+            "Steady effort",
+            "Daily token budget",
+        ] {
+            assert!(!arm.contains(row), "{name} still paints {row}");
+        }
+    }
+    assert!(account.contains("ACCOUNT_SIGN_IN_MOVED"));
+    let privacy = include_str!("privacy_page.rs");
+    let switches = privacy
+        .split("fn privacy_switches(")
+        .nth(1)
+        .and_then(|s| s.split("\n    fn ").next())
+        .expect("privacy switches");
+    assert!(
+        !switches.contains("paint_offline_row(ui)"),
+        "Offline only moved"
+    );
+    assert!(
+        !switches.contains("\"On-device model\""),
+        "the on-device switch moved"
+    );
+    assert!(switches.contains("MODELS_MOVED"));
+}
+
 #[test]
 fn appearance_applies_without_a_save_action() {
     assert!(!super::settings::settings_save_visible(
@@ -346,7 +450,7 @@ fn appearance_applies_without_a_save_action() {
 
 #[test]
 fn home_api_key_hint_points_to_defaults() {
-    assert!(include_str!("pages.rs").contains("or add an API key in Settings → Defaults."));
+    assert!(include_str!("pages.rs").contains("or add an API key there."));
 }
 
 #[test]
@@ -363,13 +467,13 @@ fn settings_permissions_editor_lists_rules_and_grants() {
     let chat = include_str!("chat_ui.rs");
     assert!(!chat.contains("ui_permission_editor"));
     assert!(!chat.contains("SettingsSec::Permissions"));
-    let defaults = settings
-        .split("SettingsSec::Defaults => {")
-        .nth(1)
-        .and_then(|slice| slice.split("if let Some(s) = next_sec").next())
-        .expect("defaults arm");
-    // Model, Permission and Session mode. R1 removed the effort dropdown.
-    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
+    let defaults = settings_arm(
+        settings,
+        "SettingsSec::Defaults => {",
+        "if let Some(s) = next_sec",
+    );
+    // Permission and Session mode. R1 removed the effort dropdown.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 2);
 }
 
 // Landed from PR #95.

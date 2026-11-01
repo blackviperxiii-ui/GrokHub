@@ -2037,7 +2037,7 @@ mod tests {
     #[test]
     fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
         use super::{doctor, invalidate, offline_paused, shutdown_all};
-        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
         let exe = Path::new("/opt/loadout/grokhub");
         let cua = vec!["--mcp-cua".to_string()];
         let npx = vec!["-y".to_string(), "weather-mcp".to_string()];

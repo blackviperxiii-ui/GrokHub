@@ -2272,7 +2272,7 @@ mod tests {
 
     #[test]
     fn an_offline_only_refusal_is_final_and_keeps_its_words() {
-        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
         let no_local = format!("Offline, local model unavailable: runtime missing. {msg}");
         assert_eq!(classify_stream_error(&no_local), StreamErrorKind::Fatal);
         assert_eq!(rewrite_truncation_error(&no_local), no_local);
