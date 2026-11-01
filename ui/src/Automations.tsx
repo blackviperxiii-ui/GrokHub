@@ -11,6 +11,7 @@ import {
   type RunResult,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { ConfirmRow } from "./ui";
 
 export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
@@ -42,6 +43,7 @@ export function Automations({
   const [running, setRunning] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
@@ -170,6 +172,18 @@ export function Automations({
                 </button>
               </form>
             )}
+            {asking === row.id ? (
+              <ConfirmRow
+                question={`Remove ${row.name}?`}
+                detail="It won't run again."
+                action="Remove"
+                onConfirm={() => {
+                  setAsking(null);
+                  void act(() => removeAutomation(row.id));
+                }}
+                onCancel={() => setAsking(null)}
+              />
+            ) : (
             <div className="card-buttons">
               <button
                 type="button"
@@ -198,11 +212,12 @@ export function Automations({
               <button
                 type="button"
                 className="quiet danger"
-                onClick={() => void act(() => removeAutomation(row.id))}
+                onClick={() => setAsking(row.id)}
               >
-                Remove
+                Remove…
               </button>
             </div>
+            )}
           </li>
         ))}
       </ul>

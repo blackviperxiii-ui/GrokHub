@@ -1,7 +1,7 @@
 //! Paint one Home module at a given size. Missing data → clean "coming soon".
 
 use grokhub_agent::indexers::system_state::DiskUse;
-use grokhub_core::home::{lookup, DataStatus, ModuleSize};
+use grokhub_core::home::{lookup, ModuleSize};
 use grokhub_core::local_profile::Thermal;
 use grokhub_core::mission::MissionView;
 
@@ -31,7 +31,6 @@ pub(super) fn paint_module(
     let mut actions = Vec::new();
     let entry = lookup(module_id);
     let name = entry.map(|e| e.name).unwrap_or(module_id);
-    let data = entry.map(|e| e.data).unwrap_or(DataStatus::New);
     let purpose = entry.map(|e| e.purpose).unwrap_or("");
 
     if !entry.map(|e| e.supports(size)).unwrap_or(false) {
@@ -54,10 +53,171 @@ pub(super) fn paint_module(
         "frame_rate" => paint_frame_rate(ui, size),
         "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
-        _ if data == DataStatus::New => coming_soon_card(ui, name, purpose),
-        _ => ready_stub(ui, size, name, purpose, data),
+        _ => match module_kind(module_id) {
+            ModuleKind::Link { cta, to } => {
+                let note = link_note(cabin, module_id);
+                paint_link_card(
+                    ui,
+                    size,
+                    name,
+                    purpose,
+                    note.as_deref(),
+                    cta,
+                    to,
+                    &mut actions,
+                )
+            }
+            // A module with no tile yet says so plainly: no READY badge
+            // over a card with nothing on it.
+            _ => preview_card(ui, size, name, purpose),
+        },
     }
     actions
+}
+
+/// What a Home module paints today. `Live` modules draw their own data;
+/// `Link` modules have no tile data yet but their data lives on another page,
+/// so the card says what it is and opens that page; `Preview` modules aren't
+/// built and show a labelled placeholder. The Edit Home picker reads this too,
+/// so it never offers a placeholder as if it were ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum ModuleKind {
+    Live,
+    Link { cta: &'static str, to: LinkTarget },
+    Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum LinkTarget {
+    Page(&'static str),
+    Settings(SettingsSec),
+}
+
+/// Modules with a painter of their own (the arms of `paint_module`).
+pub(in crate::app) const LIVE_MODULES: [&str; 14] = [
+    "objectives",
+    "up_next",
+    "pulse",
+    "pc_loadout",
+    "streak",
+    "usage",
+    "storage",
+    "game_mode",
+    "connection",
+    "updates",
+    "speeds",
+    "frame_rate",
+    "workboard",
+    "recent_chats",
+];
+
+pub(in crate::app) fn module_kind(id: &str) -> ModuleKind {
+    if LIVE_MODULES.contains(&id) {
+        return ModuleKind::Live;
+    }
+    let link = |cta, to| ModuleKind::Link { cta, to };
+    match id {
+        "game_library" => link("Open Library", LinkTarget::Page("library")),
+        "journal" => link("Open Journal", LinkTarget::Page("journal")),
+        "automations" => link("Open Automations", LinkTarget::Page("automations")),
+        "personality" => link(
+            "Open Personality",
+            LinkTarget::Settings(SettingsSec::Personality),
+        ),
+        "playbooks" => link(
+            "Open Playbooks",
+            LinkTarget::Settings(SettingsSec::Playbooks),
+        ),
+        "local_ai" => link(
+            "Open model settings",
+            LinkTarget::Settings(SettingsSec::Defaults),
+        ),
+        _ => ModuleKind::Preview,
+    }
+}
+
+/// One live line for a link card when the app already holds it in memory.
+/// Tiles stay light: nothing here reads disk or calls a model.
+fn link_note(cabin: &Cabin, id: &str) -> Option<String> {
+    match id {
+        "journal" => Some(match cabin.journal.len() {
+            0 => "No open questions yet".to_string(),
+            1 => "1 question in the journal".to_string(),
+            n => format!("{n} questions in the journal"),
+        }),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_link_card(
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    name: &str,
+    purpose: &str,
+    note: Option<&str>,
+    cta: &str,
+    to: LinkTarget,
+    actions: &mut Vec<ModuleAction>,
+) {
+    let action = match to {
+        LinkTarget::Page(id) => ModuleAction::Nav(id),
+        LinkTarget::Settings(sec) => ModuleAction::Settings(sec),
+    };
+    let resp = card(ui, |ui| {
+        header(ui, false, name, "", crate::theme::fg());
+        if let Some(note) = note {
+            ui.label(
+                RichText::new(note)
+                    .size(crate::theme::TYPE_BODY)
+                    .color(crate::theme::fg()),
+            );
+        }
+        if size != ModuleSize::Small {
+            ui.label(
+                RichText::new(purpose)
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(6.0);
+            if crate::cards::ghost_pill(ui, cta) {
+                actions.push(action.clone());
+            }
+        } else {
+            // No room for a pill: the card itself is the button, and says so.
+            ui.label(
+                RichText::new(cta)
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::amber()),
+            );
+        }
+    });
+    if card_clicked(ui, &resp, name, cta) && actions.is_empty() {
+        actions.push(action);
+    }
+}
+
+/// A module that isn't built yet: labelled Preview so nobody reads it as data.
+fn preview_card(ui: &mut egui::Ui, size: ModuleSize, name: &str, purpose: &str) {
+    card(ui, |ui| {
+        header(ui, false, name, "PREVIEW", crate::theme::muted());
+        ui.label(
+            RichText::new(if purpose.is_empty() {
+                "Not built yet"
+            } else {
+                purpose
+            })
+            .size(crate::theme::TYPE_BODY)
+            .color(crate::theme::muted()),
+        );
+        if size != ModuleSize::Small {
+            ui.label(
+                RichText::new("Not built yet: this is a placeholder.")
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::muted()),
+            );
+        }
+    });
 }
 
 /// A module card that fills its slot, so stacked slots read as one packed grid
@@ -153,40 +313,6 @@ fn coming_soon_card(ui: &mut egui::Ui, name: &str, detail: &str) {
             })
             .size(crate::theme::TYPE_BODY)
             .color(crate::theme::muted()),
-        );
-    });
-}
-
-fn ready_stub(ui: &mut egui::Ui, size: ModuleSize, name: &str, purpose: &str, data: DataStatus) {
-    card(ui, |ui| {
-        let tag = if size == ModuleSize::Small {
-            data.label()
-        } else {
-            ""
-        };
-        header(
-            ui,
-            false,
-            name,
-            tag,
-            if data == DataStatus::Partial {
-                crate::theme::amber()
-            } else {
-                crate::theme::muted()
-            },
-        );
-        if size == ModuleSize::Small {
-            ui.label(
-                RichText::new(data.label().to_uppercase())
-                    .size(crate::theme::TYPE_TITLE)
-                    .strong()
-                    .color(crate::theme::fg()),
-            );
-        }
-        ui.label(
-            RichText::new(purpose)
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
         );
     });
 }

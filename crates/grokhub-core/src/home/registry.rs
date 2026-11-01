@@ -189,7 +189,7 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "objectives",
         "Objectives",
         Gaming,
-        New,
+        Exists,
         "Today's objectives with progress, streak and coach",
         [Large, Medium, Small]
     ),
@@ -197,7 +197,7 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "streak",
         "Streak & XP",
         Gaming,
-        New,
+        Partial,
         "Level, XP bar, 7-day streak",
         [Medium, Small]
     ),

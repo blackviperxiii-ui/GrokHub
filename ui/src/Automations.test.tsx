@@ -108,6 +108,11 @@ describe("Automations", () => {
     expect(api.setAutomationEnabled).toHaveBeenCalledWith("auto-1", false);
     expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    expect(api.removeAutomation).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(api.removeAutomation).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(api.removeAutomation).toHaveBeenCalledWith("auto-1");
     expect(await screen.findByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeInTheDocument();
