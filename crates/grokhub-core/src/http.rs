@@ -7,7 +7,8 @@
 //! with a string body, with headers; the status, a header, the content type,
 //! the body as a reader or a string; and an error that keeps a 4xx/5xx
 //! answer's code, body and `Retry-After`, or what kind of transport failure it
-//! was.
+//! was. Stage 3 adds a body as bytes and an opt-in env proxy
+//! ([`Opts::proxy_from_env`]), which a `public_only` agent never reads.
 //!
 //! This is a factory, not a guard: every caller still runs its own egress
 //! check (or loopback check) before it calls, and the Offline only scans
@@ -35,6 +36,19 @@ pub struct Opts {
     pub redirects: u32,
     /// Dial public addresses only (and nothing while Offline only is on).
     pub public_only: bool,
+    /// Dial through the proxy named in `ALL_PROXY`, `HTTPS_PROXY` or
+    /// `HTTP_PROXY` (either case, first set wins), read when the agent is
+    /// built. Ignored when `public_only` is set: see [`Opts::reads_env_proxy`].
+    pub proxy_from_env: bool,
+}
+
+impl Opts {
+    /// Whether [`agent`] reads the env proxy: only when asked and not
+    /// `public_only`. A proxy is dialed instead of the target, so the target's
+    /// address would never reach the public-only resolver; `public_only` wins.
+    pub const fn reads_env_proxy(&self) -> bool {
+        self.proxy_from_env && !self.public_only
+    }
 }
 
 impl Default for Opts {
@@ -46,6 +60,7 @@ impl Default for Opts {
             overall: None,
             redirects: 5,
             public_only: false,
+            proxy_from_env: false,
         }
     }
 }
@@ -54,10 +69,12 @@ impl Default for Opts {
 #[derive(Clone)]
 pub struct Agent(ureq::Agent);
 
-/// Build an agent. No env proxy is read: a proxy would be dialed instead of
-/// the target and skip the public-only resolver.
+/// Build an agent. An env proxy is read only when [`Opts::reads_env_proxy`]
+/// says so: a proxy would be dialed instead of the target and skip the
+/// public-only resolver.
 pub fn agent(opts: Opts) -> Agent {
     let mut b = ureq::AgentBuilder::new()
+        .try_proxy_from_env(opts.reads_env_proxy())
         .timeout_connect(opts.connect)
         .redirects(opts.redirects);
     if let Some(read) = opts.read {
@@ -105,8 +122,8 @@ impl Request {
             .map_err(Error::from_ureq)
     }
 
-    /// Send it with `body` as raw bytes (a multipart upload). Sets no
-    /// `Content-Type` of its own. Answers as [`Request::call`] does.
+    /// Send it with `body` as is. Sets no `Content-Type` of its own: name one
+    /// with [`Request::header`]. Answers as [`Request::call`] does.
     pub fn send_bytes(self, body: &[u8]) -> Result<Response, Error> {
         self.0
             .send_bytes(body)
@@ -282,6 +299,8 @@ mod tests {
         assert_eq!((o.read, o.overall), (None, None));
         assert_eq!(o.redirects, 5);
         assert!(!o.public_only);
+        assert!(!o.proxy_from_env);
+        assert!(!o.reads_env_proxy());
     }
 
     #[test]
@@ -461,20 +480,6 @@ mod tests {
     }
 
     #[test]
-    fn post_sends_raw_bytes_as_they_are() {
-        let (port, server) = serve(vec![reply("200 OK", "", "{}")]);
-        agent(Opts::default())
-            .post(&format!("http://127.0.0.1:{port}/stt"))
-            .header("content-type", "application/octet-stream")
-            .send_bytes(b"RIFF\x00\x01")
-            .unwrap();
-        let req = &server.join().unwrap()[0];
-        assert!(req.starts_with("POST /stt HTTP/1.1\r\n"), "{req:?}");
-        assert!(req.contains("Content-Length: 6\r\n"), "{req:?}");
-        assert!(req.ends_with("\r\n\r\nRIFF\u{0}\u{1}"), "{req:?}");
-    }
-
-    #[test]
     fn post_status_error_keeps_the_body() {
         let (port, server) = serve(vec![reply(
             "400 Bad Request",
@@ -507,6 +512,137 @@ mod tests {
         assert_eq!(a.get(&url).call().unwrap().content_type(), "Text/HTML ");
         assert_eq!(a.get(&url).call().unwrap().content_type(), "text/plain");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn send_bytes_sends_the_body_as_is() {
+        let (port, server) = serve(vec![reply("200 OK", "", "ok")]);
+        let body = b"--b\r\n\xff\x00raw\r\n--b--\r\n";
+        let resp = agent(Opts::default())
+            .post(&format!("http://127.0.0.1:{port}/stt"))
+            .header("content-type", "multipart/form-data; boundary=b")
+            .send_bytes(body)
+            .unwrap();
+        assert_eq!(resp.into_string().unwrap(), "ok");
+        let req = &server.join().unwrap()[0];
+        assert!(req.starts_with("POST /stt HTTP/1.1\r\n"), "{req:?}");
+        assert!(
+            req.contains("content-type: multipart/form-data; boundary=b\r\n"),
+            "{req:?}"
+        );
+        assert!(req.contains("Content-Length: 19\r\n"), "{req:?}");
+        // `serve` reads the body lossily: the 0xff byte shows as U+FFFD.
+        assert!(
+            req.ends_with("\r\n\r\n--b\r\n\u{fffd}\0raw\r\n--b--\r\n"),
+            "{req:?}"
+        );
+    }
+
+    /// Env proxy tests share the process environment; one at a time.
+    static PROXY_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Points `ALL_PROXY` (read before the other proxy variables) at a
+    /// loopback port until dropped, then puts the old value back.
+    struct ProxyEnv {
+        old: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ProxyEnv {
+        fn set(port: u16) -> Self {
+            let lock = PROXY_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let old = std::env::var_os("ALL_PROXY");
+            std::env::set_var("ALL_PROXY", format!("http://127.0.0.1:{port}"));
+            Self { old, _lock: lock }
+        }
+    }
+
+    impl Drop for ProxyEnv {
+        fn drop(&mut self) {
+            match self.old.take() {
+                Some(v) => std::env::set_var("ALL_PROXY", v),
+                None => std::env::remove_var("ALL_PROXY"),
+            }
+        }
+    }
+
+    #[test]
+    fn proxy_from_env_dials_the_env_proxy() {
+        let (proxy, server) = serve(vec![reply("200 OK", "", "via proxy")]);
+        let env = ProxyEnv::set(proxy);
+        let opts = Opts {
+            proxy_from_env: true,
+            ..Opts::default()
+        };
+        assert!(opts.reads_env_proxy());
+        let a = agent(opts);
+        drop(env);
+        // The name never resolves: only the proxy can have answered.
+        let resp = a.get("http://proxied.invalid/x").call().unwrap();
+        assert_eq!(resp.into_string().unwrap(), "via proxy");
+        let req = &server.join().unwrap()[0];
+        assert!(
+            req.starts_with("GET http://proxied.invalid/x HTTP/1.1\r\n"),
+            "{req:?}"
+        );
+    }
+
+    #[test]
+    fn env_proxy_is_not_read_unless_asked() {
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        proxy.set_nonblocking(true).unwrap();
+        let _env = ProxyEnv::set(proxy.local_addr().unwrap().port());
+        let (port, server) = serve(vec![reply("200 OK", "", "direct")]);
+        let resp = agent(Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/direct"))
+            .call()
+            .unwrap();
+        assert_eq!(resp.into_string().unwrap(), "direct");
+        let req = &server.join().unwrap()[0];
+        assert!(req.starts_with("GET /direct HTTP/1.1\r\n"), "{req:?}");
+        assert!(proxy.accept().is_err(), "the env proxy must not be dialed");
+    }
+
+    #[test]
+    fn public_only_wins_over_proxy_from_env() {
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        proxy.set_nonblocking(true).unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        let _env = ProxyEnv::set(proxy_port);
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let port = target.local_addr().unwrap().port();
+        let opts = Opts {
+            public_only: true,
+            proxy_from_env: true,
+            overall: Some(Duration::from_secs(1)),
+            ..Opts::default()
+        };
+        assert!(!opts.reads_env_proxy());
+        let err = agent(opts)
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .call()
+            .err()
+            .unwrap();
+        // The resolver was asked for the target itself, not for a proxy.
+        let msg = err.to_string();
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Dns,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            msg.contains(&format!("resolve dns name '127.0.0.1:{port}'")),
+            "{msg}"
+        );
+        assert!(!msg.contains(&format!("'127.0.0.1:{proxy_port}'")), "{msg}");
+        assert!(proxy.accept().is_err(), "the env proxy must not be dialed");
+        assert!(target.accept().is_err(), "nothing may connect");
     }
 
     #[test]

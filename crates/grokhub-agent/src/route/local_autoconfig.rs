@@ -508,6 +508,11 @@ pub fn set_profile(p: LocalProfile, tune_dir: PathBuf) {
     }
 }
 
+/// The cabin's hardware read, once it has one.
+pub fn profile() -> Option<LocalProfile> {
+    live().lock().ok()?.profile.clone()
+}
+
 pub fn set_state(s: GovState) {
     if let Ok(mut l) = live().lock() {
         l.state = s;
