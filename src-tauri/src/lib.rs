@@ -16,6 +16,7 @@ pub mod journal;
 pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
+pub mod models;
 pub mod opener;
 pub mod permissions;
 pub mod personality;
@@ -138,6 +139,51 @@ fn save_settings(
 fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<SettingsView, String> {
     let next = ShellSettings {
         theme,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// Settings → General and the composer chip: the models to pick from.
+/// `refresh` reads the account's list again instead of the 10-minute cache.
+#[tauri::command]
+async fn list_models(
+    state: State<'_, ShellState>,
+    refresh: Option<bool>,
+) -> Result<models::ModelList, String> {
+    let model = current(&state).model;
+    let config_dir = state.config_dir.clone();
+    off_main(move || {
+        // The loopback mock model lists nothing; tests see the catalog.
+        if credential::test_responses_url().is_some() {
+            return models::list(&model, None);
+        }
+        match credential::load_key() {
+            Ok(bearer) => {
+                let api = grokhub_agent::route::sources::XaiApiSource {
+                    config_dir,
+                    bearer: bearer.clone(),
+                };
+                let cached = models::Cached {
+                    inner: &api,
+                    bearer_tag: models::bearer_tag(&bearer),
+                    refresh: refresh.unwrap_or(false),
+                };
+                models::list(&model, Some(&cached))
+            }
+            Err(_) => models::list(&model, None),
+        }
+    })
+    .await
+}
+
+/// The picker's choice, saved for the next message. Unknown ids are kept.
+#[tauri::command]
+fn set_model(state: State<'_, ShellState>, id: String) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        model: models::clean_id(&id)?,
         ..current(&state)
     };
     settings::save(&state.config_dir, &next)?;
@@ -1313,6 +1359,8 @@ pub fn run() {
             set_theme,
             open_external,
             set_api_key,
+            list_models,
+            set_model,
             clear_api_key,
             send_chat,
             answer_permission,
