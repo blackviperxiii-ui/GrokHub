@@ -28,6 +28,7 @@ describe("paletteRows", () => {
       "Journal",
       "Automations",
       "Memory",
+      "Skills",
       "Connectors",
       "Settings",
       "Settings: General",
@@ -47,6 +48,7 @@ describe("paletteRows", () => {
       "Journal",
       "Automations",
       "Memory",
+      "Skills",
       "Connectors",
       "Settings",
       "Settings: General",
@@ -57,7 +59,7 @@ describe("paletteRows", () => {
       "Settings: Permissions",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Skills", "Connectors", "Settings"]);
   });
 
   it("filters by the typed text and ends with Ask Grok", () => {
@@ -148,8 +150,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 11 starts at 440, row 12 ends at 516.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 416, behavior: "auto" });
+      // Row 12 starts at 480, row 13 ends at 556.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 456, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

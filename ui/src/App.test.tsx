@@ -44,6 +44,13 @@ vi.mock("./Journal", () => ({
 vi.mock("./Automations", () => ({ Automations: () => null }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
+vi.mock("./Skills", () => ({
+  Skills: ({ onUse }: { onUse: (text: string) => void }) => (
+    <button type="button" onClick={() => onUse("deploy the site")}>
+      Use
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
@@ -77,6 +84,7 @@ describe("App", () => {
       "Journal",
       "Automations",
       "Memory",
+      "Skills",
       "Connectors",
       "Settings",
     ]);
@@ -97,14 +105,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Skills", "Connectors", "Settings"]);
   });
 
   it("leaves the Journal off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Skills", "Connectors", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -147,6 +155,15 @@ describe("App", () => {
     await userEvent.keyboard("tidy the board");
     await userEvent.click(screen.getByRole("option", { name: "Ask Grok: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a skill's Use puts its trigger in the chat box and opens Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Skills" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Use" }));
+    expect(screen.getByText("Chat page: deploy the site in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 

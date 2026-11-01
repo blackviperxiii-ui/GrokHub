@@ -909,3 +909,29 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
 }
+
+/** The Skills page (src-tauri/src/skills.rs). Read only. */
+export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** What Use puts in the chat box. */
+  trigger: string;
+  source: SkillSource;
+  /** The skill's folder, empty for a built-in. */
+  folder: string;
+}
+
+export interface SkillPage {
+  rows: SkillRow[];
+}
+
+export function getSkills(): Promise<SkillPage> {
+  return invoke<SkillPage>("get_skills");
+}
+
+/** The shell finds the folder from the source and name itself. */
+export function openSkillFolder(source: SkillSource, name: string): Promise<void> {
+  return invoke<void>("open_skill_folder", { source, name });
+}

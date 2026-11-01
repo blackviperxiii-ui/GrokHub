@@ -25,6 +25,7 @@ pub mod pulse_feed;
 pub mod remote;
 pub mod remote_tls;
 pub mod settings;
+pub mod skills;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -762,6 +763,29 @@ async fn fetch_plugin_market(
 }
 
 #[tauri::command]
+async fn get_skills(state: State<'_, ShellState>) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::load(&dir, &workspace, home.as_deref())).await
+}
+
+/// The page names the skill; the shell finds its folder itself.
+#[tauri::command]
+async fn open_skill_folder(
+    state: State<'_, ShellState>,
+    source: skills::Source,
+    name: String,
+) -> Result<(), String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        skills::folder(&dir, &workspace, home.as_deref(), source, &name)
+            .and_then(|folder| skills::open_folder(&folder))
+    })
+    .await?
+}
+
+#[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -1090,6 +1114,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_skills" => out(block_on(get_skills(state))?),
         _ => Err(remote::refused()),
     }
 }
@@ -1354,6 +1379,8 @@ pub fn run() {
             plugin_act,
             install_plugin,
             fetch_plugin_market,
+            get_skills,
+            open_skill_folder,
             get_interests,
             add_interest,
             interest_act,
