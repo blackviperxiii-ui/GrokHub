@@ -79,13 +79,14 @@ describe("paletteRows", () => {
   });
 
   it("puts the commands this shell can run after the pages", () => {
-    expect(withExtras(DESKTOP, "").slice(0, 11)).toEqual([
+    expect(withExtras(DESKTOP, "").slice(0, 12)).toEqual([
       "Chat",
       "Pulse",
       "Journal",
       "Automations",
       "Memory",
       "Connectors",
+      "Library",
       "Settings",
       "New chat",
       "Halt",
@@ -93,7 +94,7 @@ describe("paletteRows", () => {
       "Shortcuts",
     ]);
     // Only the runners the shell hands over get rows.
-    expect(withExtras(DESKTOP, "", { ...EXTRAS, runners: { shortcuts: run } }).slice(7, 9)).toEqual([
+    expect(withExtras(DESKTOP, "", { ...EXTRAS, runners: { shortcuts: run } }).slice(8, 10)).toEqual([
       "Shortcuts",
       "Settings: General",
     ]);
