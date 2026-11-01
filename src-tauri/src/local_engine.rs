@@ -317,7 +317,7 @@ pub fn draft_progress() -> Option<DraftProgress> {
     })
 }
 
-/// Fetches the engine asset at the URL `rd::download_engine` passes in.
+/// The engine archive download; `download_engine` names each asset's URL.
 struct HttpEngineFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {
