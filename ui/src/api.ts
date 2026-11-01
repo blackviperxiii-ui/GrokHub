@@ -623,6 +623,14 @@ export interface PulsePost {
   /** The first source link, empty when there is none. */
   link: string;
   loved: boolean;
+  /** What the card's numbers mean, when it has a read of them. */
+  verdict: PulseVerdict | null;
+}
+
+/** A card's one-line read of its own numbers, and how worried to be. */
+export interface PulseVerdict {
+  tone: "fine" | "watch" | "act";
+  line: string;
 }
 
 /** One Ideas row: something GrokHub could do next. */
@@ -637,6 +645,46 @@ export interface PulseIdea {
   kind: string;
   /** What Let's do it puts in the chat box. */
   action: string;
+  verdict: PulseVerdict | null;
+  /** "Fix it" or "Options" on a PC health card: its main button opens the
+   * options window. Empty on other ideas. */
+  fix: string;
+}
+
+export type FixKind =
+  | "compare"
+  | "fpsCap"
+  | "upscale"
+  | "airflow"
+  | "fanCurve"
+  | "repaste"
+  | "quietWhenNormal"
+  | "warnLines"
+  | "pause"
+  | "ask";
+
+export interface FixOption {
+  kind: FixKind;
+  title: string;
+  why: string;
+  /** Steps the person follows; empty for rows that act in the app. */
+  steps: string[];
+}
+
+export interface CompareRow {
+  session: string;
+  time: string;
+  gpuPeak: string;
+  cpuPeak: string;
+  gpuBusy: string;
+}
+
+/** A PC health card's options window. */
+export interface FixView {
+  title: string;
+  verdict: PulseVerdict | null;
+  options: FixOption[];
+  compare: CompareRow[];
 }
 
 export interface PulsePage {
@@ -681,6 +729,11 @@ export function pulseDiscuss(id: string): Promise<string> {
 
 export function pulseWhy(id: string): Promise<string> {
   return invoke<string>("pulse_why", { id });
+}
+
+/** A PC health card's options window. Read only. */
+export function pulseFix(id: string): Promise<FixView> {
+  return invoke<FixView>("pulse_fix", { id });
 }
 
 /** The Feed prompt the writer follows, and what its last run did. */

@@ -271,7 +271,8 @@ pub fn verdict(
 }
 
 /// What a Fix it sheet row does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum FixKind {
     /// Show this session next to the last few.
     Compare,
@@ -295,8 +296,16 @@ pub enum FixKind {
     Ask,
 }
 
+impl FixKind {
+    /// A row that changes a PC health setting rather than showing guidance.
+    pub fn is_setting(self) -> bool {
+        matches!(self, Self::QuietWhenNormal | Self::WarnLines | Self::Pause)
+    }
+}
+
 /// One row of the Fix it sheet.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FixOption {
     pub kind: FixKind,
     pub title: String,
@@ -442,6 +451,80 @@ pub fn fix_options(
         crate::brand::filled("Ask {product} about it"),
         "Open a chat with this session's numbers to dig in.",
     ));
+    out
+}
+
+/// The sheet's rows for a card. A card whose session fell out of the ledger
+/// still gets the settings rows and Ask.
+pub fn sheet_options(
+    stat: Option<&SessionStat>,
+    history: &[SessionStat],
+    settings: &PcHealthSettings,
+) -> Vec<FixOption> {
+    let opts = fix_options(&stat.cloned().unwrap_or_default(), history, settings);
+    if stat.is_some() {
+        opts
+    } else {
+        opts.into_iter()
+            .filter(|o| o.kind.is_setting() || o.kind == FixKind::Ask)
+            .collect()
+    }
+}
+
+/// The main button's word on a PC health card: Fix it when the verdict
+/// found something, Options when it's normal. `None` on any other card.
+pub fn fix_label(card: &crate::UpdateCard) -> Option<&'static str> {
+    if !crate::pc_health::is_pc_health_card(card) {
+        return None;
+    }
+    Some(match card.pulse.verdict.as_ref().map(|v| v.tone) {
+        Some(VerdictTone::Watch | VerdictTone::Act) => "Fix it",
+        _ => "Options",
+    })
+}
+
+/// One line of the compare table, ready to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareRow {
+    pub session: String,
+    pub time: String,
+    pub gpu_peak: String,
+    pub cpu_peak: String,
+    pub gpu_busy: String,
+}
+
+/// The compare table: this session first ("This one"), then the five most
+/// recent others, newest first.
+pub fn compare_rows(stat: Option<&SessionStat>, history: &[SessionStat]) -> Vec<CompareRow> {
+    let deg = |v: Option<u8>| v.map(|c| format!("{c}°C")).unwrap_or_else(|| "–".into());
+    let pct = |v: Option<u8>| v.map(|c| format!("{c}%")).unwrap_or_else(|| "–".into());
+    let row = |name: String, s: &SessionStat| CompareRow {
+        session: name,
+        time: format!("{} min", s.mins),
+        gpu_peak: deg(s.max_gpu_c),
+        cpu_peak: deg(s.max_cpu_c),
+        gpu_busy: pct(s.avg_gpu_pct),
+    };
+    let mut out: Vec<CompareRow> = stat
+        .map(|s| row("This one".into(), s))
+        .into_iter()
+        .collect();
+    out.extend(
+        history
+            .iter()
+            .rev()
+            .filter(|s| stat.is_none_or(|t| t.at_ms != s.at_ms))
+            .take(5)
+            .map(|s| {
+                let name = if s.label.is_empty() {
+                    s.game.clone()
+                } else {
+                    s.label.clone()
+                };
+                row(name, s)
+            }),
+    );
     out
 }
 
