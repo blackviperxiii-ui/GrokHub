@@ -1,2 +1,0 @@
-- Pulse: a Not this / Not interested / Dismiss that the ledger refuses (too large, or a link) no longer scores the card first, so "Nothing was changed" is true.
-- Web: the Add, Remember and Search buttons stay on screen at phone width instead of sliding off the right edge.

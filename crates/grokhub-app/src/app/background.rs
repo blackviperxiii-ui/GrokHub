@@ -1215,9 +1215,12 @@ mod sp2_tool_set_tests {
         );
         let chat_bytes = serde_json::to_vec(&chat).unwrap().len();
         let job_bytes = serde_json::to_vec(&job).unwrap().len();
+        // Lazy tools already keep chat to the core list, so the job is only
+        // required to be smaller here; the ≥30% cut against the full catalog is
+        // checked in grokhub-agent with lazy tools pinned off.
         assert!(
-            job_bytes * 10 <= chat_bytes * 7,
-            "job schema payload must be ≥30% smaller: job={job_bytes} chat={chat_bytes}"
+            job_bytes < chat_bytes,
+            "job schema payload must be smaller than chat: job={job_bytes} chat={chat_bytes}"
         );
     }
 

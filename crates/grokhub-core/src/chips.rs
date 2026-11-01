@@ -246,6 +246,35 @@ pub struct ChipInput<'a> {
     pub last_project: &'a str,
     pub skill_count: u32,
     pub session_mode: &'a str,
+    pub signals: ChipSignals<'a>,
+}
+
+/// What the app already knows about this PC and the day, beyond the chat.
+/// Filled from cached state only: no new process, file or network reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChipSignals<'a> {
+    /// The library game the last process sample saw running.
+    pub game: Option<&'a str>,
+    /// A library game that closed a few minutes ago.
+    pub game_ended: Option<&'a str>,
+    /// A local drive is nearly full (see [`disk_is_low`]).
+    pub low_disk: bool,
+    /// Local weekday, 0 = Sunday, like `date +%w`.
+    pub weekday: u8,
+    /// A new app build is waiting to install.
+    pub update_waiting: bool,
+    /// The user's quiet hours are on.
+    pub quiet_hours: bool,
+}
+
+/// Under this share free, a drive counts as nearly full.
+const LOW_DISK_SHARE: u64 = 10;
+/// Under this many bytes free, a drive counts as nearly full whatever its size.
+const LOW_DISK_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// True when a drive with `total` bytes has under 10% or 5 GiB left.
+pub fn disk_is_low(free: u64, total: u64) -> bool {
+    total > 0 && (free < LOW_DISK_BYTES || free.saturating_mul(100) < total * LOW_DISK_SHARE)
 }
 
 pub fn empty_chip_memory() -> ChipMemory {
@@ -722,6 +751,48 @@ fn family_quiet_this_hour(
         chip_family(&hit.key, &hit.value, &hit.label) == family
             && hit.dismiss_hours.get(hour_i).copied().unwrap_or(0) > 0
     })
+}
+
+/// Id prefix of the starter chips below.
+pub const SEED_PREFIX: &str = "seed-";
+
+/// Loadout's starter chips (the deck's Hangout four plus Home's picks). They
+/// rank below anything the chat, history or signals suggest, so they only fill
+/// a thin row, and they dismiss and learn like any catalog chip (the label is
+/// fixed copy, never chat text).
+pub const SEED_CHIPS: &[(&str, &str)] = &[
+    ("stutter", "Fix my stutter"),
+    ("duo", "Find a duo"),
+    ("roast", "Roast my build"),
+    ("weekend", "Plan my weekend"),
+    ("storage", "Free up storage"),
+    ("week", "Plan my week"),
+];
+
+const SEED_SCORE: f32 = 30.0;
+
+fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
+    // Mid-chat they sink further so the conversation's own chips lead.
+    let base = if stage == ChipStage::Empty {
+        SEED_SCORE
+    } else {
+        SEED_SCORE - 15.0
+    };
+    SEED_CHIPS
+        .iter()
+        .enumerate()
+        .map(|(i, (key, label))| {
+            chip(
+                &format!("{SEED_PREFIX}{key}"),
+                label,
+                label,
+                ChipKind::Chat,
+                // Keep the listed order among equals.
+                base - i as f32 * 0.1,
+                "",
+            )
+        })
+        .collect()
 }
 
 fn guide_chips(connected: bool) -> Vec<QuickChip> {
@@ -1758,6 +1829,85 @@ fn home_signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
     out
 }
 
+/// Longest game name kept whole in a chip label.
+const SIGNAL_GAME_LABEL_MAX: usize = 22;
+
+fn signal_game_label(name: &str) -> String {
+    let name = chip_label(name);
+    if name.chars().count() <= SIGNAL_GAME_LABEL_MAX {
+        name
+    } else {
+        // Whole words only, without a dangling ":" or "-".
+        let cut: String = name.chars().take(SIGNAL_GAME_LABEL_MAX + 1).collect();
+        let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+        cut.trim_end_matches([' ', ':', '-', ',']).to_string()
+    }
+}
+
+/// Chips from what the PC and the day are doing: a game running or just
+/// closed, a full drive, an update waiting, a Friday evening. They lead an
+/// empty chat and sit under the chat's own chips once it has turns. Quiet
+/// hours drop the social one.
+fn signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
+    let sig = &input.signals;
+    let lift = if input.chat.is_empty() { 0.0 } else { -30.0 };
+    let mut out = vec![];
+    if let Some(game) = sig.game.map(str::trim).filter(|g| !g.is_empty()) {
+        out.push(chip(
+            "sig-game-stutter",
+            &format!("Fix stutter in {}", signal_game_label(game)),
+            &format!(
+                "{game} is stuttering. Check what else is using this PC right now and tell me how to smooth it out. Don't touch the game or its files."
+            ),
+            ChipKind::Chat,
+            98.0 + lift,
+            "Game running",
+        ));
+    } else if let Some(game) = sig.game_ended.map(str::trim).filter(|g| !g.is_empty()) {
+        out.push(chip(
+            "sig-game-ended",
+            &format!("How'd {} go?", signal_game_label(game)),
+            &format!(
+                "I just finished playing {game}. Ask me how it went, then give me one thing to try next time."
+            ),
+            ChipKind::Chat,
+            94.0 + lift,
+            "Game just closed",
+        ));
+    }
+    if sig.low_disk {
+        out.push(chip(
+            "sig-low-disk",
+            "Free up storage",
+            "My disk is almost full. Find what's taking up the most space and tell me what's safe to clear before deleting anything.",
+            ChipKind::Chat,
+            96.0 + lift,
+            "Drive almost full",
+        ));
+    }
+    if sig.update_waiting {
+        out.push(chip(
+            "sig-update",
+            "See the update",
+            "__nav:update",
+            ChipKind::Nav,
+            92.0 + lift,
+            "Update waiting",
+        ));
+    }
+    if sig.weekday == 5 && input.hour >= 17 && !sig.quiet_hours {
+        out.push(chip(
+            "sig-weekend",
+            "Plan my weekend",
+            "Help me plan my weekend. Ask what I'm in the mood for first.",
+            ChipKind::Chat,
+            90.0 + lift,
+            "Friday evening",
+        ));
+    }
+    out
+}
+
 fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     let slash = home_slash_cmd(input.last_slash).unwrap_or("");
     let surface = input.last_surface.trim().to_ascii_lowercase();
@@ -2547,6 +2697,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(home_signal_chips(&input));
+    chips.extend(signal_chips(&input));
     chips.extend(draft_prediction_chips(input.draft));
     chips.extend(
         learned_chips_from_memory(input.memory, input.now_ms)
@@ -2678,6 +2829,9 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         chips.push(copy);
     }
 
+    chips.extend(seed_chips(stage));
+    lead_with_reply_follow_ups(&mut chips, &input, &said, &heard);
+
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
         if let Some(hit) = input
@@ -2795,6 +2949,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         picked.retain(|c| {
             let id = c.id.as_str();
             id.starts_with("home-")
+                || id.starts_with(SEED_PREFIX)
                 || id.starts_with("pred-tod")
                 || id.starts_with("pred-tx")
                 || id.starts_with("pred-habit")
@@ -2813,6 +2968,46 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         }
     }
     picked
+}
+
+/// Score that puts a reply's follow-ups at the front of the row, under only
+/// "Connect Grok".
+const FOLLOW_UP_SCORE: f32 = 112.0;
+
+/// Right after a reply, its one-tap follow-ups ([`reply_suggestions`]) lead
+/// the row. A chip already in the pool with the same label is lifted rather
+/// than doubled. Typing a draft, or a reply that names no next move, leaves
+/// the row as it was.
+fn lead_with_reply_follow_ups(
+    chips: &mut Vec<QuickChip>,
+    input: &ChipInput<'_>,
+    said: &str,
+    heard: &str,
+) {
+    let replied = input
+        .chat
+        .last()
+        .is_some_and(|(role, _)| role == "assistant");
+    if !replied || !input.draft.trim().is_empty() {
+        return;
+    }
+    for follow in reply_suggestions(said, heard, input.last_failed) {
+        let hint = "Follow-up to that reply";
+        match chips
+            .iter_mut()
+            .find(|c| c.label.eq_ignore_ascii_case(&follow.label))
+        {
+            Some(c) => {
+                c.score = c.score.max(FOLLOW_UP_SCORE);
+                c.hint = hint.into();
+            }
+            None => chips.push(QuickChip {
+                score: FOLLOW_UP_SCORE,
+                hint: hint.into(),
+                ..follow
+            }),
+        }
+    }
 }
 
 /// Up to three one-tap follow-ups for the reply that just finished, or none.
@@ -3169,6 +3364,7 @@ fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
 pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
     match value.trim() {
         "__nav:settings" => Some("settings"),
+        "__nav:update" => Some("update"),
         "__nav:imagine" => Some("imagine"),
         "__nav:history" => Some("history"),
         "__nav:workboard" => Some("workboard"),
@@ -3234,7 +3430,82 @@ mod tests {
             last_project: "",
             skill_count: 0,
             session_mode: "chat",
+            signals: ChipSignals::default(),
         }
+    }
+
+    fn ids(chips: &[QuickChip]) -> Vec<&str> {
+        chips.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn seeds_fill_a_thin_row_and_rank_below_real_chips() {
+        let memory = ChipMemory::default();
+        // A returning user (the first-run tour owns a brand new chat).
+        let familiar = |mut i: ChipInput<'_>| {
+            i.usage_messages = 20;
+            build_quick_chips(i)
+        };
+        let empty = familiar(input(&[], "", &memory, &[], &[]));
+        assert!(
+            empty.iter().any(|c| c.id.starts_with(SEED_PREFIX)),
+            "a fresh chat is never dev-only or empty: {:?}",
+            ids(&empty)
+        );
+        let chat = [
+            msg("user", "the build fails with a linker error"),
+            msg(
+                "assistant",
+                "Error: linker `cc` not found. Install build-essential.",
+            ),
+        ];
+        let mid = familiar(input(&chat, "", &memory, &[], &[]));
+        let first_seed = mid.iter().position(|c| c.id.starts_with(SEED_PREFIX));
+        let last_real = mid.iter().rposition(|c| !c.id.starts_with(SEED_PREFIX));
+        if let (Some(seed), Some(real)) = (first_seed, last_real) {
+            assert!(
+                seed > real,
+                "seeds trail the chat's own chips: {:?}",
+                ids(&mid)
+            );
+        }
+    }
+
+    #[test]
+    fn a_dismissed_seed_stays_gone() {
+        let memory = ChipMemory::default();
+        let mut fresh = input(&[], "", &memory, &[], &[]);
+        fresh.usage_messages = 20;
+        let before = build_quick_chips(fresh);
+        let seed = before
+            .iter()
+            .find(|c| c.id.starts_with(SEED_PREFIX))
+            .expect("a seed")
+            .clone();
+        let dismissed = vec![seed.id.clone()];
+        let mut again = input(&[], "", &memory, &dismissed, &[]);
+        again.usage_messages = 20;
+        let after = build_quick_chips(again);
+        assert!(
+            after.iter().all(|c| c.id != seed.id),
+            "{} came back: {:?}",
+            seed.id,
+            ids(&after)
+        );
+    }
+
+    #[test]
+    fn seed_clicks_are_remembered_by_their_fixed_label() {
+        let seed = seed_chips(ChipStage::Empty)
+            .into_iter()
+            .next()
+            .expect("seed");
+        assert_eq!(
+            seed.value, seed.label,
+            "seed copy is fixed text, never chat"
+        );
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Find a duo"));
+        assert!(SEED_CHIPS.iter().any(|(_, l)| *l == "Fix my stutter"));
     }
 
     /// Every chip any row offers, clicked and dismissed, twice over (the
@@ -4783,5 +5054,195 @@ mod tests {
             "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else"
         ));
         assert!(prompt.contains("- If nothing specific fits, return []"));
+    }
+
+    #[test]
+    fn a_failed_turn_leads_the_row_with_its_follow_up() {
+        let mem = ChipMemory::default();
+        let chat = [msg("user", "run the tests"), msg("assistant", "Done.")];
+        let mut i = input(&chat, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        i.last_failed = true;
+        let chips = build_quick_chips(i);
+        assert_eq!(chips[0].label, "Root cause + fix", "{:?}", ids(&chips));
+        assert_eq!(chips[0].hint, "Follow-up to that reply");
+        assert_eq!(
+            chips
+                .iter()
+                .filter(|c| c.label == "Root cause + fix")
+                .count(),
+            1,
+            "lifted, not doubled"
+        );
+    }
+
+    #[test]
+    fn a_named_move_leads_and_a_plain_reply_or_a_draft_gets_none() {
+        let mem = ChipMemory::default();
+        let broke = [
+            msg("user", "the build failed after the last change"),
+            msg("assistant", "TypeError: foo is not a function."),
+        ];
+        let mut i = input(&broke, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        let chips = build_quick_chips(i.clone());
+        assert_eq!(chips[0].label, "Fix the cause", "{:?}", ids(&chips));
+        i.draft = "also check";
+        let typing = build_quick_chips(i);
+        assert!(typing.iter().all(|c| c.hint != "Follow-up to that reply"));
+        let plain = [msg("user", "hi"), msg("assistant", "Hello.")];
+        let mut i = input(&plain, "", &mem, &[], &[]);
+        i.usage_messages = 20;
+        let chips = build_quick_chips(i);
+        assert!(chips.iter().all(|c| c.hint != "Follow-up to that reply"));
+    }
+
+    fn with_signals(signals: ChipSignals<'_>, hour: u8) -> Vec<QuickChip> {
+        let memory = ChipMemory::default();
+        let mut i = input(&[], "", &memory, &[], &[]);
+        i.usage_messages = 20;
+        i.hour = hour;
+        i.max = CHIP_HARD_MAX;
+        i.signals = signals;
+        build_quick_chips(i)
+    }
+
+    fn find<'c>(chips: &'c [QuickChip], id: &str) -> Option<&'c QuickChip> {
+        chips.iter().find(|c| c.id == id)
+    }
+
+    #[test]
+    fn a_running_game_offers_a_stutter_fix_named_for_it() {
+        let chips = with_signals(
+            ChipSignals {
+                game: Some("Cyberpunk 2077"),
+                weekday: 2,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-stutter").expect("stutter chip");
+        assert_eq!(c.label, "Fix stutter in Cyberpunk 2077");
+        assert!(c.value.contains("Cyberpunk 2077"));
+        assert!(c.value.contains("Don't touch the game"));
+        assert!(find(&chips, "sig-game-ended").is_none());
+        let off = with_signals(ChipSignals::default(), 14);
+        assert!(
+            off.iter().all(|c| !c.id.starts_with("sig-")),
+            "{:?}",
+            ids(&off)
+        );
+    }
+
+    #[test]
+    fn a_long_game_name_is_cut_in_the_label_but_whole_in_the_ask() {
+        let name = "The Elder Scrolls V: Skyrim Special Edition";
+        let chips = with_signals(
+            ChipSignals {
+                game: Some(name),
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-stutter").expect("stutter chip");
+        assert_eq!(c.label, "Fix stutter in The Elder Scrolls V");
+        assert!(c.value.contains(name));
+    }
+
+    #[test]
+    fn a_closed_game_asks_how_it_went() {
+        let chips = with_signals(
+            ChipSignals {
+                game_ended: Some("Hades"),
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-game-ended").expect("ended chip");
+        assert_eq!(c.label, "How'd Hades go?");
+    }
+
+    #[test]
+    fn a_full_drive_offers_to_free_space_without_deleting_first() {
+        let chips = with_signals(
+            ChipSignals {
+                low_disk: true,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-low-disk").expect("disk chip");
+        assert_eq!(c.label, "Free up storage");
+        assert!(c.value.contains("before deleting anything"));
+    }
+
+    #[test]
+    fn disk_is_low_under_ten_percent_or_five_gib() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert!(disk_is_low(4 * GIB, 100 * GIB));
+        assert!(disk_is_low(90 * GIB, 1000 * GIB));
+        assert!(!disk_is_low(20 * GIB, 100 * GIB));
+        assert!(!disk_is_low(150 * GIB, 1000 * GIB));
+        assert!(!disk_is_low(0, 0), "an unknown drive is not low");
+    }
+
+    #[test]
+    fn a_waiting_update_opens_the_update_page() {
+        let chips = with_signals(
+            ChipSignals {
+                update_waiting: true,
+                ..Default::default()
+            },
+            14,
+        );
+        let c = find(&chips, "sig-update").expect("update chip");
+        assert_eq!(c.kind, ChipKind::Nav);
+        assert_eq!(nav_from_chip_value(&c.value), Some("update"));
+    }
+
+    #[test]
+    fn friday_evening_offers_weekend_plans_and_quiet_hours_drop_them() {
+        let friday = |hour, quiet_hours| {
+            with_signals(
+                ChipSignals {
+                    weekday: 5,
+                    quiet_hours,
+                    ..Default::default()
+                },
+                hour,
+            )
+        };
+        assert!(find(&friday(19, false), "sig-weekend").is_some());
+        assert!(
+            find(&friday(12, false), "sig-weekend").is_none(),
+            "Friday lunch"
+        );
+        assert!(
+            find(&friday(19, true), "sig-weekend").is_none(),
+            "quiet hours"
+        );
+        let thursday = with_signals(
+            ChipSignals {
+                weekday: 4,
+                ..Default::default()
+            },
+            19,
+        );
+        assert!(find(&thursday, "sig-weekend").is_none());
+    }
+
+    #[test]
+    fn signal_chips_sit_under_the_chats_own_once_it_has_turns() {
+        let memory = ChipMemory::default();
+        let chat = vec![msg("user", "fix the build"), msg("assistant", "Done.")];
+        let base = |chat: &[(String, String)]| {
+            let mut i = input(chat, "", &memory, &[], &[]);
+            i.signals = ChipSignals {
+                low_disk: true,
+                ..Default::default()
+            };
+            signal_chips(&i)[0].score
+        };
+        assert!(base(&chat) < base(&[]));
     }
 }

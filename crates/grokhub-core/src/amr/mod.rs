@@ -755,6 +755,44 @@ Glow stays white.
         assert!(store.recall("not a node").is_empty());
     }
 
+    #[test]
+    fn ranked_recall_puts_more_matched_words_first_then_newer() {
+        let tmp = Tmp::new("ranked");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        // "a-" sorts first by id, so id order alone would put it on top.
+        store
+            .remember(&draft("a-mode", "ranked mode off\n"))
+            .unwrap();
+        store
+            .remember(&draft("z-partner", "Kestrel duo partner ranked\n"))
+            .unwrap();
+        store
+            .remember(&NodeDraft {
+                updated: "2026-10-09T00:00:00Z".into(),
+                ..draft("m-queue", "ranked queue at nine\n")
+            })
+            .unwrap();
+        let words: Vec<String> = ["ranked", "duo", "partner"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        let lines: Vec<String> = store
+            .recall_ranked(&words)
+            .into_iter()
+            .map(|hit| hit.line)
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "Kestrel duo partner ranked".to_string(),
+                "ranked queue at nine".to_string(),
+                "ranked mode off".to_string(),
+            ]
+        );
+        assert!(store.recall_ranked(&[]).is_empty());
+    }
+
     /// A node file that sat untouched and still won't parse is moved aside and noted for
     /// a Home card. One written seconds ago may be mid-write, so it stays put.
     #[test]

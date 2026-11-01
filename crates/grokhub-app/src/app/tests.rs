@@ -112,6 +112,7 @@ fn cabin_src() -> String {
     // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
+        include_str!("lan_host.rs"),
         include_str!("persist.rs"),
         include_str!("persist_service.rs"),
         include_str!("acp.rs"),
@@ -2156,13 +2157,9 @@ fn quiet_cabin() -> Cabin {
         pulse_view: Default::default(),
         agent_cursor: None,
         board_view: Default::default(),
-        llm_chips: Vec::new(),
         visible_chips: Vec::new(),
-        chip_rx: None,
-        chip_busy: false,
-        chip_fp: String::new(),
+        home_chips: Vec::new(),
         chip_paint_key: String::new(),
-        chip_llm_at: 0,
         greeting: String::new(),
         greeting_fp: String::new(),
         greeting_user_at: 0,

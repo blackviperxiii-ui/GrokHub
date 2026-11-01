@@ -1,2 +1,0 @@
-- Chat personality: the switch opens a centred picker with presets wrapping in rows. A switch now changes the titlebar, the chat welcome face and the companion dock together.
-- Personality Try it: signed out shows a neutral line with a sign-in link instead of red text; a reply that never comes times out after 45 seconds; it uses your provider model or the local model when that is where your chats go.

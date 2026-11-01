@@ -1,0 +1,1 @@
+- When the model connection keeps failing, Loadout now gives up after 6 tries, about a minute of waiting, instead of 15 tries over about six silent minutes. A dropped stream is no longer resent, and charged again, up to 14 times.

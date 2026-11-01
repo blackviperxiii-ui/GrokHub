@@ -10,6 +10,10 @@ const SEND_SIGNIN_HINT: &str =
 const NATIVE_SIGNIN_NOTE: &str =
     "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
 
+/// No sign-in or key, but Local AI is ready: chats answer on this computer.
+pub(super) const LOCAL_ONLY_NOTE: &str =
+    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
+
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
 pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
@@ -647,6 +651,10 @@ impl Cabin {
             self.signin_card = false;
             return;
         }
+        let local_only = self.local_only_chat();
+        if local_only {
+            self.signin_card = false;
+        }
         if self.signin_card {
             self.ui_send_signin_card(ui);
             return;
@@ -655,7 +663,14 @@ impl Cabin {
             return;
         }
         ui.horizontal(|ui| {
-            crate::cards::settings_note(ui, NATIVE_SIGNIN_NOTE);
+            crate::cards::settings_note(
+                ui,
+                if local_only {
+                    LOCAL_ONLY_NOTE
+                } else {
+                    NATIVE_SIGNIN_NOTE
+                },
+            );
             if crate::cards::ghost_pill(ui, "Settings") {
                 self.nav = Nav::Settings;
             }

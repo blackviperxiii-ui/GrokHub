@@ -25,6 +25,8 @@ struct LiveCfg {
     episode: Option<grokhub_agent::EpisodeSeed>,
     /// Cabin chat thread that owns this native session (G4 panel drain).
     cabin_thread_id: String,
+    /// `briefModelFallback`: an ask the rules and local scorer can't sort asks the model.
+    brief_model_fallback: bool,
 }
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
@@ -229,6 +231,18 @@ impl Cabin {
         self.scheduled_perm || self.has_key() || self.imagine_native.tokens.is_some()
     }
 
+    /// Can a chat turn start? [`Self::agent_ready`], or no sign-in or key but
+    /// Local AI is on, installed and not paused: the router sends the turn to
+    /// the device (`local:no_keys`), online or offline.
+    pub(super) fn chat_ready(&self) -> bool {
+        self.agent_ready() || local_chat_available()
+    }
+
+    /// Signed out, and chats run on Local AI until a sign-in or key is added.
+    pub(super) fn local_only_chat(&self) -> bool {
+        !self.agent_ready() && local_chat_available()
+    }
+
     /// Why a turn did not start, naming the engine's own missing piece.
     pub(super) fn no_agent_note(&self) -> &'static str {
         grokhub_core::XAI_NEED_SIGNIN
@@ -335,7 +349,13 @@ impl Cabin {
     }
 
     fn publish_native_cfg_for(&mut self, session_id: &str) -> Result<(), String> {
-        let (bearer, auth_kind) = self.native_cred()?;
+        let (bearer, auth_kind) = match self.native_cred() {
+            Ok(cred) => cred,
+            // No sign-in or key: with Local AI ready the router answers on the
+            // device, so the engine starts with no bearer at all.
+            Err(_) if self.local_only_chat() => (String::new(), AuthKind::ApiKey),
+            Err(err) => return Err(err),
+        };
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let workspace = self.native_workspace();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
@@ -365,6 +385,7 @@ impl Cabin {
             origin: self.harness.turn_origin,
             episode: self.native_episode_seed(),
             cabin_thread_id,
+            brief_model_fallback: self.cfg.brief_model_fallback,
         };
         live_map()
             .lock()
@@ -693,9 +714,9 @@ fn serve_native(
         engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
-        // Brain 1: an unclear ask's Brief costs one fast call. App tests
-        // script each reply, so they keep the rules-only default.
-        engine.set_brief_model(!cfg!(test));
+        // Brain 1: the rules and the local scorer sort the ask in-process; a
+        // model call for what they can't sort is opt-in (off by default).
+        engine.set_brief_model(cfg.brief_model_fallback);
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         #[cfg(test)]
         let client = match test_responses_url() {
@@ -728,6 +749,36 @@ fn serve_native(
         .unwrap_or_else(|err| err.into_inner())
         .remove(&session_id);
     grokhub_agent::mcp::detach_elicit(&session_id);
+}
+
+/// Local AI is on, installed and not paused, so a chat can answer on the device.
+fn local_chat_available() -> bool {
+    #[cfg(test)]
+    if let Some(on) = LOCAL_READY_TEST.with(std::cell::Cell::get) {
+        return on;
+    }
+    grokhub_agent::route::local::available()
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOCAL_READY_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: say Local AI is (or isn't) ready on this thread; `None` reads the real gate.
+#[cfg(test)]
+pub(super) fn set_local_ready_for_test(on: Option<bool>) {
+    LOCAL_READY_TEST.with(|c| c.set(on));
+}
+
+/// Test-only: the bearer the native engine was handed for `session_id`.
+#[cfg(test)]
+pub(super) fn published_bearer_for_test(session_id: &str) -> Option<String> {
+    live_map()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(session_id)
+        .map(|cfg| cfg.bearer.clone())
 }
 
 #[cfg(test)]

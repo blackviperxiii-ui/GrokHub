@@ -447,11 +447,11 @@ async fn run_worker(rx: Receiver<Cmd>, cancel: Arc<AtomicBool>) {
         match rx.try_recv() {
             Ok(cmd) => dispatch(&mut live, cmd, &cancel).await,
             Err(TryRecvError::Empty) => {
-                if let Some(session) = live.as_mut() {
-                    if let Err(err) = session.drain().await {
-                        eprintln!("desktop-mcp: {err}");
-                        live = None;
-                    }
+                if let Some(session) = live.as_mut()
+                    && let Err(err) = session.drain().await
+                {
+                    eprintln!("desktop-mcp: {err}");
+                    live = None;
                 }
                 tokio::time::sleep(Duration::from_millis(15)).await;
             }

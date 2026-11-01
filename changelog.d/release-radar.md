@@ -1,1 +1,0 @@
-- Pulse can tell you about upcoming DLC and sequels for your most-played Steam games and your wishlist (opt-in under Settings → Pulse → Sources). It checks Steam's public store once a day, posts only what you don't own yet, and "Remind me when it's out" posts again on release day.
