@@ -1,13 +1,11 @@
 name: Release
 
 # A stable `vX.Y.Z` tag publishes Latest. A `vX.Y.Z-beta.N` tag publishes a
-# GitHub pre-release (never Latest) with the same assets. Every push to
-# `beta` (each merge), a manual run on `beta` and the nightly schedule
-# (~3 AM America/Chicago) publish `vX.Y.Z-beta.N` from beta (N = commits since
-# the newest stable tag), so the beta updater sees each merge. A newer beta
-# push cancels a build still running; the nightly skips when that tag already
-# exists. Merges made with github.token start no push runs, so auto-merge needs
-# AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
+# GitHub pre-release (never Latest) with the same assets. Beta builds are
+# on request only: a manual run (workflow_dispatch) on `beta` publishes
+# `vX.Y.Z-beta.N` from beta (N = commits since the newest stable tag). Merges
+# into `beta` no longer start a build, and there is no nightly beta build.
+# A newer manual beta run cancels one still running.
 # Each release carries Linux and Windows builds, the Tauri shell's bundles
 # (Linux and Windows; macOS on tags, the nightly and manual runs, not on beta
 # pushes), `SHA256SUMS`, and
@@ -18,12 +16,7 @@ on:
   push:
     tags:
       - "v*"
-    # Runs from beta's own copy of this file, so it works before main has it.
-    branches:
-      - beta
-  # Schedules fire from the default branch (main); SOURCE_REF makes them build beta.
-  schedule:
-    - cron: "0 8 * * *"
+  # Beta pre-releases: run this by hand on `beta` when a beta build is wanted.
   workflow_dispatch:
 
 permissions:

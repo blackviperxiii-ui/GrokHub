@@ -1,0 +1,1 @@
+- CI: beta releases are on request only. Merges into `beta` and the nightly no longer start `release.yml`; run it by hand on `beta` to publish a `vX.Y.Z-beta.N` pre-release. Tags still release as before.
