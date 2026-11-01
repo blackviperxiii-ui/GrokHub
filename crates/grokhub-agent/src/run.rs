@@ -1324,11 +1324,13 @@ fn emit_tool(
     detail: &str,
     image: Option<String>,
 ) {
+    // The row shows what the tool said, not the untrusted fence around it.
+    let detail = crate::tools::fence::display_text(detail);
     on_event(LoopEvent::Tool {
         id: id.to_string(),
         name: call.name.clone(),
         status: status.into(),
-        detail: clip(detail, detail_limit(detail)),
+        detail: clip(&detail, detail_limit(&detail)),
         image,
     });
 }
