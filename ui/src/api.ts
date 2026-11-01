@@ -653,6 +653,94 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
+/** One work card on the Workboard (src-tauri/src/workboard.rs). */
+export interface WorkStepView {
+  text: string;
+  status: "planned" | "doing" | "done" | "skipped" | "failed";
+}
+
+export interface WorkCard {
+  id: string;
+  title: string;
+  detail: string;
+  notes: string;
+  column: "todo" | "doing" | "blocked" | "done" | "followUp" | "archived";
+  /** Who owns it, as the cabin's badge reads. */
+  owner: "Agent" | "You";
+  /** Automation, Background, Episode or Flow; a plain task has none. */
+  kind: string | null;
+  /** Where the work left off. */
+  leftOff: string | null;
+  steps: WorkStepView[];
+  checkpoint: { goal: string; next: string; blocker: string; refs: string[] } | null;
+  /** Steps done and in all. */
+  progress: [number, number];
+  /** A paused or interrupted run: Resume and Hand back apply. */
+  canResume: boolean;
+  /** The chat that works it. */
+  chat: string | null;
+  updatedMs: number;
+  fresh: boolean;
+}
+
+export interface WorkColumn {
+  id: "todo" | "doing" | "blocked" | "done";
+  label: string;
+  cards: WorkCard[];
+}
+
+export interface WorkBoard {
+  followUp: WorkCard[];
+  columns: WorkColumn[];
+  archived: WorkCard[];
+  /** The file's mtime, for the change check. */
+  stamp: number;
+}
+
+export type WorkAct =
+  | { kind: "move"; column: WorkColumn["id"] }
+  | { kind: "rank"; up: boolean }
+  | { kind: "handBack" }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" };
+
+export interface WorkLogLine {
+  at: number;
+  kind: string;
+  text: string;
+}
+
+/** What Resume puts in the chat box, and the chat it goes to. */
+export interface WorkResume {
+  conversationId: string;
+  prompt: string;
+  board: WorkBoard;
+}
+
+export function getWorkboard(): Promise<WorkBoard> {
+  return invoke<WorkBoard>("get_workboard");
+}
+
+/** The board file's mtime; cheap enough to poll. */
+export function workboardStamp(): Promise<number> {
+  return invoke<number>("workboard_stamp");
+}
+
+/** A card's progress log tail. Read only when its drawer opens. */
+export function workboardLog(id: string): Promise<WorkLogLine[]> {
+  return invoke<WorkLogLine[]>("workboard_log", { id });
+}
+
+export function workboardAct(id: string, act: WorkAct): Promise<WorkBoard> {
+  return invoke<WorkBoard>("workboard_act", { id, act });
+}
+
+/** Resume a paused run. A stub until KB-03 fills in the real resume. */
+export function workboardResume(id: string, conversationId: string): Promise<WorkResume> {
+  return invoke<WorkResume>("workboard_resume", { id, conversationId });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 

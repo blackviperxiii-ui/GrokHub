@@ -96,6 +96,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_behavior",
     "get_privacy",
     "get_background",
+    // The Workboard, read only: the cards, the change check and a card's log.
+    "get_workboard",
+    "workboard_stamp",
+    "workboard_log",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -879,6 +883,16 @@ mod tests {
             "library_cover",
             "library_play",
         ] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_web_reads_the_workboard_but_changes_none() {
+        for name in ["get_workboard", "workboard_stamp", "workboard_log"] {
+            assert!(web_command(name), "{name}");
+        }
+        for name in ["workboard_act", "workboard_resume"] {
             assert!(!web_command(name), "{name}");
         }
     }

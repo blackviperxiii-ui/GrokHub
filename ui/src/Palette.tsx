@@ -19,7 +19,7 @@ import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
-export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings" | "library";
+export type View = "chat" | "pulse" | "workboard" | "journal" | "automations" | "memory" | "connectors" | "settings" | "library";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -60,6 +60,7 @@ const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], sla
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
   pulse: "Pulse",
+  workboard: "Workboard",
   journal: "Journal",
   automations: "Automations",
   memory: "Memory",
@@ -69,11 +70,13 @@ export const VIEW_LABELS: Record<View, string> = {
 };
 
 /** The pages this platform shows, in tab order. The journal is this
- * computer's file, so the web app leaves it on the desktop. */
+ * computer's file, so the web app leaves it on the desktop; the web app shows
+ * the Workboard read only. */
 export function views(caps: Capabilities): View[] {
   return [
     "chat",
     ...(caps.pulse ? (["pulse"] as const) : []),
+    "workboard",
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
     "memory",

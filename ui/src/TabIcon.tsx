@@ -5,6 +5,7 @@ import type { View } from "./Palette";
 const PATHS: Record<View, string> = {
   chat: "M4 5h16v11H9l-5 4z",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
+  workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   journal: "M6 3h11a1 1 0 0 1 1 1v17H7a2 2 0 0 1-2-2V4a1 1 0 0 1 1-1zM5 18a2 2 0 0 1 2-2h11",
   automations: "M13 3 5 14h6l-1 7 8-11h-6z",
   memory: "M12 4c-4 0-7 1.3-7 3v10c0 1.7 3 3 7 3s7-1.3 7-3V7c0-1.7-3-3-7-3zM5 7c0 1.7 3 3 7 3s7-1.3 7-3M5 12c0 1.7 3 3 7 3s7-1.3 7-3",

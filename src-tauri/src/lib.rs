@@ -36,6 +36,7 @@ pub mod remote_tls;
 pub mod settings;
 pub mod shell_update;
 pub mod slash;
+pub mod workboard;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -849,6 +850,51 @@ async fn journal_to_mission(
     off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
 }
 
+/// Workboard: the cabin's work cards from the same file. Read only on the web.
+#[tauri::command]
+async fn get_workboard(state: State<'_, ShellState>) -> Result<workboard::Board, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::load(&dir)).await?
+}
+
+/// The board file's mtime; the page reloads only when it changes.
+#[tauri::command]
+async fn workboard_stamp(state: State<'_, ShellState>) -> Result<u64, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::stamp(&dir)).await
+}
+
+/// A card's progress log tail, read when its drawer opens.
+#[tauri::command]
+async fn workboard_log(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<Vec<grokhub_core::WorkLogEvent>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::log_tail(&dir, &id)).await
+}
+
+#[tauri::command]
+async fn workboard_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: workboard::Act,
+) -> Result<workboard::Board, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::act(&dir, &id, act)).await?
+}
+
+/// Resume a paused run. A stub until KB-03 fills in the real resume.
+#[tauri::command]
+async fn workboard_resume(
+    state: State<'_, ShellState>,
+    id: String,
+    conversation_id: String,
+) -> Result<workboard::Resume, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::resume(&dir, &id, &conversation_id)).await?
+}
+
 #[tauri::command]
 async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
@@ -1515,6 +1561,9 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
+        "get_workboard" => out(block_on(get_workboard(state))?),
+        "workboard_stamp" => out(block_on(workboard_stamp(state))?),
+        "workboard_log" => out(block_on(workboard_log(state, arg(args, "id")?))?),
         _ => Err(remote::refused()),
     }
 }
@@ -1900,6 +1949,11 @@ pub fn run() {
             journal_add,
             journal_act,
             journal_to_mission,
+            get_workboard,
+            workboard_stamp,
+            workboard_log,
+            workboard_act,
+            workboard_resume,
             get_permissions,
             add_permission_rule,
             remove_permission_rule,

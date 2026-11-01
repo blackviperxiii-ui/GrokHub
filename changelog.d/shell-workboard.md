@@ -1,0 +1,1 @@
+- Workboard in the shell: the cabin's work cards from the same file, with columns, steps, where each card left off, the Agent or You badge, a log read only when you open it, Resume, Hand back, move, reorder, archive and delete. Changes go through the same lock and merge as the cabin, and the web app shows the board read only.

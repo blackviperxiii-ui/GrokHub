@@ -16,6 +16,15 @@ const api = vi.hoisted(() => ({
       { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
     ].filter((hit) => hit.cmd.startsWith(draft)),
   ),
+  // One card, worked by chat "shell-c1", so its dock item can open it.
+  getWorkboard: vi.fn(() =>
+    Promise.resolve({
+      followUp: [],
+      columns: [{ id: "blocked", label: "Blocked", cards: [{ id: "w1", chat: "shell-c1" }] }],
+      archived: [],
+      stamp: 1,
+    }),
+  ),
   onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
     chatHandlers.push(handler);
     return Promise.resolve(() => {});
@@ -46,6 +55,27 @@ vi.mock("./Journal", () => ({
     <button type="button" onClick={() => onMission({ conversationId: "shell-m1", title: "Q", prompt: "Mission: Q" })}>
       To mission
     </button>
+  ),
+}));
+vi.mock("./Workboard", () => ({
+  Workboard: ({
+    readOnly,
+    openCard,
+    onResume,
+  }: {
+    readOnly?: boolean;
+    openCard?: { id: string };
+    onResume: (r: { conversationId: string; prompt: string }) => void;
+  }) => (
+    <div>
+      <p>
+        Workboard page{readOnly ? " (read only)" : ""}
+        {openCard && ` at ${openCard.id}`}
+      </p>
+      <button type="button" onClick={() => onResume({ conversationId: "chat-w1", prompt: "Resume the work card" })}>
+        Resume
+      </button>
+    </div>
   ),
 }));
 vi.mock("./Automations", () => ({ Automations: () => null }));
@@ -90,6 +120,7 @@ describe("App", () => {
     expect(tabs()).toEqual([
       "Chat",
       "Pulse",
+      "Workboard",
       "Journal",
       "Automations",
       "Memory",
@@ -130,14 +161,25 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Workboard", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
   });
 
-  it("leaves the Journal off the web app", async () => {
+  it("leaves the Journal off the web app and shows the Workboard read only", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Workboard", "Automations", "Memory", "Connectors", "Settings"]);
+    await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
+    expect(await screen.findByText("Workboard page (read only)")).toBeVisible();
+  });
+
+  it("Resume on the Workboard puts the draft in the card's chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    expect(screen.getByText("Chat page: Resume the work card in chat-w1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -290,7 +332,24 @@ describe("App", () => {
     expect(within(dock).getByRole("listitem", { name: "Chat reply" })).toHaveTextContent(
       "Needs your OK: Run npm test",
     );
+    expect(within(dock).queryByRole("button", { name: "Open card" })).toBeNull();
     await userEvent.click(within(dock).getByRole("button", { name: "Review" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a dock item whose chat works a card opens that card on the Workboard", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(chatHandlers.length).toBe(1));
+    await waitFor(() => expect(api.getWorkboard).toHaveBeenCalled());
+    act(() => {
+      chatHandlers[0]({ conversationId: "shell-c1", event: { kind: "text", text: "On it" } });
+    });
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
+    await userEvent.click(within(dock).getByRole("button", { name: "Open card" }));
+    expect(await screen.findByText("Workboard page at w1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Workboard" })).toHaveAttribute("aria-pressed", "true");
   });
 });

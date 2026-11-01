@@ -11,17 +11,22 @@ const STATUS_WORD: Record<ActivityItem["status"], string> = {
 
 /** One dock in the views bar, so it follows every view: what the agent is
  * running, what waits on the user's OK, and what just finished. Chat items
- * open the chat (where the approval card is); routine runs open Automations
- * with the result. Hidden while there is nothing to show. */
+ * open the chat (where the approval card is), and their work card when the
+ * chat works one; routine runs open Automations with the result. Hidden while there is nothing to show. */
 export function ActivityDock({
   items,
   onOpenChat,
   onOpenAutomations,
+  cardFor,
+  onOpenCard,
   now: fixedNow,
 }: {
   items: ActivityItem[];
   onOpenChat: () => void;
   onOpenAutomations: () => void;
+  /** The work card a chat works, if any (keyed by conversation id). */
+  cardFor?: (conversationId: string) => string | undefined;
+  onOpenCard?: (cardId: string) => void;
   /** Tests pin the clock; the app ticks it so finished items age out. */
   now?: number;
 }) {
@@ -86,6 +91,21 @@ export function ActivityDock({
                     : "Open chat"
                   : "Open result"}
               </button>
+              {(() => {
+                const card = item.kind === "chat" ? cardFor?.(item.key.slice("chat:".length)) : undefined;
+                return card && onOpenCard ? (
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => {
+                      setOpen(false);
+                      onOpenCard(card);
+                    }}
+                  >
+                    Open card
+                  </button>
+                ) : null;
+              })()}
             </li>
           ))}
           {more > 0 && <li className="activity-more">{more} more</li>}

@@ -1,6 +1,6 @@
 import { Activity, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
-import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
+import { CORE_ONLY, getCapabilities, getSettings, getWorkboard, onChatEvent, type Capabilities } from "./api";
+import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
@@ -20,6 +20,7 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
@@ -31,6 +32,7 @@ const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
+const Workboard = lazy(loaders.workboard);
 
 function preloadViews() {
   for (const load of Object.values(loaders)) void load().catch(() => {});
@@ -57,6 +59,9 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // Which work card each chat works, from the Workboard's last load.
+  const [cardChats, setCardChats] = useState<Record<string, string>>({});
+  const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
@@ -82,6 +87,11 @@ export function App() {
       .then(setCaps);
     getSettings().then(
       (s) => applyTheme(s.theme),
+      () => {},
+    );
+    // A local read, so a chat's dock item can open its work card.
+    getWorkboard().then(
+      (board) => setCardChats(cardsByChat(board)),
       () => {},
     );
   }, []);
@@ -187,6 +197,11 @@ export function App() {
           items={Object.values(activity)}
           onOpenChat={() => setView("chat")}
           onOpenAutomations={() => setView("automations")}
+          cardFor={(chat) => cardChats[chat]}
+          onOpenCard={(id) => {
+            setOpenCard((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+            setView("workboard");
+          }}
         />
         <button
           type="button"
@@ -248,6 +263,19 @@ export function App() {
       {opened.has("pulse") && caps.pulse && (
         <Page shown={view === "pulse"}>
           <Pulse onRun={ask} />
+        </Page>
+      )}
+      {opened.has("workboard") && (
+        <Page shown={view === "workboard"}>
+          <Workboard
+            readOnly={Boolean(caps.remote)}
+            openCard={openCard}
+            onCards={setCardChats}
+            onResume={({ prompt, conversationId }) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
         </Page>
       )}
       {opened.has("journal") && !caps.remote && (

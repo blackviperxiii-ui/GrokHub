@@ -1,6 +1,7 @@
 //! `workboard.json` shared by several writers (the cabin, the shell, the self MCP
 //! process). Each card's progress log lives under [`work_dir`]; its file work is
-//! in `grokhub_core::work_item` so every writer shares it.
+//! in `grokhub_core::work_item`, and the lock in `grokhub_core::work_file`, so
+//! every writer shares them.
 //!
 //! A save takes `workboard.json.lock`, re-reads the file, merges card by card
 //! (the higher `rev` wins) and writes through `atomic_write`, so one writer never
@@ -8,11 +9,11 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use grokhub_core::work_file::lock_board;
 use grokhub_core::work_item::{
     board_base, merge_cards, migrate_cards, remove_work_log, stamp_changes, BoardBase,
 };
@@ -20,10 +21,6 @@ use grokhub_core::{now_ms, BoardCard};
 
 use crate::config::{atomic_write, peek_json, JSON_STORE_CAP};
 
-/// A lock older than this was left by a writer that died; it is broken.
-const LOCK_STALE: Duration = Duration::from_secs(5);
-/// Give up on the lock after this long.
-const LOCK_WAIT: Duration = Duration::from_secs(7);
 /// How often the cabin looks for another writer's save.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
 /// How often the cabin runs the sweep.
@@ -40,59 +37,6 @@ pub struct BoardStore {
     mtime: Option<SystemTime>,
     checked: Option<Instant>,
     swept_ms: u64,
-}
-
-/// Held while a writer re-reads, merges and writes. Removed on drop.
-pub struct BoardLock(PathBuf);
-
-impl Drop for BoardLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-pub fn lock_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".lock");
-    path.with_file_name(name)
-}
-
-/// Take `<file>.lock` with an exclusive create. A lock older than five seconds
-/// is stale and broken.
-pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
-    let lock = lock_path(path);
-    if let Some(dir) = lock.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let start = Instant::now();
-    loop {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-        {
-            Ok(mut f) => {
-                let _ = write!(f, "{}", std::process::id());
-                return Ok(BoardLock(lock));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let stale = fs::metadata(&lock)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|age| age >= LOCK_STALE);
-                if stale {
-                    let _ = fs::remove_file(&lock);
-                    continue;
-                }
-                if start.elapsed() >= LOCK_WAIT {
-                    return Err("workboard.json is locked by another writer".into());
-                }
-                std::thread::sleep(Duration::from_millis(15));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
 }
 
 fn file_mtime(path: &Path) -> Option<SystemTime> {
@@ -246,6 +190,7 @@ pub fn delete_card(cards: &mut Vec<BoardCard>, id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::work_file::lock_path;
     use grokhub_core::BoardStatus;
 
     fn root(label: &str) -> PathBuf {
