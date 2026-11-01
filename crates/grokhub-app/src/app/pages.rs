@@ -552,7 +552,7 @@ impl Cabin {
                         self.start_hub();
                     }
                     ui.add_space(16.0);
-                    crate::cards::section_label(ui, "Send a task");
+                    crate::cards::section_label(ui, "Run a task on this PC");
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())
                         .corner_radius(12.0)
@@ -572,7 +572,7 @@ impl Cabin {
                         });
                     ui.add_space(8.0);
                     if self.has_key() {
-                        if crate::cards::white_pill(ui, "Send a task home") {
+                        if crate::cards::white_pill(ui, "Run it here") {
                             let t = std::mem::take(&mut self.task_prompt);
                             self.nav = Nav::Chat;
                             self.send_chat(t);
