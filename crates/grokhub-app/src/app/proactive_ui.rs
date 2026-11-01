@@ -657,6 +657,7 @@ mod tests {
                 | Nav::Imagine
                 | Nav::Skills
                 | Nav::Library
+                | Nav::Mods
                 | Nav::Objectives
                 | Nav::Night
                 | Nav::History
