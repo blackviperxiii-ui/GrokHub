@@ -213,7 +213,7 @@ impl Cabin {
         };
         self.setup.choice = Some(id.to_string());
         self.set_nav_id("settings");
-        self.settings_sec = SettingsSec::Defaults;
+        self.settings_sec = SettingsSec::AiModels;
         true
     }
 
@@ -353,7 +353,7 @@ mod tests {
             cabin.open_local_model_link("grokhub://local-model/gemma-4-31b-it-abliterated-q4_k")
         );
         assert_eq!(cabin.nav, Nav::Settings);
-        assert_eq!(cabin.settings_sec, SettingsSec::Defaults);
+        assert_eq!(cabin.settings_sec, SettingsSec::AiModels);
         assert_eq!(
             cabin.setup.choice.as_deref(),
             Some("gemma-4-31b-it-abliterated-q4_k")
