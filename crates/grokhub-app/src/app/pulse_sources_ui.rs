@@ -8,6 +8,7 @@
 use super::pulse_ui::SourceAct;
 use super::*;
 use grokhub_agent::harness::DataClass;
+use grokhub_core::http;
 use grokhub_core::interests::InterestSignal;
 use grokhub_core::pulse::LedgerReason;
 use grokhub_core::pulse_sources::{
@@ -88,16 +89,17 @@ fn user_agent() -> String {
     )
 }
 
-fn source_agent() -> ureq::Agent {
+fn source_agent() -> http::Agent {
     // Redirects are followed by hand so every hop is checked as a public URL.
-    // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
-    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
-    // on the target (same as web_fetch).
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .resolver(grokhub_agent::public_only_resolve)
-        .build()
+    // `public_only` dials through public_only_resolve, which blocks DNS→private/CGNAT
+    // even when the hostname looked public. The facade reads no env proxy:
+    // HTTP(S)_PROXY would dial the proxy and skip that check on the target.
+    http::agent(http::Opts {
+        redirects: 0,
+        overall: Some(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS)),
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 fn redirect_target(from: &str, location: &str) -> String {
@@ -131,30 +133,32 @@ pub(super) fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fe
         }
         let mut call = source_agent()
             .get(&url)
-            .set("user-agent", &user_agent())
-            .set(
+            .header("user-agent", &user_agent())
+            .header(
                 "accept",
                 "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5",
             );
         if hop == 0 {
             if let Some(entry) = have {
                 if let Some(etag) = entry.etag.as_deref() {
-                    call = call.set("if-none-match", etag);
+                    call = call.header("if-none-match", etag);
                 }
                 if let Some(when) = entry.last_modified.as_deref() {
-                    call = call.set("if-modified-since", when);
+                    call = call.header("if-modified-since", when);
                 }
             }
         }
         let resp = match call.call() {
             Ok(resp) => resp,
-            Err(ureq::Error::Status(code, _)) => return Fetched::Failed(format!("HTTP {code}")),
-            Err(ureq::Error::Transport(t)) => {
-                let why = match t.kind() {
-                    ureq::ErrorKind::Dns => "could not find the host",
-                    ureq::ErrorKind::ConnectionFailed => "could not connect",
-                    ureq::ErrorKind::Io => "timed out or dropped",
-                    _ => "network error",
+            Err(http::Error::Status { code, .. }) => {
+                return Fetched::Failed(format!("HTTP {code}"))
+            }
+            Err(http::Error::Transport { kind, .. }) => {
+                let why = match kind {
+                    http::TransportKind::Dns => "could not find the host",
+                    http::TransportKind::Connect => "could not connect",
+                    http::TransportKind::Io => "timed out or dropped",
+                    http::TransportKind::Other => "network error",
                 };
                 return Fetched::Failed(why.into());
             }
@@ -1367,13 +1371,14 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("fn redirect_target(").next())
             .expect("source_agent");
+        // `public_only` dials through public_only_resolve (grokhub_core::http tests).
         assert!(
-            arm.contains(".resolver(grokhub_agent::public_only_resolve)"),
+            arm.contains("http::agent(") && arm.contains("public_only: true"),
             "Pulse source fetches must refuse DNS→private: {arm}"
         );
         assert!(
-            arm.contains(".redirects(0)"),
-            "manual redirect checks need redirects(0): {arm}"
+            arm.contains("redirects: 0,"),
+            "manual redirect checks need redirects: 0: {arm}"
         );
         assert!(
             !arm.contains("try_proxy_from_env"),

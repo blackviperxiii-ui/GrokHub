@@ -23,6 +23,22 @@ pub(super) fn support_link(url: &str) -> Option<&str> {
     crate::desktop::url_safe_to_open(url).then_some(url)
 }
 
+/// What About's support field saves: `Some("")` for blank (hides the link),
+/// the trimmed URL when the link would show, `None` to refuse the edit.
+pub(super) fn support_url_to_save(draft: &str) -> Option<String> {
+    let draft = draft.trim();
+    if draft.is_empty() {
+        return Some(String::new());
+    }
+    support_link(draft).map(str::to_string)
+}
+
+/// Developer-only Labs demos (the cursor-motion preview) show only with
+/// `GROKHUB_DEV_DEMOS=1`.
+pub(super) fn dev_demos_on(var: Option<&str>) -> bool {
+    var.map(str::trim) == Some("1")
+}
+
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
@@ -539,6 +555,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_proactive_reminders(&mut self, on: bool) {
+        if self.cfg.proactive_reminders == on {
+            return;
+        }
+        self.cfg.proactive_reminders = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_living_wall(&mut self, on: bool) {
         if self.cfg.imagine_wall == on {
             return;
@@ -997,6 +1022,15 @@ impl Cabin {
                                                                     composer_autocomplete,
                                                                 );
                                                             }
+                                                            let mut reminders = self.cfg.proactive_reminders;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Reminder notifications",
+                                                                "A system notification when a card on your board is due within the hour. Quiet hours hold it.",
+                                                                &mut reminders,
+                                                            ) {
+                                                                self.set_proactive_reminders(reminders);
+                                                            }
                                                             self.ui_focus_help_row(ui);
                                                             self.ui_screenshot_explain_settings(ui);
                                                             self.ui_pc_health_row(ui);
@@ -1154,6 +1188,7 @@ impl Cabin {
                                                                 copy_diag = true;
                                                             }
                                                             self.ui_support_link(ui);
+                                                            self.ui_support_url_field(ui);
                                                         }
                                                         SettingsSec::Defaults => {
                                                             crate::ui_kit::section_header(
@@ -1418,6 +1453,7 @@ impl Cabin {
                                                             self.ui_labs_diagnostics(ui);
                                                             ui.add_space(12.0);
                                                             self.ui_labs_desktop_nyx(ui);
+                                                            if dev_demos_on(std::env::var("GROKHUB_DEV_DEMOS").ok().as_deref()) {
                                                             ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")
@@ -1439,6 +1475,7 @@ impl Cabin {
                                                                 self.agent_cursor =
                                                                     Some(crate::motion::AgentCursorAnim::demo(now, origin));
                                                                 self.status = "Cursor preview".into();
+                                                            }
                                                             }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
@@ -1508,9 +1545,7 @@ impl Cabin {
         }
     }
 
-    /// Settings → Copy diagnostics and the palette row: the bundle goes to the
-    /// clipboard, and the status line only says so.
-    /// Settings → About: a quiet text link, only while `app.json` has a support URL.
+    /// Settings → About: a quiet text link, only while a support URL is set.
     fn ui_support_link(&self, ui: &mut egui::Ui) {
         let Some(url) = support_link(&self.cfg.support_url) else {
             return;
@@ -1523,10 +1558,51 @@ impl Cabin {
         }
     }
 
+    /// Settings → About: where the support link points. Saves on Enter or when
+    /// the field loses focus; blank hides the link, anything but a plain web
+    /// page is refused.
+    fn ui_support_url_field(&mut self, ui: &mut egui::Ui) {
+        let id = ui.id().with("support_url_draft");
+        let mut draft = ui
+            .data_mut(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| self.cfg.support_url.clone());
+        ui.add_space(6.0);
+        let edit = ui
+            .horizontal(|ui| {
+                ui.label(
+                    RichText::new("Support link")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft)
+                        .hint_text(crate::theme::hint("https://… (blank hides it)"))
+                        .desired_width(280.0),
+                )
+            })
+            .inner;
+        if edit.lost_focus() {
+            match support_url_to_save(&draft) {
+                Some(url) if url == self.cfg.support_url => {}
+                Some(url) => {
+                    self.cfg.support_url = url;
+                    self.persist_cfg();
+                    self.status = "Saved".into();
+                }
+                None => self.status = "Support link needs a full https:// address.".into(),
+            }
+            ui.data_mut(|d| d.remove::<String>(id));
+        } else if edit.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, draft));
+        }
+    }
+
+    /// Settings → Copy diagnostics and the palette row: the bundle goes to the
+    /// clipboard, and the status line only says so.
     pub(super) fn copy_diagnostics(&mut self, ctx: &egui::Context) {
         let version = crate::update::build_version_line();
         let bundle = diagnostics_bundle(
-            version.strip_prefix("GrokHub ").unwrap_or(&version),
+            grokhub_core::strip_product_prefix(&version),
             self.has_key(),
             HUB_KIND,
             self.skill_list.len(),
@@ -2058,6 +2134,43 @@ mod tests {
         assert_eq!(support_link("javascript:alert(1)"), None);
         assert_eq!(support_link("file:///etc/passwd"), None);
         assert_eq!(support_link("https://donate.example/a|calc"), None);
+    }
+
+    #[test]
+    fn support_url_field_saves_web_pages_and_blank_only() {
+        assert_eq!(support_url_to_save("  "), Some(String::new()));
+        assert_eq!(
+            support_url_to_save(" https://donate.example/my-app "),
+            Some("https://donate.example/my-app".into())
+        );
+        assert_eq!(support_url_to_save("donate.example"), None);
+        assert_eq!(support_url_to_save("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn cursor_demo_needs_the_dev_flag() {
+        assert!(!dev_demos_on(None));
+        assert!(!dev_demos_on(Some("0")));
+        assert!(!dev_demos_on(Some("")));
+        assert!(dev_demos_on(Some("1")));
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        let gate = src
+            .find(concat!(
+                "dev_demos_on(std::env::var(\"GROKHUB_",
+                "DEV_DEMOS\")"
+            ))
+            .expect("Labs gate");
+        let demo = src
+            .find(concat!("\"Desktop-agent cursor ", "(preview)\""))
+            .expect("demo label");
+        assert!(gate < demo, "the cursor demo sits inside the dev gate");
+    }
+
+    #[test]
+    fn behavior_has_a_reminders_toggle_and_about_a_support_field() {
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        assert!(src.contains(concat!("self.set_proactive_", "reminders(reminders);")));
+        assert!(src.contains(concat!("self.ui_support_url_", "field(ui);")));
     }
 
     #[test]

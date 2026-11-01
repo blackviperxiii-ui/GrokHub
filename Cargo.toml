@@ -29,7 +29,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # keyring 4 requires the `v1` (or `cli`) feature; `v1` enables each OS store and
 # the crates themselves are target-gated, so Linux still only compiles Secret Service.
 keyring = { version = "4", default-features = false, features = ["v1"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Smaller, faster release binaries. Thin LTO + one codegen unit; strip symbols
 # (keep the binary runnable; crash UI cards do not need DWARF). Panic stays unwind.

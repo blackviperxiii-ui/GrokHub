@@ -265,17 +265,47 @@ fn speeds_tile_reads_the_internet_log_and_sends_nothing_when_off() {
 fn frame_rate_tile_is_honest_about_not_reading_games() {
     use super::fps::FpsState;
     use grokhub_agent::indexers::display_fps::FpsBlock;
-    let t = frame_rate_text(None);
+    let t = frame_rate_text(None, false, None);
     assert_eq!(t.big, "Not read");
     assert_eq!(t.caption, "Loadout never hooks into games");
     assert_eq!(t.tone, Tone::Quiet);
-    let t = frame_rate_text(Some(FpsState::Rate(143.6)));
+    let t = frame_rate_text(Some(FpsState::Rate(143.6)), false, None);
     assert_eq!(
         (t.big.as_str(), t.caption.as_str()),
         ("144 FPS", "Frames on screen")
     );
-    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NeedsPermission)));
+    let t = frame_rate_text(
+        Some(FpsState::Blocked(FpsBlock::NeedsPermission)),
+        false,
+        None,
+    );
     assert_eq!(t.caption, "Needs a sudo setup first");
-    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)));
+    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)), false, None);
     assert_eq!(t.caption, "This driver doesn't report screen frames");
+}
+
+#[test]
+fn frame_rate_tile_on_windows_names_the_app_it_counts() {
+    use super::fps::FpsState;
+    use grokhub_agent::indexers::display_fps::FpsBlock;
+    let t = frame_rate_text(Some(FpsState::Rate(239.7)), true, Some("cs2.exe"));
+    assert_eq!(
+        (t.big.as_str(), t.caption.as_str()),
+        ("240 FPS", "From cs2")
+    );
+    assert_eq!(
+        t.detail.as_deref(),
+        Some("Counted by Windows, never inside the game")
+    );
+    let t = frame_rate_text(Some(FpsState::Rate(0.0)), true, None);
+    assert_eq!(t.caption, "Nothing is drawing frames");
+    assert_eq!(t.tone, Tone::Quiet);
+    let t = frame_rate_text(
+        Some(FpsState::Blocked(FpsBlock::NeedsPermission)),
+        true,
+        None,
+    );
+    assert_eq!(t.caption, "Needs a one-time admin setup");
+    let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)), true, None);
+    assert_eq!(t.caption, "Windows didn't start the frame trace");
 }

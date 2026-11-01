@@ -1,5 +1,6 @@
-//! Linux frame rate for the Home tile, counted by the kernel from display flips
-//! (see `grokhub_agent::indexers::display_fps`). A background thread reads the
+//! Frame rate for the Home tile: on Linux the kernel counts display flips, on
+//! Windows the graphics kernel's present events (see
+//! `grokhub_agent::indexers::display_fps`). Never from inside a game. A background thread reads the
 //! counters once a second while the tile is painted, and closes them five
 //! seconds after Home stops painting.
 
@@ -23,6 +24,8 @@ pub(super) enum FpsState {
 
 struct Slot {
     state: FpsState,
+    /// Windows: the exe the rate came from.
+    presenter: Option<String>,
     painted: Option<Instant>,
     running: bool,
     failed_at: Option<Instant>,
@@ -30,6 +33,7 @@ struct Slot {
 
 static SLOT: Mutex<Slot> = Mutex::new(Slot {
     state: FpsState::Starting,
+    presenter: None,
     painted: None,
     running: false,
     failed_at: None,
@@ -55,6 +59,11 @@ pub(super) fn display_fps() -> FpsState {
     slot.state
 }
 
+/// Windows: the exe the latest rate came from.
+pub(super) fn presenter() -> Option<String> {
+    SLOT.lock().ok().and_then(|s| s.presenter.clone())
+}
+
 fn run() {
     let mut counter = match FlipCounter::open() {
         Ok(c) => c,
@@ -77,9 +86,11 @@ fn run() {
         slot.failed_at = None;
         if let Some(r) = rate {
             slot.state = FpsState::Rate(r);
+            slot.presenter = counter.presenter().map(str::to_owned);
         }
         if slot.painted.is_none_or(|t| t.elapsed() >= IDLE) {
             slot.state = FpsState::Starting;
+            slot.presenter = None;
             slot.running = false;
             return;
         }

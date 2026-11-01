@@ -1,0 +1,1 @@
+- Internal: updated the WebSocket library to 0.30, which also drops the old rand 0.8 and utf-8 packages from the lockfile. Closing and focusing browser tabs works the same as before.

@@ -92,7 +92,7 @@ type AuthLog = Arc<Mutex<(Vec<String>, usize)>>;
 /// Open a (copied) history file read-only with an authorizer that allows
 /// reads of `kind`'s one table and denies everything else.
 fn open_guarded(path: &Path, kind: BrowserKind) -> Result<(Connection, AuthLog), String> {
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
@@ -115,7 +115,9 @@ fn open_guarded(path: &Path, kind: BrowserKind) -> Result<(Connection, AuthLog),
         }
         AuthAction::Select | AuthAction::Function { .. } => Authorization::Allow,
         _ => Authorization::Deny,
-    }));
+    }))
+    // Fail closed: no guard, no read.
+    .map_err(|e| e.to_string())?;
     Ok((conn, log))
 }
 

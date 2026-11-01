@@ -878,12 +878,18 @@ fn paint_speeds(
 }
 
 /// The Frame Rate tile. On Linux the kernel counts the frames each screen
-/// shows (display flips), entirely outside the game. Elsewhere it says plainly
-/// that Loadout doesn't read games and points to the safe built-in counters.
-/// `linux` is `None` off Linux.
-pub(super) fn frame_rate_text(linux: Option<FpsState>) -> TileText {
+/// shows (display flips); on Windows the graphics kernel's present events give
+/// the busiest app's frame rate. Both entirely outside the game. Elsewhere it
+/// says plainly that Loadout doesn't read games and points to the safe
+/// built-in counters. `reading` is `None` where there is no reader;
+/// `presenter` is the Windows exe the rate came from.
+pub(super) fn frame_rate_text(
+    reading: Option<FpsState>,
+    windows: bool,
+    presenter: Option<&str>,
+) -> TileText {
     use grokhub_agent::indexers::display_fps::FpsBlock;
-    let Some(state) = linux else {
+    let Some(state) = reading else {
         return TileText {
             big: "Not read".into(),
             caption: "Loadout never hooks into games".into(),
@@ -892,6 +898,19 @@ pub(super) fn frame_rate_text(linux: Option<FpsState>) -> TileText {
         };
     };
     match state {
+        FpsState::Rate(r) if windows => TileText {
+            big: format!("{} FPS", r.round() as u32),
+            caption: match presenter {
+                Some(p) => format!("From {}", p.strip_suffix(".exe").unwrap_or(p)),
+                None => "Nothing is drawing frames".into(),
+            },
+            detail: Some("Counted by Windows, never inside the game".into()),
+            tone: if presenter.is_some() {
+                Tone::Normal
+            } else {
+                Tone::Quiet
+            },
+        },
         FpsState::Rate(r) => TileText {
             big: format!("{} FPS", r.round() as u32),
             caption: "Frames on screen".into(),
@@ -904,11 +923,23 @@ pub(super) fn frame_rate_text(linux: Option<FpsState>) -> TileText {
             detail: None,
             tone: Tone::Quiet,
         },
+        FpsState::Blocked(FpsBlock::NeedsPermission) if windows => TileText {
+            big: "Not read".into(),
+            caption: "Needs a one-time admin setup".into(),
+            detail: Some("Copy setup, read it, run it in an admin PowerShell".into()),
+            tone: Tone::Warn,
+        },
         FpsState::Blocked(FpsBlock::NeedsPermission) => TileText {
             big: "Not read".into(),
             caption: "Needs a sudo setup first".into(),
             detail: Some("Copy setup, read it, run it in a terminal".into()),
             tone: Tone::Warn,
+        },
+        FpsState::Blocked(_) if windows => TileText {
+            big: "Not read".into(),
+            caption: "Windows didn't start the frame trace".into(),
+            detail: Some("Xbox Game Bar (Win+G) or Steam's counter show FPS safely".into()),
+            tone: Tone::Quiet,
         },
         FpsState::Blocked(_) => TileText {
             big: "Not read".into(),
@@ -919,32 +950,55 @@ pub(super) fn frame_rate_text(linux: Option<FpsState>) -> TileText {
     }
 }
 
+/// The Windows account the setup adds to Performance Log Users.
+fn windows_account() -> String {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    match std::env::var("USERDOMAIN") {
+        Ok(d) if !d.is_empty() => format!("{d}\\{user}"),
+        _ => user,
+    }
+}
+
 fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
-    let linux = cfg!(target_os = "linux").then(super::fps::display_fps);
-    let t = frame_rate_text(linux);
+    use grokhub_agent::indexers::display_fps as fps;
+    let windows = cfg!(windows);
+    let reading = (cfg!(target_os = "linux") || windows).then(super::fps::display_fps);
+    let presenter = if windows {
+        super::fps::presenter()
+    } else {
+        None
+    };
+    let t = frame_rate_text(reading, windows, presenter.as_deref());
     let needs_setup = matches!(
-        linux,
-        Some(FpsState::Blocked(
-            grokhub_agent::indexers::display_fps::FpsBlock::NeedsPermission
-        ))
+        reading,
+        Some(FpsState::Blocked(fps::FpsBlock::NeedsPermission))
     );
     card(ui, |ui| {
         header(ui, false, "Frame Rate", "", crate::theme::muted());
         paint_tile_text(ui, &t, size);
         if needs_setup && size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Copy setup") {
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "/usr/bin/grokhub".into());
-            ui.ctx()
-                .copy_text(grokhub_agent::indexers::display_fps::linux_setup(&exe));
+            let setup = if windows {
+                fps::windows_setup(&windows_account())
+            } else {
+                let exe = std::env::current_exe()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| "/usr/bin/grokhub".into());
+                fps::linux_setup(&exe)
+            };
+            ui.ctx().copy_text(setup);
         }
     })
-    .on_hover_text(if linux.is_some() {
-        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) installs a frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. The probe opens the frame counters and then drops it, Loadout itself never runs with it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf"
+    .on_hover_text(if windows {
+        format!(
+            "Loadout counts frames from Windows' own graphics event log (the one PresentMon reads), never from inside the game, so anti-cheat has nothing to see. It shows the busiest app drawing frames, which is your game while you play. The setup (run once in an admin PowerShell, then sign out and back in) adds your account to Windows' built-in Performance Log Users group, which lets you start event traces without admin. Undo: {}",
+            fps::windows_undo(&windows_account())
+        )
+    } else if reading.is_some() {
+        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) installs a frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. The probe opens the frame counters and then drops it, Loadout itself never runs with it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf".to_owned()
     } else {
-        "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone."
+        "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone.".to_owned()
     });
-    if linux.is_some() {
+    if reading.is_some() {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs(1));
     }

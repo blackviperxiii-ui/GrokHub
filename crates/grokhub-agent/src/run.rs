@@ -1294,7 +1294,7 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
     }
 }
 
-fn push_output(
+pub(crate) fn push_output(
     history: &mut Vec<InputItem>,
     conversation_id: &str,
     call: &FunctionCall,
@@ -1334,7 +1334,7 @@ fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u3
     let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
 }
 
-fn emit_tool(
+pub(crate) fn emit_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     id: &str,
     call: &FunctionCall,
