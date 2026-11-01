@@ -37,7 +37,7 @@ vi.mock("./api", () => ({
 
 vi.mock("./transport", () => ({ call: desktop.call }));
 
-import { Chat } from "./Chat";
+import { CHAT_EMPTY, Chat } from "./Chat";
 import { Personality } from "./Personality";
 import { activityOf, artUrl, PoseCycle } from "./nyx";
 
@@ -210,7 +210,7 @@ describe("Nyx in the chat", () => {
     await waitFor(() => expect(nyxLookCalls()).toHaveLength(1));
     expect(container.querySelector(".nyx-face")).toBeNull();
     expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
-    expect(screen.getByText("Ask Grok anything.")).toBeVisible();
+    expect(screen.getByText(CHAT_EMPTY)).toBeVisible();
   });
 });
 
