@@ -2,6 +2,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Root } from "./Pair";
 import "./styles.css";
+import { applyCachedTheme } from "./theme";
+
+// Paint in last time's theme; Settings corrects it once it loads.
+applyCachedTheme();
 
 const root = document.getElementById("root");
 if (root) {

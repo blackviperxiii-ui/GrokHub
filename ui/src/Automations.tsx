@@ -9,6 +9,7 @@ import {
   type RunResult,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { ConfirmRow } from "./ui";
 
 function resultLine(result: RunResult): string {
   if (result.error) return result.error;
@@ -39,6 +40,7 @@ export function Automations({
   const [note, setNote] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, string>>({});
+  const [asking, setAsking] = useState<string | null>(null);
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
@@ -114,6 +116,18 @@ export function Automations({
             <div className="card-status">{row.summary}</div>
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
+            {asking === row.id ? (
+              <ConfirmRow
+                question={`Remove ${row.name}?`}
+                detail="It won't run again."
+                action="Remove"
+                onConfirm={() => {
+                  setAsking(null);
+                  void act(() => removeAutomation(row.id));
+                }}
+                onCancel={() => setAsking(null)}
+              />
+            ) : (
             <div className="card-buttons">
               <button
                 type="button"
@@ -132,11 +146,12 @@ export function Automations({
               <button
                 type="button"
                 className="quiet danger"
-                onClick={() => void act(() => removeAutomation(row.id))}
+                onClick={() => setAsking(row.id)}
               >
-                Remove
+                Remove…
               </button>
             </div>
+            )}
           </li>
         ))}
       </ul>

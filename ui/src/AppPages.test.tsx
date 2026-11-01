@@ -74,19 +74,19 @@ describe("App pages", () => {
   it("Settings keeps an unsaved edit after Chat, and an untouched field takes the fresh value", async () => {
     render(<App />);
     await userEvent.click(tab("Settings"));
-    const model = await screen.findByLabelText("Model");
-    await userEvent.clear(model);
-    await userEvent.type(model, "kept");
+    const folder = await screen.findByLabelText("Work folder");
+    await userEvent.clear(folder);
+    await userEvent.type(folder, "/home/user/kept");
 
     // Chat's approvals chips saved "always" meanwhile.
     api.getSettings.mockResolvedValue(settings({ approvals: "always" }));
     await userEvent.click(tab("Chat"));
-    expect(screen.getByLabelText("Model")).not.toBeVisible();
+    expect(screen.getByLabelText("Work folder")).not.toBeVisible();
     await userEvent.click(tab("Settings"));
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Approvals" })).toHaveValue("always"));
-    expect(screen.getByLabelText("Model")).toHaveValue("kept");
-    expect(screen.getByLabelText("Model")).toBeVisible();
+    expect(screen.getByLabelText("Work folder")).toHaveValue("/home/user/kept");
+    expect(screen.getByLabelText("Work folder")).toBeVisible();
   });
 
   it("Settings opens again on the section that was open", async () => {

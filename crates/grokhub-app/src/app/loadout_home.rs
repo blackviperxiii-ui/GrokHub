@@ -2492,8 +2492,10 @@ mod tests {
         cabin.settings_menu_open = false;
         std::env::set_var("GROKHUB_DECK_NAV", "profile");
         cabin.apply_deck_shot_seed();
-        assert_eq!(cabin.nav_id(), "profile");
-        assert!(!cabin.activity.open, "profile over Chat is a known page");
+        assert_eq!(cabin.nav, Nav::Settings);
+        assert_eq!(cabin.settings_sec, SettingsSec::Account);
+        assert_eq!(cabin.rail_id(), "profile");
+        assert!(!cabin.activity.open, "profile is a known page");
         cabin.settings_menu_open = false;
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();

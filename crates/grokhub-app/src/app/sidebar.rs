@@ -3,7 +3,6 @@
 use super::*;
 
 pub(super) const RAIL_FOOTER_H: f32 = 40.0;
-use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
 fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
     ui.label(
@@ -45,10 +44,9 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
 const TITLEBAR_PILL_GAP: f32 = 8.0;
 
 impl Cabin {
+    /// The Signal Red window rim. Every theme wears the Loadout chrome; the
+    /// classic themes keep only their own colours.
     pub(super) fn paint_loadout_window_border(ui: &mut egui::Ui) {
-        if !crate::theme::is_loadout_paint() {
-            return;
-        }
         let rect = ui.max_rect();
         ui.painter().rect_stroke(
             rect,
@@ -64,27 +62,14 @@ impl Cabin {
         crate::motion::sync_reduced(&ctx, self.cfg.reduce_motion);
         let mut run_pending_update = false;
         let update_chip = update_chip_label(self.update_pending_now());
-        let loadout = crate::theme::is_loadout_paint();
-        let bar_fill = if loadout {
-            crate::theme::surface()
-        } else {
-            crate::theme::bg()
-        };
+        let bar_fill = crate::theme::surface();
         egui::Panel::top("titlebar")
             .exact_size(crate::theme::TITLEBAR_H)
             .frame(egui::Frame::NONE.fill(bar_fill))
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(12.0);
-                    if loadout {
-                        self.paint_loadout_titlebar_brand(ui);
-                    } else {
-                        ui.label(
-                            RichText::new(grokhub_core::brand::product_name())
-                                .font(crate::theme::title_font(crate::theme::FONT_CHROME))
-                                .color(crate::theme::fg()),
-                        );
-                    }
+                    self.paint_loadout_titlebar_brand(ui);
                     if let Some(label) = update_chip {
                         ui.add_space(8.0);
                         if crate::cards::titlebar_update_chip(ui, label) {
@@ -101,10 +86,8 @@ impl Cabin {
                             self.settings_sec = SettingsSec::Behavior;
                         }
                     }
-                    if loadout {
-                        ui.add_space(8.0);
-                        self.paint_loadout_titlebar_pills(ui);
-                    }
+                    ui.add_space(8.0);
+                    self.paint_loadout_titlebar_pills(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let hide = crate::tray::should_hide_on_close(
@@ -150,9 +133,6 @@ impl Cabin {
                         self.ui_notice_bell(ui);
                         // Recording and audio-check clocks, left of the bell.
                         self.paint_titlebar_live(ui);
-                        if !loadout {
-                            self.paint_personality_switch(ui);
-                        }
                         let (_rect, drag) = ui.allocate_exact_size(
                             ui.available_size(),
                             egui::Sense::click_and_drag(),
@@ -396,10 +376,7 @@ impl Cabin {
         }
         // Slide 07 nav: the selected item carries an amber bar on its left edge.
         // Only the row the glide highlights, so a second active row stays plain.
-        if active
-            && crate::theme::is_loadout_paint()
-            && crate::theme::glide_selected_is(ui, "rail", rect)
-        {
+        if active && crate::theme::glide_selected_is(ui, "rail", rect) {
             use crate::ui_kit::recipe::{look, paint_mark, Part, State};
             // The mark sits just left of the rect it is given; shift it inside
             // the slot so the rail's clip doesn't cut it off.
@@ -519,7 +496,7 @@ impl Cabin {
                 ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
-                let cur = self.nav_id();
+                let cur = self.rail_id();
                 for (id, label) in crate::theme::LOADOUT_NAV {
                     let active = cur == *id;
                     let resp =
@@ -527,10 +504,7 @@ impl Cabin {
                     if resp.clicked() {
                         match *id {
                             "home" => self.open_mission_home(),
-                            "profile" => {
-                                self.settings_menu_open = !self.settings_menu_open;
-                                self.settings_menu_ignore = true;
-                            }
+                            "profile" => self.open_profile(),
                             // Chat rail restores the last-used tab. Tabs live under the title bar.
                             "chat" => self.set_nav_id(id),
                             _ => self.set_nav_id(id),
@@ -539,6 +513,24 @@ impl Cabin {
                 }
                 crate::theme::glide_aim(ui, "rail");
             });
+    }
+
+    /// Rail Profile: Settings → Account, where the name, picture and sign-in live.
+    pub(super) fn open_profile(&mut self) {
+        self.settings_menu_open = false;
+        if self.nav != Nav::Settings {
+            self.settings_back = self.nav;
+        }
+        self.settings_sec = SettingsSec::Account;
+        self.nav = Nav::Settings;
+    }
+
+    /// The rail row to light: Profile while Settings shows Account.
+    pub(super) fn rail_id(&self) -> &'static str {
+        if self.nav == Nav::Settings && self.settings_sec == SettingsSec::Account {
+            return "profile";
+        }
+        self.nav_id()
     }
 
     pub(super) fn page_nav(&self) -> Nav {
@@ -634,8 +626,7 @@ impl Cabin {
                 return;
             }
             "profile" => {
-                self.settings_menu_open = !self.settings_menu_open;
-                self.settings_menu_ignore = true;
+                self.open_profile();
                 return;
             }
             "chat" => {
@@ -665,8 +656,10 @@ impl Cabin {
         }
     }
 
-    pub(super) fn ui_projects_and_history(&mut self, ui: &mut egui::Ui, rail_w: f32) {
-        let _ = rail_w;
+    /// The Projects tree on the History page. The page lists every chat
+    /// itself (with one search over chats and memory), so this no longer
+    /// paints a second filtered chat list under it.
+    pub(super) fn ui_projects_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             rail_section_caption(ui, RichText::new("Projects"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -836,62 +829,6 @@ impl Cabin {
             self.proj_menu_pos = pos;
             self.apply_project_menu(id, act);
         }
-        ui.add_space(crate::theme::SPACING_8);
-        ui.horizontal(|ui| {
-            rail_section_caption(ui, RichText::new("History"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if chip(ui, "See all", true, true).clicked() {
-                    self.nav = Nav::History;
-                }
-            });
-        });
-        card_frame(ui, CardVariant::Subtle, true, |ui| {
-            crate::cards::search_bar(
-                ui,
-                &mut self.sidebar_q,
-                "Filter chats…",
-                (ui.available_width() - crate::theme::SPACING_8).max(80.0),
-            );
-            ui.add_space(crate::theme::SPACING_4);
-            let hist_h = 180.0_f32;
-            egui::ScrollArea::vertical()
-                .id_salt("rail-history")
-                .auto_shrink([false, true])
-                .max_height(hist_h)
-                .show(ui, |ui| {
-                    let q = self.sidebar_q.to_ascii_lowercase();
-                    let live_empty = self.messages.is_empty();
-                    let listed = threads::chat_section_indices(
-                        &self.threads,
-                        Some(self.thread_idx),
-                        live_empty,
-                    );
-                    let listed: Vec<usize> = listed
-                        .into_iter()
-                        .filter(|&i| {
-                            q.is_empty()
-                                || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
-                        })
-                        .collect();
-                    if listed.is_empty() {
-                        let filtered = !q.is_empty();
-                        if filtered {
-                            if empty_state(ui, "No matches", "Try another filter.", Some("Clear")) {
-                                self.sidebar_q.clear();
-                            }
-                        } else {
-                            let _ = empty_state(
-                                ui,
-                                "No chats yet",
-                                "Start a new chat from the rail.",
-                                None,
-                            );
-                        }
-                    } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
-                        self.apply_tab_act(act);
-                    }
-                });
-        });
     }
 
     /// A rail row is `NAV_ROW_H` plus the item spacing a real `horizontal` leaves

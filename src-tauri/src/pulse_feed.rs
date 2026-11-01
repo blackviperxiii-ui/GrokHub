@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use grokhub_agent::harness as hx;
 use grokhub_agent::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
+use grokhub_core::http;
 use grokhub_core::pulse::{self as pc};
 use grokhub_core::pulse_ideas::{self as pi, IdeasState};
 use grokhub_core::pulse_sources::{self as ps, CacheEntry, Fetched, SourceReq};
@@ -453,10 +454,13 @@ impl LoopbackNet {
 
     fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, String> {
         let at = format!("{}/pulse/{kind}?url={}", self.base, ps::query_value(url));
-        let resp = ureq::get(&at)
-            .timeout(FETCH_TIMEOUT)
-            .call()
-            .map_err(|e| e.to_string())?;
+        let resp = http::agent(http::Opts {
+            overall: Some(FETCH_TIMEOUT),
+            ..Default::default()
+        })
+        .get(&at)
+        .call()
+        .map_err(|e| e.to_string())?;
         let mut buf = Vec::new();
         resp.into_reader()
             .take(SOURCE_CAP)
@@ -501,12 +505,13 @@ struct Got {
 pub struct LiveNet;
 
 impl LiveNet {
-    fn agent() -> ureq::Agent {
-        ureq::AgentBuilder::new()
-            .redirects(0)
-            .timeout(FETCH_TIMEOUT)
-            .resolver(grokhub_agent::public_only_resolve)
-            .build()
+    fn agent() -> http::Agent {
+        http::agent(http::Opts {
+            redirects: 0,
+            overall: Some(FETCH_TIMEOUT),
+            public_only: true,
+            ..Default::default()
+        })
     }
 
     fn get(
@@ -527,22 +532,22 @@ impl LiveNet {
             )?;
             let mut call = Self::agent()
                 .get(&url)
-                .set("user-agent", grokhub_agent::USER_AGENT)
-                .set("accept", accept);
+                .header("user-agent", grokhub_agent::USER_AGENT)
+                .header("accept", accept);
             if hop == 0 {
                 if let Some(entry) = have {
                     if let Some(etag) = entry.etag.as_deref() {
-                        call = call.set("if-none-match", etag);
+                        call = call.header("if-none-match", etag);
                     }
                     if let Some(when) = entry.last_modified.as_deref() {
-                        call = call.set("if-modified-since", when);
+                        call = call.header("if-modified-since", when);
                     }
                 }
             }
             let resp = match call.call() {
                 Ok(resp) => resp,
-                Err(ureq::Error::Status(code, _)) => return Err(format!("HTTP {code}")),
-                Err(ureq::Error::Transport(_)) => return Err("network error".into()),
+                Err(http::Error::Status { code, .. }) => return Err(format!("HTTP {code}")),
+                Err(http::Error::Transport { .. }) => return Err("network error".into()),
             };
             let status = resp.status();
             if (300..400).contains(&status) && status != 304 {

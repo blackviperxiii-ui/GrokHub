@@ -10,6 +10,7 @@ import {
   type JournalQuestion,
 } from "./api";
 import { newConversationId } from "./Chat";
+import { StatusLine, useNote } from "./ui";
 
 export const JOURNAL_EMPTY =
   "No open questions. Add a decision you're weighing and I'll help you test it.";
@@ -20,21 +21,21 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
   const [page, setPage] = useState<JournalPage | null>(null);
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<Record<string, string>>({});
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getJournal().then(setPage, (err) => setNote(String(err)));
-  }, []);
+    getJournal().then(setPage, fail);
+  }, [fail]);
 
   async function run(work: () => Promise<JournalPage>, done?: string) {
     setBusy(true);
     try {
       setPage(await work());
-      setNote(done ?? null);
+      ok(done ?? null);
       return true;
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       // The cabin may have changed it; show what the file holds now.
       await getJournal().then(setPage, () => {});
       return false;
@@ -68,7 +69,7 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
       const started = await journalToMission(q.id, q.mission ?? newConversationId());
       onMission(started);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     } finally {
       setBusy(false);
       await getJournal().then(setPage, () => {});
@@ -94,11 +95,7 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
           Add question
         </button>
       </form>
-      {note && (
-        <p className="status" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} />
       {page === null && !note && <p className="empty">Loading the journal…</p>}
       {page && page.active.length === 0 && <p className="empty">{JOURNAL_EMPTY}</p>}
       {page && (
