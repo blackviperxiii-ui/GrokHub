@@ -5520,7 +5520,6 @@ impl eframe::App for Cabin {
             self.ui_palette(&ctx);
         }
         self.paint_record_indicator(&ctx);
-        self.paint_listen_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }
