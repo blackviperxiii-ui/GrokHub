@@ -28,6 +28,10 @@ export interface Settings {
   theme: Theme;
   /** Settings → About. */
   version: string;
+  /** Settings → General → the summon hotkey. */
+  summonHotkey: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications: boolean;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -42,6 +46,12 @@ export interface Capabilities {
   plugins: boolean;
   /** Settings → Account → Sign in with Grok (desktop and iOS). */
   grokSignIn?: boolean;
+  /** Settings → General → start at login. */
+  autostart?: boolean;
+  /** Settings → General → the summon hotkey; off on Wayland. */
+  summonHotkey?: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -71,6 +81,8 @@ export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  /** A permission card answered away from the page, such as Deny on its notification. */
+  | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
@@ -134,6 +146,24 @@ export function saveSettings(
     approvals,
     desktopControl,
   });
+}
+
+/** Whether the OS starts the app at login. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Resolves with what the OS has after the change. */
+export function setAutostart(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { on });
+}
+
+export function setSummonHotkey(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_summon_hotkey", { on });
+}
+
+export function setNotifications(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_notifications", { on });
 }
 
 /** Where a model in the picker came from. */
@@ -318,6 +348,31 @@ export function pollGrokSignIn(): Promise<GrokSignInPoll> {
 
 export function grokSignOut(): Promise<Settings> {
   return invoke<Settings>("grok_sign_out");
+}
+
+/** A row of the composer's command list. `disabled` says why it can't run. */
+export interface SlashHit {
+  cmd: string;
+  hint: string;
+  insert: string;
+  runOnPick: boolean;
+  disabled: string | null;
+}
+
+/** What a slash line asked the chat to do. Slash lines never reach the model. */
+export type SlashEffect =
+  | { kind: "newChat" }
+  | { kind: "mode"; mode: SessionMode; text: string | null }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
+  | { kind: "modelSet"; id: string; text: string }
+  | { kind: "notice"; text: string };
+
+export function slashHits(draft: string): Promise<SlashHit[]> {
+  return invoke<SlashHit[]>("slash_hits", { draft });
+}
+
+export function runSlash(line: string): Promise<SlashEffect> {
+  return invoke<SlashEffect>("run_slash", { line });
 }
 
 export function addMemory(

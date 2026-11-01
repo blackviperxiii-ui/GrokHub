@@ -228,7 +228,7 @@ pub fn parse_saved(text: &str) -> Map<String, Value> {
 }
 
 /// One character the addon recorded.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WowCharacter {
     pub name: String,
     pub realm: String,
@@ -236,13 +236,87 @@ pub struct WowCharacter {
     pub class: String,
     /// The class's display name in the game's language.
     pub class_name: String,
+    pub spec: String,
     pub level: u32,
     pub zone: String,
+    pub guild: String,
     pub money_copper: u64,
+    /// Equipped item level.
     pub item_level: Option<f64>,
+    /// Item level counting the best gear in the bags too.
+    pub item_level_overall: Option<f64>,
     pub played_secs: Option<u64>,
     pub deaths: u64,
     pub last_seen: u64,
+    pub gear: Vec<WowItem>,
+    pub professions: Vec<WowSkill>,
+    pub currencies: Vec<WowCount>,
+    pub reputations: Vec<WowRep>,
+    pub mplus_score: Option<f64>,
+    pub keystone: Option<WowKeystone>,
+    pub vault: Vec<WowVaultSlot>,
+    pub lockouts: Vec<WowLockout>,
+    pub achievement_points: Option<u64>,
+    pub mounts: Option<u64>,
+    pub pets: Option<u64>,
+    pub quests_in_log: Option<u64>,
+    pub quests_completed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowItem {
+    pub slot: String,
+    pub name: String,
+    pub level: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowSkill {
+    pub name: String,
+    pub skill: u32,
+    pub max: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowCount {
+    pub name: String,
+    pub quantity: u64,
+}
+
+/// A reputation: renown for a major faction, else its standing (1 hated
+/// to 8 exalted) and progress inside it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowRep {
+    pub name: String,
+    pub renown: Option<u32>,
+    pub standing: Option<u32>,
+    pub progress: Option<(u64, u64)>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowKeystone {
+    pub name: String,
+    pub level: u32,
+}
+
+/// One Great Vault slot: `kind` is Blizzard's activity type (1 dungeons,
+/// 3 raids, 6 world).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowVaultSlot {
+    pub kind: u32,
+    pub progress: u64,
+    pub threshold: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WowLockout {
+    pub name: String,
+    pub difficulty: String,
+    pub raid: bool,
+    pub done: u32,
+    pub total: u32,
+    /// Unix seconds when it resets.
+    pub resets_at: u64,
 }
 
 /// One thing the addon logged.
@@ -276,29 +350,13 @@ fn u(v: &Value, k: &str) -> Option<u64> {
     })
 }
 
-/// The characters and events in one `LoadoutDB` value.
-pub fn from_db(db: &Value) -> WowSaved {
-    let mut out = WowSaved::default();
-    if let Some(chars) = db.get("characters").and_then(Value::as_object) {
-        for c in chars.values() {
-            out.characters.push(WowCharacter {
-                name: s(c, "name"),
-                realm: s(c, "realm"),
-                class: s(c, "class"),
-                class_name: s(c, "className"),
-                level: u(c, "level")
-                    .and_then(|l| u32::try_from(l).ok())
-                    .unwrap_or(0),
-                zone: s(c, "zone"),
-                money_copper: u(c, "money").unwrap_or(0),
-                item_level: c.get("itemLevel").and_then(Value::as_f64),
-                played_secs: u(c, "played"),
-                deaths: u(c, "deaths").unwrap_or(0),
-                last_seen: u(c, "lastSeen").unwrap_or(0),
-            });
-        }
-    }
-    let events: Vec<&Value> = match db.get("events") {
+fn u32_of(v: &Value, k: &str) -> Option<u32> {
+    u(v, k).and_then(|n| u32::try_from(n).ok())
+}
+
+/// A saved Lua list: an array, or a table keyed `1`, `2`, ... in order.
+fn list(v: Option<&Value>) -> Vec<&Value> {
+    match v {
         Some(Value::Array(a)) => a.iter().collect(),
         Some(Value::Object(m)) => {
             let mut v: Vec<(u64, &Value)> = m
@@ -309,8 +367,118 @@ pub fn from_db(db: &Value) -> WowSaved {
             v.into_iter().map(|(_, v)| v).collect()
         }
         _ => Vec::new(),
-    };
-    for e in events {
+    }
+}
+
+fn character(c: &Value) -> WowCharacter {
+    let field = |k: &str| list(c.get(k));
+    WowCharacter {
+        name: s(c, "name"),
+        realm: s(c, "realm"),
+        class: s(c, "class"),
+        class_name: s(c, "className"),
+        spec: s(c, "spec"),
+        level: u32_of(c, "level").unwrap_or(0),
+        zone: s(c, "zone"),
+        guild: s(c, "guild"),
+        money_copper: u(c, "money").unwrap_or(0),
+        // Copies before 1.1.0 could save 0 at logout; that isn't a level.
+        item_level: c
+            .get("itemLevel")
+            .and_then(Value::as_f64)
+            .filter(|l| *l > 0.0),
+        item_level_overall: c
+            .get("itemLevelOverall")
+            .and_then(Value::as_f64)
+            .filter(|l| *l > 0.0),
+        played_secs: u(c, "played"),
+        deaths: u(c, "deaths").unwrap_or(0),
+        last_seen: u(c, "lastSeen").unwrap_or(0),
+        gear: field("gear")
+            .into_iter()
+            .map(|g| WowItem {
+                slot: s(g, "slot"),
+                name: s(g, "name"),
+                level: u32_of(g, "level"),
+            })
+            .collect(),
+        professions: field("professions")
+            .into_iter()
+            .map(|p| WowSkill {
+                name: s(p, "name"),
+                skill: u32_of(p, "skill").unwrap_or(0),
+                max: u32_of(p, "max").unwrap_or(0),
+            })
+            .filter(|p| !p.name.is_empty())
+            .collect(),
+        currencies: field("currencies")
+            .into_iter()
+            .map(|x| WowCount {
+                name: s(x, "name"),
+                quantity: u(x, "quantity").unwrap_or(0),
+            })
+            .filter(|x| !x.name.is_empty())
+            .collect(),
+        reputations: field("reputations")
+            .into_iter()
+            .map(|r| WowRep {
+                name: s(r, "name"),
+                renown: u32_of(r, "renown"),
+                standing: u32_of(r, "standing"),
+                progress: match (u(r, "value"), u(r, "low"), u(r, "high")) {
+                    (Some(v), Some(lo), Some(hi)) if hi > lo => {
+                        Some((v.saturating_sub(lo), hi - lo))
+                    }
+                    _ => None,
+                },
+            })
+            .filter(|r| !r.name.is_empty())
+            .collect(),
+        mplus_score: c
+            .get("mplusScore")
+            .and_then(Value::as_f64)
+            .filter(|x| *x > 0.0),
+        keystone: c.get("keystone").and_then(|k| {
+            Some(WowKeystone {
+                name: s(k, "name"),
+                level: u32_of(k, "level").filter(|l| *l > 0)?,
+            })
+        }),
+        vault: field("vault")
+            .into_iter()
+            .map(|v| WowVaultSlot {
+                kind: u32_of(v, "kind").unwrap_or(0),
+                progress: u(v, "progress").unwrap_or(0),
+                threshold: u(v, "threshold").unwrap_or(0),
+            })
+            .collect(),
+        lockouts: field("lockouts")
+            .into_iter()
+            .map(|l| WowLockout {
+                name: s(l, "name"),
+                difficulty: s(l, "difficulty"),
+                raid: l.get("raid").and_then(Value::as_bool).unwrap_or(false),
+                done: u32_of(l, "done").unwrap_or(0),
+                total: u32_of(l, "total").unwrap_or(0),
+                resets_at: u(l, "resetAt").unwrap_or(0),
+            })
+            .filter(|l| !l.name.is_empty())
+            .collect(),
+        achievement_points: u(c, "achievementPoints"),
+        mounts: u(c, "mounts"),
+        pets: u(c, "pets"),
+        quests_in_log: u(c, "questsInLog"),
+        quests_completed: u(c, "questsCompleted"),
+    }
+}
+
+/// The characters and events in one `LoadoutDB` value.
+pub fn from_db(db: &Value) -> WowSaved {
+    let mut out = WowSaved::default();
+    if let Some(chars) = db.get("characters").and_then(Value::as_object) {
+        out.characters.extend(chars.values().map(character));
+    }
+    for e in list(db.get("events")) {
         out.events.push(WowEvent {
             kind: s(e, "kind"),
             at: u(e, "at").unwrap_or(0),
@@ -324,12 +492,13 @@ pub fn from_db(db: &Value) -> WowSaved {
 
 /// The addon's saved-variables files in one flavor, one per account.
 pub fn saved_files(flavor_dir: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(flavor_dir.join("WTF").join("Account")) else {
+    use crate::wow_addon::child_any_case as child;
+    let Ok(rd) = std::fs::read_dir(child(&child(flavor_dir, "WTF"), "Account")) else {
         return Vec::new();
     };
     let mut out: Vec<PathBuf> = rd
         .flatten()
-        .map(|e| e.path().join("SavedVariables").join("Loadout.lua"))
+        .map(|e| child(&child(&e.path(), "SavedVariables"), "Loadout.lua"))
         .filter(|p| p.is_file())
         .collect();
     out.sort();
@@ -380,7 +549,14 @@ pub fn character_line(c: &WowCharacter) -> String {
     } else {
         &c.class_name
     };
-    parts.push(format!("{} {}", c.level, class).trim().to_owned());
+    let who = [c.level.to_string(), c.spec.clone(), class.clone()];
+    parts.push(
+        who.iter()
+            .filter(|w| !w.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
     if !c.zone.is_empty() {
         parts.push(c.zone.clone());
     }
@@ -389,6 +565,143 @@ pub fn character_line(c: &WowCharacter) -> String {
         parts.push(format!("ilvl {}", ilvl.round() as u64));
     }
     parts.join(" · ")
+}
+
+fn count_label(n: u64) -> String {
+    gold_label(n * 10_000).trim_end_matches('g').to_owned()
+}
+
+/// `3h 20m` from seconds.
+fn played_label(secs: u64) -> String {
+    let (d, h, m) = (secs / 86_400, secs / 3_600 % 24, secs / 60 % 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else {
+        format!("{h}h {m}m")
+    }
+}
+
+/// Everything else the addon saved about a character, one short line per
+/// topic, for its detail view. Lockouts past their reset by `now` (unix
+/// seconds) are left out.
+pub fn detail_lines(c: &WowCharacter, now: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    match (c.item_level, c.item_level_overall) {
+        (Some(eq), Some(all)) if all.round() > eq.round() => out.push(format!(
+            "Item level {} equipped, {} overall",
+            eq.round() as u64,
+            all.round() as u64
+        )),
+        (Some(eq), _) => out.push(format!("Item level {}", eq.round() as u64)),
+        _ => {}
+    }
+    let mut mplus = Vec::new();
+    if let Some(score) = c.mplus_score {
+        mplus.push(format!("Mythic+ rating {}", score.round() as u64));
+    }
+    if let Some(k) = &c.keystone {
+        let name = if k.name.is_empty() {
+            "keystone"
+        } else {
+            &k.name
+        };
+        mplus.push(format!("+{} {name}", k.level));
+    }
+    if !mplus.is_empty() {
+        out.push(mplus.join(" · "));
+    }
+    let vault: Vec<String> = [(1, "Dungeons"), (3, "Raids"), (6, "World")]
+        .iter()
+        .filter_map(|(kind, label)| {
+            let slots: Vec<&WowVaultSlot> = c.vault.iter().filter(|v| v.kind == *kind).collect();
+            (!slots.is_empty()).then(|| {
+                let open = slots
+                    .iter()
+                    .filter(|v| v.threshold > 0 && v.progress >= v.threshold)
+                    .count();
+                format!("{label} {open}/{}", slots.len())
+            })
+        })
+        .collect();
+    if !vault.is_empty() {
+        out.push(format!("Great Vault: {}", vault.join(", ")));
+    }
+    let locks: Vec<String> = c
+        .lockouts
+        .iter()
+        .filter(|l| l.resets_at == 0 || l.resets_at > now)
+        .map(|l| {
+            let diff = if l.difficulty.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", l.difficulty)
+            };
+            if l.total > 0 {
+                format!("{}{diff} {}/{}", l.name, l.done, l.total)
+            } else {
+                format!("{}{diff}", l.name)
+            }
+        })
+        .collect();
+    if !locks.is_empty() {
+        out.push(format!("Locked: {}", locks.join(", ")));
+    }
+    if !c.professions.is_empty() {
+        let p: Vec<String> = c
+            .professions
+            .iter()
+            .map(|p| format!("{} {}/{}", p.name, p.skill, p.max))
+            .collect();
+        out.push(p.join(" · "));
+    }
+    let renown: Vec<String> = c
+        .reputations
+        .iter()
+        .filter_map(|r| Some(format!("{} {}", r.name, r.renown?)))
+        .collect();
+    if !renown.is_empty() {
+        out.push(format!("Renown: {}", renown.join(", ")));
+    }
+    let reps = c.reputations.iter().filter(|r| r.renown.is_none()).count();
+    let mut misc = Vec::new();
+    if let Some(p) = c.achievement_points {
+        misc.push(format!("{} achievement points", count_label(p)));
+    }
+    if let Some(m) = c.mounts {
+        misc.push(format!("{} mounts", count_label(m)));
+    }
+    if let Some(p) = c.pets {
+        misc.push(format!("{} pets", count_label(p)));
+    }
+    if reps > 0 {
+        misc.push(format!("{reps} reputations"));
+    }
+    if !misc.is_empty() {
+        out.push(misc.join(" · "));
+    }
+    let mut quests = Vec::new();
+    if let Some(q) = c.quests_in_log {
+        quests.push(format!("{q} quests in the log"));
+    }
+    if let Some(q) = c.quests_completed {
+        quests.push(format!("{} completed", count_label(q)));
+    }
+    if let Some(p) = c.played_secs {
+        quests.push(format!("played {}", played_label(p)));
+    }
+    if !quests.is_empty() {
+        out.push(quests.join(" · "));
+    }
+    let top: Vec<String> = c
+        .currencies
+        .iter()
+        .take(4)
+        .map(|x| format!("{} {}", x.name, count_label(x.quantity)))
+        .collect();
+    if !top.is_empty() {
+        out.push(top.join(" · "));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -462,6 +775,7 @@ OtherAddonDB = nil
                 played_secs: Some(360_000),
                 deaths: 1,
                 last_seen: 1_761_955_210,
+                ..Default::default()
             }
         );
         assert_eq!(chars[1].level, 12);
@@ -550,5 +864,151 @@ OtherAddonDB = nil
         );
         let alt = saved.characters.iter().find(|c| c.name == "Alt").unwrap();
         assert_eq!(character_line(alt), "Alt · 12 MAGE · 0g");
+    }
+
+    /// What the 1.1.0 addon saves, in WoW's own layout.
+    const SAVED_V2: &str = r#"
+LoadoutDB = {
+["schema"] = 2,
+["characters"] = {
+["Testchar-Area 52"] = {
+["name"] = "Testchar",
+["realm"] = "Area 52",
+["class"] = "HUNTER",
+["className"] = "Hunter",
+["spec"] = "Marksmanship",
+["level"] = 90,
+["zone"] = "Silvermoon City",
+["money"] = 51234567,
+["itemLevel"] = 701.3,
+["itemLevelOverall"] = 703.8,
+["played"] = 360000,
+["lastSeen"] = 1761955210,
+["mplusScore"] = 2456.4,
+["keystone"] = {
+["level"] = 12,
+["map"] = 500,
+["name"] = "Magisters' Terrace",
+},
+["gear"] = {
+{
+["slot"] = "Head",
+["id"] = 1001,
+["name"] = "Helm",
+["level"] = 700,
+["quality"] = 4,
+}, -- [1]
+},
+["professions"] = {
+{
+["name"] = "Skinning",
+["skill"] = 100,
+["max"] = 100,
+}, -- [1]
+},
+["currencies"] = {
+{
+["name"] = "Valorstones",
+["quantity"] = 1500,
+}, -- [1]
+},
+["reputations"] = {
+{
+["name"] = "Silvermoon Court",
+["renown"] = 12,
+}, -- [1]
+{
+["name"] = "Shattered Sun",
+["standing"] = 5,
+["value"] = 3000,
+["low"] = 0,
+["high"] = 6000,
+}, -- [2]
+},
+["vault"] = {
+{
+["kind"] = 1,
+["progress"] = 4,
+["threshold"] = 1,
+}, -- [1]
+{
+["kind"] = 1,
+["progress"] = 4,
+["threshold"] = 4,
+}, -- [2]
+{
+["kind"] = 1,
+["progress"] = 4,
+["threshold"] = 8,
+}, -- [3]
+},
+["lockouts"] = {
+{
+["name"] = "Voidspire",
+["difficulty"] = "Heroic",
+["raid"] = true,
+["done"] = 3,
+["total"] = 8,
+["resetAt"] = 1762000000,
+}, -- [1]
+{
+["name"] = "Old Raid",
+["raid"] = true,
+["resetAt"] = 1700000000,
+}, -- [2]
+},
+["achievementPoints"] = 18000,
+["mounts"] = 412,
+["pets"] = 250,
+["questsInLog"] = 22,
+["questsCompleted"] = 14000,
+},
+},
+["events"] = {},
+}
+"#;
+
+    #[test]
+    fn everything_the_addon_saves_reads_back_and_shows() {
+        let saved = from_db(&parse_saved(SAVED_V2)["LoadoutDB"]);
+        let c = &saved.characters[0];
+        assert_eq!(c.spec, "Marksmanship");
+        assert_eq!(c.gear[0].level, Some(700));
+        assert_eq!(c.reputations[1].progress, Some((3000, 6000)));
+        assert_eq!(
+            c.keystone,
+            Some(WowKeystone {
+                name: "Magisters' Terrace".into(),
+                level: 12
+            })
+        );
+        assert_eq!(
+            character_line(c),
+            "Testchar · 90 Marksmanship Hunter · Silvermoon City · 5,123g · ilvl 701"
+        );
+        assert_eq!(
+            detail_lines(c, 1_761_955_210),
+            vec![
+                "Item level 701 equipped, 704 overall",
+                "Mythic+ rating 2456 · +12 Magisters' Terrace",
+                "Great Vault: Dungeons 2/3",
+                "Locked: Voidspire Heroic 3/8",
+                "Skinning 100/100",
+                "Renown: Silvermoon Court 12",
+                "18,000 achievement points · 412 mounts · 250 pets · 1 reputations",
+                "22 quests in the log · 14,000 completed · played 4d 4h",
+                "Valorstones 1,500",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_zero_item_level_from_an_old_copy_is_unknown_not_zero() {
+        let db = parse_saved(
+            "LoadoutDB = { [\"characters\"] = { [\"A-B\"] = { [\"name\"] = \"A\", [\"level\"] = 90, [\"itemLevel\"] = 0 } } }",
+        );
+        let c = &from_db(&db["LoadoutDB"]).characters[0];
+        assert_eq!(c.item_level, None);
+        assert!(!character_line(c).contains("ilvl"));
     }
 }

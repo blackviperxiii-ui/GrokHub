@@ -33,13 +33,13 @@ pub(super) fn clip_profile_name(s: &str) -> String {
 pub(super) fn fallback_cabin_name(user_md: &str) -> String {
     let n = greeting_name(user_md, "");
     if n.is_empty() {
-        "Grok".into()
+        "You".into()
     } else {
         n
     }
 }
 
-/// Saved name wins. An empty saved name keeps the OAuth name, then USER.md, then Grok.
+/// Saved name wins. An empty saved name keeps the OAuth name, then USER.md, then "You".
 /// The OAuth email is not a name.
 pub(super) fn avatar_menu(
     saved_name: &str,

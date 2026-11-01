@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
+  getAutostart,
   getSettings,
   saveSettings,
   setApiKey,
+  setAutostart,
+  setNotifications,
+  setSummonHotkey,
   type Approvals,
   type Capabilities,
   type Settings as Shape,
@@ -30,6 +34,12 @@ import { StatusLine, useNote } from "./ui";
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
+/** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
+export const SUMMON_KEYS =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+    ? "⌘+Shift+Space"
+    : "Ctrl+Shift+Space";
+
 /** `goTo`: a section the command palette picked. A new `n` opens it. */
 export function Settings({
   caps,
@@ -47,6 +57,8 @@ export function Settings({
   const [workspace, setWorkspace] = useState("");
   const [approvals, setApprovals] = useState<Approvals>("ask");
   const [desktopControl, setDesktopControl] = useState(false);
+  /** As the OS has it; null until read. */
+  const [autostart, setAutostartShown] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
   const { note, ok, fail, clear } = useNote();
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
@@ -76,6 +88,11 @@ export function Settings({
     getSettings().then(show, fail);
   }, []);
 
+  useEffect(() => {
+    if (!caps.autostart || caps.remote) return;
+    getAutostart().then(setAutostartShown, fail);
+  }, [caps.autostart, caps.remote]);
+
   // Each section is its own page: it opens at the top, however far the last one was read.
   useEffect(() => {
     if (pane.current) pane.current.scrollTop = 0;
@@ -102,6 +119,26 @@ export function Settings({
         await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals, desktopControl),
       );
       ok("Settings saved.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  // These switches apply at once. Only the switch changes, so an unsaved edit
+  // in the form above stays.
+  async function flipAutostart(on: boolean) {
+    try {
+      setAutostartShown(await setAutostart(on));
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function flip(change: () => Promise<Shape>) {
+    try {
+      setSettings(await change());
+      clear();
     } catch (err) {
       fail(err);
     }
@@ -190,6 +227,7 @@ export function Settings({
 
   function general() {
     return (
+      <>
       <form onSubmit={save}>
         <div className="field">
           <span id="model-label">Model</span>
@@ -232,6 +270,43 @@ export function Settings({
         )}
         <button type="submit">Save settings</button>
       </form>
+      {basics()}
+      </>
+    );
+  }
+
+  /** Start at login, the summon hotkey and notifications: desktop only. */
+  function basics() {
+    if (!caps.autostart && !caps.summonHotkey && !caps.notifications) return null;
+    return (
+      <div className="settings-group" role="group" aria-label="On this computer">
+        <h2>On this computer</h2>
+        {caps.autostart && (
+          <Toggle
+            checked={autostart === true}
+            disabled={autostart === null}
+            onChange={(on) => void flipAutostart(on)}
+          >
+            Start {PRODUCT_NAME} when you sign in
+          </Toggle>
+        )}
+        {caps.summonHotkey && (
+          <Toggle
+            checked={loaded.summonHotkey}
+            onChange={(on) => void flip(() => setSummonHotkey(on))}
+          >
+            Bring up {PRODUCT_NAME} from anywhere with {SUMMON_KEYS}
+          </Toggle>
+        )}
+        {caps.notifications && (
+          <Toggle
+            checked={loaded.notifications}
+            onChange={(on) => void flip(() => setNotifications(on))}
+          >
+            Notify me when Grok needs an OK or finishes while {PRODUCT_NAME} is in the background
+          </Toggle>
+        )}
+      </div>
     );
   }
 

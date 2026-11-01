@@ -661,7 +661,8 @@ select:focus-visible {
 }
 
 .settings form,
-.settings .key {
+.settings .key,
+.settings .settings-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2172,4 +2173,45 @@ label.toggle-row {
   letter-spacing: 0.15em;
   margin: 0.5rem 0;
   user-select: all;
+}
+/* Composer slash commands: the list sits just above the composer. */
+.slash-wrap {
+  position: relative;
+}
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--line, currentColor);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+.slash-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.slash-row[aria-selected="true"] {
+  background: var(--accent-soft, rgb(127 127 127 / 0.18));
+}
+.slash-row.off {
+  opacity: 0.55;
+  cursor: default;
+}
+.slash-hint {
+  flex: 1;
+}
+.card.slash-notice .card-detail-line {
+  white-space: pre-wrap;
 }
