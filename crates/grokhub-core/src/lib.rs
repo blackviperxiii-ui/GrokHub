@@ -184,6 +184,7 @@ pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod work_item;
+pub mod work_run;
 pub mod workboard;
 pub mod wow_addon;
 pub mod wow_saved;

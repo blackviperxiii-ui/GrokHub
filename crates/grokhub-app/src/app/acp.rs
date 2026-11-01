@@ -124,6 +124,7 @@ impl Cabin {
                         self.store_hub_frame(url);
                     }
                     self.ingest_tool_card(&card);
+                    self.log_run_tool(&card);
                     let watched = card.clone();
                     if self.stream_here() {
                         self.scrub_live_blocks();
