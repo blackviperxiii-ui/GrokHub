@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  deleteChat: vi.fn<(id: string) => Promise<void>>(),
   getLastChat: vi.fn<() => Promise<Transcript | null>>(),
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   setModel: vi.fn<(id: string) => Promise<Settings>>(),
@@ -44,6 +45,7 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  deleteChat: api.deleteChat,
   getLastChat: api.getLastChat,
   loadChat: api.loadChat,
   setModel: api.setModel,
@@ -793,6 +795,29 @@ describe("Chat history", () => {
     await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
     const id = await startTurn("new start");
     expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat deletes the open chat's saved history and starts a new one", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockResolvedValue();
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    expect(api.deleteChat).toHaveBeenCalledWith("shell-saved");
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat keeps the chat on screen when the delete fails", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockRejectedValue("disk is read-only");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    expect(await screen.findByText(/disk is read-only/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
   });
 
   it("Show earlier loads more of a long chat's start", async () => {

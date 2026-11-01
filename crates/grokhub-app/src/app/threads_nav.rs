@@ -840,6 +840,63 @@ impl Cabin {
         self.persist();
     }
 
+    /// Main tab's Clear chat, after its confirm. Main's transcript and every
+    /// saved history its model reads back go for good: its sessions, their
+    /// attachments, `/bg` and scheduled forks of them, and Main's copy in the
+    /// backups. Main itself stays, and so do the Workboard, memory and settings.
+    pub(super) fn clear_main_chat(&mut self) {
+        let i = self.main_thread_idx();
+        let open = self.thread_idx == i;
+        let mut halted = false;
+        if open && self.running {
+            self.halt_in_flight();
+            self.finish_hub_dispatch("Chat cleared", false);
+            halted = true;
+        }
+        let main_id = self.threads[i].id.clone();
+        self.drop_bg_runs_for(&main_id);
+        let main = &self.threads[i];
+        let mut ids = threads::sessions_deleted_with_chat(
+            main.grok_session.as_deref(),
+            &main.retired_sessions,
+        );
+        if let Some(bound) = self.acp.as_ref().map(|h| h.session_id.clone()) {
+            if ids.contains(&bound) {
+                if !halted {
+                    self.halt_in_flight();
+                }
+                self.acp = None;
+            }
+        }
+        for id in &ids {
+            let _ = grokhub_agent::delete_session(id);
+        }
+        ids.extend(grokhub_agent::delete_forks_of(&ids));
+        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+        for t in &mut self.threads {
+            t.retired_sessions.retain(|s| !ids.contains(s));
+        }
+        let main = &mut self.threads[i];
+        main.messages = Arc::new(Vec::new());
+        main.goal = Default::default();
+        main.plan_body.clear();
+        // Deleted ids stay tombstoned, so Main's next turn starts a new session.
+        main.grok_session = None;
+        main.grok_cwd = None;
+        main.native_carry = false;
+        main.last_active_ms = now_ms();
+        if open {
+            self.messages = main.messages.clone();
+            self.drop_leaving_thread_chrome();
+            self.followup_step = 0;
+            self.active_skill_follow = None;
+            self.goal_step = 0;
+        }
+        threads::forget_main_history();
+        self.status = "Main chat cleared".into();
+        self.persist();
+    }
+
     pub(super) fn delete_all_history(&mut self) {
         let thread_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
         self.halt_in_flight();

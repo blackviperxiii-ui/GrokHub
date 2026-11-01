@@ -3444,6 +3444,27 @@ label.toggle-row {
   padding: 2px 8px 2px 0;
 }
 
+/* The Chat tab's right-click menu sits at the pointer, over everything. */
+.feed-menu.tab-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 30;
+}
+
+/* A short confirm in the fix window's frame. */
+.confirm-window {
+  max-width: 420px;
+}
+
+.confirm-window p {
+  margin: 0 0 10px;
+}
+
+.confirm-window .confirm-keeps {
+  color: var(--muted);
+}
+
 /* Home: the cabin's tile grid. A Large tile spans two columns and two rows,
    a Medium two columns, a Small one; a phone stacks them. */
 .home,
