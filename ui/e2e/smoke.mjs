@@ -1172,7 +1172,7 @@ async function probe(s, label) {
         box: document.querySelector("textarea[aria-label='Message']")?.value,
         active: d(document.activeElement),
         vt: 'activeViewTransition' in document ? String(document.activeViewTransition) : 'n/a',
-        focus: document.hasFocus(), frames: window.__frames || 0, ua: navigator.userAgent.slice(-60),
+        focus: document.hasFocus(), frames: window.__frames || 0, ready: document.readyState, now: Math.round(performance.now()), paint: performance.getEntriesByType('paint').map((e) => e.name + '@' + Math.round(e.startTime)), nav: (() => { const n = performance.getEntriesByType('navigation')[0]; return n ? [Math.round(n.domContentLoadedEventEnd), Math.round(n.loadEventEnd)] : null; })(), res: performance.getEntriesByType('resource').filter((e) => e.responseEnd > 500).map((e) => e.name.slice(-40) + '@' + Math.round(e.startTime) + '-' + Math.round(e.responseEnd)).slice(0, 20), ua: navigator.userAgent.slice(-60),
         log: window.__diag.slice(-120),
       });`,
     args: [],
