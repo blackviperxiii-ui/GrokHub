@@ -19,12 +19,14 @@ const loaders = {
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
 };
 const Connectors = lazy(loaders.connectors);
 const Journal = lazy(loaders.journal);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
+const Workboard = lazy(loaders.workboard);
 
 function preloadViews() {
   for (const load of Object.values(loaders)) void load().catch(() => {});
@@ -192,6 +194,7 @@ export function App() {
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
+        {view === "workboard" && <Workboard onWork={ask} />}
       </Suspense>
     </div>
   );

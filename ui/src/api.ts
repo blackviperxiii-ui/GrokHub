@@ -489,6 +489,64 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
+export interface BoardCard {
+  id: string;
+  title: string;
+  detail: string;
+  /** Your notes for the agent; Work hands them over. */
+  notes: string;
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
+}
+
+export interface BoardColumn {
+  lane: BoardLane;
+  label: string;
+  cards: BoardCard[];
+}
+
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
+}
+
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" };
+
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
+}
+
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 
