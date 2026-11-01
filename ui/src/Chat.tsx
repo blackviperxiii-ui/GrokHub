@@ -14,6 +14,7 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
+  deleteChat,
   getLastChat,
   getSettings,
   loadChat,
@@ -422,7 +423,9 @@ function LogItem({
  * where the approvals stay the computer's. `notice`: an automation run that
  * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
- * History deleted; if it is the open one, a new chat starts. On the desktop
+ * History deleted; if it is the open one, a new chat starts. `clear`: the
+ * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
+ * saved history for good and starts a new one. On the desktop
  * the chat open at the last close comes back on mount. */
 export function Chat({
   onOpenSettings,
@@ -433,6 +436,7 @@ export function Chat({
   notice,
   open,
   deleted,
+  clear,
   active = true,
   remote = false,
   grokSignIn = false,
@@ -447,6 +451,7 @@ export function Chat({
   notice?: RunNotice & { n: number };
   open?: { id: string; n: number };
   deleted?: { id: string; n: number };
+  clear?: { n: number };
   active?: boolean;
   remote?: boolean;
   /** Settings → Account offers Sign in with Grok here. */
@@ -563,6 +568,17 @@ export function Chat({
     const timer = window.setTimeout(() => dropDeleted(id), 0);
     return () => window.clearTimeout(timer);
   }, [deleted]);
+
+  // Clear chat: stop any reply, delete the open chat's saved history, start over.
+  const clearOpen = useEffectEvent(() => {
+    const id = conversationId;
+    touched.current = true;
+    deleteChat(id).then(startFresh, (err) => setError(String(err)));
+  });
+
+  useEffect(() => {
+    if (clear) clearOpen();
+  }, [clear]);
 
   /** Reloads the saved chat with more of its start. The log has at least as
    * many items as the saved lines it shows, so nothing shown drops off. */

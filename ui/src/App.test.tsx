@@ -36,17 +36,20 @@ vi.mock("./Chat", () => ({
     prefill,
     open,
     deleted,
+    clear,
     onSignIn,
   }: {
     prefill?: { text: string; n: number; conversationId?: string };
     open?: { id: string; n: number };
     deleted?: { id: string; n: number };
+    clear?: { n: number };
     onSignIn: () => void;
   }) => (
     <div>
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
+      {clear && <p>Cleared {clear.n}</p>}
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -228,6 +231,33 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open old chat" }));
     expect(screen.getByText("Opened shell-old")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("right-clicking the Chat tab offers Clear chat, which asks first and says it's permanent", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    const tab = await screen.findByRole("button", { name: "Chat" });
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear chat…" }));
+    const ask = screen.getByRole("alertdialog", { name: "Clear this chat?" });
+    expect(within(ask).getByText(/This is permanent/)).toBeVisible();
+    await userEvent.click(within(ask).getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByText(/Cleared/)).toBeNull();
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear chat…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Clear chat" }));
+    expect(screen.getByText("Cleared 1")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("the web app's Chat tab has no Clear chat", async () => {
+    api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
+    render(<App />);
+    const tab = await screen.findByRole("button", { name: "Chat" });
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    expect(screen.queryByRole("menuitem", { name: "Clear chat…" })).toBeNull();
   });
 
   it("Agents follows the chat the window last heard from and links back to Chat", async () => {

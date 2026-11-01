@@ -203,11 +203,14 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
     grokhub_agent::rename_session(id, title)
 }
 
-/// Deletes the chat's file; a turn still running is not written back.
+/// Deletes the chat's file and its files; a turn still running is not
+/// written back. `/bg` and scheduled forks of it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
     let _config = ConfigGuard::set(config_dir);
-    grokhub_agent::delete_session(id)
+    grokhub_agent::delete_session(id)?;
+    grokhub_agent::delete_forks_of(&[id.to_string()]);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -514,8 +517,18 @@ mod tests {
 
         let file = config.join("sessions").join(format!("{id}.jsonl"));
         assert!(file.exists());
+        let fork = {
+            let _config = ConfigGuard::set(&config);
+            grokhub_agent::fork_session(id).expect("fork")
+        };
+        let fork_file = config.join("sessions").join(format!("{}.jsonl", fork.id));
+        assert!(fork_file.exists());
         delete(&config, id).expect("delete");
         assert!(!file.exists());
+        assert!(
+            !fork_file.exists(),
+            "a /bg fork holds a copy of the chat, so it goes too"
+        );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert!(load(&config, id, LOAD_CAP).is_err());
     }
