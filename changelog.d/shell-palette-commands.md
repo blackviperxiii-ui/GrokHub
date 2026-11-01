@@ -1,0 +1,1 @@
+- Shell: the command palette (Ctrl+K) now lists New chat (Ctrl+N), Sign in while there is no API key, and Shortcuts (Ctrl+/), with each row's key at its right; Settings shows Ctrl+,. Ctrl+N, Ctrl+, and Ctrl+/ work from any page, Ctrl+/ opens a keyboard shortcut sheet, and the cabin's older words (feed, schedule, keys) find their rows. Desktop-only commands stay off the web app.

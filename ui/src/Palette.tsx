@@ -1,5 +1,19 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Capabilities } from "./api";
+import {
+  answersTo,
+  chatRows,
+  commandRows,
+  NO_CHATS,
+  NO_SLASH,
+  SETTINGS_KEYS,
+  slashRows,
+  type ChatHit,
+  type ChatSource,
+  type CommandId,
+  type CommandRunners,
+  type SlashSource,
+} from "./paletteCommands";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 
@@ -9,12 +23,37 @@ export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "co
 export type PaletteAction =
   | { kind: "view"; view: View }
   | { kind: "settings"; section: Section }
-  | { kind: "ask"; text: string };
+  | { kind: "ask"; text: string }
+  | { kind: "command"; id: CommandId }
+  | { kind: "chat"; id: string };
 
 export interface PaletteRow {
   label: string;
   action: PaletteAction;
+  /** The key that does the same, shown at the row's right. */
+  keys?: string;
 }
+
+/** Where the rows beyond pages and Settings sections come from. */
+export interface PaletteSources {
+  runners: CommandRunners;
+  signedOut: boolean;
+  chats: ChatSource;
+  slash: SlashSource;
+}
+
+/** Pages and Settings sections only. */
+export const NO_SOURCES: PaletteSources = { runners: {}, signedOut: false, chats: NO_CHATS, slash: NO_SLASH };
+
+/** The sources' rows for one query, already looked up. */
+export interface PaletteExtras {
+  runners: CommandRunners;
+  signedOut: boolean;
+  chats: readonly ChatHit[];
+  slash: SlashSource;
+}
+
+const NO_EXTRAS: PaletteExtras = { ...NO_SOURCES, chats: [] };
 
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
@@ -40,24 +79,42 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
-/** The rows for `query`: pages, then Settings sections, then Ask Grok with
- * the typed text, which puts it in the chat box like the cabin's palette. */
-export function paletteRows(caps: Capabilities, query: string): PaletteRow[] {
-  const all: PaletteRow[] = [
-    ...views(caps).map((view) => ({
-      label: VIEW_LABELS[view],
-      action: { kind: "view", view } as const,
-    })),
-    // The web app's Settings is one page on the desktop's terms.
-    ...(caps.remote ? [] : sections(caps)).map((section) => ({
-      label: `Settings: ${SECTION_LABELS[section]}`,
-      action: { kind: "settings", section } as const,
-    })),
-  ];
+/** The rows for `query`, in order: pages, commands, slash commands (for a
+ * query that starts with `/`), recent chats, Settings sections, then Ask Grok
+ * with the typed text, which puts it in the chat box like the cabin's palette. */
+export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
+  const slash = q.startsWith("/");
+  const pages: PaletteRow[] = views(caps).map((view) => ({
+    label: VIEW_LABELS[view],
+    action: { kind: "view", view },
+    ...(view === "settings" ? { keys: SETTINGS_KEYS } : {}),
+  }));
+  // The web app's Settings is one page on the desktop's terms.
+  const settings: PaletteRow[] = (caps.remote ? [] : sections(caps)).map((section) => ({
+    label: `Settings: ${SECTION_LABELS[section]}`,
+    action: { kind: "settings", section },
+  }));
+  const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
+  const all = [
+    ...named(pages),
+    ...named(commandRows(caps, extras)),
+    ...(slash ? slashRows(extras.slash(q)) : []),
+    ...(slash ? [] : chatRows(extras.chats)),
+    ...named(settings),
+  ];
   if (!q) return all;
-  const hits = all.filter((row) => row.label.toLowerCase().includes(q));
-  return [...hits, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+  return [...all, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+}
+
+/** Rows can share a label (two chats with one title), so keys use the action. */
+function rowKey(row: PaletteRow): string {
+  return row.action.kind === "chat" ? `chat:${row.action.id}` : row.label;
+}
+
+/** `Ctrl+Alt+H` as aria-keyshortcuts spells it. */
+function ariaKeys(keys: string): string {
+  return keys.replace(/\bCtrl\b/g, "Control");
 }
 
 /** The list may take half the window, as in the stylesheet. */
@@ -67,26 +124,44 @@ const paletteRoom = () => window.innerHeight * 0.5;
  * outside or a pick closes it. */
 export function Palette({
   caps,
+  sources = NO_SOURCES,
   onPick,
   onClose,
 }: {
   caps: Capabilities;
+  sources?: PaletteSources;
   onPick: (action: PaletteAction) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
+  const [chats, setChats] = useState<readonly ChatHit[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
-  const rows = paletteRows(caps, query);
+  const rows = paletteRows(caps, query, { ...sources, chats });
+  const { chats: findChats } = sources;
   const at = Math.min(pick, rows.length - 1);
   usePeek(list, "y", rows.length, paletteRoom);
 
   useEffect(() => {
     input.current?.focus();
   }, []);
+
+  // Chats come from the history on disk, so they arrive a moment later.
+  useEffect(() => {
+    let live = true;
+    const q = query.trim();
+    const keep = (hits: readonly ChatHit[]) => {
+      if (live) setChats((now) => (now.length === 0 && hits.length === 0 ? now : hits));
+    };
+    if (q.startsWith("/")) keep([]);
+    else findChats(q).then(keep, () => keep([]));
+    return () => {
+      live = false;
+    };
+  }, [query, findChats]);
 
   useEffect(() => {
     const dir = moved.current;
@@ -146,14 +221,16 @@ export function Palette({
         <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
           {rows.map((row, i) => (
             <li
-              key={row.label}
+              key={rowKey(row)}
               id={`palette-row-${i}`}
               role="option"
               aria-selected={i === at}
+              aria-keyshortcuts={row.keys && ariaKeys(row.keys)}
               onMouseEnter={() => setPick(i)}
               onClick={() => choose(row)}
             >
-              {row.label}
+              <span>{row.label}</span>
+              {row.keys && <kbd aria-hidden="true">{row.keys}</kbd>}
             </li>
           ))}
         </ul>

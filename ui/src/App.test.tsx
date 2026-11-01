@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 // Each page has its own tests; here only the tabs matter.
 vi.mock("./Chat", () => ({
+  newConversationId: () => "shell-new",
   Chat: ({
     prefill,
     onSignIn,
@@ -156,6 +157,61 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("Ctrl+N starts a new chat from any page", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    await userEvent.keyboard("{Control>}n{/Control}");
+    expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Ctrl+, opens Settings and Ctrl+/ toggles the shortcut sheet", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.keyboard("{Control>},{/Control}");
+    expect(await screen.findByText("Settings for a desktop")).toBeVisible();
+    await userEvent.keyboard("{Control>}/{/Control}");
+    const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(sheet).getByRole("row", { name: "Ctrl+N New chat" })).toBeInTheDocument();
+    expect(within(sheet).queryByText("Halt")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the palette's commands start a chat, sign in and show the keys", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    // No halt command in this shell yet, so no Halt row even with desktop control.
+    expect(screen.queryByRole("option", { name: "Halt" })).toBeNull();
+    await userEvent.keyboard("sign");
+    await userEvent.click(await screen.findByRole("option", { name: "Sign in" }));
+    expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    await userEvent.keyboard("keys{Enter}");
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await userEvent.keyboard("{Control>}k{/Control}");
+    await userEvent.keyboard("new chat{Enter}");
+    expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
+  });
+
+  it("the Sign in row goes once the key is in", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getSettings.mockResolvedValue({ theme: "light", hasApiKey: true } as never);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    await userEvent.keyboard("sign");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ask Grok: sign"]);
+    api.getSettings.mockReset();
+    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light" }));
   });
 
   it("the Activity Dock shows an approval waiting from any page and opens the chat", async () => {
