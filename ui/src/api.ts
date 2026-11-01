@@ -6,16 +6,23 @@ import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
 
+export interface SignedIn {
+  name: string | null;
+  email: string | null;
+}
+
 export interface Settings {
   model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
+  /** Signed in with Grok: who, when xAI said. */
+  signedIn?: SignedIn | null;
   /** The folder picked in Settings, empty for the default. */
   workspace: string;
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
-  /** Settings → Let Grok control the desktop. */
+  /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
   theme: Theme;
@@ -37,6 +44,8 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** Settings → Account → Sign in with Grok (desktop and iOS). */
+  grokSignIn?: boolean;
   /** Settings → General → start at login. */
   autostart?: boolean;
   /** Settings → General → the summon hotkey; off on Wayland. */
@@ -82,7 +91,7 @@ export type ChatEvent =
   | {
       kind: "elicit";
       id: string;
-      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      /** "Plan" for a plan to approve, "Question" for the agent's question, or the connector. */
       server: string;
       message: string;
       mode: "form" | "url";
@@ -90,7 +99,7 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
-      /** Answers to tap for Grok's question, the recommended one first. */
+      /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
     };
 
@@ -313,6 +322,32 @@ export function saveMemory(
   base: string,
 ): Promise<{ notes: MemoryNotes; redacted: boolean }> {
   return invoke("save_memory", { global, text, base });
+}
+
+/** Sign in with Grok, step one: the code to type at xAI's page. */
+export interface GrokSignInStart {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  interval: number;
+  expiresIn: number;
+}
+
+export type GrokSignInPoll =
+  | { status: "pending"; interval: number }
+  | { status: "ready"; signedIn: SignedIn }
+  | { status: "failed"; error: string };
+
+export function startGrokSignIn(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("start_grok_sign_in");
+}
+
+export function pollGrokSignIn(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("poll_grok_sign_in");
+}
+
+export function grokSignOut(): Promise<Settings> {
+  return invoke<Settings>("grok_sign_out");
 }
 
 /** A row of the composer's command list. `disabled` says why it can't run. */

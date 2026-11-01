@@ -1,5 +1,6 @@
 use grokhub_agent::harness as hx;
 use grokhub_agent::route;
+use grokhub_core::http;
 use grokhub_core::{
     chat_request_body_images, chat_timeout_secs, dedicated_imagine_model, frame_bytes,
     imagine_edit_body, imagine_edit_mask_fallback, imagine_empty_reply_hint,
@@ -11,7 +12,7 @@ use grokhub_core::{
     parse_video_request_id, parse_video_url, responses_request_body_images, responses_url,
     stt_multipart, stt_url, tts_request_body, tts_url, video_failure_detail,
     video_moderation_blocked, ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus,
-    MEDIA_FILE_CAP, TEXT_FILE_CAP, XAI_BASE,
+    MEDIA_FILE_CAP, XAI_BASE,
 };
 use std::io::Read;
 
@@ -53,18 +54,20 @@ fn json_error(v: &serde_json::Value) -> Option<String> {
 /// A bounded Grok ask that ran out of time or was cancelled.
 const TRY_STOPPED: &str = "Grok call stopped";
 
-fn xai_agent(timeout_secs: u64) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .timeout_connect(std::time::Duration::from_secs(25))
-        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
-        .build()
+fn xai_agent(timeout_secs: u64) -> http::Agent {
+    // Honors HTTPS_PROXY (a VPN or office proxy) and never hangs on connect.
+    http::agent(http::Opts {
+        connect: std::time::Duration::from_secs(25),
+        overall: Some(std::time::Duration::from_secs(timeout_secs.max(1))),
+        proxy_from_env: true,
+        ..Default::default()
+    })
 }
 
 /// EgressGuard (Spike-4a): a cabin-owned call asks `harness::decide` and, when
 /// it may leave, logs one `egress.jsonl` line (host and data classes, no
 /// content). Anything held back sends nothing. Spike-4c routes every cabin
-/// `ureq` call here; the line carries this thread's origin.
+/// HTTP call here; the line carries this thread's origin.
 pub(crate) fn egress_ok(url: &str, data: &[hx::DataClass]) -> Result<(), String> {
     hx::guard_quiet(&crate::config::config_dir(), &hx::EgressReq::new(url, data))
 }
@@ -78,11 +81,12 @@ fn grok_json(
     timeout_secs: u64,
 ) -> Result<serde_json::Value, String> {
     egress_ok(url, PROMPT_DATA)?;
+    let body = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     let resp = xai_agent(timeout_secs)
         .post(url)
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .send_json(body)
+        .header("authorization", &format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .send_bytes(&body)
         .map_err(http_err)?;
     let v = read_json_capped(resp)?;
     if let Some(err) = json_error(&v) {
@@ -91,7 +95,7 @@ fn grok_json(
     Ok(v)
 }
 
-fn read_json_capped(resp: ureq::Response) -> Result<serde_json::Value, String> {
+fn read_json_capped(resp: http::Response) -> Result<serde_json::Value, String> {
     let mut buf = Vec::new();
     resp.into_reader()
         .take(MEDIA_FILE_CAP + 1)
@@ -370,7 +374,7 @@ fn poll_imagine_video(key: &str, request_id: &str, prompt: &str) -> Result<Strin
         egress_ok(&poll_url, &[])?;
         let poll = xai_agent(45)
             .get(&poll_url)
-            .set("authorization", &format!("Bearer {key}"))
+            .header("authorization", &format!("Bearer {key}"))
             .call()
             .map_err(|e| imagine_network_hint(&http_err(e)))?;
         let v = read_json_capped(poll)?;
@@ -437,7 +441,7 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
         let fetch = |auth: bool| -> Result<Vec<u8>, String> {
             let mut req = xai_agent(120).get(url);
             if auth && !key.trim().is_empty() {
-                req = req.set("authorization", &format!("Bearer {key}"));
+                req = req.header("authorization", &format!("Bearer {key}"));
             }
             let resp = req.call().map_err(http_err)?;
             let mut buf = Vec::new();
@@ -480,8 +484,8 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
     egress_ok(&stt_url(), &[hx::DataClass::Chat])?;
     let resp = xai_agent(60)
         .post(&stt_url())
-        .set("authorization", &format!("Bearer {key}"))
-        .set(
+        .header("authorization", &format!("Bearer {key}"))
+        .header(
             "content-type",
             &format!("multipart/form-data; boundary={boundary}"),
         )
@@ -497,15 +501,10 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
     parse_stt_text(&v).ok_or_else(|| "empty transcript".into())
 }
 
-pub fn http_err(e: ureq::Error) -> String {
+pub fn http_err(e: http::Error) -> String {
     match e {
-        ureq::Error::Status(code, resp) => {
-            let mut buf = Vec::new();
-            let _ = resp
-                .into_reader()
-                .take(TEXT_FILE_CAP as u64)
-                .read_to_end(&mut buf);
-            let body = String::from_utf8_lossy(&buf);
+        // The facade keeps the first 64 KiB of the error page (STATUS_BODY_CAP).
+        http::Error::Status { code, body, .. } => {
             format!(
                 "HTTP {code}: {}",
                 body.chars().take(200).collect::<String>()
@@ -536,11 +535,12 @@ pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, Strin
         return Err("nothing to speak".into());
     }
     egress_ok(&tts_url(), &[hx::DataClass::Chat])?;
+    let body = serde_json::to_vec(&tts_request_body(text, voice)).map_err(|e| e.to_string())?;
     let resp = xai_agent(60)
         .post(&tts_url())
-        .set("authorization", &format!("Bearer {key}"))
-        .set("content-type", "application/json")
-        .send_json(tts_request_body(text, voice))
+        .header("authorization", &format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .send_bytes(&body)
         .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     resp.into_reader()
@@ -634,16 +634,29 @@ mod tests {
             .and_then(|s| s.split("pub fn grok_tts(").next())
             .expect("http_err");
         assert!(
-            err.contains(".take(") && !err.contains("into_string()"),
+            err.contains("http::Error::Status { code, body, .. }")
+                && !err.contains("into_string()"),
             "HTTP error must not slurp a huge error page: {err}"
+        );
+        assert_eq!(
+            grokhub_core::http::STATUS_BODY_CAP,
+            grokhub_core::TEXT_FILE_CAP,
+            "the error page keeps the same 64 KiB cap"
         );
         assert!(
             src.contains("imagine_should_retry_model"),
             "OAuth often lacks grok-imagine-image-2.0 — retry grok-imagine-image"
         );
+        let agent = src
+            .split("fn xai_agent(")
+            .nth(1)
+            .and_then(|s| s.split("pub(crate) fn egress_ok(").next())
+            .expect("xai_agent");
         assert!(
-            src.contains("try_proxy_from_env(true)") && src.contains("timeout_connect"),
-            "Imagine must honor HTTPS_PROXY and not hang forever on connect: {src}"
+            agent.contains("proxy_from_env: true")
+                && agent.contains("connect: std::time::Duration::from_secs(25)")
+                && !agent.contains("public_only"),
+            "Imagine must honor HTTPS_PROXY and not hang forever on connect: {agent}"
         );
         let imagine = src
             .split("pub fn grok_imagine_opts(")

@@ -390,21 +390,22 @@ impl rd::Fetch for HttpEngineFetch {
 
 struct HfFetch;
 
-fn hf_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(60))
-        .build()
+fn hf_agent() -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(15),
+        read: Some(Duration::from_secs(60)),
+        proxy_from_env: true,
+        ..Default::default()
+    })
 }
 
 impl md::Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
         let mut req = hf_agent()
             .get(url)
-            .set("user-agent", grokhub_agent::USER_AGENT);
+            .header("user-agent", grokhub_agent::USER_AGENT);
         if offset > 0 {
-            req = req.set("range", &format!("bytes={offset}-"));
+            req = req.header("range", &format!("bytes={offset}-"));
         }
         let resp = req.call().map_err(|e| e.to_string())?;
         let (start, total) = if resp.status() == 206 {
@@ -427,7 +428,7 @@ impl md::Fetch for HfFetch {
         let url = md::tree_url(repo);
         let resp = hf_agent()
             .get(&url)
-            .set("user-agent", grokhub_agent::USER_AGENT)
+            .header("user-agent", grokhub_agent::USER_AGENT)
             .call()
             .map_err(|e| e.to_string())?;
         let mut body = String::new();

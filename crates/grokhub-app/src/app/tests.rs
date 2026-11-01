@@ -1968,6 +1968,7 @@ fn quiet_cabin() -> Cabin {
         web_search_key_draft: String::new(),
         running: false,
         turn_retried: false,
+        rejected_bearer: None,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         rx: None,
         chat_job_thread: None,

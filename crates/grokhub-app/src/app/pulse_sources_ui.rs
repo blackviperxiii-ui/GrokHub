@@ -1381,7 +1381,7 @@ mod tests {
             "manual redirect checks need redirects: 0: {arm}"
         );
         assert!(
-            !arm.contains("try_proxy_from_env"),
+            !arm.contains("proxy_from_env"),
             "env proxy would skip public_only_resolve on the target: {arm}"
         );
     }
