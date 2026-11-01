@@ -219,6 +219,25 @@ impl CoverKind {
             CoverKind::Wide => "header.jpg",
         }
     }
+
+    /// Every name the Steam client may cache this shape under, best first:
+    /// the store names, the 2x tall copy, and the capsule and hero art newer
+    /// clients keep when the main file is missing.
+    pub fn local_names(self) -> &'static [&'static str] {
+        match self {
+            CoverKind::Tall => &[
+                "library_600x900.jpg",
+                "library_600x900_2x.jpg",
+                "library_capsule.jpg",
+            ],
+            CoverKind::Wide => &[
+                "header.jpg",
+                "capsule_616x353.jpg",
+                "library_hero.jpg",
+                "capsule_231x87.jpg",
+            ],
+        }
+    }
 }
 
 /// The public store CDN URL for one game's art (no key needed). Newer games
@@ -233,27 +252,55 @@ pub fn cover_url(app_id: u32, kind: CoverKind) -> String {
 /// Art the Steam client already saved on this PC, in
 /// `appcache/librarycache`: the old flat `{id}_library_600x900.jpg` names, or
 /// the newer `{id}/library_600x900.jpg`, sometimes one hashed folder deeper.
+/// Each name in [`CoverKind::local_names`] is tried in order, in every layout.
 pub fn local_cover(root: &Path, app_id: u32, kind: CoverKind) -> Option<PathBuf> {
     let cache = root.join("appcache").join("librarycache");
-    let flat = cache.join(format!("{app_id}_{}", kind.file()));
-    if flat.is_file() {
-        return Some(flat);
-    }
     let dir = cache.join(app_id.to_string());
-    let direct = dir.join(kind.file());
-    if direct.is_file() {
-        return Some(direct);
-    }
     let mut subs: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
     subs.sort();
-    subs.into_iter()
-        .map(|d| d.join(kind.file()))
-        .find(|p| p.is_file())
+    kind.local_names().iter().find_map(|name| {
+        std::iter::once(cache.join(format!("{app_id}_{name}")))
+            .chain(std::iter::once(dir.join(name)))
+            .chain(subs.iter().map(|d| d.join(name)))
+            .find(|p| p.is_file())
+    })
+}
+
+/// The store's own details for one game. Newer games keep their art under
+/// hashed paths that only this answer names.
+pub fn store_details_url(app_id: u32) -> String {
+    format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic")
+}
+
+/// The header art a store details answer names, best first (`header_image`,
+/// then `capsule_image`). Only an https link on Steam's own image hosts is
+/// returned, so a strange answer can't send the fetch anywhere else.
+pub fn store_art_urls(details: &[u8], app_id: u32) -> Vec<String> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(details) else {
+        return Vec::new();
+    };
+    let data = &v[app_id.to_string()]["data"];
+    ["header_image", "capsule_image"]
+        .iter()
+        .filter_map(|k| data[*k].as_str())
+        .filter(|u| steam_image_url(u))
+        .map(str::to_string)
+        .collect()
+}
+
+fn steam_image_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !host.contains(['@', ':']) && host.ends_with(".steamstatic.com")
 }
 
 /// Steam's own runtimes and redistributables are not games.
@@ -577,6 +624,61 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_cached_names_count_when_the_main_file_is_missing() {
+        let root = std::env::temp_dir().join(format!("gh-steam-alt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache = root.join("appcache/librarycache");
+        std::fs::create_dir_all(cache.join("50/9f2e")).unwrap();
+        std::fs::create_dir_all(cache.join("60")).unwrap();
+        std::fs::write(cache.join("50/9f2e/library_capsule.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("60/library_hero.jpg"), b"x").unwrap();
+        std::fs::write(cache.join("60_capsule_231x87.jpg"), b"x").unwrap();
+        assert_eq!(
+            local_cover(&root, 50, CoverKind::Tall),
+            Some(cache.join("50/9f2e/library_capsule.jpg"))
+        );
+        // The hero beats the small capsule, wherever each one sits.
+        assert_eq!(
+            local_cover(&root, 60, CoverKind::Wide),
+            Some(cache.join("60/library_hero.jpg"))
+        );
+        // The main name still wins over a fallback once it is there.
+        std::fs::write(cache.join("60/header.jpg"), b"x").unwrap();
+        assert_eq!(
+            local_cover(&root, 60, CoverKind::Wide),
+            Some(cache.join("60/header.jpg"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn store_details_name_hashed_art_only_on_steams_image_hosts() {
+        let body = br#"{"1172470":{"success":true,"data":{
+            "header_image":"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/abc123/header.jpg?t=1",
+            "capsule_image":"https://cdn.akamai.steamstatic.com/steam/apps/1172470/capsule_231x87.jpg"}}}"#;
+        assert_eq!(
+            store_art_urls(body, 1172470),
+            vec![
+                "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/abc123/header.jpg?t=1".to_string(),
+                "https://cdn.akamai.steamstatic.com/steam/apps/1172470/capsule_231x87.jpg".to_string(),
+            ]
+        );
+        let odd = br#"{"5":{"success":true,"data":{
+            "header_image":"http://shared.akamai.steamstatic.com/x.jpg",
+            "capsule_image":"https://evil.example/steamstatic.com/x.jpg"}}}"#;
+        assert!(store_art_urls(odd, 5).is_empty());
+        let sneaky =
+            br#"{"6":{"data":{"header_image":"https://me@x.steamstatic.com.evil.example/a.jpg"}}}"#;
+        assert!(store_art_urls(sneaky, 6).is_empty());
+        assert!(store_art_urls(br#"{"7":{"success":false}}"#, 7).is_empty());
+        assert!(store_art_urls(b"not json", 7).is_empty());
+        assert_eq!(
+            store_details_url(7),
+            "https://store.steampowered.com/api/appdetails?appids=7&filters=basic"
+        );
+    }
 
     #[test]
     fn covers_come_from_the_store_cdn_or_the_local_library_cache() {
