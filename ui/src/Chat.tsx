@@ -463,7 +463,7 @@ export function Chat({
                 >
                   <span className="card-title">{item.name}</span>
                   <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-                  <p className="card-detail-line">
+                  <p className="card-detail-line plain">
                     {item.text.length > NOTICE_CHARS
                       ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
                       : item.text}
