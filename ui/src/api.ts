@@ -52,6 +52,10 @@ export interface Capabilities {
   summonHotkey?: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications?: boolean;
+  /** The composer's push-to-talk mic (desktops and phones). */
+  voice?: boolean;
+  /** The Library page: this computer's Steam games. */
+  library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -64,6 +68,7 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
   webAccess: false,
   plugins: false,
+  library: false,
 };
 
 /** The web app gets chat, memory, automations, connectors and Pulse. */
@@ -196,13 +201,67 @@ export function clearApiKey(): Promise<Settings> {
   return invoke<Settings>("clear_api_key");
 }
 
-/** Runs one prompt through the agent loop; resolves with the stop reason. */
+/** Runs one prompt through the agent loop; resolves with the stop reason.
+ * `attachments`: paths from `stageAttachment`, in the chips' order. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode: SessionMode = "chat",
+  attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+}
+
+/** A file waiting on the composer (src-tauri/src/attach.rs). */
+export interface Staged {
+  /** The copy in the chat's folder; send it back with the message. */
+  path: string;
+  name: string;
+  kind: "image" | "text" | "document";
+  /** "Picture shot.png", "File notes.md". */
+  label: string;
+  /** The note when the chat's model can't read it; it won't send. */
+  status: string | null;
+}
+
+/** One picked or dropped file: staged, or why not. */
+export interface StageOutcome {
+  staged: Staged | null;
+  error: string | null;
+}
+
+/** A pasted or dropped file's bytes, as base64. */
+export function stageAttachment(conversationId: string, name: string, data: string): Promise<Staged> {
+  return invoke<Staged>("stage_attachment", { conversationId, name, data });
+}
+
+/** Files dropped on the window, by path (the desktop window only). */
+export function stageAttachmentPaths(conversationId: string, paths: string[]): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("stage_attachment_paths", { conversationId, paths });
+}
+
+/** The + button: the system file picker, then each pick is staged. */
+export function pickAttachments(conversationId: string): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("pick_attachments", { conversationId });
+}
+
+export function removeAttachment(conversationId: string, path: string): Promise<void> {
+  return invoke<void>("remove_attachment", { conversationId, path });
+}
+
+/** Files dropped on the desktop window arrive as paths. Outside the shell
+ * this never fires; the page's own drop event has the files. */
+export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  if (!inShell()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
+  });
+}
+
+/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
+export function transcribe(wav: string): Promise<string> {
+  return invoke<string>("transcribe", { wav });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -232,6 +291,14 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** Opens a reply's http(s) link in the default browser (`open_url`, which
+ * refuses anything else). Shell only: in the web app links open in a new tab
+ * and never reach the computer. */
+export function openUrl(url: string): Promise<void> {
+  if (!inShell()) return Promise.reject(new Error("Links open in this browser's own tabs."));
+  return invoke<void>("open_url", { url });
+}
+
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
@@ -248,6 +315,10 @@ export interface AutomationRow {
   enabled: boolean;
   summary: string;
   health: string | null;
+  /** The words for the Edit box; null when words can't say the schedule. */
+  describe: string | null;
+  /** It has a check command, so only the cabin runs it. */
+  cabinOnly: boolean;
 }
 
 export interface RunResult {
@@ -279,6 +350,30 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+export function editAutomation(id: string, text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("edit_automation", { id, text, clock: wallClock() });
+}
+
+/** A scheduled run the shell fired, from `automations://ran`. */
+export interface ScheduledRun {
+  id: string;
+  name: string;
+  result: RunResult;
+}
+
+export const AUTOMATION_RAN_EVENT = "automations://ran";
+
+export function onAutomationRan(handler: (run: ScheduledRun) => void): Promise<UnlistenFn> {
+  return subscribe<ScheduledRun>(AUTOMATION_RAN_EVENT, handler);
+}
+
+/** Tells the shell's scheduler the local time, so jobs fire at local times.
+ * Only the desktop window sends it; a paired browser may be elsewhere. */
+export function shareSchedulerClock(): Promise<void> {
+  if (!inShell()) return Promise.resolve();
+  return invoke<void>("set_scheduler_clock", { clock: wallClock() });
 }
 
 export interface MemoryRow {
@@ -419,6 +514,8 @@ export interface ConnectorRow {
   account: string;
   needsSignIn: boolean;
   canDisconnect: boolean;
+  /** False once its switch turned it off. */
+  enabled: boolean;
 }
 
 export interface ConnectorsChanged {
@@ -446,6 +543,64 @@ export function signOutConnector(name: string): Promise<ConnectorsChanged> {
 /** Only after the person confirmed it on the page. */
 export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
+}
+
+/** One connector in the Add sheet's catalog. */
+export interface CatalogRow {
+  id: string;
+  name: string;
+  publisher: string;
+  category: string;
+  description: string;
+  auth: "none" | "oauth" | "key" | "google" | "own";
+  keyHint: string;
+  target: string;
+  installed: boolean;
+}
+
+export interface CatalogView {
+  rows: CatalogRow[];
+  /** What Refresh did, when it ran. */
+  note: string | null;
+}
+
+/** A key waiting on its approval card. */
+export interface KeyCard {
+  id: string;
+  name: string;
+  action: string;
+}
+
+/** `refresh` reads the official registry; only from the Refresh click. */
+export function connectorCatalog(refresh = false): Promise<CatalogView> {
+  return invoke<CatalogView>("connector_catalog", { refresh });
+}
+
+export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+}
+
+/** A pasted `mcpServers` config; names already set up are kept. */
+export function addConnectorConfig(text: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_connector_config", { text });
+}
+
+export function setConnectorEnabled(name: string, on: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Opens the server's sign-in page in the browser and waits for it. */
+export function signInConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("sign_in_connector", { name });
+}
+
+/** Posts the approval card; nothing is saved until `answerConnectorKey`. */
+export function saveConnectorKey(name: string, key: string): Promise<KeyCard> {
+  return invoke<KeyCard>("save_connector_key", { name, key });
+}
+
+export function answerConnectorKey(id: string, approve: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("answer_connector_key", { id, approve });
 }
 
 /** One Feed post: something that happened or was found. */
@@ -805,6 +960,39 @@ export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
 }
 
+/** A browser paired with Web access right now (src-tauri/src/remote_devices.rs). */
+export interface PairedBrowser {
+  /** The browser and its system, like "Firefox on Android". */
+  name: string;
+  /** Unix ms. */
+  firstSeen: number;
+  /** Unix ms. */
+  lastCall: number;
+  /** Chats it sent a message in. */
+  chats: number;
+}
+
+/** The Devices page; desktop only, kept in memory only. */
+export interface Devices {
+  /** This computer's name. */
+  computer: string;
+  /** Whether web access is on. */
+  on: boolean;
+  /** The web app's LAN address without the code; empty while off. */
+  lan: string;
+  /** The most recently used first. */
+  browsers: PairedBrowser[];
+}
+
+export function getDevices(): Promise<Devices> {
+  return invoke<Devices>("get_devices");
+}
+
+/** Signs out every browser: a new pairing code ends every pairing. */
+export function forgetAllDevices(): Promise<Devices> {
+  return invoke<Devices>("forget_all_devices");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;
@@ -1058,4 +1246,109 @@ export function installShellUpdate(): Promise<void> {
 
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** Settings → Behavior, saved in shell.json. Everything starts off. */
+export interface Behavior {
+  autocomplete: boolean;
+  /** Quiet hours for automations as HH:MM; both empty is none. */
+  quietStart: string;
+  quietEnd: string;
+  /** Tokens a day, one of `budgets`; 0 is off. */
+  dailyTokenBudget: number;
+  pauseOverBudget: boolean;
+}
+
+export interface BehaviorPage {
+  closeToTray: boolean;
+  behavior: Behavior;
+  budgets: { value: number; label: string }[];
+}
+
+export function getBehavior(): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("get_behavior");
+}
+
+export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
+}
+
+/** Settings → Defaults: the work folder and the approvals. */
+export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+  return invoke<Settings>("save_defaults", { workspace, approvals });
+}
+
+/** Settings → Privacy & data (src-tauri/src/privacy.rs). */
+export interface PrivacyPage {
+  offlineOnly: boolean;
+  /** An on-device model can take the chat while Offline only is on. */
+  localReady: boolean;
+  /** "3 calls sent off-device this week". */
+  sent: string;
+  hosts: { host: string; calls: number }[];
+  encrypted: boolean;
+  encryptedNote: string;
+  dataFolder: string;
+  canOpenFolder: boolean;
+}
+
+export function getPrivacy(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("get_privacy");
+}
+
+export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("set_offline_only", { on });
+}
+
+export function openDataFolder(): Promise<void> {
+  return invoke<void>("open_data_folder");
+}
+
+/** Settings → Background (src-tauri/src/background.rs). */
+export interface BackgroundPage {
+  runner: string;
+  nextDue: string | null;
+  quiet: string;
+  budget: string;
+  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+}
+
+export function getBackground(): Promise<BackgroundPage> {
+  return invoke<BackgroundPage>("get_background");
+}
+
+/** One Steam game on this computer (src-tauri/src/library.rs). */
+export interface LibraryGame {
+  appId: number;
+  name: string;
+  /** False while Steam downloads or updates it. */
+  installed: boolean;
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  /** Minutes played, 0 when never played. */
+  playtimeMin: number;
+}
+
+export interface LibraryPage {
+  /** A Steam library folder was found on this computer. */
+  steamFound: boolean;
+  /** Most recently played first. */
+  games: LibraryGame[];
+}
+
+/** Tall box art for the grid, the wide store header for the detail column. */
+export type CoverShape = "tall" | "wide";
+
+export function getLibrary(): Promise<LibraryPage> {
+  return invoke<LibraryPage>("get_library");
+}
+
+/** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
+export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+  return invoke<string | null>("library_cover", { appId, shape });
+}
+
+/** Ask Steam to start the game. Resolves to a line to show. */
+export function libraryPlay(appId: number): Promise<string> {
+  return invoke<string>("library_play", { appId });
 }

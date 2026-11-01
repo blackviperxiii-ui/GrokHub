@@ -458,6 +458,52 @@ pub fn disconnect(name: &str) -> Result<String, String> {
     Ok(format!("Disconnected {name}"))
 }
 
+/// Settings → Connectors switch: turn a server off (`enabled: false` in its
+/// `mcp.json` entry) or back on (the flag is dropped), through the
+/// ChangeLedger (origin user, so `/connections` can undo it). A server that
+/// is off is listed but never started. Desktop servers keep their lock.
+pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
+    if is_desktop_server(name) {
+        return Err(format!("{name} belongs to the desktop and stays on."));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{name} isn't one of this cabin's connections"))?;
+    let mut entry: serde_json::Map<String, Value> =
+        serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    let was_on = entry
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let line = if on {
+        format!("Turned on {name}")
+    } else {
+        format!("Turned off {name}")
+    };
+    if was_on == on {
+        return Ok(line);
+    }
+    if on {
+        entry.remove("enabled");
+    } else {
+        entry.insert("enabled".into(), json!(false));
+    }
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    let why = if on {
+        "turned on in Settings"
+    } else {
+        "turned off in Settings"
+    };
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    shutdown_all();
+    Ok(line)
+}
+
 /// What [`install`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Installed {
@@ -1291,6 +1337,43 @@ mod tests {
     }
 
     #[test]
+    fn set_enabled_writes_the_flag_and_doctor_skips_it() {
+        let (dir, _guard) = temp_cfg("set-enabled");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"box":{"command":"definitely-not-a-real-binary-xyz"}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        assert_eq!(
+            super::set_enabled("box", false),
+            Ok("Turned off box".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(text.contains("\"enabled\": false"), "{text}");
+        let rows = super::doctor();
+        let row = rows.iter().find(|r| r.name == "box").expect("box row");
+        assert_eq!(row.status, "disabled");
+        assert_eq!(super::set_enabled("box", true), Ok("Turned on box".into()));
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(!text.contains("enabled"), "{text}");
+        assert_eq!(
+            super::configured()
+                .iter()
+                .find(|r| r.name == "box")
+                .map(|r| r.status.clone()),
+            Some("not checked".into())
+        );
+        assert_eq!(
+            super::set_enabled("nope", false),
+            Err("nope isn't one of this cabin's connections".into())
+        );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn qualify_sanitizes_caps_and_dedupes() {
         let rows = super::names::qualify_all(&[
             ("a b".into(), "t".into()),
@@ -2037,7 +2120,7 @@ mod tests {
     #[test]
     fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
         use super::{doctor, invalidate, offline_paused, shutdown_all};
-        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
         let exe = Path::new("/opt/loadout/grokhub");
         let cua = vec!["--mcp-cua".to_string()];
         let npx = vec!["-y".to_string(), "weather-mcp".to_string()];

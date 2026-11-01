@@ -33,6 +33,17 @@ vi.mock("./api", () => ({
     return Promise.resolve(() => {});
   },
   onEventGap: () => Promise.resolve(() => {}),
+  // The rest of the composer has its own tests (Chat.test.tsx, AttachChips.test.tsx).
+  setModel: vi.fn(),
+  listModels: vi.fn(() => Promise.resolve([])),
+  slashHits: vi.fn(() => Promise.resolve([])),
+  runSlash: vi.fn(),
+  transcribe: vi.fn(),
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 vi.mock("./transport", () => ({ call: desktop.call }));

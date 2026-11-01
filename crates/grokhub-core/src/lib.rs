@@ -42,6 +42,8 @@ pub mod doctor;
 pub mod downloads_tidy;
 pub mod eso_addon;
 pub mod export;
+pub mod factorio_mod;
+pub mod factorio_state;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;
@@ -59,6 +61,7 @@ pub mod game_watch_league;
 pub mod game_watch_minecraft;
 pub mod game_watch_pick;
 pub mod game_watch_poe;
+pub mod game_watch_rl;
 pub mod game_watch_store;
 pub mod game_watch_wow;
 pub mod gguf;
@@ -144,6 +147,7 @@ pub mod rewind;
 pub mod rhythm;
 pub mod run_metrics;
 pub mod runtime_download;
+pub mod scheduler_lease;
 pub mod screen_record;
 pub mod screenshot_offer;
 pub mod sddl;
@@ -179,6 +183,7 @@ pub mod win_acl;
 pub mod wind_down;
 pub mod windshield;
 pub mod wire;
+pub mod work_item;
 pub mod workboard;
 pub mod wow_addon;
 pub mod wow_saved;
@@ -212,13 +217,14 @@ pub use attach::{
 };
 pub use automation::{
     automation_blocked_by_policy, automation_health_line, automation_schedule_label,
-    automation_summary_line, chat_may_save_automation, compute_next_run, due_automations,
-    ensure_automation_schedule, mark_automation_failed, mark_automation_ok, mark_automation_ran,
-    mark_automation_skipped, mark_automation_stopped, night_check_command, night_check_exit_code,
-    night_check_may_fire, night_check_stdout, night_counts_run, parse_clock_token,
-    parse_nl_automation, replay_automation_target, route_schedule, skip_automation,
-    skip_night_check_receipt, teach_routine, teachable_steps, user_asked_to_schedule,
-    watch_once_keeps_running, AutoHealth, AutoOutcome, Automation, ScheduleRoute,
+    automation_summary_line, chat_may_save_automation, compute_next_run, describe_automation,
+    due_automations, ensure_automation_schedule, mark_automation_failed, mark_automation_ok,
+    mark_automation_ran, mark_automation_skipped, mark_automation_stopped, night_check_command,
+    night_check_exit_code, night_check_may_fire, night_check_stdout, night_counts_run,
+    parse_clock_token, parse_nl_automation, replay_automation_target, route_schedule,
+    skip_automation, skip_night_check_receipt, teach_routine, teachable_steps,
+    user_asked_to_schedule, watch_once_keeps_running, AutoHealth, AutoOutcome, Automation,
+    ScheduleRoute,
 };
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
@@ -688,6 +694,12 @@ pub use windshield::{
     rank_atspi_rows, refused_lock, tab_list_from_rows, window_name_from_atspi,
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
     WindshieldFrame, ATSPI_PY,
+};
+pub use work_item::{
+    archive as archive_work_card, clean_card as clean_work_card, delete as delete_work_card,
+    delete_archived as delete_archived_work_cards, mark_touched, merge_cards, migrate_cards,
+    restore as restore_work_card, stamp_changes, sweep as sweep_work_cards, BoardBase, Checkpoint,
+    StepStatus, SweepReport, WorkKind, WorkLogEvent, WorkOrigin, WorkStep,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,

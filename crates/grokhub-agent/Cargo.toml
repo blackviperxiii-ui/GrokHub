@@ -13,7 +13,6 @@ serde.workspace = true
 # `raw_value`: an xAI compaction item is kept as the exact JSON text it came in.
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }
-ureq = { workspace = true }
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
 base64 = "0.22"
 ignore = "0.4"

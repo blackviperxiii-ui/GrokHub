@@ -202,6 +202,12 @@ pub struct PoeSession {
     /// The level of the area the player is in, and the highest this session.
     pub area_level: Option<u32>,
     pub highest_area_level: Option<u32>,
+    /// Path of Exile 1's experience penalty for a level gap applies.
+    xp_rule: bool,
+    /// Areas entered where the level gap cut experience by a tenth or
+    /// more, and the lowest share of experience kept in one, in percent.
+    pub xp_cut_areas: u32,
+    pub worst_xp_pct: Option<u32>,
     /// Seconds spent in maps before the current area.
     map_secs: i64,
     party: Vec<String>,
@@ -217,7 +223,47 @@ pub struct PoeSession {
     last_at: Option<i64>,
 }
 
+/// Share of experience Path of Exile 1 gives a player of `player` level
+/// in an area of `area` level, from the wiki's experience page: no cut
+/// within a safe zone of 3 plus one per 16 levels, then
+/// ((L + 5) / (L + 5 + gap^2.5))^1.5, at least 1%. Levels 95 and up carry
+/// further penalties the log can't size, so they get no number.
+pub fn xp_share(player: u32, area: u32) -> Option<f64> {
+    if player == 0 || player >= 95 {
+        return None;
+    }
+    let safe = 3 + player / 16;
+    let gap = player.abs_diff(area).saturating_sub(safe);
+    if gap == 0 {
+        return Some(1.0);
+    }
+    let l = f64::from(player) + 5.0;
+    Some((l / (l + f64::from(gap).powf(2.5))).powf(1.5).max(0.01))
+}
+
 impl PoeSession {
+    /// A session for one game; only Path of Exile 1 gets experience hints.
+    pub fn new(game: PoeGame) -> Self {
+        Self {
+            xp_rule: game == PoeGame::Poe1,
+            ..Self::default()
+        }
+    }
+
+    fn note_xp(&mut self, area_level: u32) {
+        if !self.xp_rule {
+            return;
+        }
+        let Some(share) = self.level.and_then(|l| xp_share(l, area_level)) else {
+            return;
+        };
+        if share <= 0.9 {
+            self.xp_cut_areas += 1;
+            let pct = (share * 100.0).round() as u32;
+            self.worst_xp_pct = Some(self.worst_xp_pct.map_or(pct, |w| w.min(pct)));
+        }
+    }
+
     fn is_player(&mut self, who: &str) -> bool {
         match &self.character {
             Some(me) => me == who,
@@ -233,6 +279,7 @@ impl PoeSession {
     fn entered_new(&mut self, area: &str, level: u32, id: &str, seed: u64) {
         self.area_level = Some(level);
         self.highest_area_level = Some(self.highest_area_level.map_or(level, |h| h.max(level)));
+        self.note_xp(level);
         self.in_map = is_map(id);
         if self.in_map && !self.map_seeds.contains(&seed) {
             self.map_seeds.push(seed);
@@ -362,6 +409,13 @@ impl PoeSession {
                 parts.push(format!("Highest area level {h}"));
             }
         }
+        if let Some(worst) = self.worst_xp_pct {
+            let n = self.xp_cut_areas;
+            let areas = if n == 1 { "area" } else { "areas" };
+            parts.push(format!(
+                "The level gap cut your XP in {n} {areas}, down to {worst}% at worst"
+            ));
+        }
         parts.join(". ") + "."
     }
 }
@@ -403,10 +457,10 @@ pub struct PoeWatcher {
 }
 
 impl PoeWatcher {
-    pub fn new(logs_dir: PathBuf) -> Self {
+    pub fn new(logs_dir: PathBuf, game: PoeGame) -> Self {
         Self {
             tail: CombatLogTail::with_picker(logs_dir, newest_client_log),
-            session: PoeSession::default(),
+            session: PoeSession::new(game),
         }
     }
 
@@ -564,7 +618,7 @@ mod tests {
         let log = dir.0.join("Client.txt");
         let mut f = std::fs::File::create(&log).unwrap();
         writeln!(f, "{}", sys("Oldchar has been slain.")).unwrap();
-        let mut w = PoeWatcher::new(dir.0.clone());
+        let mut w = PoeWatcher::new(dir.0.clone(), PoeGame::Poe1);
         assert!(w.poll(1).unwrap().is_empty());
         writeln!(f, "{}", sys("You have entered The Twilight Strand.")).unwrap();
         writeln!(f, "{}", sys("Testwitch has been slain.")).unwrap();
@@ -597,6 +651,67 @@ mod tests {
 
     fn at(time: &str, rest: &str) -> String {
         format!("2026/10/31 {time} 123456789 cff94598 [{rest}")
+    }
+
+    #[test]
+    fn a_level_gap_that_cuts_xp_is_counted_in_path_of_exile_1_only() {
+        // Inside the safe zone (3 + 40/16 = 5 levels) nothing is lost.
+        assert_eq!(xp_share(40, 44), Some(1.0));
+        assert_eq!(xp_share(40, 35), Some(1.0));
+        // 7 over: 2 past the zone, ((45) / (45 + 2^2.5))^1.5.
+        let share = xp_share(40, 47).unwrap();
+        assert!((share - 0.837).abs() < 0.001, "{share}");
+        // Far past it, never under 1%.
+        assert_eq!(xp_share(2, 80), Some(0.01));
+        // 95 and up has penalties the log can't size.
+        assert_eq!(xp_share(95, 83), None);
+
+        let lines = [
+            at(
+                "20:00:00",
+                "INFO Client 1] : Testwitch (Witch) is now level 40",
+            ),
+            at(
+                "20:00:10",
+                "DEBUG Client 1] Generating level 44 area \"1_3_1\" with seed 1",
+            ),
+            at(
+                "20:00:11",
+                "INFO Client 1] : You have entered The Fellshrine Ruins.",
+            ),
+            at(
+                "20:10:00",
+                "DEBUG Client 1] Generating level 47 area \"1_3_2\" with seed 2",
+            ),
+            at("20:10:01", "INFO Client 1] : You have entered The Crypt."),
+            at(
+                "20:20:00",
+                "DEBUG Client 1] Generating level 52 area \"1_3_3\" with seed 3",
+            ),
+            at(
+                "20:20:01",
+                "INFO Client 1] : You have entered The Catacombs.",
+            ),
+        ];
+        let run = |game| {
+            let mut s = PoeSession::new(game);
+            for l in &lines {
+                s.take_at(parse_line(l).unwrap(), line_secs(l));
+            }
+            s
+        };
+        let poe1 = run(PoeGame::Poe1);
+        assert_eq!((poe1.xp_cut_areas, poe1.worst_xp_pct), (2, Some(13)));
+        assert!(
+            poe1.summary()
+                .ends_with("The level gap cut your XP in 2 areas, down to 13% at worst."),
+            "{}",
+            poe1.summary()
+        );
+        // Path of Exile 2 works its experience out another way: no hint.
+        let poe2 = run(PoeGame::Poe2);
+        assert_eq!((poe2.xp_cut_areas, poe2.worst_xp_pct), (0, None));
+        assert!(!poe2.summary().contains("XP"));
     }
 
     #[test]

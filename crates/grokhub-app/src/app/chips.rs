@@ -765,6 +765,23 @@ impl Cabin {
         }
     }
 
+    /// Each frame, cheaply: pick up another writer's board save (checked every
+    /// two seconds), and once an hour run the local sweep. No model is involved.
+    pub(super) fn tick_board_store(&mut self) {
+        let path = config::workboard_path();
+        crate::work_store::reload_if_changed(&path, &mut self.board);
+        let now = grokhub_core::now_ms();
+        if !crate::work_store::sweep_due(&path, now) {
+            return;
+        }
+        let live: Vec<String> = self.chat_job_thread.iter().cloned().collect();
+        let report = grokhub_core::sweep_work_cards(&mut self.board, now, &live);
+        if !report.is_empty() {
+            self.note_board_sweep(&report);
+            self.flush_board();
+        }
+    }
+
     pub(super) fn flush_board(&mut self) {
         let board = self.board.clone();
         let io = self.persist_io.clone();
