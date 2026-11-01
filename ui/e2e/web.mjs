@@ -133,6 +133,31 @@ async function sendChat({ conversationId, text }) {
 
 const COMMANDS = {
   get_settings: () => ({ ok: true, value: settings() }),
+  get_behavior: () => ({
+    ok: true,
+    value: {
+      closeToTray: true,
+      behavior: { autocomplete: false, quietStart: "", quietEnd: "", dailyTokenBudget: 0, pauseOverBudget: false },
+      budgets: [{ value: 0, label: "Off" }],
+    },
+  }),
+  get_privacy: () => ({
+    ok: true,
+    value: {
+      offlineOnly: false,
+      localReady: false,
+      sent: "0 calls sent off-device this week",
+      hosts: [],
+      encrypted: true,
+      encryptedNote: "Personal memory and the logs are sealed with your keyring.",
+      dataFolder: "/home/user/.config/GrokHub",
+      canOpenFolder: true,
+    },
+  }),
+  get_background: () => ({
+    ok: true,
+    value: { runner: "Here a job runs when you choose Run now.", nextDue: null, quiet: "No quiet hours", budget: "Daily token budget: Off", rows: [] },
+  }),
   send_chat: sendChat,
   answer_permission: ({ callId, answer }) => {
     if (STATE.permission?.id !== callId) return { ok: false, error: "no such approval" };
@@ -299,6 +324,14 @@ async function main() {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
+    await page.getByText("0 calls sent off-device this week").waitFor();
+    await page.getByText("No automation is on, so nothing is due.").waitFor();
+    check(
+      (await page.locator("section.settings").getByRole("switch").count()) === 0 &&
+        (await page.getByRole("button", { name: "Open data folder" }).count()) === 0,
+      "the web app offered to change Privacy & data",
+    );
+    console.log("settings: Defaults, Behavior, Privacy & data and Background read-only");
 
     const stores = await page.evaluate(async () => ({
       local: localStorage.length,

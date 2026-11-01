@@ -1892,6 +1892,17 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ),
         "Stardew Valley",
     ));
+    rows.push((
+        "end_eso_session",
+        grokhub_core::eso_addon::session_card(
+            &grokhub_core::eso_addon::EsoSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "The Elder Scrolls Online",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
