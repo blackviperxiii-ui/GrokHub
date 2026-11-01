@@ -363,6 +363,7 @@ impl Engine for NativeEngine {
             return Ok(());
         }
         let brief = self.write_brief(text, image.is_some());
+        crate::tools::note_turn_brief(&self.conversation_id, &brief);
         // LO-43: a plain read-only ask ("list my skills") runs its one tool
         // and answers from a template, with no model call.
         let turn = crate::brain::instant::Turn {

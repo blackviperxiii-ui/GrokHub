@@ -79,7 +79,7 @@ use grokhub_core::{
     quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect,
     recipe_from_cmds, record_turn, redact_held_secrets, redact_secrets, redirect_prompt,
     refresh_last_stretch, refund_host_reserved, release_inflight_card, remember_chip_click,
-    remember_chip_dismiss, remember_chip_outcome, remember_home_slash, remember_home_surface,
+    remember_chip_dismiss, remember_chip_turn_outcome, remember_home_slash, remember_home_surface,
     remember_typed_prompt, rename_node, replay_automation_target, replay_ops, resolve_bind_path,
     resolve_chat_model, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
     rewind_allowed, rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
@@ -256,6 +256,7 @@ mod web_search_ui;
 mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
+mod wow_ui;
 
 use background::BgWork;
 use chat_ui::*;
@@ -696,6 +697,12 @@ pub struct Cabin {
     /// Home's row: the same engine for a fresh chat, four at most.
     home_chips: Vec<QuickChip>,
     chip_paint_key: String,
+    /// The chip whose send is under way, so the turn it starts is known
+    /// as the chip's and not a typed ask.
+    chip_send_key: Option<String>,
+    /// The chip that started the running turn; only it is credited with
+    /// how the turn went. `None` for a typed turn.
+    chip_turn_key: Option<String>,
     greeting: String,
     greeting_fp: String,
     greeting_user_at: u64,
@@ -1314,6 +1321,8 @@ impl Cabin {
             visible_chips: vec![],
             home_chips: vec![],
             chip_paint_key: String::new(),
+            chip_send_key: None,
+            chip_turn_key: None,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -1787,6 +1796,8 @@ impl Cabin {
             visible_chips: Vec::new(),
             home_chips: Vec::new(),
             chip_paint_key: String::new(),
+            chip_send_key: None,
+            chip_turn_key: None,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -5520,7 +5531,6 @@ impl eframe::App for Cabin {
             self.ui_palette(&ctx);
         }
         self.paint_record_indicator(&ctx);
-        self.paint_listen_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }

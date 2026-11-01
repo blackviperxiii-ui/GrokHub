@@ -5,9 +5,10 @@
 //! once; the report lands in the chat that asked and on a feed card. Nothing
 //! on the computer is changed. Delete recording asks first.
 //!
-//! SD2: after a recording finishes, a **Save as skill** offer (same floating
-//! chrome as the Stop indicator) runs the watch-and-learn vision call, shows
-//! the draft with hard steps flagged, and saves only after the user confirms.
+//! SD2: after a recording finishes, a **Save as skill** notice in the bell
+//! runs the watch-and-learn vision call; a centered card shows the draft with
+//! hard steps flagged, and saves only after the user confirms. While
+//! recording, the clock and Stop sit in the titlebar left of the bell.
 
 use super::*;
 use grokhub_core::fix_plan::ApprovalNeed;
@@ -95,6 +96,14 @@ fn watch_take() -> Option<WatchPhase> {
 
 fn watch_set(phase: Option<WatchPhase>) {
     *WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner()) = phase;
+}
+
+/// The folder of the Save-as-skill offer waiting for a tap, if any.
+pub(super) fn watch_offer_dir() -> Option<PathBuf> {
+    watch_with_mut(|slot| match slot.as_ref() {
+        Some(WatchPhase::Offer(o)) => Some(o.dir.clone()),
+        _ => None,
+    })
 }
 
 fn watch_with_mut<R>(f: impl FnOnce(&mut Option<WatchPhase>) -> R) -> R {
@@ -372,6 +381,13 @@ impl Cabin {
                 chat: chat.to_string(),
                 title: title.clone(),
             })));
+            // The offer waits for an answer, so it lives in the bell, not
+            // over the top-right corner the toasts use.
+            self.notify(
+                super::notices::NoticeKind::Info,
+                format!("Save the steps you showed as a skill? {title}"),
+                Some(super::notices::NoticeAction::SaveAsSkill(done.dir.clone())),
+            );
         }
         let picks = sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES);
         let stills: Vec<String> = picks
@@ -668,35 +684,41 @@ impl Cabin {
         }
     }
 
-    /// Red indicator with the clock and Stop, above every page while recording,
-    /// under the title bar so the window buttons stay reachable. When idle,
-    /// paints the SD2 Save as skill / draft chrome for the latest recording.
-    pub(super) fn paint_record_indicator(&mut self, ctx: &egui::Context) {
+    /// Live indicators in the titlebar, left of the bell (right-to-left
+    /// layout): the recording clock with Stop, and the audio check's clock.
+    /// They sit in the bar, so nothing floats over the toasts' corner.
+    pub(super) fn paint_titlebar_live(&mut self, ui: &mut egui::Ui) {
+        let mut stop = false;
         if let Some(live) = self.screen_rec.as_ref() {
             let line = sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS));
-            let mut stop = false;
-            egui::Area::new(egui::Id::new("screen-record-indicator"))
-                .order(egui::Order::Foreground)
-                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
-                .show(ctx, |ui| {
-                    egui::Frame::NONE
-                        .fill(crate::theme::elevated())
-                        .corner_radius(crate::theme::CHROME_RADIUS)
-                        .stroke(egui::Stroke::new(2.0_f32, crate::theme::offline()))
-                        .inner_margin(egui::Margin::same(8))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&line).size(13.0).color(crate::theme::fg()));
-                                stop = crate::cards::danger_pill(ui, "Stop");
-                            });
-                        });
-                });
-            if stop {
-                self.stop_screen_recording();
-            }
-            return;
+            ui.add_space(6.0);
+            stop = crate::cards::danger_pill(ui, "Stop");
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(line)
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::offline()),
+            );
         }
-        self.paint_watch_learn_chrome(ctx);
+        if let Some(line) = self.listen_line() {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(line)
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::offline()),
+            );
+        }
+        if stop {
+            self.stop_screen_recording();
+        }
+    }
+
+    /// After the bell's Save as skill: the reading / draft / nothing-found
+    /// card, centered, since it is a step the user just asked for.
+    pub(super) fn paint_record_indicator(&mut self, ctx: &egui::Context) {
+        if self.screen_rec.is_none() {
+            self.paint_watch_learn_chrome(ctx);
+        }
     }
 
     fn paint_watch_learn_chrome(&mut self, ctx: &egui::Context) {
@@ -708,7 +730,8 @@ impl Cabin {
                 WatchPhase::Empty(_) => 3,
             })
         });
-        let Some(kind) = kind else {
+        // The offer itself is a bell notice; only the steps after it paint here.
+        let Some(kind) = kind.filter(|k| *k != 0) else {
             return;
         };
         let mut save_as = false;
@@ -763,7 +786,7 @@ impl Cabin {
         let _ = hard;
         egui::Area::new(egui::Id::new("watch-learn-chrome"))
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(crate::theme::elevated())
@@ -833,6 +856,39 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gh-screenrec-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// LO-20: nothing of recording, watch-to-learn or the audio check floats
+    /// in the top-right corner the toasts use. Live clocks sit in the
+    /// titlebar left of the bell; the offer is a bell notice.
+    #[test]
+    fn live_indicators_sit_in_the_titlebar_and_leave_the_toast_corner() {
+        let own = include_str!("screen_record_ui.rs").replace("\r\n", "\n");
+        let audio = include_str!("audio_check_ui.rs").replace("\r\n", "\n");
+        let code = |s: &str| {
+            s.split("#[cfg(test)]\nmod tests")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        for (name, src) in [
+            ("screen_record_ui", code(&own)),
+            ("audio_check_ui", code(&audio)),
+        ] {
+            assert!(
+                !src.contains("RIGHT_TOP"),
+                "{name} floats in the toast corner"
+            );
+        }
+        let bar = include_str!("sidebar.rs").replace("\r\n", "\n");
+        let bell = bar.find("self.ui_notice_bell(ui);").expect("bell");
+        let live = bar
+            .find("self.paint_titlebar_live(ui);")
+            .expect("live cluster");
+        assert!(
+            live > bell,
+            "right-to-left: painted after the bell lands left of it"
+        );
     }
 
     #[test]
@@ -1259,6 +1315,22 @@ mod tests {
             )
         });
         assert!(armed, "Save as skill offer armed after recording");
+        assert_eq!(
+            cabin.notices.items[0].action,
+            Some(super::super::notices::NoticeAction::SaveAsSkill(
+                dir.clone()
+            )),
+            "the offer waits in the bell"
+        );
+        // No key: the tap says so and keeps the pill for another try.
+        cabin.run_notice_action(0);
+        assert!(cabin.status.contains("Connect Grok"), "{}", cabin.status);
+        assert_eq!(
+            cabin.notices.items[0].action,
+            Some(super::super::notices::NoticeAction::SaveAsSkill(
+                dir.clone()
+            ))
+        );
         // Confirming a fixture reply (no network) saves via the undo path.
         let draft = draft_from_reply("open Settings → Display", OPEN_SETTINGS_REPLY).unwrap();
         watch_set(Some(WatchPhase::Draft {

@@ -4,6 +4,7 @@
 //! This module loads/saves `{config}/home_layout.json` and paints Home.
 
 mod edit;
+mod fps;
 mod live;
 mod page;
 mod paint;

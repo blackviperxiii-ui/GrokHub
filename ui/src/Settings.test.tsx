@@ -239,6 +239,24 @@ describe("Settings", () => {
     expect(screen.queryByText("Labs panel")).toBeNull();
   });
 
+  it("opens each section at the top and closes from the button or Esc", async () => {
+    api.getSettings.mockResolvedValue(shape({}));
+    const onClose = vi.fn();
+    const { container } = render(<Settings caps={DESKTOP} onClose={onClose} />);
+    await openSection("Playbooks");
+    const pane = container.querySelector<HTMLElement>(".settings-pane")!;
+    expect(screen.getByRole("heading", { level: 1, name: "Playbooks" })).toBeTruthy();
+    pane.scrollTop = 400;
+    await openSection("Permissions");
+    expect(pane.scrollTop).toBe(0);
+    expect(screen.getByRole("heading", { level: 1, name: "Permissions" })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
   it("shows the web app the desktop's settings but nothing to change them with", async () => {
     api.getSettings.mockResolvedValue(shape({ hasApiKey: true, approvals: "auto" }));
     render(<Settings caps={WEB} />);

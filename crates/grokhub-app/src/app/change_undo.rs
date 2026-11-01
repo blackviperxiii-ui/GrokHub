@@ -258,6 +258,11 @@ pub(super) fn report_rows(ledger: &hx::ChangeLedger, now_ms: u64) -> Vec<ChangeR
     rows
 }
 
+/// Key for a Work-tree row's chat tag.
+pub(super) fn work_row_key(row: &ChangeRow) -> String {
+    format!("{}:{}", row.kind.as_str(), row.id)
+}
+
 /// The Work-tree row for one self-made change.
 pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
     ChangeRow {
@@ -419,6 +424,14 @@ impl Cabin {
                     || trials.iter().any(|(k, s)| k == kind.as_str() && *s == seq)
             };
             self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &skip);
+            // Rows read back after a restart have no chat on record: they
+            // show once, in the chat open at start, not in every chat.
+            let here = self.visible_thread_id();
+            for row in &self.harness.work_rows {
+                self.harness
+                    .work_row_chat
+                    .insert(work_row_key(row), here.clone());
+            }
             self.harness.ledger_watch.baseline(&dir);
         }
         let watch = &mut self.harness.ledger_watch;
@@ -461,6 +474,12 @@ impl Cabin {
                 continue;
             }
             let row = work_row(kind, &c);
+            // The chat whose turn made the change; between turns, the open one.
+            let chat = self
+                .chat_job_thread
+                .clone()
+                .unwrap_or_else(|| self.visible_thread_id());
+            self.harness.work_row_chat.insert(work_row_key(&row), chat);
             self.harness
                 .work_rows
                 .retain(|r| !(r.kind == kind && r.id == row.id));
@@ -558,21 +577,30 @@ impl Cabin {
         done.is_ok()
     }
 
-    /// Work-tree rows under the approval cards. Click only.
+    /// This chat's Work-tree rows. A row made in another chat stays there.
+    pub(super) fn work_rows_here(&self) -> Vec<ChangeRow> {
+        let here = self.visible_thread_id();
+        self.harness
+            .work_rows
+            .iter()
+            .filter(|r| {
+                self.harness
+                    .work_row_chat
+                    .get(&work_row_key(r))
+                    .is_none_or(|c| *c == here)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Work-tree rows under the approval cards, this chat's only. Click
+    /// only. The router's quiet lines go to the bell (`deliver_heal`).
     pub(super) fn paint_work_rows(&mut self, ui: &mut egui::Ui) {
-        if self.harness.work_rows.is_empty() && self.harness.router.rows.is_empty() {
+        let rows = self.work_rows_here();
+        if rows.is_empty() {
             return;
         }
         ui.add_space(8.0);
-        // The router's quiet lines (a pinned model resting): tell-only, no buttons.
-        for (_, text) in &self.harness.router.rows {
-            ui.label(
-                egui::RichText::new(text)
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
-        }
-        let rows = self.harness.work_rows.clone();
         if let Some((row, act)) = paint_change_rows(ui, "work-row", &rows, false) {
             self.change_row_clicked(&row, act);
         }
@@ -782,6 +810,39 @@ mod tests {
             "a day later the row is gone"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A row made in chat A paints in chat A only, and the router's quiet
+    /// lines no longer paint under the chat at all.
+    #[test]
+    fn a_work_row_stays_in_the_chat_that_made_it() {
+        let mut cabin = Cabin::quiet_for_test();
+        let a = crate::threads::ChatThread::new("A", false);
+        let b = crate::threads::ChatThread::new("B", false);
+        let (a_id, b_id) = (a.id.clone(), b.id.clone());
+        cabin.threads = vec![a, b];
+        cabin.thread_idx = 0;
+        let row = ChangeRow {
+            kind: ChangeKind::Connection,
+            id: "notes".into(),
+            label: "Grok added connection notes".into(),
+            keep: true,
+        };
+        cabin.harness.work_rows = vec![row.clone()];
+        cabin.harness.work_row_chat.insert(work_row_key(&row), a_id);
+        assert_eq!(cabin.visible_thread_id(), cabin.threads[0].id);
+        assert_eq!(cabin.work_rows_here(), vec![row]);
+        cabin.thread_idx = 1;
+        assert_eq!(cabin.visible_thread_id(), b_id);
+        assert!(cabin.work_rows_here().is_empty(), "chat B shows none");
+        let src = include_str!("change_undo.rs").replace("\r\n", "\n");
+        let paint = src
+            .split("pub(super) fn paint_work_rows(")
+            .nth(1)
+            .and_then(|s| s.split("/// A ghost pill that answers").next())
+            .expect("paint_work_rows");
+        assert!(paint.contains("work_rows_here()"), "{paint}");
+        assert!(!paint.contains("router.rows"), "{paint}");
     }
 
     #[test]

@@ -203,7 +203,7 @@ impl Cabin {
 
     /// One match event from any game's adapter: a new pointer becomes a
     /// quiet toast, the match's end the recap card.
-    fn note_watch_event(&mut self, game: &'static str, event: WatchEvent, now: u64) {
+    pub(super) fn note_watch_event(&mut self, game: &'static str, event: WatchEvent, now: u64) {
         let w = &mut self.focus.watch;
         if w.match_game != Some(game) {
             w.tracker = MatchTracker::default();

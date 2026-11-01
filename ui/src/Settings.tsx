@@ -29,9 +29,12 @@ export const DESKTOP_NOTE =
 export function Settings({
   caps,
   goTo,
+  onClose,
 }: {
   caps: Capabilities;
   goTo?: { section: Section; n: number };
+  /** Leaves Settings for the screen that was open before it. */
+  onClose?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
@@ -43,6 +46,8 @@ export function Settings({
   const [note, setNote] = useState<string | null>(null);
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
   const nav = useRef<HTMLElement>(null);
+  const page = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
   // On a phone the sections are one row that scrolls; the next one peeks in.
   usePeek(nav, "x", settings !== null && sections(caps).length);
 
@@ -65,6 +70,25 @@ export function Settings({
   useEffect(() => {
     getSettings().then(show, (err) => setNote(String(err)));
   }, []);
+
+  // Each section is its own page: it opens at the top, however far the last one was read.
+  useEffect(() => {
+    if (pane.current) pane.current.scrollTop = 0;
+    if (page.current) page.current.scrollTop = 0;
+  }, [section, goTo]);
+
+  useEffect(() => {
+    if (!onClose) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Esc belongs to a field or list that is using it, such as the palette.
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[role='dialog'], [role='listbox'], select")) return;
+      onClose?.();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -112,7 +136,7 @@ export function Settings({
   }
 
   return (
-    <div className="settings-page">
+    <div className="settings-page" ref={page}>
       <nav
         ref={nav}
         className="settings-nav"
@@ -130,7 +154,16 @@ export function Settings({
           </button>
         ))}
       </nav>
-      <section className="settings" aria-label={SECTION_LABELS[section]}>
+      <div className="settings-pane" ref={pane}>
+        <header className="settings-head">
+          <h1>{SECTION_LABELS[section]}</h1>
+          {onClose && (
+            <button type="button" className="quiet" onClick={onClose} aria-label="Close settings">
+              Close
+            </button>
+          )}
+        </header>
+        <section className="settings" aria-label={SECTION_LABELS[section]}>
         {section === "general" && general()}
         {section === "account" && account()}
         {note && <p className="note">{note}</p>}
@@ -145,7 +178,8 @@ export function Settings({
         {section === "webAccess" && caps.webAccess && <WebAccess />}
         {section === "labs" && caps.plugins && <Labs />}
         {section === "about" && <About version={loaded.version} />}
-      </section>
+        </section>
+      </div>
     </div>
   );
 

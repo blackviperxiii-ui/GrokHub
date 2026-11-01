@@ -2160,6 +2160,8 @@ fn quiet_cabin() -> Cabin {
         visible_chips: Vec::new(),
         home_chips: Vec::new(),
         chip_paint_key: String::new(),
+        chip_send_key: None,
+        chip_turn_key: None,
         greeting: String::new(),
         greeting_fp: String::new(),
         greeting_user_at: 0,
