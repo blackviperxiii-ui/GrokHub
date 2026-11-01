@@ -32,6 +32,9 @@ vi.mock("./api", () => ({
     return Promise.resolve(() => {});
   },
   onEventGap: () => Promise.resolve(() => {}),
+  // The scheduler has its own tests (App.test.tsx, Automations.test.tsx).
+  onAutomationRan: () => Promise.resolve(() => {}),
+  shareSchedulerClock: () => Promise.resolve(),
   onFileDrop: () => Promise.resolve(() => {}),
   // The turn stays open, so its events keep landing.
   sendChat: (conversationId: string) => {
@@ -39,7 +42,7 @@ vi.mock("./api", () => ({
     return new Promise<string>(() => {});
   },
 }));
-vi.mock("./Automations", () => ({ Automations: () => null }));
+vi.mock("./Automations", () => ({ Automations: () => null, resultLine: () => "" }));
 
 import { App } from "./App";
 

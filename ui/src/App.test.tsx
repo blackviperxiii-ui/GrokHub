@@ -6,6 +6,7 @@ import type { Capabilities } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
+const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
@@ -29,6 +30,11 @@ const api = vi.hoisted(() => ({
     chatHandlers.push(handler);
     return Promise.resolve(() => {});
   }),
+  onAutomationRan: vi.fn((handler: (run: unknown) => void) => {
+    ranHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
+  shareSchedulerClock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("./api", () => api);
@@ -78,7 +84,10 @@ vi.mock("./Workboard", () => ({
     </div>
   ),
 }));
-vi.mock("./Automations", () => ({ Automations: () => null }));
+vi.mock("./Automations", () => ({
+  Automations: () => null,
+  resultLine: (r: { text: string; error: string }) => r.error || r.text,
+}));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
@@ -351,5 +360,26 @@ describe("App", () => {
     await userEvent.click(within(dock).getByRole("button", { name: "Open card" }));
     expect(await screen.findByText("Workboard page at w1")).toBeVisible();
     expect(screen.getByRole("button", { name: "Workboard" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shares the clock with the scheduler and shows a scheduled run in the dock", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    ranHandlers.length = 0;
+    api.shareSchedulerClock.mockClear();
+    render(<App />);
+    expect(api.shareSchedulerClock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(ranHandlers.length).toBe(1));
+    act(() => {
+      ranHandlers[0]({
+        id: "auto-1",
+        name: "summarize my inbox",
+        result: { text: "3 new mails.", error: "", stop: "end_turn" },
+      });
+    });
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
+    expect(within(dock).getByRole("listitem", { name: "summarize my inbox" })).toHaveTextContent(
+      "3 new mails.",
+    );
   });
 });
