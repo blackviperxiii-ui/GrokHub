@@ -775,18 +775,15 @@ pub fn permission_modes() -> &'static [(&'static str, &'static str)] {
 
 /// Hover copy for the Chat / Plan / btw session pills. Unknown ids stay silent.
 pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
+    use grokhub_core::brand::filled;
     match id {
         "chat" => Some((
             "Chat",
-            grokhub_core::brand::filled(
-                "Normal chat. {product} can edit files and use tools in the bound project. Everyday work.",
-            ),
+            filled("Normal chat. {product} can edit files and use tools in the bound project. Everyday work."),
         )),
         "plan" => Some((
             "Plan",
-            grokhub_core::brand::filled(
-                "{product} writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
-            ),
+            filled("{product} writes a plan before changing things. Use this for bigger or riskier work. /plan is the same."),
         )),
         "ask" => Some((grokhub_core::BTW_TIP_TITLE, grokhub_core::BTW_TIP_BODY)),
         _ => None,
