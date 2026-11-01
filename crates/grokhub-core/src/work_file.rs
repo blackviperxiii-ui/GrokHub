@@ -7,11 +7,14 @@
 //! - [`update_board`] is a short read-change-write under that lock for a writer
 //!   that keeps no copy of its own (the shell). It merges through
 //!   [`merge_cards`](crate::work_item::merge_cards) like the cabin's saves.
+//! - [`read_board`] and [`write_board`] are the one reader and writer of the
+//!   file; `work_run`'s board edits go through them too.
 //! - [`read_work_log_tail`] reads only the end of a card's progress log.
 
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::work_item::{
@@ -131,9 +134,15 @@ pub fn update_board<R>(
     // Under the lock the disk cannot move, so this keeps `mine` as written,
     // through the same per-card rule every other writer uses.
     let merged = merge_cards(&base, &mine, &disk);
-    let raw = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
-    write_private_atomic(path, raw.as_bytes())?;
+    write_board(path, &merged)?;
     Ok((out, merged))
+}
+
+/// Write `cards` as the board file: pretty JSON through a private temp file,
+/// fsync, then a rename. Call it under [`lock_board`].
+pub fn write_board(path: &Path, cards: &[BoardCard]) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
+    write_private_atomic(path, raw.as_bytes())
 }
 
 #[cfg(unix)]
@@ -170,7 +179,9 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or("the board needs a file name")?;
-    let tmp = dir.join(format!(".{name}.board-{}.tmp", std::process::id()));
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.board-{}-{n}.tmp", std::process::id()));
     let mut f = create_private(&tmp).map_err(|e| e.to_string())?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
