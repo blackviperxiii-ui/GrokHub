@@ -19,6 +19,8 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// Settings → Account → Sign in with Grok. Android waits for a keychain.
+    pub grok_sign_in: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -33,6 +35,7 @@ pub fn for_os(os: &str) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        grok_sign_in: desktop || os == "ios",
     }
 }
 
@@ -64,6 +67,7 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            grok_sign_in: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -79,9 +83,16 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            grok_sign_in: false,
         };
         assert_eq!(for_os("android"), none);
-        assert_eq!(for_os("ios"), none);
+        assert_eq!(
+            for_os("ios"),
+            Capabilities {
+                grok_sign_in: true,
+                ..none
+            }
+        );
     }
 
     #[test]
@@ -105,6 +116,7 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "grokSignIn": false,
             })
         );
     }

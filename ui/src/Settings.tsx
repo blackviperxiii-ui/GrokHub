@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
+import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
@@ -233,8 +234,10 @@ export function Settings({
 
   function account() {
     return (
-      <div className="key">
-        <h2>xAI API key</h2>
+      <>
+        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} onChange={show} />}
+        <div className="key">
+        <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
         <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
         <input
           type="password"
@@ -252,7 +255,8 @@ export function Settings({
             Remove key
           </button>
         )}
-      </div>
+        </div>
+      </>
     );
   }
 }
@@ -293,6 +297,8 @@ function RemoteSettings({ settings }: { settings: Shape }) {
         <dd>{APPROVALS[settings.approvals].label}</dd>
         <dt>xAI API key</dt>
         <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
+        <dt>Grok sign-in</dt>
+        <dd>{settings.signedIn ? "Signed in on your computer." : "Not signed in."}</dd>
       </dl>
     </section>
   );

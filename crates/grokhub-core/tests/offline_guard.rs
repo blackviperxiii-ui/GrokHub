@@ -74,6 +74,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
     ("crates/grokhub-app/src/app/pulse_ui.rs", 1, "Pulse previews: egress_ok"),
     ("crates/grokhub-app/src/app/pulse_sources_ui.rs", 1, "Pulse sources: egress_ok on every hop"),
+    ("src-tauri/src/oauth.rs", 1, "Sign in with Grok to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
