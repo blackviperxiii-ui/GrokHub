@@ -1,0 +1,1 @@
+- Dependencies: the desktop shell's web-access certificate maker moves to rcgen 0.14. Certificates and keys come out the same (self-signed, PEM). reqwest 0.13 and ureq 3 were already in place.
