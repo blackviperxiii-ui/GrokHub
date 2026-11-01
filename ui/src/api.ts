@@ -704,6 +704,57 @@ export function pulseImage(name: string): Promise<string> {
   return invoke<string>("pulse_image", { name });
 }
 
+/** The Imagine page (src-tauri/src/imagine.rs). Its gallery is the cabin's wall. */
+export type ImagineKind = "image" | "video";
+
+export interface ImagineTile {
+  id: string;
+  /** Read it with `imagineImage`. */
+  name: string;
+  title: string;
+  prompt: string;
+  createdMs: number;
+  video: boolean;
+  tall: boolean;
+}
+
+export interface ImaginePage {
+  /** Newest first. */
+  tiles: ImagineTile[];
+  /** A Grok sign-in or a key is there, so Make can run. */
+  ready: boolean;
+}
+
+export interface ImagineMade {
+  page: ImaginePage;
+  made: number;
+  /** Empty, or which results could not be saved. */
+  note: string;
+}
+
+export function getImagine(): Promise<ImaginePage> {
+  return invoke<ImaginePage>("get_imagine");
+}
+
+/** Resolves once the results are saved; `imagineCancel` ends it early. */
+export function imagineGenerate(
+  prompt: string,
+  aspect: string,
+  count: number,
+  kind: ImagineKind,
+): Promise<ImagineMade> {
+  return invoke<ImagineMade>("imagine_generate", { prompt, aspect, count, kind });
+}
+
+export function imagineCancel(): Promise<boolean> {
+  return invoke<boolean>("imagine_cancel");
+}
+
+/** A gallery file as a data URL, by its bare name. */
+export function imagineImage(name: string): Promise<string> {
+  return invoke<string>("imagine_image", { name });
+}
+
 /** One decision journal question (src-tauri/src/journal.rs). */
 export interface JournalQuestion {
   id: string;
