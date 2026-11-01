@@ -48,7 +48,7 @@ export function Devices({ onOpenWebAccess }: { onOpenWebAccess: () => void }) {
     read();
     const timer = window.setInterval(read, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [fail]);
 
   async function signOutAll() {
     setBusy(true);
