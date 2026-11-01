@@ -1,0 +1,1 @@
+- UI dev tooling: eslint's glob matcher (minimatch) is pinned to 11.0.3 through an npm override, which clears the moderate minimatch advisory (GHSA-g3hv-75wg-m249) from `npm audit`. Dev dependency only; nothing in the shipped app changes.
