@@ -27,6 +27,7 @@ import { TabIcon } from "./TabIcon";
 // idle so that first click does not wait on the network or disk.
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
@@ -34,6 +35,7 @@ const loaders = {
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
+const Devices = lazy(loaders.devices);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
@@ -320,6 +322,11 @@ export function App() {
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
+        </Page>
+      )}
+      {opened.has("devices") && caps.webAccess && !caps.remote && (
+        <Page shown={view === "devices"}>
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
         </Page>
       )}
     </div>

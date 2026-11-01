@@ -18,6 +18,8 @@ pub mod journal;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
+#[cfg(test)]
+mod md_fixtures;
 pub mod memory;
 pub mod models;
 pub mod oauth;
@@ -32,6 +34,7 @@ pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_devices;
 pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -1383,6 +1386,19 @@ fn set_web_access(
     )
 }
 
+/// The Devices page (desktop only; not a web command): this computer, web
+/// access, and the browsers paired right now. Kept in memory only.
+#[tauri::command]
+fn get_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.devices()
+}
+
+/// Devices → Sign out all browsers: a new pairing code ends every pairing.
+#[tauri::command]
+fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.forget_all()
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -1951,9 +1967,31 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The reply links `open_url` will hand to the default browser: http(s) only,
+/// by the same rule the cabin and the chat page use (`md_link_ok`).
+fn openable_url(url: &str) -> Result<&str, String> {
+    let url = url.trim();
+    if grokhub_core::md_link_ok(url) {
+        Ok(url)
+    } else {
+        Err("Only web links (https:// or http://) open from a reply.".into())
+    }
+}
+
+/// A reply's link, opened in the default browser. The web app never calls
+/// this (it is not in `remote::WEB_COMMANDS`); its links open in a new tab.
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = openable_url(&url)?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
@@ -2114,6 +2152,8 @@ pub fn run() {
             run_local_speed_test,
             get_web_access,
             set_web_access,
+            get_devices,
+            forget_all_devices,
             get_update_status,
             set_update_channel,
             check_shell_update,
@@ -2135,7 +2175,8 @@ pub fn run() {
             get_background,
             get_library,
             library_cover,
-            library_play
+            library_play,
+            open_url
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
@@ -2144,5 +2185,29 @@ pub fn run() {
             grokhub_core::brand::product_name()
         );
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::openable_url;
+
+    #[test]
+    fn opens_only_web_links() {
+        assert_eq!(openable_url(" https://x.ai/docs "), Ok("https://x.ai/docs"));
+        assert_eq!(openable_url("http://example.com"), Ok("http://example.com"));
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<b>x</b>",
+            "not a url",
+            "",
+            "https://",
+            "https:///etc",
+            "mailto:a@b.c",
+            "https://a b",
+        ] {
+            assert!(openable_url(bad).is_err(), "{bad} must be refused");
+        }
     }
 }
