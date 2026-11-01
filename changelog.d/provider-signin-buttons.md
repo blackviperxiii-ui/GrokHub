@@ -1,0 +1,2 @@
+- Settings: "Sign in with OpenRouter" and "Get a key" open your browser again; if the browser can't be opened, Settings shows the link with a Copy button and the sign-in still finishes when you open it.
+- Settings → Account: a Grok sign-in that has expired or can't be renewed now shows "Sign-in expired" with Sign in with Grok, instead of Connected, and the avatar menu offers Connect Grok in that case too.
