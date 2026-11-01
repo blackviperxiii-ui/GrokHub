@@ -626,11 +626,8 @@ mod tests {
         let fill = body(&chips, "let game = self", "let key = format!(");
         let steam = include_str!("steam_ui.rs").replace("\r\n", "\n");
         let name = body(&steam, "fn steam_cached_name(", "\n    }\n");
-        let ended = body(
-            include_str!("game_companion_ui.rs"),
-            "fn game_just_ended(",
-            "\n    }\n",
-        );
+        let own = include_str!("game_companion_ui.rs").replace("\r\n", "\n");
+        let ended = body(&own, "fn game_just_ended(", "\n    }\n");
         let live = include_str!("home/live.rs").replace("\r\n", "\n");
         let drives = body(&live, "fn cached_drives(", "\n}\n");
         for (what, src) in [

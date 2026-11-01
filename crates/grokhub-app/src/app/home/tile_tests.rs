@@ -5,7 +5,8 @@ use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
 use super::paint::{
-    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, usage_text, Tone,
+    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
+    usage_text, Tone,
 };
 use crate::app::budget_ui::WeekSpend;
 use grokhub_agent::indexers::system_state::DiskUse;
@@ -189,4 +190,38 @@ fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
         ("107 GB free", "Home drive")
     );
     assert_eq!(storage_text(&[], None).tone, Tone::Quiet);
+}
+
+#[test]
+fn updates_tile_names_what_is_waiting() {
+    use super::updates::{OsUpdates, UpdateFacts};
+    let none = UpdateFacts {
+        os: OsUpdates::NotAllowed,
+        steam: vec![],
+    };
+    let t = updates_text(false, &none, Some("amdgpu (kernel)"));
+    assert_eq!(t.big, "Up to date");
+    assert_eq!(t.caption, "Loadout and Steam checked · system checks off");
+    assert_eq!(t.detail.as_deref(), Some("GPU driver amdgpu (kernel)"));
+    let busy = UpdateFacts {
+        os: OsUpdates::Pending(12),
+        steam: vec!["Apex Legends".into(), "Counter-Strike 2".into()],
+    };
+    let t = updates_text(true, &busy, None);
+    assert_eq!(t.big, "3 waiting");
+    assert_eq!(t.caption, "Loadout · 2 Steam games · 12 system packages");
+    assert_eq!(t.tone, Tone::Warn);
+    let one = UpdateFacts {
+        os: OsUpdates::Pending(0),
+        steam: vec!["Apex Legends".into()],
+    };
+    assert_eq!(updates_text(false, &one, None).caption, "Apex Legends");
+    let windows = UpdateFacts {
+        os: OsUpdates::NoChecker,
+        steam: vec![],
+    };
+    assert_eq!(
+        updates_text(false, &windows, None).caption,
+        "Loadout and Steam checked"
+    );
 }

@@ -2,12 +2,13 @@
 //! the previous request byte for byte (system, then tools, then the transcript),
 //! so the provider's prompt cache can serve it. The guard keeps a hash of every
 //! segment of the last request per run, finds the first segment a new request
-//! changes, and names why. Breaks with a known cause (compaction, a model or
-//! effort switch, a loaded tool schema) are expected; any other break logs one
+//! changes, and names why. Breaks with a known cause (compaction, a history
+//! trim, a model or effort switch, a loaded tool schema) are expected; any
+//! other break logs one
 //! structured line. Nothing here panics or changes the request.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
@@ -38,6 +39,8 @@ impl Part {
 pub enum Reason {
     /// The transcript was compacted since the last request.
     Compaction,
+    /// Older tool outputs were trimmed since the last request (`compact::trim_pass`).
+    Trim,
     ModelSwitch,
     EffortSwitch,
     /// Deferred tool schemas were appended to the tools list.
@@ -50,6 +53,7 @@ impl Reason {
     pub fn as_str(self) -> &'static str {
         match self {
             Reason::Compaction => "compaction",
+            Reason::Trim => "trim",
             Reason::ModelSwitch => "model_switch",
             Reason::EffortSwitch => "effort_switch",
             Reason::ToolsAppended => "tools_appended",
@@ -107,8 +111,9 @@ fn hash(value: &Value) -> u64 {
 }
 
 /// Where `next` stops extending `prev`, and why. `None` when `next` starts with
-/// every segment of `prev`.
-pub fn first_break(prev: &Shape, next: &Shape, compacted: bool) -> Option<PrefixBreak> {
+/// every segment of `prev`. `noted` is the rewrite the run announced since
+/// `prev` ([`note_compaction`] or [`note_trim`]); it names any break.
+pub fn first_break(prev: &Shape, next: &Shape, noted: Option<Reason>) -> Option<PrefixBreak> {
     let index = prev
         .segments
         .iter()
@@ -123,8 +128,8 @@ pub fn first_break(prev: &Shape, next: &Shape, compacted: bool) -> Option<Prefix
         .get(index)
         .or_else(|| prev.segments.get(index))
         .map_or(Part::Input, |(part, _)| *part);
-    let reason = if compacted {
-        Reason::Compaction
+    let reason = if let Some(noted) = noted {
+        noted
     } else if prev.model != next.model {
         Reason::ModelSwitch
     } else if prev.effort != next.effort {
@@ -168,13 +173,13 @@ fn tools_only_appended(prev: &Shape, next: &Shape) -> bool {
 
 struct Guard {
     last: BTreeMap<String, Shape>,
-    compacted: BTreeSet<String>,
+    noted: BTreeMap<String, Reason>,
     breaks: BTreeMap<String, Vec<PrefixBreak>>,
 }
 
 static GUARD: Mutex<Guard> = Mutex::new(Guard {
     last: BTreeMap::new(),
-    compacted: BTreeSet::new(),
+    noted: BTreeMap::new(),
     breaks: BTreeMap::new(),
 });
 
@@ -186,7 +191,7 @@ const MAX_RUNS: usize = 256;
 pub fn observe(key: &str, req: &ResponsesRequest) -> Option<PrefixBreak> {
     let shape = Shape::of(req);
     let mut g = GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    let compacted = g.compacted.remove(key);
+    let noted = g.noted.remove(key);
     if g.last.len() >= MAX_RUNS && !g.last.contains_key(key) {
         g.last.clear();
         g.breaks.clear();
@@ -194,7 +199,7 @@ pub fn observe(key: &str, req: &ResponsesRequest) -> Option<PrefixBreak> {
     let found = g
         .last
         .insert(key.to_string(), shape.clone())
-        .and_then(|prev| first_break(&prev, &shape, compacted));
+        .and_then(|prev| first_break(&prev, &shape, noted));
     if let Some(b) = &found {
         if !b.reason.expected() {
             eprintln!(
@@ -217,8 +222,19 @@ pub fn note_compaction(key: &str) {
     GUARD
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .compacted
-        .insert(key.to_string());
+        .noted
+        .insert(key.to_string(), Reason::Compaction);
+}
+
+/// Older tool outputs of this run were trimmed: its next request may rewrite the
+/// prefix. A compaction noted for the same request still names the break.
+pub fn note_trim(key: &str) {
+    GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .noted
+        .entry(key.to_string())
+        .or_insert(Reason::Trim);
 }
 
 /// The run key for a loop: one per conversation, depth and subagent, so a
@@ -290,7 +306,7 @@ mod tests {
         items.push(msg("assistant", "hello"));
         items.push(msg("user", "next"));
         let b = req(items, vec![tool("read")]);
-        assert_eq!(first_break(&Shape::of(&a), &Shape::of(&b), false), None);
+        assert_eq!(first_break(&Shape::of(&a), &Shape::of(&b), None), None);
     }
 
     #[test]
@@ -304,7 +320,7 @@ mod tests {
             vec![tool("read")],
         );
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&b), false),
+            first_break(&Shape::of(&a), &Shape::of(&b), None),
             Some(PrefixBreak {
                 index: 0,
                 part: Part::System,
@@ -334,7 +350,7 @@ mod tests {
             ],
             tools,
         );
-        let got = first_break(&Shape::of(&a), &Shape::of(&b), false).unwrap();
+        let got = first_break(&Shape::of(&a), &Shape::of(&b), None).unwrap();
         assert_eq!(got.index, 4);
         assert_eq!(got.part, Part::Input);
         assert_eq!(got.reason, Reason::Unexpected);
@@ -351,26 +367,31 @@ mod tests {
             vec![tool("read")],
         );
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&shorter), true).map(|b| b.reason),
+            first_break(
+                &Shape::of(&a),
+                &Shape::of(&shorter),
+                Some(Reason::Compaction)
+            )
+            .map(|b| b.reason),
             Some(Reason::Compaction)
         );
         let mut other_model = shorter.clone();
         other_model.model = "grok-4.7-fast".into();
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&other_model), false).map(|b| b.reason),
+            first_break(&Shape::of(&a), &Shape::of(&other_model), None).map(|b| b.reason),
             Some(Reason::ModelSwitch)
         );
         let mut other_effort = shorter.clone();
         other_effort.effort = Some("low".into());
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&other_effort), false).map(|b| b.reason),
+            first_break(&Shape::of(&a), &Shape::of(&other_effort), None).map(|b| b.reason),
             Some(Reason::EffortSwitch)
         );
         let mut items = a.input.clone();
         items.push(msg("assistant", "loading"));
         let loaded = req(items, vec![tool("read"), tool("browser")]);
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&loaded), false),
+            first_break(&Shape::of(&a), &Shape::of(&loaded), None),
             Some(PrefixBreak {
                 index: 2,
                 part: Part::Tools,
@@ -408,5 +429,38 @@ mod tests {
         );
         assert_ne!(child, key);
         assert_eq!(observe(&child, &a), None);
+    }
+
+    #[test]
+    fn a_noted_trim_names_the_next_break_and_a_compaction_outranks_it() {
+        let key = run_key(&format!("guard-trim-{}", std::process::id()), 0, None);
+        let output = |text: &str| InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: text.into(),
+        };
+        let a = req(vec![msg("system", "S"), output("FULL LOG")], vec![]);
+        assert_eq!(observe(&key, &a), None);
+        let trimmed = req(
+            vec![msg("system", "S"), output("[Output dropped: …]")],
+            vec![],
+        );
+        note_trim(&key);
+        assert_eq!(
+            observe(&key, &trimmed),
+            Some(PrefixBreak {
+                index: 1,
+                part: Part::Input,
+                reason: Reason::Trim,
+            })
+        );
+        note_compaction(&key);
+        note_trim(&key);
+        let summary = req(vec![msg("system", "S"), msg("user", "summary")], vec![]);
+        assert_eq!(
+            observe(&key, &summary).map(|b| b.reason),
+            Some(Reason::Compaction)
+        );
+        assert_eq!(Reason::Trim.as_str(), "trim");
+        assert!(Reason::Trim.expected());
     }
 }
