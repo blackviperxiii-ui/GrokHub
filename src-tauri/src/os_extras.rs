@@ -206,17 +206,23 @@ pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
         )
 }
 
+/// The buttons on a notification that asks for an OK: Open and Deny, never
+/// Allow. Open comes first: macOS folds two actions into a menu whose button
+/// reports the first one, and a stray press there should open, not deny.
+fn ask_actions() -> ActionType {
+    ActionType::builder(ASK_ACTIONS)
+        .actions(vec![
+            Action::builder(OPEN, "Open").foreground(true).build(),
+            Action::builder(DENY, "Deny").destructive(true).build(),
+        ])
+        .build()
+}
+
 /// Wires the notification clicks and the saved hotkey. A failure here only
 /// costs that feature, never the app.
 pub fn setup(app: &AppHandle, loaded: &ShellSettings) {
     let notification = app.notification();
-    let actions = ActionType::builder(ASK_ACTIONS)
-        .actions(vec![
-            Action::builder(DENY, "Deny").destructive(true).build(),
-            Action::builder(OPEN, "Open").foreground(true).build(),
-        ])
-        .build();
-    if let Err(err) = notification.register_action_types(vec![actions]) {
+    if let Err(err) = notification.register_action_types(vec![ask_actions()]) {
         eprintln!("notifications: {err}");
     }
     let handle = app.clone();
@@ -453,6 +459,18 @@ mod tests {
         assert_eq!(parse_action("always"), None);
         assert_eq!(parse_action("Deny"), None);
         assert_eq!(parse_action(""), None);
+    }
+
+    #[test]
+    fn an_ask_offers_open_and_deny_only() {
+        let actions = ask_actions();
+        let buttons: Vec<(&str, &str)> = actions
+            .actions()
+            .iter()
+            .map(|action| (action.id(), action.title()))
+            .collect();
+        assert_eq!(actions.id(), "permission");
+        assert_eq!(buttons, vec![("open", "Open"), ("deny", "Deny")]);
     }
 
     #[test]
