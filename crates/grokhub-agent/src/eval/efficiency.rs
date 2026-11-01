@@ -32,6 +32,15 @@ pub const BENCH_REQUEST_CAP: usize = 60;
 /// One planted fact the last request must still carry.
 const FACT_NOTE: &str = "FACT-ALPHA: the save folder is D:/Loadout/saves";
 const FACT_HISTORY: &str = "FACT-BRAVO: my duo partner is called Kestrel";
+const FACT_LOG: &str = "FACT-CHARLIE: the crash dump is in D:/Loadout/dumps";
+
+/// The `re-reads` log: big enough that one read_file hits its 50,000-char cap.
+const BIG_LOG: &str = "server.log";
+const BIG_LOG_LINES: usize = 4000;
+
+/// A local model's window, small enough that two full log reads pass the
+/// history trim's 40% mark.
+const LOCAL_CONTEXT_TOKENS: u64 = 64_000;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BenchRow {
@@ -203,6 +212,20 @@ fn seed_workspace(dir: &Path) {
     let _ = std::fs::write(dir.join("system.log"), log);
 }
 
+fn seed_big_log(dir: &Path) {
+    let mut log = format!("{FACT_LOG}\n");
+    for i in 1..BIG_LOG_LINES {
+        log.push_str(&format!(
+            "2026-10-31T21:{:02}:{:02} WARN worker[{}] slow request ms={}\n",
+            i / 60 % 60,
+            i % 60,
+            i % 13,
+            16 + i % 41
+        ));
+    }
+    let _ = std::fs::write(dir.join(BIG_LOG), log);
+}
+
 fn read(id: &str, file: &str) -> TurnOutput {
     tool_turn(id, "read_file", &json!({ "target_file": file }).to_string())
 }
@@ -250,6 +273,37 @@ struct Scenario {
     /// Turns of an earlier chat to resume, before the prompts.
     history_turns: usize,
     facts: Vec<&'static str>,
+    /// Model window in tokens; `None` keeps the engine's default.
+    context_tokens: Option<u64>,
+    /// Write `history_trim.toml` with `enabled = false` (the control row).
+    trim_off: bool,
+}
+
+/// A log read three times with the same arguments, one turn each (a third
+/// identical call in one turn would be refused unrun), then a notes read.
+fn re_reads(name: &'static str, trim_off: bool) -> Scenario {
+    Scenario {
+        name,
+        prompts: vec![
+            "Read server.log and sum it up.",
+            "I restarted the server. Read server.log again.",
+            "One more look at server.log, then remind me where my save folder is.",
+        ],
+        script: vec![
+            read("g1", BIG_LOG),
+            text_turn("Only slow requests so far."),
+            read("g2", BIG_LOG),
+            text_turn("Still only slow requests."),
+            read("g3", BIG_LOG),
+            read("g4", "notes.txt"),
+            text_turn("Slow requests only. Your save folder is D:/Loadout/saves."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![FACT_NOTE, FACT_LOG],
+        context_tokens: Some(LOCAL_CONTEXT_TOKENS),
+        trim_off,
+    }
 }
 
 fn scenarios() -> Vec<Scenario> {
@@ -263,6 +317,8 @@ fn scenarios() -> Vec<Scenario> {
             finish: "Anything else?",
             history_turns: 0,
             facts: vec![],
+            context_tokens: None,
+            trim_off: false,
         },
         Scenario {
             name: "tools",
@@ -276,6 +332,8 @@ fn scenarios() -> Vec<Scenario> {
             finish: "Done.",
             history_turns: 0,
             facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
         },
         Scenario {
             name: "diagnostics",
@@ -289,6 +347,8 @@ fn scenarios() -> Vec<Scenario> {
             finish: "Checked the folder and the system log: nothing failing.",
             history_turns: 0,
             facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
         },
         Scenario {
             name: "long-chat",
@@ -297,6 +357,8 @@ fn scenarios() -> Vec<Scenario> {
             finish: "Kestrel.",
             history_turns: 20,
             facts: vec![FACT_HISTORY],
+            context_tokens: None,
+            trim_off: false,
         },
         Scenario {
             name: "three-turns",
@@ -314,7 +376,11 @@ fn scenarios() -> Vec<Scenario> {
             finish: "Anything else?",
             history_turns: 0,
             facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
         },
+        re_reads("re-reads", false),
+        re_reads("re-reads (trim off)", true),
     ]
 }
 
@@ -356,9 +422,22 @@ pub fn run_bench() -> Vec<BenchRow> {
         let _cfg = ConfigGuard::set(dir.join("cfg"));
         let ws = dir.join("ws");
         seed_workspace(&ws);
+        if sc.facts.contains(&FACT_LOG) {
+            seed_big_log(&ws);
+        }
+        if sc.trim_off {
+            let _ = std::fs::create_dir_all(dir.join("cfg"));
+            let _ = std::fs::write(
+                dir.join("cfg").join(crate::compact::HISTORY_TRIM_CONFIG),
+                "enabled = false\n",
+            );
+        }
         let rec = Arc::new(Recorder::new(sc.script, sc.finish));
         let shared: Arc<dyn ModelClient + Send + Sync> = rec.clone();
         let mut engine = bench_engine(&ws, sc.name, shared);
+        if let Some(tokens) = sc.context_tokens {
+            engine.set_context_length(tokens);
+        }
         if sc.history_turns > 0 {
             let system = crate::system_prompt_parts(
                 &grokhub_core::cabin_rules::cabin_static_rules(false),
@@ -424,13 +503,29 @@ mod tests {
         let names: Vec<&str> = rows.iter().map(|r| r.scenario).collect();
         assert_eq!(
             names,
-            ["chat", "tools", "diagnostics", "long-chat", "three-turns"]
+            [
+                "chat",
+                "tools",
+                "diagnostics",
+                "long-chat",
+                "three-turns",
+                "re-reads",
+                "re-reads (trim off)"
+            ]
         );
         for r in &rows {
             assert!(r.requests >= 1, "{r:?}");
             assert!(r.first_tools_bytes > 0 && r.first_system_bytes > 0, "{r:?}");
             assert!(r.recall_ok, "a planted fact fell out: {r:?}");
         }
+        // Dropping the two older log reads sends fewer bytes in the same requests.
+        let trimmed = &rows[5];
+        let control = &rows[6];
+        assert_eq!(trimmed.requests, control.requests);
+        assert!(
+            trimmed.total_bytes < control.total_bytes,
+            "{trimmed:?} vs {control:?}"
+        );
         let table = render_bench(&rows);
         assert!(table.contains("| diagnostics |"), "{table}");
     }

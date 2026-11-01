@@ -588,8 +588,17 @@ fn pacman_health(out: &ProbeOutput) -> Vec<Finding> {
 
 /// Pending updates from the package lists already on disk.
 fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
-    if failed_silently(out) {
+    let Some(n) = pending_update_count(out) else {
         return Vec::new();
+    };
+    updates_finding(ProbeId::PendingUpdates, n, "updates are", out.stdout.trim())
+}
+
+/// How many packages a `PendingUpdates` probe lists, or `None` when it failed
+/// without saying anything useful.
+pub fn pending_update_count(out: &ProbeOutput) -> Option<usize> {
+    if failed_silently(out) {
+        return None;
     }
     let lines = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty());
     let n = match out.program.as_str() {
@@ -603,7 +612,7 @@ fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
             .filter(|l| l.split_whitespace().count() == 3 && l.contains('.'))
             .count(),
     };
-    updates_finding(ProbeId::PendingUpdates, n, "updates are", out.stdout.trim())
+    Some(n)
 }
 
 fn updates_finding(probe: ProbeId, n: usize, many: &str, detail: &str) -> Vec<Finding> {
