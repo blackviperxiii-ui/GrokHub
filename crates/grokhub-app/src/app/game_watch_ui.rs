@@ -322,6 +322,7 @@ impl Cabin {
             }
         });
         self.ui_eso(ui);
+        self.ui_factorio(ui);
     }
 }
 
