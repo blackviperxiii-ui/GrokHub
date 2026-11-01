@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { forgetAllDevices, getDevices, type Devices as Shape, type PairedBrowser } from "./api";
+import { StatusLine, useNote } from "./ui";
 
 /** How often the page re-reads the list, so a browser that just paired shows. */
 export const REFRESH_MS = 15_000;
@@ -30,7 +31,7 @@ export function browserLine(browser: PairedBrowser, now: number): string {
 /** This computer, Web access, and the browsers paired with it right now. */
 export function Devices({ onOpenWebAccess }: { onOpenWebAccess: () => void }) {
   const [devices, setDevices] = useState<Shape | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -41,7 +42,7 @@ export function Devices({ onOpenWebAccess }: { onOpenWebAccess: () => void }) {
           setDevices(next);
           setNow(Date.now());
         },
-        (err) => setNote(String(err)),
+        fail,
       );
     }
     read();
@@ -54,9 +55,9 @@ export function Devices({ onOpenWebAccess }: { onOpenWebAccess: () => void }) {
     try {
       setDevices(await forgetAllDevices());
       setNow(Date.now());
-      setNote(SIGNED_OUT);
+      ok(SIGNED_OUT);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     } finally {
       setBusy(false);
     }
@@ -80,11 +81,7 @@ export function Devices({ onOpenWebAccess }: { onOpenWebAccess: () => void }) {
       </div>
       <h2>Paired browsers</h2>
       <p className="note">{DEVICES_NOTE}</p>
-      {note && (
-        <p className="status" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} />
       {devices && !devices.on && <p className="empty">{OFF_NOTE}</p>}
       {devices?.on && devices.browsers.length === 0 && <p className="empty">{NONE_PAIRED}</p>}
       {devices?.on && devices.browsers.length > 0 && (
