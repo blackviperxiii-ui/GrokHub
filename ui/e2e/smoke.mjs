@@ -219,6 +219,20 @@ async function waitFor(what, fn, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${what}${last ? `: ${last.message}` : ""}`);
 }
 
+// New cards rise in from opacity 0 (styles.css rise-in), and WebDriver reads
+// an invisible element's text as "". Read until the card is visible and says
+// what it should, then return what it said last.
+async function cardText(s, card, ok, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < end) {
+    text = await wd("GET", `${s}/element/${card}/text`);
+    if (ok(text)) break;
+    await sleep(100);
+  }
+  return text;
+}
+
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
@@ -676,7 +690,7 @@ async function plan(s, workspace) {
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
   const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
-  const shown = await wd("GET", `${s}/element/${card}/text`);
+  const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
   const voiced = mockSeen.find((c) => c.body.includes(PLAN_PROMPT));
@@ -1118,7 +1132,7 @@ async function main() {
       });
       return el[ELEMENT];
     });
-    const asked = await wd("GET", `${s}/element/${card}/text`);
+    const asked = await cardText(s, card, (t) => t.includes("write") && t.includes(NOTE));
     if (!asked.includes("write") || !asked.includes(NOTE)) {
       throw new Error(`permission card said ${JSON.stringify(asked)}`);
     }
