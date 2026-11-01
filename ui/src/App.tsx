@@ -1,9 +1,18 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+  CORE_ONLY,
+  getCapabilities,
+  getSettings,
+  haltDesktop,
+  onChatEvent,
+  onHalt,
+  type Capabilities,
+} from "./api";
 import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
 import { Chat, type Prefill } from "./Chat";
+import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
@@ -44,6 +53,11 @@ export function App() {
   const [open, setOpen] = useState<{ id: string; n: number }>();
   const [deleted, setDeleted] = useState<{ id: string; n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  const [desktopOn, setDesktopOn] = useState(false);
+  const [haltNote, setHaltNote] = useState<string>();
+  // Halt is the computer's own: phones and the web app have no desktop control.
+  const canHalt = caps.desktopControl && !caps.remote;
+  const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
   const barAway = useHidingBar(palette);
   // Closing Settings goes back to the screen that was open before it.
   const before = useRef<View>("chat");
@@ -69,6 +83,29 @@ export function App() {
       () => {},
     );
   }, []);
+  // Settings may have turned desktop control on or off; read it again when
+  // the view changes (leaving Settings included).
+  useEffect(() => {
+    if (!canHalt) return;
+    getSettings().then(
+      (s) => setDesktopOn(s.desktopControl),
+      () => {},
+    );
+  }, [canHalt, view]);
+  // The tray's Halt and Super+Shift+Esc land here too.
+  useEffect(() => {
+    if (!canHalt) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onHalt(() => setHaltNote(HALT_DONE)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [canHalt]);
   // The Activity Dock follows every chat turn, whichever view is open.
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -92,16 +129,25 @@ export function App() {
       stop?.();
     };
   }, []);
+  const halt = useCallback(() => {
+    haltDesktop().then(
+      () => setHaltNote(HALT_DONE),
+      (err) => setHaltNote(`${HALT_FAILED} ${String(err)}`),
+    );
+  }, []);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if (canHalt && isHaltKey(event)) {
+        event.preventDefault();
+        halt();
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPalette((open) => !open);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [canHalt, halt]);
 
   function ask(text: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
@@ -137,6 +183,7 @@ export function App() {
             </button>
           ))}
         </nav>
+        {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
           items={Object.values(activity)}
           onOpenChat={() => setView("chat")}
@@ -151,6 +198,7 @@ export function App() {
           Command
         </button>
       </header>
+      {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
       {palette && <Palette caps={caps} onPick={run} onClose={() => setPalette(false)} />}
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}

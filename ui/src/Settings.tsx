@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
+  getHaltKeys,
   getSettings,
   saveSettings,
   setApiKey,
@@ -29,6 +30,11 @@ import { StatusLine, useNote } from "./ui";
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
+export const HALT_KEYS_NOTE =
+  "Halt stops desktop control and every reply: the Halt button, Ctrl+Alt+H in this window, the tray's Halt, or Super+Shift+Esc from any app.";
+export const HALT_KEYS_LOCAL =
+  "Super+Shift+Esc isn't available here (another app holds it, or this desktop has no system-wide keys). Ctrl+Alt+H, the button and the tray still halt.";
+
 /** `goTo`: a section the command palette picked. A new `n` opens it. */
 export function Settings({
   caps,
@@ -46,6 +52,8 @@ export function Settings({
   const [workspace, setWorkspace] = useState("");
   const [approvals, setApprovals] = useState<Approvals>("ask");
   const [desktopControl, setDesktopControl] = useState(false);
+  /** Super+Shift+Esc registered system-wide; null until read. */
+  const [globalHalt, setGlobalHalt] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
   const { note, ok, fail, clear } = useNote();
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
@@ -74,6 +82,14 @@ export function Settings({
   useEffect(() => {
     getSettings().then(show, fail);
   }, []);
+
+  useEffect(() => {
+    if (!caps.desktopControl || caps.remote) return;
+    getHaltKeys().then(
+      (keys) => setGlobalHalt(keys.global),
+      () => setGlobalHalt(false),
+    );
+  }, [caps.desktopControl, caps.remote]);
 
   // Each section is its own page: it opens at the top, however far the last one was read.
   useEffect(() => {
@@ -224,6 +240,9 @@ export function Settings({
           </Toggle>
         )}
         {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+        {caps.desktopControl && globalHalt !== null && (
+          <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>
+        )}
         {caps.tray && (
           <Toggle checked={closeToTray} onChange={setCloseToTray}>
             Closing the window keeps {PRODUCT_NAME} in the tray

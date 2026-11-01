@@ -285,17 +285,32 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Risky steps (delete, send, money, credentials) wait for an OK in every
   approvals mode, Always included. Ordinary steps follow the approvals
   setting. A halt stamp (the cabin's Halt) stops a running prompt.
+- Halt stops desktop control and every running prompt at once, the way the
+  cabin's tray Halt does (`agent::halt`, `halt_now` in `src-tauri/src/lib.rs`).
+  It's a red button in the top bar while desktop control is on or anything
+  runs, Ctrl+Alt+H in the window, a Halt item in the tray, and Super+Shift+Esc
+  from any app. Super+Shift+Esc is best effort: when another app (the cabin)
+  holds it or the desktop has no system-wide keys, Settings → General says so
+  and the other three still work. Halt writes the halt stamp, lets go of held
+  keys, stops unattended runs, and cancels every chat. A waiting card reads
+  "Not run: halted", and the chat says it stopped. Desktop steps stay off until
+  the app restarts, as in the cabin. A prompt sent after the Halt still runs.
+  Halt only listens and stops; it never types or clicks. Phones and the web
+  app don't get it (`halt_desktop` is not in `remote::WEB_COMMANDS`).
 - The shell is the crate's host: its config folder, its switch, and on Linux
   the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
   (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
-- Not yet: desktop episodes (the cabin's observe, act, verify loop), the
-  Cua driver, and a Halt button in the shell. macOS has no desktop backend
+- Not yet: desktop episodes (the cabin's observe, act, verify loop) and the
+  Cua driver. macOS has no desktop backend
   yet, so desktop calls fail there with the no-display error.
 - Rust tests cover the switch, a refused call while it's off, a typed delete
   that waits in Always and is denied, and an allowed step that runs. The
   smoke test turns the switch on with approvals at Always, has the model
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
+  Halt's Rust tests park a desktop step, halt, and check that the turn ends
+  as halted, the step never runs and the stamp is written; a prompt sent after
+  the Halt still runs. The smoke test has no Halt walk yet.
 
 **3h, chat history.** Chats now survive New chat, a reload and quitting
 (`src-tauri/src/history.rs`, `ui/src/History.tsx`).

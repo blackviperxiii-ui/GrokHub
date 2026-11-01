@@ -49,11 +49,15 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 
 pub const CHAT_EVENT: &str = "chat://event";
+/// Sent after every Halt, with the chats it stopped mid-reply.
+pub const HALT_EVENT: &str = "halt://done";
 
 struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    /// Super+Shift+Esc was registered system-wide.
+    global_halt: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -380,6 +384,70 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     {
         session.cancel();
     }
+}
+
+/// Halt from the top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc: stops
+/// desktop control and every running prompt (`agent::halt`), then tells the
+/// window, which shows it.
+#[cfg(desktop)]
+fn halt_now(app: &AppHandle) -> Vec<String> {
+    let state = app.state::<ShellState>();
+    let busy = {
+        let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+        agent::halt(&state.config_dir, chats.values())
+    };
+    let _ = app.emit(HALT_EVENT, &busy);
+    busy
+}
+
+/// Halt. Desktop only: phones have no desktop control, and the web app never
+/// calls it (it is not in `remote::WEB_COMMANDS`).
+#[tauri::command]
+fn halt_desktop(app: AppHandle) -> Result<Vec<String>, String> {
+    #[cfg(desktop)]
+    {
+        Ok(halt_now(&app))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Halt stops desktop control, which runs on a computer.".into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HaltKeys {
+    /// Super+Shift+Esc works from any app, not only this window.
+    pub global: bool,
+}
+
+/// Settings → General's note on the Halt keys.
+#[tauri::command]
+fn get_halt_keys(state: State<'_, ShellState>) -> HaltKeys {
+    HaltKeys {
+        global: state.global_halt.load(std::sync::atomic::Ordering::SeqCst),
+    }
+}
+
+/// Super+Shift+Esc halts from any app, as in the cabin. Best effort: the
+/// cabin or another app may hold the keys, or the desktop (Wayland) may offer
+/// no global keys; the window's Ctrl+Alt+H, the button and the tray still work.
+/// It only listens: nothing is typed or sent to other apps.
+#[cfg(desktop)]
+fn register_halt_keys(app: &AppHandle) -> bool {
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
+    let keys = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+    let plugin = tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(move |app, pressed, event| {
+            if *pressed == keys && event.state() == ShortcutState::Pressed {
+                halt_now(app);
+            }
+        })
+        .build();
+    app.plugin(plugin).is_ok() && app.global_shortcut().register(keys).is_ok()
 }
 
 /// New chat: the old conversation's worker ends. Its saved turns stay, so
@@ -1326,8 +1394,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show_label = format!("Show {}", grokhub_core::brand::product_name());
     let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    // Always on; harmless when nothing runs.
+    let halt = MenuItem::with_id(app, "halt", "Halt", true, None::<&str>)?;
     let local = MenuItem::with_id(app, "local", local_ai::TRAY_CHECKING, false, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&local, &show, &quit])?;
+    let menu = Menu::with_items(app, &[&local, &halt, &show, &quit])?;
     local_ai::start_tray(local, app.state::<ShellState>().config_dir.clone());
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip(grokhub_core::brand::product_name())
@@ -1335,6 +1405,9 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main(app),
+            "halt" => {
+                halt_now(app);
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -1426,6 +1499,9 @@ mod tests {
 /// cabin-only spike, so it stays off here.
 #[cfg(desktop)]
 fn install_desktop_host() {
+    // Pin the start time now, as the cabin does: a Halt after it keeps desktop
+    // steps off until the next start, even if none ran before the Halt.
+    grokhub_desktop::process_started_ms();
     grokhub_desktop::host::install(grokhub_desktop::host::Host {
         config_dir: grokhub_agent::perm::config_dir,
         settings: || grokhub_desktop::host::Settings {
@@ -1520,7 +1596,15 @@ pub fn run() {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                global_halt: std::sync::atomic::AtomicBool::new(false),
             });
+            #[cfg(desktop)]
+            {
+                let global = register_halt_keys(app.handle());
+                app.state::<ShellState>()
+                    .global_halt
+                    .store(global, std::sync::atomic::Ordering::SeqCst);
+            }
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
@@ -1559,6 +1643,8 @@ pub fn run() {
             answer_permission,
             answer_elicit,
             cancel_chat,
+            halt_desktop,
+            get_halt_keys,
             close_chat,
             list_chats,
             search_chats,

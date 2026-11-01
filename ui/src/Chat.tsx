@@ -39,14 +39,23 @@ export type Item =
       title: string;
       action: string;
       reason: string;
-      /** "ended": the turn stopped before anyone answered, so nothing ran. */
-      answer: Answer | "ended" | null;
+      /** "ended": the turn stopped before anyone answered, so nothing ran;
+       * "halted": Halt stopped it. */
+      answer: Answer | Ended | null;
     }
   | { kind: "suggest"; items: Suggestion[] }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
   | ({ kind: "notice" } & RunNotice)
+  /** Halt stopped this reply. */
+  | { kind: "halted" }
   | ElicitItem;
+
+type Ended = "ended" | "halted";
+
+/** The stop reason of a turn Halt ended (`agent::HALTED`). */
+export const HALTED_STOP = "halted";
+export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
 
 /** How much of a run's reply its notice shows; Automations has the rest. */
 export const NOTICE_CHARS = 280;
@@ -173,20 +182,27 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. */
-function settle(items: Item[]): Item[] {
+function settle(items: Item[], how: Ended = "ended"): Item[] {
   return items.map((item) => {
     if (item.kind === "assistant" && item.streaming) return { ...item, streaming: false };
-    if (item.kind === "permission" && item.answer === null) return { ...item, answer: "ended" };
-    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: "ended" };
+    if (item.kind === "permission" && item.answer === null) return { ...item, answer: how };
+    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: how };
     return item;
   });
 }
 
-const ANSWERED: Record<Answer | "ended", string> = {
+/** Halt ended the turn: its cards read halted, and one line says so. */
+function settleHalted(items: Item[]): Item[] {
+  const settled = settle(items, "halted");
+  return settled.at(-1)?.kind === "halted" ? settled : [...settled, { kind: "halted" }];
+}
+
+const ANSWERED: Record<Answer | Ended, string> = {
   allow: "Allowed once",
   always: "Always allowed",
   deny: "Denied",
   ended: "Not run: the turn ended",
+  halted: "Not run: halted",
 };
 
 // Typing in the composer re-renders Chat, and a reply streaming in re-renders it
@@ -416,7 +432,7 @@ export function Chat({
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
-      else if (event.kind === "done") setItems(settle);
+      else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else setItems((now) => applyEvent(now, event));
     }).then((unlisten) => {
       if (dropped) unlisten();
@@ -451,14 +467,15 @@ export function Chat({
     setError(null);
     busyRef.current = true;
     setBusy(true);
+    let stop = "";
     try {
-      await sendChat(conversationId, text, mode);
+      stop = await sendChat(conversationId, text, mode);
     } catch (err) {
       setError(String(err));
     } finally {
       busyRef.current = false;
       setBusy(false);
-      setItems(settle);
+      setItems(stop === HALTED_STOP ? settleHalted : settle);
     }
   }
 
@@ -594,6 +611,12 @@ export function Chat({
                     )}
                   </div>
                 </div>
+              );
+            case "halted":
+              return (
+                <p key={i} className="halted-line" role="status">
+                  {HALTED_LINE}
+                </p>
               );
             case "tools":
               return (

@@ -47,6 +47,11 @@ describe("chatActivity", () => {
     expect(done?.steps).toBe(1);
   });
 
+  it("a turn Halt stopped says so", () => {
+    const running = fold([{ kind: "text", text: "Typing" }]);
+    expect(fold([{ kind: "done", stop: "halted" }], running)).toMatchObject({ status: "done", detail: "Halted" });
+  });
+
   it("a permission ask or a plan waits on the user", () => {
     expect(
       fold([{ kind: "permission", id: "p1", title: "Run npm test", action: "run", reason: "" }]),
