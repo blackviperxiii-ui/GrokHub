@@ -1,0 +1,1 @@
+- Dependencies: sha2 0.11, getrandom 0.4, base64 0.23 and symphonia 0.6 (mp3 decode for the companion's lip-sync). Hashes and tokens are unchanged. The lip-sync decode now drops the mp3 encoder's delay and padding frames, so the mouth envelope lines up with the audio more closely. quick-xml stays on 0.41 until wayland-scanner moves.

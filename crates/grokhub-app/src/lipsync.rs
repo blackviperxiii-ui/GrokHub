@@ -7,12 +7,11 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 /// One envelope frame.
 pub const FRAME_MS: u32 = 20;
@@ -90,38 +89,36 @@ pub fn decode_mp3(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
     let mut hint = Hint::new();
     hint.with_extension("mp3");
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .ok()?;
-    let mut format = probed.format;
-    let track = format.default_track()?;
+    let track = format.default_track(TrackType::Audio)?;
     let track_id = track.id;
+    let params = track.codec_params.as_ref()?.audio()?;
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
         .ok()?;
     let mut mono = Vec::new();
     let mut rate = 0u32;
-    let mut buf: Option<SampleBuffer<f32>> = None;
-    while let Ok(packet) = format.next_packet() {
-        if packet.track_id() != track_id {
+    let mut buf: Vec<f32> = Vec::new();
+    while let Ok(Some(packet)) = format.next_packet() {
+        if packet.track_id != track_id {
             continue;
         }
         let Ok(decoded) = decoder.decode(&packet) else {
             continue;
         };
-        let spec = *decoded.spec();
-        rate = spec.rate;
-        let channels = spec.channels.count().max(1);
-        let sb = buf.get_or_insert_with(|| SampleBuffer::new(decoded.capacity() as u64, spec));
-        sb.copy_interleaved_ref(decoded);
+        let spec = decoded.spec();
+        rate = spec.rate();
+        let channels = spec.channels().count().max(1);
+        decoded.copy_to_vec_interleaved(&mut buf);
         mono.extend(
-            sb.samples()
-                .chunks(channels)
+            buf.chunks(channels)
                 .map(|frame| frame.iter().sum::<f32>() / channels as f32),
         );
     }
