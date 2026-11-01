@@ -382,6 +382,7 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         ));
     }
     let host = "127.0.0.1".to_string();
+    autoconfig::clear_resident();
     let planned = autoconfig::launch_for(&paths.binary, &paths.model);
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
@@ -417,6 +418,8 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
+                // Free VRAM with the model loaded: the governor's drop baseline.
+                autoconfig::mark_resident();
                 side.effort_levels = super::local_effort::fetch_levels(
                     &side.host,
                     side.port,
@@ -835,6 +838,16 @@ pub fn touch_global() {
     let slot = global_slot().lock().expect("sidecar global");
     if let Some(side) = slot.as_ref() {
         side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
+    }
+}
+
+/// Settings → Local AI → "Keep the model loaded": the running sidecar takes
+/// the new idle timeout at once; the next start reads it from `local_perf`.
+pub fn set_idle_unload_secs(secs: u64) {
+    if let Ok(mut slot) = global_slot().lock() {
+        if let Some(side) = slot.as_mut() {
+            side.idle_unload_secs = secs;
+        }
     }
 }
 

@@ -34,6 +34,8 @@ pub(super) enum NoticeAction {
     RestoreCards(Vec<String>),
     /// Open this card on the Workboard.
     OpenCard(String),
+    /// Open this Settings section (the sign-in note's pill).
+    OpenSettings(SettingsSec),
 }
 
 impl NoticeAction {
@@ -44,6 +46,7 @@ impl NoticeAction {
             NoticeAction::SaveAsSkill(_) => "Save as skill",
             NoticeAction::RestoreCards(_) => "Undo",
             NoticeAction::OpenCard(_) => "Open card",
+            NoticeAction::OpenSettings(_) => "Settings",
         }
     }
 }
@@ -63,6 +66,9 @@ pub(super) struct Notices {
     pub(super) unread: usize,
     /// Last status line already mirrored, so one line lands once.
     last_status: String,
+    /// The standing sign-in note as last posted (`None` once signed in), so a
+    /// signed-out session gets it once, not every heartbeat.
+    pub(super) auth_note: Option<&'static str>,
 }
 
 impl Notices {
@@ -179,6 +185,10 @@ impl Cabin {
                 }
             }
             NoticeAction::OpenCard(id) => self.open_board_card(&id),
+            NoticeAction::OpenSettings(sec) => {
+                self.nav = Nav::Settings;
+                self.settings_sec = sec;
+            }
             NoticeAction::SaveAsSkill(dir) => {
                 if super::screen_record_ui::watch_offer_dir().as_deref() != Some(dir.as_path()) {
                     return;
@@ -392,5 +402,90 @@ mod tests {
         assert_eq!(n.items[1].action, None);
         assert_eq!(n.take_action(0), Some(NoticeAction::Archive("t2".into())));
         assert_eq!(n.take_action(0), None);
+    }
+
+    fn texts_of(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_sign_in_note_lands_in_the_bell_once_with_a_settings_pill() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("bell-auth-note");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.get_started_done = true;
+        super::super::native_engine::set_local_ready_for_test(Some(false));
+        // Signed out, no Local AI: one note, with a Settings pill, posted once.
+        cabin.sync_auth_notice();
+        cabin.sync_auth_notice();
+        assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(
+            cabin.notices.items[0].text,
+            super::super::pages::NATIVE_SIGNIN_NOTE
+        );
+        assert_eq!(cabin.notices.items[0].kind, NoticeKind::Info);
+        assert_eq!(
+            cabin.notices.items[0].action,
+            Some(NoticeAction::OpenSettings(SettingsSec::AiModels))
+        );
+        assert_eq!(
+            cabin.notices.items[0].action.as_ref().unwrap().label(),
+            "Settings"
+        );
+        cabin.run_notice_action(0);
+        assert_eq!(
+            (cabin.nav, cabin.settings_sec),
+            (Nav::Settings, SettingsSec::AiModels)
+        );
+        // Local AI becomes ready: the same note changes to the local-only wording.
+        super::super::native_engine::set_local_ready_for_test(Some(true));
+        cabin.sync_auth_notice();
+        cabin.sync_auth_notice();
+        assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(
+            cabin.notices.items[0].text,
+            super::super::pages::LOCAL_ONLY_NOTE
+        );
+        // Signed in (a key): nothing more is posted, and the state clears.
+        cabin.cfg.api_key = "sk-abcdefghijklmnopqrstuv".into();
+        cabin.sync_auth_notice();
+        assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(cabin.notices.auth_note, None);
+        super::super::native_engine::set_local_ready_for_test(None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nothing_about_signing_in_is_painted_above_the_composer() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("bell-no-composer-strip");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.get_started_done = true;
+        cabin.signin_card = false;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        for local in [Some(false), Some(true)] {
+            super::super::native_engine::set_local_ready_for_test(local);
+            let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+                cabin.ui_native_auth_banner(ui);
+            });
+            let texts = texts_of(&out.shapes);
+            assert!(
+                texts.is_empty(),
+                "the composer must not carry the sign-in strip (local ready: {local:?}): {texts:?}"
+            );
+        }
+        super::super::native_engine::set_local_ready_for_test(None);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

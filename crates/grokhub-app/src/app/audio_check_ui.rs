@@ -240,6 +240,7 @@ mod tests {
         let root = crate::config::test_config_root("audio-check-report");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
+        let prev_env = std::env::var_os("GROKHUB_CONFIG");
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut cabin = Cabin::quiet_for_test();
         let done = run_check("", devices, |_| Ok((48_000, clipped_pcm())));
@@ -280,7 +281,12 @@ mod tests {
                 .count(),
             1
         );
-        std::env::remove_var("GROKHUB_CONFIG");
+        // Put the process-wide variable back as it was: unsetting it would send
+        // every later test in this process to the real config folder.
+        match prev_env {
+            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+            None => std::env::remove_var("GROKHUB_CONFIG"),
+        }
     }
 
     #[test]

@@ -202,6 +202,7 @@ mod local_models_ui;
 mod local_pick_ui;
 mod local_probe;
 mod local_signals;
+mod local_tuning_ui;
 mod marketplace_ui;
 mod memory_tidy;
 mod minecraft_ui;
@@ -209,6 +210,7 @@ mod mission_page;
 mod mission_ui;
 mod model_download_ui;
 mod model_drop_ui;
+mod model_prefs_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
@@ -267,6 +269,7 @@ mod voice;
 mod web_search_ui;
 mod week_recap_ui;
 mod wind_down_ui;
+mod window_geom;
 mod wishlist_ui;
 mod work_log;
 mod work_resume;
@@ -754,6 +757,11 @@ pub struct Cabin {
     geom_dirty: bool,
     geom_applied: bool,
     geom_apply_frames: u8,
+    /// Windows: fill the work area natively on the next frame, once eframe has
+    /// applied this frame's `Maximized(false)` (viewport commands run at the
+    /// end of the frame, so a native maximize in the same frame is undone).
+    #[cfg(windows)]
+    native_maximize_due: bool,
     imagine_want_focus: bool,
     composer_want_focus: bool,
     settings_sec: SettingsSec,
@@ -1376,6 +1384,8 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            #[cfg(windows)]
+            native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
@@ -1532,6 +1542,9 @@ impl Cabin {
         };
         steps.mark("startup:new:fields");
         if !quiet {
+            // The router hears the saved pin, Local AI switch, provider pick
+            // and model preferences before anything can send.
+            c.sync_router_pin();
             c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
             steps.mark("startup:new:imagine");
             // Registering takes ~50 ms on X11, so a shown window registers
@@ -1853,6 +1866,8 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            #[cfg(windows)]
+            native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
@@ -2003,111 +2018,6 @@ impl Cabin {
             diagnostics: Default::default(),
             home_layout: grokhub_core::home::HomeLayout::default(),
             home_edit: None,
-        }
-    }
-
-    fn apply_saved_geom(&mut self, ctx: &egui::Context) {
-        let g = crate::window::clamp_geom(self.cfg.window);
-        #[cfg(windows)]
-        if g.maximized && self.window_visible {
-            if let Some((x, y, w, h)) = crate::win_native::work_area() {
-                let ppp = ctx.pixels_per_point().max(0.5);
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                    w as f32 / ppp,
-                    h as f32 / ppp,
-                )));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    x as f32 / ppp,
-                    y as f32 / ppp,
-                )));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
-                let _ = crate::win_native::show_cabin(x, y, w, h, true);
-                let dark = grokhub_core::resolve_dark(
-                    grokhub_core::parse_theme(&self.cfg.theme),
-                    crate::theme::desktop_prefers_dark(),
-                );
-                crate::win_native::polish_hwnd(dark);
-                self.win_max = true;
-                self.cfg.window.maximized = true;
-                self.geom_applied = true;
-                self.geom_apply_frames = 0;
-                return;
-            }
-            self.win_max = true;
-            return;
-        }
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(g.w, g.h)));
-        if let Some([x, y]) = crate::window::launch_pos(&g) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
-        }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(g.maximized));
-        self.win_max = g.maximized;
-        self.geom_applied = true;
-        self.geom_apply_frames = 0;
-    }
-
-    fn capture_window(&mut self, ctx: &egui::Context) {
-        if !self.window_visible {
-            return;
-        }
-        if !self.geom_applied {
-            self.apply_saved_geom(ctx);
-            return;
-        }
-        self.geom_apply_frames = self
-            .geom_apply_frames
-            .saturating_add(1)
-            .min(crate::window::GEOM_SETTLE_FRAMES);
-        if !crate::window::geom_can_remember(self.geom_applied, self.geom_apply_frames) {
-            return;
-        }
-        let (outer, inner, egui_max) = ctx.input(|i| {
-            (
-                i.viewport().outer_rect,
-                i.viewport().inner_rect,
-                i.viewport().maximized,
-            )
-        });
-        let Some(outer) = outer else {
-            return;
-        };
-        let size = inner.map(|r| r.size()).unwrap_or(outer.size());
-        let maximized = maximized_now(egui_max, self.win_max);
-        if let Some(g) = crate::window::remember_geom(
-            self.window_visible,
-            maximized,
-            outer.min.x,
-            outer.min.y,
-            size.x,
-            size.y,
-            self.cfg.window,
-        ) {
-            if crate::window::geom_moved(g, self.cfg.window) {
-                self.cfg.window = g;
-                self.geom_dirty = true;
-            }
-            self.win_max = g.maximized;
-        }
-    }
-
-    fn flush_window(&mut self, ctx: &egui::Context) {
-        match crate::window::geom_flush(
-            self.geom_dirty,
-            self.last_persist.elapsed().as_millis() as u64,
-        ) {
-            crate::window::GeomFlush::Skip => {}
-            crate::window::GeomFlush::Now => {
-                self.geom_dirty = false;
-                let mut cfg = self.cfg.clone();
-                cfg.api_key.clear();
-                // PersistService worker pins dir + takes persist_io before save_in.
-                let err = self.persist_err.clone();
-                let dir = config::config_dir();
-                self.persist_svc.submit_window_cfg(dir, cfg, err);
-            }
-            crate::window::GeomFlush::AfterMs(ms) => {
-                ctx.request_repaint_after(Duration::from_millis(ms));
-            }
         }
     }
 
@@ -3679,6 +3589,8 @@ impl Cabin {
                 HeartbeatAct::MidThought => self.tick_mid_thought(),
             }
         }
+        // After the beat, so the router state it reads (Local AI on) is current.
+        self.sync_auth_notice();
     }
 
     /// One governor beat: the queue of due jobs, highest priority first. Halt,
@@ -5482,7 +5394,8 @@ impl eframe::App for Cabin {
             self.tray_saw_unfocused =
                 crate::tray::remember_hidden_unfocus(focused, self.tray_saw_unfocused);
             let since_ms = self.tray_hid_at.elapsed().as_millis() as u64;
-            let tick = if crate::tray::hidden_raise_ready(since_ms) {
+            let tick = if crate::tray::raise_on_focus() && crate::tray::hidden_raise_ready(since_ms)
+            {
                 crate::tray::hidden_window_tick(true, focused, just_hid, self.tray_saw_unfocused)
             } else {
                 crate::tray::HiddenTick::StayHidden
@@ -5490,7 +5403,7 @@ impl eframe::App for Cabin {
             match tick {
                 crate::tray::HiddenTick::Raise => self.show_from_tray(ctx),
                 crate::tray::HiddenTick::StayHidden => {
-                    if crate::tray::reapply_unmap(true, focused) {
+                    if crate::tray::reapply_unmap(true, focused, since_ms) {
                         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
                         #[cfg(windows)]
                         crate::win_native::hide_cabin();

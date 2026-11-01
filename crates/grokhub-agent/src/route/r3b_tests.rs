@@ -1753,3 +1753,424 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_openrouter_privacy_refusal_reads_as_what_to_do_not_a_raw_404() {
+    let body = "0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. We removed them for the following reasons: Provider not allowed by guardrail: 1 endpoint excluded; ZDR violation (account settings): 1 endpoint excluded";
+    assert!(providers::policy_refusal(404, body));
+    assert!(providers::policy_refusal(
+        404,
+        "ZDR violation (account settings)"
+    ));
+    // A plain missing model, a key problem or a server fault is not a policy refusal.
+    assert!(!providers::policy_refusal(
+        404,
+        "No endpoints found for vendor/model."
+    ));
+    assert!(!providers::policy_refusal(401, "guardrail"));
+    assert!(!providers::policy_refusal(503, "data policy"));
+    assert!(providers::POLICY_REFUSED.contains("Use for your chats"));
+    assert!(providers::POLICY_REFUSED.contains("https://openrouter.ai/settings/privacy"));
+}
+
+#[test]
+fn openrouter_routing_prefs_go_out_as_provider_and_models_fields_only_when_set() {
+    use super::providers::{apply_openrouter_routing, is_openrouter_router, Routing};
+    let base = json!({"model": "google/gemma-4-31b-it:free", "stream": false, "messages": []});
+
+    // All off: the body is untouched (the golden bodies stay byte-identical).
+    let mut b = base.clone();
+    apply_openrouter_routing(&mut b, "google/gemma-4-31b-it:free", &Routing::default());
+    assert_eq!(b, base);
+
+    // Sort, data policy and the free-router fallback for a free pick.
+    let mut b = base.clone();
+    let r = Routing {
+        sort: "price".into(),
+        fallback: true,
+        data: "zdr".into(),
+    };
+    apply_openrouter_routing(&mut b, "google/gemma-4-31b-it:free", &r);
+    assert_eq!(b["provider"]["sort"], json!("price"));
+    assert_eq!(b["provider"]["zdr"], json!(true));
+    assert_eq!(b["models"], json!(["openrouter/free"]));
+
+    // A paid pick falls back to Auto; "allow" is data_collection.
+    let mut b = json!({"model": "anthropic/claude-fable-5"});
+    let r = Routing {
+        sort: "throughput".into(),
+        fallback: true,
+        data: "allow".into(),
+    };
+    apply_openrouter_routing(&mut b, "anthropic/claude-fable-5", &r);
+    assert_eq!(b["provider"]["sort"], json!("throughput"));
+    assert_eq!(b["provider"]["data_collection"], json!("allow"));
+    assert_eq!(b["models"], json!(["openrouter/auto"]));
+
+    // A router pick never gets a fallback list, and an unknown sort is dropped.
+    let mut b = json!({"model": "openrouter/free"});
+    let r = Routing {
+        sort: "bogus".into(),
+        fallback: true,
+        data: String::new(),
+    };
+    apply_openrouter_routing(&mut b, "openrouter/free", &r);
+    assert_eq!(b, json!({"model": "openrouter/free"}));
+    assert!(is_openrouter_router("openrouter/auto"));
+    assert!(is_openrouter_router("openrouter/openrouter/free"));
+    assert!(!is_openrouter_router(
+        "openrouter/google/gemma-4-31b-it:free"
+    ));
+    assert!(!is_openrouter_router("google/gemma-4-31b-it:free"));
+    assert!(providers::is_free_model("openrouter/openrouter/free"));
+    assert!(providers::is_free_model("google/gemma-4-31b-it:free"));
+    assert!(!providers::is_free_model("openrouter/openrouter/auto"));
+}
+
+fn prefs_with(
+    entries: &[(&str, super::prefs::ModelUse)],
+) -> std::sync::Arc<super::prefs::ModelPrefs> {
+    let mut p = super::prefs::ModelPrefs::default();
+    for (id, u) in entries {
+        p.set_use(id, *u);
+    }
+    std::sync::Arc::new(p)
+}
+
+#[test]
+fn a_provider_model_joins_autos_pool_only_where_a_preference_allows_it() {
+    use super::prefs::ModelUse;
+    use grokhub_core::model_registry::ModelState;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    // Every xAI model is down: Auto has nothing of its own left.
+    let mut reg = fleet();
+    for id in ["grok-4.7", "grok-4.3"] {
+        reg.models.get_mut(id).unwrap().state = ModelState::Quarantined;
+    }
+    let ask = |class: &'static str, prefs: std::sync::Arc<super::prefs::ModelPrefs>| RouteInput {
+        provider: "xai",
+        class,
+        current_model: "grok-4.7",
+        spend: Spend {
+            providers: vec!["openrouter".into()],
+            ..Spend::default()
+        },
+        prefs,
+        ..RouteInput::default()
+    };
+    // Default: the provider model is never a fallback, so the step has no route.
+    let r = Router::choose(
+        &ask("chat:default", prefs_with(&[])),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_ne!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    assert!(!r.rule_ids.iter().any(|x| x == "prefs:auto_provider"));
+    // Allowed for everything: Auto takes it, and says so.
+    let r = Router::choose(
+        &ask("chat:default", prefs_with(&[(OR_MODEL, ModelUse::Any)])),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str()),
+        (OR_MODEL, "openrouter")
+    );
+    assert!(
+        r.rule_ids.contains(&"prefs:auto_provider".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // Allowed for chats only: a plan step is work, so it is left out again.
+    let chat_only = prefs_with(&[(OR_MODEL, ModelUse::Chat)]);
+    let r = Router::choose(
+        &ask("chat:quick", chat_only.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(r.model, OR_MODEL);
+    let r = Router::choose(&ask("plan", chat_only), &reg, &profiles, &table, 10);
+    assert_ne!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    // Without its key and grant the preference changes nothing.
+    let mut no_grant = ask("chat:default", prefs_with(&[(OR_MODEL, ModelUse::Any)]));
+    no_grant.spend.providers.clear();
+    let r = Router::choose(&no_grant, &reg, &profiles, &table, 10);
+    assert_ne!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+}
+
+#[test]
+fn never_takes_a_model_out_of_autos_pool_but_a_pin_and_an_effort_preference_still_apply() {
+    use super::prefs::ModelUse;
+    let reg = fleet();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let never = prefs_with(&[("grok-4.7", ModelUse::Never)]);
+    let auto = RouteInput {
+        provider: "xai",
+        class: "chat:default",
+        current_model: "grok-4.7",
+        prefs: never.clone(),
+        ..RouteInput::default()
+    };
+    let r = Router::choose(&auto, &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "grok-4.3", "{:?}", r.rule_ids);
+    // A pin reaches it anyway.
+    let pinned = RouteInput {
+        pinned: true,
+        ..auto.clone()
+    };
+    let r = Router::choose(&pinned, &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "grok-4.7", "{:?}", r.rule_ids);
+    // An effort preference pins what Auto sends; one outside the listing is ignored.
+    let mut p = super::prefs::ModelPrefs::default();
+    p.set_effort("grok-4.7", "high");
+    let with_effort = RouteInput {
+        pinned: true,
+        prefs: std::sync::Arc::new(p.clone()),
+        ..auto.clone()
+    };
+    let r = Router::choose(&with_effort, &reg, &profiles, &table, 10);
+    assert_eq!(r.effort.as_deref(), Some("high"), "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"prefs:effort".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    p.set_effort("grok-4.7", "ultra");
+    let odd = RouteInput {
+        pinned: true,
+        prefs: std::sync::Arc::new(p),
+        ..auto
+    };
+    let r = Router::choose(&odd, &reg, &profiles, &table, 10);
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "prefs:effort"),
+        "{:?}",
+        r.rule_ids
+    );
+}
+
+#[test]
+fn auto_all_models_ranks_every_provider_model_and_gives_way_in_a_tight_week() {
+    use grokhub_core::model_registry::record::CallMark;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    // No xAI sign-in: before "all models" Auto had only the chat's own model.
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    let all = |on: bool| {
+        std::sync::Arc::new(super::prefs::ModelPrefs {
+            all: on,
+            ..super::prefs::ModelPrefs::default()
+        })
+    };
+    let ask = |prefs: std::sync::Arc<super::prefs::ModelPrefs>, tight: bool| RouteInput {
+        provider: "xai",
+        class: "chat:default",
+        current_model: "grok-4.7",
+        spend: Spend {
+            providers: vec!["openrouter".into(), "anthropic".into()],
+            budget_tight: tight,
+            ..Spend::default()
+        },
+        prefs,
+        ..RouteInput::default()
+    };
+    let r = Router::choose(&ask(all(false), false), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "grok-4.7", "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"cost:not_included".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // On: every provider model is ranked for the step; the priced reasoner fits best.
+    let r = Router::choose(&ask(all(true), false), &reg, &profiles, &table, 10);
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str()),
+        (OR_MODEL, "openrouter"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"prefs:auto_provider".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(!r.rule_ids.iter().any(|x| x == "auto:efficient"));
+    // A tight week while that model answers busy: the one with no limit takes it.
+    for ts in 1..=3 {
+        reg.models
+            .get_mut(OR_MODEL)
+            .unwrap()
+            .health
+            .recent
+            .push_back(CallMark {
+                ts_ms: ts,
+                ok: false,
+                pressure: true,
+                latency_ms: 0,
+            });
+    }
+    let r = Router::choose(&ask(all(true), true), &reg, &profiles, &table, 10);
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str()),
+        (AN_MODEL, "anthropic"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"auto:efficient".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // Over your $/M ceiling, "all models" alone never takes it; its own preference does.
+    reg.models.get_mut(OR_MODEL).unwrap().health.recent.clear();
+    reg.models.get_mut(OR_MODEL).unwrap().meta.prices.completion = Some(10_000_000);
+    let r = Router::choose(&ask(all(true), false), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, AN_MODEL, "{:?}", r.rule_ids);
+    let mut chosen = super::prefs::ModelPrefs {
+        all: true,
+        ..super::prefs::ModelPrefs::default()
+    };
+    chosen.set_use(OR_MODEL, super::prefs::ModelUse::Any);
+    let r = Router::choose(
+        &ask(std::sync::Arc::new(chosen), false),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+}
+
+#[test]
+fn all_models_reaches_key_users_keeps_the_episode_and_leaves_unpriced_routers_out() {
+    use super::prefs::{ModelPrefs, ModelUse};
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let prefs = |all: bool, uses: &[(&str, ModelUse)]| {
+        let mut p = ModelPrefs {
+            all,
+            ..ModelPrefs::default()
+        };
+        for (id, u) in uses {
+            p.set_use(id, *u);
+        }
+        std::sync::Arc::new(p)
+    };
+    let ask = |class: &'static str,
+               current: &'static str,
+               prefs: std::sync::Arc<ModelPrefs>,
+               tight: bool| RouteInput {
+        provider: "xai",
+        class,
+        current_model: current,
+        spend: Spend {
+            providers: vec!["openrouter".into(), "anthropic".into()],
+            budget_tight: tight,
+            ..Spend::default()
+        },
+        prefs,
+        ..RouteInput::default()
+    };
+    // An xAI key with no routing-table rows used to keep the chat's own model.
+    let mut keyed = fleet();
+    keyed.entitlement.credential = Credential::ApiKey;
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(false, &[]), false),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.rule_ids.contains(&"key:keep".into()), "{:?}", r.rule_ids);
+    // With every model in Auto's pool, Auto ranks them instead.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(true, &[]), false),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "key:keep"),
+        "{:?}",
+        r.rule_ids
+    );
+    // A tight week takes the efficient ranking, but never for a step that must
+    // keep the strongest model.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(true, &[]), true),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        r.rule_ids.contains(&"auto:efficient".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    let r = Router::choose(
+        &ask("prepare:hard", "grok-4.3", prefs(true, &[]), true),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "auto:efficient"),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // No sign-in: the model an episode runs on keeps its next step.
+    let mut none = fleet();
+    none.entitlement.credential = Credential::None;
+    let mut mid = ask("chat:default", "grok-4.7", prefs(true, &[]), false);
+    mid.episode_model = Some(AN_MODEL);
+    let r = Router::choose(&mid, &none, &profiles, &table, 10);
+    assert_eq!(r.model, AN_MODEL, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"episode:keep".into()),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // An OpenRouter router with no listed price may pick any model at any
+    // price: "all models" alone leaves it out, its own preference lets it in.
+    let router = "openrouter/openrouter/auto";
+    let mut rec = none.models.get(OR_MODEL).unwrap().clone();
+    rec.meta.id = router.into();
+    rec.meta.prices = Prices::default();
+    none.models.insert(router.into(), rec);
+    let only_router = [(OR_MODEL, ModelUse::Never), (AN_MODEL, ModelUse::Never)];
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", prefs(true, &only_router), false),
+        &none,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_ne!(r.model, router, "{:?}", r.rule_ids);
+    let with_router = [
+        (OR_MODEL, ModelUse::Never),
+        (AN_MODEL, ModelUse::Never),
+        (router, ModelUse::Any),
+    ];
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", prefs(true, &with_router), false),
+        &none,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(r.model, router, "{:?}", r.rule_ids);
+}

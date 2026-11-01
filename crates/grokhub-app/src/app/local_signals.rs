@@ -56,6 +56,13 @@ pub(super) fn start(config_dir: PathBuf) {
                 config_dir.join("local"),
             );
             local_gov::set_log_dir(config_dir.join("local"));
+            // Every launch plans against the memory free right now.
+            grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
+                grokhub_agent::route::local_autoconfig::FreeNow {
+                    vram_free_mb: super::local_probe::nvidia_free_vram_now(),
+                    ram_free_mb: super::local_probe::free_ram_now(),
+                }
+            }));
             sample_loop(&config_dir)
         });
 }
@@ -77,7 +84,8 @@ fn sample_loop(config_dir: &Path) {
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
-        if reader.tick.is_multiple_of(SLOW_EVERY) {
+        let slow = reader.tick.is_multiple_of(SLOW_EVERY);
+        if slow {
             reader.rules = std::fs::read_to_string(&rules_path)
                 .map(|t| Rules::from_json(&t))
                 .unwrap_or_default();
@@ -86,6 +94,22 @@ fn sample_loop(config_dir: &Path) {
         let want = g::target(&s, &reader.rules);
         if let Some(level) = gov.observe(want.map(|w| w.level), now_ms()) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
+        }
+        // Sharing the GPU with a game: when the game takes much more VRAM than
+        // was free with the model loaded, relaunch into what is left (between
+        // requests, like a level change). What this sample sees decides, not
+        // the reason the level last changed for: battery or heat alone never
+        // restarts it.
+        if slow
+            && local_gov::level() == Level::Throttle
+            && want.is_some_and(|w| {
+                w.level == Level::Throttle
+                    && (g::game_reason(w.reason)
+                        || w.reason == "another app is keeping the GPU busy")
+            })
+            && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
+        {
+            local_gov::request_restart();
         }
         local_sidecar::tick_governor();
         // Offline or with the cloud down, have the model loaded before it's asked.
@@ -167,6 +191,7 @@ impl Reader {
             memory,
             os_pressure: self.slow.os_pressure,
             foreground: fast.foreground,
+            needed: local::warm_wanted(),
         }
     }
 }
@@ -504,12 +529,12 @@ impl Os {
             self.pdh = Pdh::open();
         }
         let gpu = self.pdh.as_ref().and_then(|p| p.sample(own));
-        let (covers, foreground) = win_foreground();
+        let (covers, foreground, pid) = win_foreground();
         let quns = win_quns();
-        let fullscreen = match (quns, covers) {
-            (None, None) => None,
-            (q, c) => Some(q == Some(true) || c == Some(true)),
-        };
+        // GrokHub's own window in front (maximized, borderless) reads as busy
+        // and covers the monitor; it is never a game to throttle for.
+        let own_window = pid == Some(std::process::id());
+        let fullscreen = g::foreground_fullscreen(quns, covers, own_window);
         Fast {
             fullscreen,
             game: None,
@@ -529,11 +554,11 @@ fn win_quns() -> Option<bool> {
 }
 
 /// Whether the foreground window covers its monitor (the desktop itself
-/// doesn't count), and its executable's file name. The name comes from a
-/// Toolhelp snapshot by pid: the foreground app (often a game) is never
-/// opened, so its anti-cheat has nothing to log.
+/// doesn't count), its executable's file name, and its process id. The name
+/// comes from a Toolhelp snapshot by pid: the foreground app (often a game)
+/// is never opened, so its anti-cheat has nothing to log.
 #[cfg(windows)]
-fn win_foreground() -> (Option<bool>, Option<String>) {
+fn win_foreground() -> (Option<bool>, Option<String>, Option<u32>) {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -545,7 +570,7 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
-            return (Some(false), None);
+            return (Some(false), None, None);
         }
         let mut class = [0u16; 64];
         let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
@@ -569,7 +594,7 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
         let name = (pid != 0)
             .then(|| grokhub_desktop::game_guard::exe_name_of(pid))
             .flatten();
-        (covers, name)
+        (covers, name, (pid != 0).then_some(pid))
     }
 }
 

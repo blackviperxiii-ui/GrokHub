@@ -37,8 +37,64 @@ const URL_HINT: &str =
 const KEY_ROW: &str = "Provider key";
 const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the model.";
 pub(super) const PICK_ROW: &str = "Use for your chats";
-const PICK_HINT: &str = "A model from a provider you allowed. Auto never picks one on its own, and never to save money.";
-const PICK_OFF: &str = "Off (xAI only)";
+const PICK_HINT: &str = "Auto: all models ranks every model you connected for each step: the best one while nothing is tight, the cloud while a game keeps the device busy, the cheapest quick one when the week's budget runs low. Or pick one model for your chats.";
+pub(super) const PICK_OFF: &str = "Auto: xAI and Local AI";
+pub(super) const PICK_ALL: &str = "Auto: all models (xAI, your providers, Local AI)";
+const ROUTE_ROW: &str = "OpenRouter routing";
+const ROUTE_HINT: &str = "How OpenRouter picks the endpoint for the model you chose. Sent with every call to openrouter.ai only.";
+const ROUTE_LABELS: [(&str, &str); 4] = [
+    ("OpenRouter's default", ""),
+    ("Cheapest endpoint first", "price"),
+    ("Fastest endpoint first", "throughput"),
+    ("Lowest latency first", "latency"),
+];
+const FALLBACK_ROW: &str = "Fall back to OpenRouter's router";
+const FALLBACK_HINT: &str = "When the model you picked fails for any reason (down, rate-limited, too long, flagged), OpenRouter goes on to its free router (for a free model) or Auto instead of failing, and bills the model that answered.";
+const DATA_ROW: &str = "OpenRouter data policy";
+const DATA_HINT: &str = "Zero data retention keeps your prompts off providers that store them; Allow also reaches providers that may train on prompts. Your account settings at openrouter.ai/settings/privacy still win.";
+const DATA_LABELS: [(&str, &str); 3] = [
+    ("Your account's default", ""),
+    ("Zero data retention only", "zdr"),
+    ("Allow providers that may store prompts", "allow"),
+];
+
+/// The dropdown label of a provider model: OpenRouter's routers and free
+/// tiers are marked.
+pub(super) fn pick_label(id: &str) -> String {
+    match pick_rank(id) {
+        0 => format!("{id}  · Auto: free models"),
+        1 => format!("{id}  · Auto: OpenRouter picks"),
+        2 => format!("{id}  · OpenRouter router"),
+        3 => format!("{id}  · free"),
+        _ => id.to_string(),
+    }
+}
+
+/// OpenRouter's free tier: a `:free` variant or its `free` router.
+pub(super) fn is_free_model(id: &str) -> bool {
+    providers::is_free_model(id)
+}
+
+/// Dropdown order: the free router, Auto, other routers, free tiers, the rest.
+fn pick_rank(id: &str) -> u8 {
+    let id = id.trim();
+    if id.ends_with("/openrouter/free") {
+        0
+    } else if id.ends_with("/openrouter/auto") {
+        1
+    } else if providers::is_openrouter_router(id) {
+        2
+    } else if is_free_model(id) {
+        3
+    } else {
+        4
+    }
+}
+
+/// Routers first, then free tiers, then the rest, each group alphabetical.
+pub(super) fn sort_picks(ids: &mut [String]) {
+    ids.sort_by(|a, b| pick_rank(a).cmp(&pick_rank(b)).then_with(|| a.cmp(b)));
+}
 const KIND_ROW: &str = "Provider type";
 const KIND_HINT: &str =
     "How it talks. Detected from the address; pick one for a proxy under another name.";
@@ -84,6 +140,10 @@ pub(super) struct ProviderUi {
     pub list: Option<Vec<providers::Provider>>,
     /// Cached "Use for your chats" model ids. Cleared with the list / grants.
     pub model_choices: Option<Vec<String>>,
+    /// The OpenRouter routing the router last heard.
+    pub sent_routing: Option<providers::Routing>,
+    /// The model preferences the router last heard.
+    pub sent_prefs: Option<grokhub_agent::route::prefs::ModelPrefs>,
 }
 
 /// What the "Sign in with OpenRouter" thread sends the cabin.
@@ -207,7 +267,7 @@ pub(super) fn provider_label(p: &providers::Provider) -> String {
 /// The hard card's action line.
 pub(super) fn provider_action(p: &providers::Provider) -> String {
     format!(
-        "Send your chats and memory to {} when you pick one of its models",
+        "Send your chats and memory to {} when you pick one of its models or Auto uses one",
         p.dest()
     )
 }
@@ -234,6 +294,18 @@ impl Cabin {
         if self.harness.router.providers.sent.as_deref() != Some(pick.as_str()) {
             grokhub_agent::route::live::set_provider_pick(&pick);
             self.harness.router.providers.sent = Some(pick);
+        }
+        if self.harness.router.providers.sent_routing.as_ref() != Some(&self.cfg.provider_routing) {
+            providers::set_routing(self.cfg.provider_routing.clone());
+            self.harness.router.providers.sent_routing = Some(self.cfg.provider_routing.clone());
+        }
+        let prefs = grokhub_agent::route::prefs::ModelPrefs {
+            all: self.cfg.auto_all_models,
+            ..self.cfg.model_prefs.clone()
+        };
+        if self.harness.router.providers.sent_prefs.as_ref() != Some(&prefs) {
+            grokhub_agent::route::prefs::set_model_prefs(prefs.clone());
+            self.harness.router.providers.sent_prefs = Some(prefs);
         }
     }
 
@@ -301,7 +373,7 @@ impl Cabin {
                 self.harness.router.providers.kind = 0;
                 self.invalidate_providers();
                 self.status = format!(
-                    "{} added. Approve the card to allow it, or later in Settings → Permissions.",
+                    "{} added. Approve the card to allow it, then pick one of its models under “{PICK_ROW}”.",
                     p.dest()
                 );
                 self.ask_provider(&p.id);
@@ -455,7 +527,10 @@ impl Cabin {
         match hx::grant_destination(&dir, &p.dest(), CALL_DATA, hx::UserClick::from_click()) {
             Ok(_) => {
                 self.invalidate_providers();
-                self.status = format!("{} allowed. Revoke it in Settings → Permissions.", p.dest());
+                self.status = format!(
+                    "{} allowed. Pick one of its models under “{PICK_ROW}” to chat with it. Revoke it in Settings → Permissions.",
+                    p.dest()
+                );
                 self.refresh_models_now();
             }
             Err(e) => self.status = format!("Could not save the grant: {e}"),
@@ -492,7 +567,7 @@ impl Cabin {
                 .collect()
         };
         let (reg, _) = grokhub_agent::route::live::snapshot(&dir);
-        let choices: Vec<String> = reg
+        let mut choices: Vec<String> = reg
             .models
             .iter()
             .filter(|(id, r)| {
@@ -505,8 +580,29 @@ impl Cabin {
             })
             .map(|(id, _)| id.clone())
             .collect();
+        sort_picks(&mut choices);
         self.harness.router.providers.model_choices = Some(choices.clone());
         choices
+    }
+
+    /// "Use for your chats" row `i`: Auto on xAI and Local AI, Auto on every
+    /// model, or one provider model (which turns "all models" off, so the
+    /// row shows what runs). True when something changed.
+    pub(super) fn set_chat_pick(&mut self, i: usize, models: &[String]) -> bool {
+        let (model, all) = match i {
+            0 => (String::new(), false),
+            1 => (String::new(), true),
+            _ => match models.get(i - 2) {
+                Some(m) => (m.clone(), false),
+                None => return false,
+            },
+        };
+        if model == self.cfg.provider_model && all == self.cfg.auto_all_models {
+            return false;
+        }
+        self.cfg.provider_model = model;
+        self.cfg.auto_all_models = all;
+        true
     }
 
     /// Settings → Cabin defaults, under the model rows.
@@ -530,28 +626,29 @@ impl Cabin {
             });
         }
         let models = self.provider_model_choices();
-        if !models.is_empty() || !self.cfg.provider_model.is_empty() {
-            let mut labels = vec![PICK_OFF.to_string()];
-            labels.extend(models.iter().cloned());
-            let selected = if self.cfg.provider_model.is_empty() {
-                PICK_OFF.to_string()
-            } else {
-                self.cfg.provider_model.clone()
+        if !models.is_empty() || !self.cfg.provider_model.is_empty() || self.cfg.auto_all_models {
+            let mut labels = vec![PICK_OFF.to_string(), PICK_ALL.to_string()];
+            labels.extend(models.iter().map(|m| pick_label(m)));
+            let selected = match (self.cfg.provider_model.is_empty(), self.cfg.auto_all_models) {
+                (true, false) => PICK_OFF.to_string(),
+                (true, true) => PICK_ALL.to_string(),
+                (false, _) => pick_label(&self.cfg.provider_model),
             };
             if let Some(i) =
                 crate::cards::settings_dropdown(ui, PICK_ROW, PICK_HINT, &selected, &labels)
             {
-                let next = if i == 0 {
-                    String::new()
-                } else {
-                    models.get(i - 1).cloned().unwrap_or_default()
-                };
-                if next != self.cfg.provider_model {
-                    self.cfg.provider_model = next;
+                if self.set_chat_pick(i, &models) {
                     self.persist_cfg();
+                    self.sync_provider_pick();
                     self.status = "Saved".into();
                 }
             }
+        }
+        if providers_list
+            .iter()
+            .any(|p| providers::is_openrouter_host(&p.dest()))
+        {
+            self.ui_openrouter_routing_rows(ui);
         }
         crate::cards::settings_field(
             ui,
@@ -614,6 +711,41 @@ impl Cabin {
         }
         if let Some(note) = &self.harness.router.providers.signin_note {
             crate::cards::settings_note(ui, note);
+        }
+    }
+
+    /// OpenRouter's routing knobs, under the pick once openrouter.ai is added.
+    fn ui_openrouter_routing_rows(&mut self, ui: &mut egui::Ui) {
+        let before = self.cfg.provider_routing.clone();
+        let mut r = before.clone();
+        let labels: Vec<String> = ROUTE_LABELS.iter().map(|(l, _)| l.to_string()).collect();
+        let picked = ROUTE_LABELS
+            .iter()
+            .find(|(_, v)| *v == r.sort)
+            .map_or(labels[0].clone(), |(l, _)| l.to_string());
+        if let Some(i) =
+            crate::cards::settings_dropdown(ui, ROUTE_ROW, ROUTE_HINT, &picked, &labels)
+        {
+            r.sort = ROUTE_LABELS.get(i).map_or("", |(_, v)| *v).to_string();
+        }
+        let mut fallback = r.fallback;
+        if crate::cards::settings_toggle(ui, FALLBACK_ROW, FALLBACK_HINT, &mut fallback) {
+            r.fallback = fallback;
+        }
+        let labels: Vec<String> = DATA_LABELS.iter().map(|(l, _)| l.to_string()).collect();
+        let picked = DATA_LABELS
+            .iter()
+            .find(|(_, v)| *v == r.data)
+            .map_or(labels[0].clone(), |(l, _)| l.to_string());
+        if let Some(i) = crate::cards::settings_dropdown(ui, DATA_ROW, DATA_HINT, &picked, &labels)
+        {
+            r.data = DATA_LABELS.get(i).map_or("", |(_, v)| *v).to_string();
+        }
+        if r != before {
+            self.cfg.provider_routing = r;
+            self.persist_cfg();
+            self.sync_provider_pick();
+            self.status = "Saved".into();
         }
     }
 
@@ -747,7 +879,7 @@ mod tests {
         assert!(is_provider_card(park.class, &park.source));
         assert_eq!(
             park.action,
-            "Send your chats and memory to openrouter.ai when you pick one of its models"
+            "Send your chats and memory to openrouter.ai when you pick one of its models or Auto uses one"
         );
         // Enter never approves it; Esc denies it, and Deny writes nothing.
         assert_eq!(hx::hard_card_key(true, false, false), None);
@@ -872,7 +1004,7 @@ mod tests {
             app.harness.router.providers.kind, 0,
             "the pick resets after a save"
         );
-        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when you pick one of its models"));
+        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when you pick one of its models or Auto uses one"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1257,6 +1389,102 @@ mod tests {
             Some(0),
             "after invalidate, a fresh load sees the deleted file"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_picks_put_routers_and_free_tiers_first_and_label_them() {
+        let mut ids: Vec<String> = [
+            "openrouter/zeta/big",
+            "openrouter/google/gemma-4-31b-it:free",
+            "openrouter/alpha/small",
+            "openrouter/openrouter/fusion",
+            "openrouter/openrouter/auto",
+            "openrouter/openrouter/free",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        sort_picks(&mut ids);
+        assert_eq!(
+            ids,
+            vec![
+                "openrouter/openrouter/free".to_string(),
+                "openrouter/openrouter/auto".to_string(),
+                "openrouter/openrouter/fusion".to_string(),
+                "openrouter/google/gemma-4-31b-it:free".to_string(),
+                "openrouter/alpha/small".to_string(),
+                "openrouter/zeta/big".to_string(),
+            ]
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/free"),
+            "openrouter/openrouter/free  · Auto: free models"
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/auto"),
+            "openrouter/openrouter/auto  · Auto: OpenRouter picks"
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/fusion"),
+            "openrouter/openrouter/fusion  · OpenRouter router"
+        );
+        assert_eq!(
+            pick_label("openrouter/google/gemma-4-31b-it:free"),
+            "openrouter/google/gemma-4-31b-it:free  · free"
+        );
+        assert_eq!(
+            pick_label("openrouter/alpha/small"),
+            "openrouter/alpha/small"
+        );
+        assert!(!is_free_model("openrouter/vendor/freeform-7b"));
+        assert_eq!(PICK_OFF, "Auto: xAI and Local AI");
+    }
+
+    #[test]
+    fn use_for_your_chats_offers_auto_on_every_model_and_tells_the_router() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("chat-pick-all-models");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        let models = vec!["openrouter/openrouter/free".to_string()];
+        // Row 1: Auto on every model.
+        assert!(app.set_chat_pick(1, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("", true)
+        );
+        assert!(
+            !app.set_chat_pick(1, &models),
+            "the same row changes nothing"
+        );
+        app.sync_provider_pick();
+        assert!(grokhub_agent::route::prefs::model_prefs().all);
+        // Row 2: one model for your chats turns "all models" off.
+        assert!(app.set_chat_pick(2, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("openrouter/openrouter/free", false)
+        );
+        app.sync_provider_pick();
+        assert!(!grokhub_agent::route::prefs::model_prefs().all);
+        // Row 0: Auto on xAI and Local AI only. A row past the list is ignored.
+        assert!(app.set_chat_pick(0, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("", false)
+        );
+        assert!(!app.set_chat_pick(9, &models));
+        // Saved as `autoAllModels`, left out while off.
+        app.cfg.auto_all_models = true;
+        let json = serde_json::to_string(&app.cfg).unwrap();
+        assert!(json.contains(r#""autoAllModels":true"#), "{json}");
+        app.cfg.auto_all_models = false;
+        assert!(!serde_json::to_string(&app.cfg)
+            .unwrap()
+            .contains("autoAllModels"));
+        assert_eq!(PICK_ALL, "Auto: all models (xAI, your providers, Local AI)");
         let _ = std::fs::remove_dir_all(root);
     }
 }

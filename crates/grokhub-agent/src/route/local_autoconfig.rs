@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use grokhub_core::gguf::{self, GgufMeta};
 use grokhub_core::local_profile::{self, Backend, LocalProfile};
@@ -486,6 +486,102 @@ struct Live {
     tune_dir: Option<PathBuf>,
     state: GovState,
     overrides: Overrides,
+    /// The cabin's live free-memory read, taken at every launch.
+    free_probe: Option<Arc<dyn Fn() -> FreeNow + Send + Sync>>,
+    /// Free VRAM once the running model was resident (MB): what is left with
+    /// our own model loaded, so only someone else's use counts as a drop.
+    launch_free_vram_mb: Option<u64>,
+}
+
+/// Free memory right now, from the cabin's probe (`nvidia-smi`, the OS).
+/// `None` where a reading isn't available; the hardware profile's value then stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FreeNow {
+    /// Free VRAM across the discrete GPUs the plan uses.
+    pub vram_free_mb: Option<u64>,
+    pub ram_free_mb: Option<u64>,
+}
+
+/// The cabin's live free-memory read. Each launch (and relaunch after a
+/// governor level change) plans against what is free *now*, so a game that
+/// took GPU memory leaves the model with fewer layers on the GPU and a
+/// shorter context instead of an out-of-memory start, and the next launch
+/// after the game ends grows back.
+pub fn set_free_probe(probe: Arc<dyn Fn() -> FreeNow + Send + Sync>) {
+    if let Ok(mut l) = live().lock() {
+        l.free_probe = Some(probe);
+    }
+}
+
+/// The profile with its free memory replaced by a live reading. Free VRAM
+/// goes to the plan's GPUs in proportion to their size.
+pub fn with_free_now(mut p: LocalProfile, now: FreeNow) -> LocalProfile {
+    if let Some(vram) = now.vram_free_mb {
+        let plan = p.device_plan();
+        let total: u64 = plan.gpus.iter().map(|g| g.vram_mb).sum();
+        for g in p.gpus.iter_mut() {
+            if plan
+                .gpus
+                .iter()
+                .any(|pg| pg.name == g.name && pg.vram_mb == g.vram_mb)
+            {
+                let share = vram
+                    .saturating_mul(g.vram_mb)
+                    .checked_div(total)
+                    .unwrap_or(vram);
+                g.free_vram_mb = Some(share.min(g.vram_mb));
+            }
+        }
+    }
+    if let Some(ram) = now.ram_free_mb {
+        p.free_ram_mb = Some(ram);
+    }
+    p
+}
+
+/// Free VRAM fell well under what the running launch was sized for (a game
+/// loaded): the model should relaunch into what is left.
+pub fn vram_dropped(launch_free_mb: u64, now_free_mb: u64) -> bool {
+    now_free_mb.saturating_mul(100) < launch_free_mb.saturating_mul(VRAM_DROP_PCT)
+}
+
+/// A relaunch is worth it once free VRAM is under this share of the launch's.
+pub const VRAM_DROP_PCT: u64 = 70;
+
+/// The sidecar is up with the model loaded: free VRAM now is the baseline a
+/// later drop is measured against (the model's own memory is already gone
+/// from it, so loading it never reads as a game taking the GPU).
+pub fn mark_resident() {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    let now = probe.map(|f| f().vram_free_mb).unwrap_or_default();
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = now;
+    }
+}
+
+/// A launch is starting (or the model left): no baseline until the new
+/// model is resident, so the last model's reading never judges this one.
+pub fn clear_resident() {
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+    }
+}
+
+/// Under Throttle: free VRAM now is well under what was free once the model
+/// was resident, so the governor should restart the model into the smaller room.
+pub fn vram_dropped_since_launch() -> bool {
+    let (probe, launched) = {
+        let Ok(l) = live().lock() else {
+            return false;
+        };
+        (l.free_probe.clone(), l.launch_free_vram_mb)
+    };
+    match (probe, launched) {
+        (Some(probe), Some(launched)) => probe()
+            .vram_free_mb
+            .is_some_and(|now| vram_dropped(launched, now)),
+        _ => false,
+    }
 }
 
 fn live() -> &'static Mutex<Live> {
@@ -496,6 +592,8 @@ fn live() -> &'static Mutex<Live> {
             tune_dir: None,
             state: GovState::Normal,
             overrides: Overrides::default(),
+            free_probe: None,
+            launch_free_vram_mb: None,
         })
     })
 }
@@ -561,15 +659,19 @@ pub fn tune_dir() -> Option<PathBuf> {
 }
 
 fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
-    let (p, dir, state, o) = {
+    let (p, dir, state, o, probe) = {
         let l = live().lock().ok()?;
         (
             l.profile.clone()?,
             l.tune_dir.clone()?,
             l.state,
             l.overrides.clone(),
+            l.free_probe.clone(),
         )
     };
+    // Plan against the memory free right now, not the probe's at setup.
+    let now = probe.as_ref().map(|f| f()).unwrap_or_default();
+    let p = with_free_now(p, now);
     let meta = gguf::read_meta(model).ok()?;
     let files = engine_files(binary);
     let files: Vec<&str> = files.iter().map(String::as_str).collect();

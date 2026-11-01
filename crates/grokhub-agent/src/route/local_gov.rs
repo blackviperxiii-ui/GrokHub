@@ -193,6 +193,16 @@ pub fn restart_due() -> bool {
     gov().lock().map(|g| g.restart_due).unwrap_or(false)
 }
 
+/// Settings changed the launch (context, GPU layers, threads): a running
+/// sidecar restarts as soon as no request is in flight, like a level change.
+pub fn request_restart() {
+    if let Ok(mut g) = gov().lock() {
+        if g.level != Level::Unload {
+            g.restart_due = true;
+        }
+    }
+}
+
 pub fn clear_restart() {
     if let Ok(mut g) = gov().lock() {
         g.restart_due = false;

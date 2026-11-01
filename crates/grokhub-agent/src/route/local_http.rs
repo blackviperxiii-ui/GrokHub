@@ -69,10 +69,15 @@ impl HttpLocalRuntime {
         self
     }
 
+    /// A throttled model (sharing the GPU with a game, or on battery) can take
+    /// minutes over a long answer; Stop and the router's own call timeout still
+    /// end a turn, so the socket read waits well past the old two minutes.
+    pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
     fn agent() -> grokhub_core::http::Agent {
         grokhub_core::http::agent(grokhub_core::http::Opts {
             connect: std::time::Duration::from_secs(5),
-            read: Some(std::time::Duration::from_secs(120)),
+            read: Some(Self::READ_TIMEOUT),
             ..Default::default()
         })
     }

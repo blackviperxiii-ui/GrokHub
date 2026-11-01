@@ -17,6 +17,20 @@ use super::setup_wizard::{free_disk_mb, ram_mb, run};
 
 struct NvidiaSmi;
 
+/// Free VRAM across NVIDIA GPUs right now (MB), from `nvidia-smi`. `None`
+/// without it. Cheap enough for the governor's slow tick and a launch.
+pub(super) fn nvidia_free_vram_now() -> Option<u64> {
+    let text = run(
+        "nvidia-smi",
+        &["--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+    )?;
+    let frees: Vec<u64> = text
+        .lines()
+        .filter_map(|l| l.trim().parse::<u64>().ok())
+        .collect();
+    (!frees.is_empty()).then(|| frees.iter().sum())
+}
+
 impl GpuProbe for NvidiaSmi {
     fn gpus(&self) -> Vec<Gpu> {
         run(
@@ -314,6 +328,11 @@ pub(super) fn thermal_now() -> Thermal {
         home: PathBuf::new(),
     }
     .thermal()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub(super) fn free_ram_now() -> Option<u64> {
+    None
 }
 
 #[cfg(any(target_os = "linux", windows))]

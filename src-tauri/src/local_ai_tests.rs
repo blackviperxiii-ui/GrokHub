@@ -336,6 +336,7 @@ fn saving_writes_the_pick_and_the_governors_rules() {
             deny: vec!["blender".into()],
             throttle_on_battery: false,
             pause_for_games: false,
+            unload_for_games: true,
             use_idle_time: false,
         }
     );
@@ -502,4 +503,17 @@ fn limited_detection_is_named() {
         ),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn saving_keeps_the_cabins_unload_choice() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-unload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let gov = dir.join("local").join("governor.json");
+    std::fs::create_dir_all(gov.parent().unwrap()).unwrap();
+    std::fs::write(&gov, r#"{"unloadForGames": false}"#).unwrap();
+    save(&dir, &LocalAiConfig::default()).unwrap();
+    let rules = Rules::from_json(&std::fs::read_to_string(&gov).unwrap());
+    assert!(!rules.unload_for_games);
+    let _ = std::fs::remove_dir_all(dir);
 }
