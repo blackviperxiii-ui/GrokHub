@@ -109,7 +109,7 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "Frame Rate",
         SystemPerformance,
         Partial,
-        "Says how to see FPS without Loadout hooking into games",
+        "Frames on screen from the display driver (Linux), never inside the game",
         [Medium, Small]
     ),
     entry!(

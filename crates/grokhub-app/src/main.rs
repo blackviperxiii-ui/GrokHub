@@ -111,6 +111,18 @@ fn cabin_shutdown_last_resort() {
 }
 
 fn main() {
+    // The Home frame-rate probe (a CAP_PERFMON copy of this binary): count
+    // screen flips for the parent over a pipe and do nothing else. Any other
+    // way in drops every capability before the app starts, so a privileged
+    // copy run with other arguments is just the ordinary app.
+    {
+        use grokhub_agent::indexers::display_fps;
+        let mut argv = env::args().skip(1);
+        if argv.next().as_deref() == Some(display_fps::PROBE_ARG) && argv.next().is_none() {
+            std::process::exit(display_fps::run_probe());
+        }
+        display_fps::drop_privileges();
+    }
     startup::begin();
     // `sudo`'s helper (card 34): answer it and leave before anything else starts.
     let args: Vec<String> = env::args().collect();
