@@ -284,8 +284,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history + tags: src-tauri/build.rs counts beta commits since
+        # vX.Y.Z, so the shell's version matches the release tag its
+        # self-updater compares against (LU-06).
         with:
           ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - name: Label the beta build
+        if: needs.plan.outputs.beta == 'true'
+        shell: bash
+        run: git switch -C beta
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -361,6 +369,31 @@ jobs:
             echo "tag=v${ver}-beta.${n}" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
+      # The shell's self-updater (LU-06) installs only what this signs: the
+      # AppImage and the NSIS installer, listed in latest.json with their
+      # minisign signatures. No key, no manifest, so shells don't offer it.
+      - name: Sign the shell updates
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          TAG: ${{ steps.name.outputs.tag }}
+        shell: bash
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set: no latest.json, so shells won't offer this release as an update."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          ver="$(tr -d '[:space:]' < VERSION)"
+          umask 077
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          for f in "dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/GrokHub-Shell-Setup-$ver.exe"; do
+            minisign -S -s "$key" -m "$f" -t "loadout shell $TAG"
+            minisign -V -p packaging/minisign.pub -m "$f"
+          done
+          rm -f "$key"
+          ./scripts/shell-update-manifest.sh dist-release "$TAG" "$GITHUB_REPOSITORY"
       - name: Write SHA256SUMS
         working-directory: dist-release
         run: |

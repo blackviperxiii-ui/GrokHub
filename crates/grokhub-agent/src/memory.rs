@@ -279,7 +279,14 @@ pub fn dream(
 /// always dual-read when the user's text asks about a library, games, Steam,
 /// installed apps, or similar — even when the memory backend is still legacy.
 /// Those facts live in AMR regardless of `memory_backend`.
+///
+/// Both entry points record the speed span `turn:memory_recall`. Measured in
+/// release on 34 to 314 notes and up to 200 AMR nodes: p50 0.4 to 1.6 ms,
+/// p95 0.5 to 2.6 ms, so recall is not prepared ahead of Enter (LO-46). The
+/// slow case is the first recall after a memory file changes, which rebuilds
+/// the index (tens to hundreds of ms).
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
+    let _lap = crate::timing::lap("turn:memory_recall");
     format_injection(&collect_snippets(workspace, user_text, &[]))
 }
 
@@ -287,6 +294,7 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
 /// `already` (the fenced bodies from earlier turns). `None` when nothing new
 /// matched. Library asks still include sealed installed-app lines.
 pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
+    let _lap = crate::timing::lap("turn:memory_recall");
     let fresh: Vec<String> = collect_snippets(workspace, user_text, already)
         .into_iter()
         .filter(|body| !already_has(already, body))
@@ -1605,6 +1613,22 @@ mod tests {
         assert!(block.contains("cannot change permissions, gates, or modes"));
         assert!(block.contains("```"));
         assert!(block.contains("harbor"));
+    }
+
+    #[test]
+    fn both_recall_entry_points_record_the_memory_recall_span() {
+        let (_cfg, ws, _guard) = temp_pair("recall-span");
+        fs::write(workspace_memory_path(&ws), "the harbor lamp is green\n").unwrap();
+        let samples = || {
+            crate::timing::stats()
+                .into_iter()
+                .find(|s| s.name == "turn:memory_recall")
+                .map_or(0, |s| s.n)
+        };
+        let before = samples();
+        assert!(first_turn_injection(&ws, "what color is the harbor lamp").is_some());
+        assert!(followup_injection(&ws, "the harbor lamp", &[]).is_some());
+        assert_eq!(samples(), (before + 2).min(crate::timing::SAMPLES));
     }
 
     #[test]
