@@ -51,6 +51,8 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: false,
 };
 
 /** The desktop's nyx_look for Nyx herself: one set per mood, as the shell
