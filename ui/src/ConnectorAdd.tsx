@@ -63,9 +63,23 @@ export function ConnectorAdd({
     }
   }
 
+  // The first read of the catalog, when the sheet opens.
   useEffect(() => {
-    void load(false);
-  }, []);
+    let live = true;
+    connectorCatalog(false).then(
+      (view) => {
+        if (!live) return;
+        setRows(view.rows);
+        if (view.note) ok(view.note);
+      },
+      (err) => {
+        if (live) fail(err);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [ok, fail]);
 
   async function run(label: string, step: () => Promise<ConnectorsChanged>) {
     setBusy(label);
