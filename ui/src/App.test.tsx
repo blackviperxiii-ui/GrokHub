@@ -7,7 +7,7 @@ import type { Capabilities } from "./api";
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 const api = vi.hoisted(() => ({
-  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false },
+  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
   onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
@@ -45,6 +45,7 @@ vi.mock("./Automations", () => ({ Automations: () => null }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
     <p>
@@ -56,7 +57,15 @@ vi.mock("./Settings", () => ({
 
 import { App } from "./App";
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true };
+const DESKTOP: Capabilities = {
+  desktopControl: true,
+  pulse: true,
+  localAi: true,
+  tray: true,
+  webAccess: true,
+  plugins: true,
+  library: true,
+};
 
 function tabs() {
   const nav = screen.getByRole("navigation", { name: "Views" });
@@ -78,8 +87,11 @@ describe("App", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Library",
       "Settings",
     ]);
+    await userEvent.click(screen.getByRole("button", { name: "Library" }));
+    expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
   });

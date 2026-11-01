@@ -18,12 +18,14 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
 const Journal = lazy(loaders.journal);
+const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
@@ -201,6 +203,7 @@ export function App() {
         )}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
+        {view === "library" && caps.library && <Library />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
       </Suspense>
     </div>

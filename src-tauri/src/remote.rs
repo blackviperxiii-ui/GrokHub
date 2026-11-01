@@ -868,6 +868,9 @@ mod tests {
             "set_autostart",
             "set_summon_hotkey",
             "set_notifications",
+            "get_library",
+            "library_cover",
+            "library_play",
         ] {
             assert!(!web_command(name), "{name}");
         }
