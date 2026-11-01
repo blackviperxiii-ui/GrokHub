@@ -2206,6 +2206,27 @@ impl Cabin {
         }
     }
 
+    /// The engine session of the chat that owns the live run.
+    fn foreground_session(&self) -> Option<String> {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        self.threads
+            .get(idx)
+            .and_then(|t| t.grok_session.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Every native run and unattended loop, foreground and background alike.
+    fn halt_background(&mut self) {
+        grokhub_agent::halt_all_sessions();
+        self.stop_native_unattended();
+    }
+
     fn halt_in_flight(&mut self) {
         // A stopped turn's steer and background notes must not ride into another chat.
         self.bg.results_follow = None;
@@ -2215,8 +2236,11 @@ impl Cabin {
         self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
-        grokhub_agent::halt_all_sessions();
-        self.stop_native_unattended();
+        // Stop ends this chat's run and its tasks. Background runs and the
+        // unattended loops keep going; tray Halt stops those (halt_everything).
+        if let Some(id) = self.foreground_session() {
+            grokhub_agent::halt_session(&id);
+        }
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
             self.confirm = None;
@@ -4836,6 +4860,7 @@ impl Cabin {
         self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
         self.halt_inbox();
         self.stop_all_bg_runs();
+        self.halt_background();
         self.halt_work(status);
     }
 
@@ -5049,6 +5074,7 @@ impl Cabin {
             "tray Quit must not CancelClose on a hidden cabin"
         );
         self.kill_bg_runs();
+        self.halt_background();
         self.halt_in_flight();
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
@@ -5141,6 +5167,7 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
+        self.halt_background();
         self.halt_in_flight();
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
