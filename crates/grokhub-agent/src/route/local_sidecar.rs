@@ -422,13 +422,14 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
         return false;
     }
     let url = format!("http://{host}:{port}/health");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: timeout,
+        read: Some(timeout),
+        ..Default::default()
+    });
     match agent
         .get(&url)
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .call()
     {
         Ok(resp) => resp.status() == 200,
