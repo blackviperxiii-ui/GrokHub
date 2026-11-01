@@ -620,4 +620,5 @@ fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as
     // A new launch starts: the old model's baseline no longer counts.
     clear_resident();
     assert!(!vram_dropped_since_launch());
+    reset_free_probe();
 }

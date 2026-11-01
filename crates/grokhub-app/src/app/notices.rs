@@ -445,11 +445,14 @@ mod tests {
             (cabin.nav, cabin.settings_sec),
             (Nav::Settings, SettingsSec::AiModels)
         );
-        // Local AI becomes ready: the same note changes to the local-only wording.
+        // Local AI becomes ready: the same note changes to the local-only
+        // wording, back on top and unread although the bell was read.
+        cabin.notices.mark_read();
         super::super::native_engine::set_local_ready_for_test(Some(true));
         cabin.sync_auth_notice();
         cabin.sync_auth_notice();
         assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(cabin.notices.unread, 1);
         assert_eq!(
             cabin.notices.items[0].text,
             super::super::pages::LOCAL_ONLY_NOTE
@@ -459,6 +462,14 @@ mod tests {
         cabin.sync_auth_notice();
         assert_eq!(cabin.notices.items.len(), 1);
         assert_eq!(cabin.notices.auth_note, None);
+        // Signed out again later: still one note, not a second copy.
+        cabin.cfg.api_key.clear();
+        cabin.sync_auth_notice();
+        assert_eq!(cabin.notices.items.len(), 1);
+        assert_eq!(
+            cabin.notices.items[0].text,
+            super::super::pages::LOCAL_ONLY_NOTE
+        );
         super::super::native_engine::set_local_ready_for_test(None);
         let _ = std::fs::remove_dir_all(root);
     }

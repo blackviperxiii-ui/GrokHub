@@ -795,17 +795,20 @@ impl Cabin {
         if want == self.notices.auth_note {
             return;
         }
-        let before = std::mem::replace(&mut self.notices.auth_note, want);
+        self.notices.auth_note = want;
         let Some(text) = want else {
             return;
         };
-        // Still signed out, new wording (Local AI got ready): the one note
-        // says the new thing instead of a second note piling up.
-        if let Some(item) =
-            before.and_then(|old| self.notices.items.iter_mut().find(|n| n.text == old))
+        // New wording (Local AI got ready), or signed out again later in the
+        // session: the one sign-in note moves to the top with the new text
+        // and counts as unread, instead of a second note piling up.
+        if let Some(i) = self
+            .notices
+            .items
+            .iter()
+            .position(|n| n.text == NATIVE_SIGNIN_NOTE || n.text == LOCAL_ONLY_NOTE)
         {
-            item.text = text.to_string();
-            return;
+            self.notices.items.remove(i);
         }
         self.notify(
             super::notices::NoticeKind::Info,

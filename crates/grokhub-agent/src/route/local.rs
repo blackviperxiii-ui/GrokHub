@@ -491,9 +491,16 @@ pub fn fallback_active() -> bool {
 /// model answering. Online with the cloud up, it loads on demand only.
 pub fn warm_wanted() -> bool {
     super::connectivity::sync_from_core();
-    super::connectivity::state().prefer_local()
-        || fallback_active()
-        || (switched_on() && first() != LocalFirst::Fallback)
+    super::connectivity::state().prefer_local() || fallback_active() || first_has_room()
+}
+
+/// "Local AI for chats" is on and the governor leaves the device room to
+/// take chats ([`first_takes`]). While a game or a busy GPU throttles it the
+/// cloud answers, so the model is not wanted loaded then: a game unloads it.
+fn first_has_room() -> bool {
+    switched_on()
+        && first() != LocalFirst::Fallback
+        && matches!(super::local_gov::level(), Level::RampUp | Level::Normal)
 }
 
 /// What a route may do with the local model for one call.
@@ -549,10 +556,12 @@ fn allowed_classes(gate: &LocalGate) -> &'static [&'static str] {
 
 /// A chat the device answers from a request fitted to its window
 /// ([`super::local_fit::fit`] drops tools, guidance and the oldest turns),
-/// so the thread's length is no bar. Background steps send their text whole.
+/// so the thread's length is no bar. Background steps send their text whole,
+/// and a desktop step (`desktop:soft`) keeps the context cap: trimming would
+/// drop its desktop tools, and a step without them cannot act.
 pub fn fits_by_trimming(class: &str) -> bool {
     let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
-    matches!(class, "chat:quick" | "chat:default" | "desktop:soft")
+    matches!(class, "chat:quick" | "chat:default")
 }
 
 /// The local route may take this step: the flag is on, the class is allowed
@@ -899,13 +908,22 @@ pub fn serve_request(
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
+    // The prompt calls the assistant Grok: the device is told which model it
+    // is (the file the running sidecar loaded), so it says so when asked.
+    let mut req = req.clone();
+    super::identity::stamp(
+        &mut req.input,
+        live_tier(),
+        super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        false,
+    );
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
     let n_ctx = rt
         .context_tokens()
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
-    let (fitted, _) = super::local_fit::fit(req, n_ctx);
+    let (fitted, _) = super::local_fit::fit(&req, n_ctx);
     rt.chat_tools(&fitted, cancel)
         .map_err(ClientError::Protocol)
 }

@@ -1475,6 +1475,9 @@ mod tests {
             (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
             ("", false)
         );
+        // The router hears it too, so no later test inherits the pick.
+        app.sync_provider_pick();
+        assert!(!grokhub_agent::route::prefs::model_prefs().all);
         assert!(!app.set_chat_pick(9, &models));
         // Saved as `autoAllModels`, left out while off.
         app.cfg.auto_all_models = true;
