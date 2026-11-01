@@ -1318,7 +1318,9 @@ label.toggle-row {
   border-radius: 999px;
   background: var(--hover);
   cursor: pointer;
-  transition: background 150ms ease;
+  transition:
+    background-color var(--t-base) var(--ease-out),
+    border-color var(--t-base) var(--ease-out);
 }
 
 .toggle[aria-checked="true"] {
@@ -1345,7 +1347,7 @@ label.toggle-row {
   border-radius: 50%;
   background: var(--muted);
   box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
-  transition: transform 150ms ease;
+  transition: transform var(--t-base) cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
 .toggle[aria-checked="true"] .toggle-thumb {
@@ -1867,5 +1869,69 @@ label.toggle-row {
     top: auto;
     bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 8px);
     width: auto;
+  }
+}
+
+/* Motion. One easing and two durations (see the tokens at the top). Entrances
+   use animation-fill-mode: backwards, never forwards, so no transform is left
+   on the element afterwards (a lingering transform would trap fixed children). */
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+}
+
+/* Switching views: the incoming screen eases up. Chat and Automations stay
+   mounted and are shown and hidden, which also restarts the animation. */
+.app > :is(div, section):not(.topbar, .palette-backdrop, [hidden]) {
+  animation: view-in var(--t-base) var(--ease-out) backwards;
+}
+
+/* New messages and cards rise in. Streaming edits the same node, so a growing
+   reply does not replay it. */
+.log > .bubble,
+.log > .card {
+  animation: rise-in var(--t-base) var(--ease-out) backwards;
+}
+
+.palette-backdrop {
+  animation: fade-in var(--t-fast) var(--ease-out) backwards;
+}
+
+.palette {
+  animation: pop-in var(--t-base) var(--ease-out) backwards;
+}
+
+/* People who ask for less motion get none: state changes still happen, instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -1,6 +1,20 @@
 //! Quick chips and the empty-home greeting.
 
 use super::*;
+use grokhub_core::ChipSignals;
+
+/// Chips on Home's row.
+pub(super) const HOME_CHIP_MAX: usize = 4;
+
+/// The plain chip signals, kept apart so they join the paint key: chips
+/// redraw when a game starts or the day turns, not every frame.
+#[derive(Debug, Clone, Copy)]
+struct ChipSignalsKey {
+    low_disk: bool,
+    weekday: u8,
+    update_waiting: bool,
+    quiet_hours: bool,
+}
 
 /// True when a chat chip should run through `send_chat` (slash parse or empty-composer send).
 fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
@@ -397,8 +411,21 @@ impl Cabin {
         );
         let skill_count = self.skill_list.len();
         let session_mode = self.session_mode.as_str().to_string();
+        let game = self
+            .game_running()
+            .and_then(|id| self.steam_cached_name(id))
+            .map(str::to_string);
+        let game_ended = self.game_just_ended().map(str::to_string);
+        let signals_key = ChipSignalsKey {
+            low_disk: super::home::cached_drives()
+                .iter()
+                .any(|d| grokhub_core::disk_is_low(d.free, d.total)),
+            weekday: Self::local_clock().weekday,
+            update_waiting: self.cabin_update_available(),
+            quiet_hours: self.quiet_now(),
+        };
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}",
             self.thread_idx,
             n,
             last,
@@ -418,7 +445,10 @@ impl Cabin {
             first_run,
             last_project,
             session_mode,
-            persistable_cabin_lane(&self.cfg.cabin_lane)
+            persistable_cabin_lane(&self.cfg.cabin_lane),
+            game,
+            game_ended,
+            signals_key
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -453,12 +483,31 @@ impl Cabin {
             last_project: &last_project,
             skill_count: skill_count as u32,
             session_mode: &session_mode,
+            signals: ChipSignals {
+                game: game.as_deref(),
+                game_ended: game_ended.as_deref(),
+                low_disk: signals_key.low_disk,
+                weekday: signals_key.weekday,
+                update_waiting: signals_key.update_waiting,
+                quiet_hours: signals_key.quiet_hours,
+            },
         };
         let pace = grokhub_core::cabin_pace(&input);
         self.offer_repeated = matches!(
             pace,
             grokhub_core::CabinPace::With | grokhub_core::CabinPace::Quiet
         );
+        // Home starts a new chat, so its row is the same engine for an empty
+        // one: no transcript, no draft, the PC's signals, seeds to fill.
+        let home = ChipInput {
+            chat: &[],
+            draft: "",
+            thread_title: "",
+            last_failed: false,
+            max: HOME_CHIP_MAX,
+            ..input.clone()
+        };
+        self.home_chips = build_quick_chips(home);
         // Chips are local only: no model ask, cloud or local (LO-28).
         self.visible_chips = build_quick_chips(input);
     }
@@ -507,6 +556,24 @@ impl Cabin {
         chips
     }
 
+    /// Home's row. A chat chip starts its own chat, like an ask typed on
+    /// Home; a page or mode chip acts as it does under the composer. Both
+    /// are learned, and the × dismisses for Home and the composer alike.
+    pub(super) fn take_home_chip_act(
+        &mut self,
+        act: crate::cards::ChipRowAct,
+        chips: &[QuickChip],
+    ) {
+        if let crate::cards::ChipRowAct::Apply(i) = act {
+            if chips.get(i).is_some_and(|c| c.kind == ChipKind::Chat) {
+                self.new_thread(false);
+                self.nav = Nav::Chat;
+                self.composer.clear();
+            }
+        }
+        self.take_chip_act(act, chips);
+    }
+
     pub(super) fn take_chip_act(&mut self, act: crate::cards::ChipRowAct, chips: &[QuickChip]) {
         match act {
             crate::cards::ChipRowAct::Apply(i) => {
@@ -550,7 +617,9 @@ impl Cabin {
         self.flush_chips();
         match chip.kind {
             ChipKind::Nav => {
-                if let Some(id) = nav_from_chip_value(&chip.value) {
+                if nav_from_chip_value(&chip.value) == Some("update") {
+                    self.open_update_overlay();
+                } else if let Some(id) = nav_from_chip_value(&chip.value) {
                     self.nav = Self::nav_from_id(id);
                     if id == "imagine" {
                         remember_home_surface(&mut self.chip_memory, "imagine", now_ms());

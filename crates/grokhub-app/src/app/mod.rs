@@ -692,6 +692,8 @@ pub struct Cabin {
     /// Workboards page: the open card and what you are typing on each.
     board_view: board_ui::BoardView,
     visible_chips: Vec<QuickChip>,
+    /// Home's row: the same engine for a fresh chat, four at most.
+    home_chips: Vec<QuickChip>,
     chip_paint_key: String,
     greeting: String,
     greeting_fp: String,
@@ -1309,6 +1311,7 @@ impl Cabin {
             agent_cursor: None,
             board_view: Default::default(),
             visible_chips: vec![],
+            home_chips: vec![],
             chip_paint_key: String::new(),
             greeting: String::new(),
             greeting_fp: String::new(),
@@ -1781,6 +1784,7 @@ impl Cabin {
             agent_cursor: None,
             board_view: Default::default(),
             visible_chips: Vec::new(),
+            home_chips: Vec::new(),
             chip_paint_key: String::new(),
             greeting: String::new(),
             greeting_fp: String::new(),

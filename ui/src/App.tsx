@@ -1,19 +1,34 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
 import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
 import { Chat, type Prefill } from "./Chat";
-import { Connectors } from "./Connectors";
-import { Journal } from "./Journal";
-import { Memory } from "./Memory";
 import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
-import { Pulse } from "./Pulse";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
-import { Settings } from "./Settings";
 import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
+
+// Chat and Automations stay mounted, so they load up front. The other screens
+// load the first time they open, and again in the background once the app is
+// idle so that first click does not wait on the network or disk.
+const loaders = {
+  connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
+  settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
+};
+const Connectors = lazy(loaders.connectors);
+const Journal = lazy(loaders.journal);
+const Memory = lazy(loaders.memory);
+const Pulse = lazy(loaders.pulse);
+const Settings = lazy(loaders.settings);
+
+function preloadViews() {
+  for (const load of Object.values(loaders)) void load().catch(() => {});
+}
 
 export function App() {
   const [view, setView] = useState<View>("chat");
@@ -25,6 +40,15 @@ export function App() {
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   const barAway = useHidingBar(palette);
   useOverscroll();
+  useEffect(() => {
+    const idle = window.requestIdleCallback;
+    if (idle) {
+      const handle = idle(preloadViews, { timeout: 3000 });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(preloadViews, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
   useEffect(() => {
     getCapabilities()
       .catch(() => CORE_ONLY)
@@ -146,22 +170,24 @@ export function App() {
           }}
         />
       </div>
-      {view === "pulse" && caps.pulse && (
-        <Pulse
-          onRun={ask}
-        />
-      )}
-      {view === "journal" && !caps.remote && (
-        <Journal
-          onMission={({ prompt, conversationId }) => {
-            setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
-            setView("chat");
-          }}
-        />
-      )}
-      {view === "memory" && <Memory />}
-      {view === "connectors" && <Connectors />}
-      {view === "settings" && <Settings caps={caps} goTo={goTo} />}
+      <Suspense fallback={null}>
+        {view === "pulse" && caps.pulse && (
+          <Pulse
+            onRun={ask}
+          />
+        )}
+        {view === "journal" && !caps.remote && (
+          <Journal
+            onMission={({ prompt, conversationId }) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
+        )}
+        {view === "memory" && <Memory />}
+        {view === "connectors" && <Connectors />}
+        {view === "settings" && <Settings caps={caps} goTo={goTo} />}
+      </Suspense>
     </div>
   );
 }
