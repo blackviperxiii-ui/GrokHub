@@ -309,6 +309,7 @@ impl Cabin {
                 crate::cards::help_text(ui, line);
             }
         });
+        self.ui_gw2(ui);
     }
 }
 

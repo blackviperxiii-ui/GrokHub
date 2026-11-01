@@ -48,6 +48,8 @@ pub(super) struct FocusState {
     pub shot: super::screenshot_offer_ui::ShotState,
     /// Elite Dangerous's Player Journal, followed while it runs.
     pub elite: super::elite_ui::EliteState,
+    /// Guild Wars 2 through ArenaNet's web API.
+    pub gw2: super::gw2_ui::Gw2Ui,
 }
 
 impl Cabin {
@@ -68,6 +70,7 @@ impl Cabin {
         self.tick_model_drop();
         self.poll_screenshot_offer();
         self.tick_elite();
+        self.tick_gw2();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
