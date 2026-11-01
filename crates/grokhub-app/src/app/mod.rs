@@ -179,6 +179,7 @@ mod game_companion_ui;
 mod game_watch_ui;
 mod ghost;
 mod glance;
+mod gw2_ui;
 mod harness_ui;
 mod heartbeat_gate;
 mod hobby_paths_ui;

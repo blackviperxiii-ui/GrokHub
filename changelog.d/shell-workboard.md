@@ -1,0 +1,1 @@
+- Shell: a Workboard page on the cabin's own board file, with drag-and-drop or a keyboard Move menu, notes, archive and a Delete that asks first. Work puts the card in the chat box without sending it and moves the card to Doing.
