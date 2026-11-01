@@ -129,6 +129,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             mlock: true,
             tensor_split: None,
             draft: None,
+            cpu_only: false,
         }
     );
     assert_eq!(
@@ -383,6 +384,7 @@ fn autotune_records_cap_the_next_plan_per_model_device_and_driver() {
         n_cpu_moe: None,
         ctx: 8_192,
         kv: KvType::Q4,
+        cpu_only: false,
     };
     save_tuned(&dir, &key, &t).unwrap();
     assert_eq!(load_tuned(&dir).get(&key), Some(&t));
@@ -489,4 +491,33 @@ fn an_igpu_only_machine_offloads_into_shared_ram_on_vulkan() {
         budgets(&bare, Backend::Vulkan, GovState::Normal),
         (0, 19_200)
     );
+}
+
+#[test]
+fn a_remembered_cpu_fallback_keeps_the_next_start_off_the_gpu() {
+    let dir = std::env::temp_dir().join(format!("gh-tune-cpu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let gpu = autoconfig(
+        &rtx_4070_laptop(),
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert!(gpu.ngl > 0 && !gpu.cpu_only);
+    let t = Tuned {
+        ngl: 0,
+        n_cpu_moe: None,
+        ctx: gpu.ctx,
+        kv: gpu.kv,
+        cpu_only: true,
+    };
+    save_tuned(&dir, "k", &t).unwrap();
+    let next = apply_tuned(gpu, load_tuned(&dir).get("k").unwrap());
+    assert!(next.cpu_only);
+    assert_eq!((next.ngl, next.backend), (0, Backend::Cpu));
+    // Records written before this field read as GPU launches.
+    let old: Tuned = serde_json::from_str(r#"{"ngl":39,"ctx":8192,"kv":"q4"}"#).unwrap();
+    assert!(!old.cpu_only);
+    let _ = std::fs::remove_dir_all(&dir);
 }

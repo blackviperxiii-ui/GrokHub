@@ -5421,6 +5421,15 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             ),
             "Counter-Strike 2",
         ));
+        let elite = crate::game_watch_elite::EliteSession {
+            jumps: 3,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_elite::session_card(&elite, at),
+            "Elite Dangerous",
+        ));
         rows
     }
 

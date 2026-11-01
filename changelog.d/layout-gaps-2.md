@@ -1,0 +1,2 @@
+- Pulse: "Offer to sleep the PC" and "Suggest Downloads cleanups" sit in their own rows with Turn on / Not now pinned right, instead of crowding the question.
+- Objectives: the checklist column is centered on wide windows and scrolls at its own edge, so there's no stray scrollbar line at the window's edge.

@@ -554,7 +554,7 @@ impl<C: CuaChild> CuaProxy<C> {
         if self.halted {
             (*grokhub_core::desktop_mcp::HALT_MSG).into()
         } else if !gate.enabled {
-            grokhub_core::desktop_mcp::OFF_MSG.into()
+            (*grokhub_core::desktop_mcp::OFF_MSG).into()
         } else {
             (*CUA_OFF_MSG).into()
         }
@@ -1020,7 +1020,7 @@ mod tests {
                 &mut || false,
             )
             .unwrap();
-        assert_eq!(text_of(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(text_of(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         assert_eq!(*starts.borrow(), 0, "no child was started");
         assert!(fake.got.borrow().is_empty());
         let spans = read_spans(&dir, "chat-c").unwrap();
@@ -1375,7 +1375,7 @@ mod tests {
         let (req, out) = parked(&mut p, 3, false);
         assert_eq!(
             (req.class.as_str(), req.action.as_str()),
-            ("money", "Grok wants to click Pay in Checkout — Shop")
+            ("money", "Loadout wants to click Pay in Checkout — Shop")
         );
         assert!(out.starts_with("Denied: hard-class money"), "{out}");
         // #4: the draft is soft; Send parks as send.
@@ -1394,7 +1394,7 @@ mod tests {
         let (req, _) = parked(&mut p, 5, false);
         assert_eq!(
             (req.class.as_str(), req.action.as_str()),
-            ("send", "Grok wants to click Send in Checkout — Shop")
+            ("send", "Loadout wants to click Send in Checkout — Shop")
         );
         // #8: the toggle is soft and its change is seen; Reset parks, and Halt denies it.
         let out = p.handle_line(&click(6), ON, &dir, &mut || false).unwrap();
@@ -1412,7 +1412,7 @@ mod tests {
         let (req, _) = parked(&mut p, 9, false);
         assert_eq!(
             (req.class.as_str(), req.action.as_str()),
-            ("send", "Grok wants to click Upload in Checkout — Shop")
+            ("send", "Loadout wants to click Upload in Checkout — Shop")
         );
         // Only the soft clicks ever reached the child.
         let clicked: Vec<Value> = fake

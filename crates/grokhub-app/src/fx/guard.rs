@@ -6,7 +6,7 @@ pub(crate) const MARKER_NAME: &str = "renderer-trying";
 pub(crate) const FALLBACK_NOTICE: &str =
     "Composer glow was turned off because the GPU renderer failed last time.";
 pub(crate) const SETTINGS_CAPTION: &str =
-    "Soft light around the composer while Grok replies. Uses the GPU renderer after restart.";
+    "Soft light around the composer while a reply comes in. Uses the GPU renderer after restart.";
 pub(crate) const GLOW_EXPAND: f32 = 18.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
