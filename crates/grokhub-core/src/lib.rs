@@ -152,6 +152,7 @@ pub mod situation;
 pub mod skill;
 pub mod slash;
 pub mod ssrf;
+pub mod stardew_saves;
 pub mod state;
 pub mod steam;
 pub mod steam_achievements;
@@ -332,7 +333,7 @@ pub use diagnostics::{
 };
 pub use doctor::{
     doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,
-    hub_kind_from_health, DoctorLine,
+    hub_kind_from_health, xai_auth_stale_line, DoctorLine,
 };
 pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,

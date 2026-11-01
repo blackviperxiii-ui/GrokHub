@@ -195,7 +195,7 @@ pub struct DiagnosticsExport {
 impl DiagnosticsExport {
     pub fn with_defaults(version: &str, chat_id: &str, chat_title: &str) -> Self {
         Self {
-            app: "GrokHub".into(),
+            app: crate::brand::product_name().into(),
             version: version.into(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
