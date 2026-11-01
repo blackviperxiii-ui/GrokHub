@@ -269,19 +269,20 @@ async function tab(s, label) {
     await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
   } catch (e) {
     const probe = await wd("POST", `${s}/execute/sync`, {
-      script: `const b = arguments[0]; const r = b.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
-        const tabs = b.parentElement.getBoundingClientRect();
-        return JSON.stringify({ now: performance.now(), active: window.__vtActive, vt: (window.__vt || []).slice(-4),
-          rect: [r.left, r.top, r.width, r.height], tabs: [tabs.left, tabs.right, b.parentElement.scrollLeft],
-          hit: document.elementsFromPoint(x, y).slice(0, 4).map((n) => n.tagName + '.' + n.className) });`,
+      script: `const b = arguments[0]; const nav = b.parentElement;
+        const hitAt = (n) => { const r = n.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+          return [Math.round(x), Math.round(y), document.elementsFromPoint(x, y).slice(0, 3).map((e) => e.tagName + '.' + (e.getAttribute('class') || '') + (e.title ? '#' + e.title : ''))]; };
+        const cs = getComputedStyle(b); const ns = getComputedStyle(nav);
+        const out = { btn: { vis: cs.visibility, pe: cs.pointerEvents, disp: cs.display, pos: cs.position, z: cs.zIndex, op: cs.opacity, tf: cs.transform, cv: cs.contentVisibility, inert: b.inert || !!b.closest('[inert]') },
+          nav: { ov: ns.overflowX, pos: ns.position, z: ns.zIndex, tf: ns.transform, w: nav.clientWidth, sw: nav.scrollWidth, n: nav.children.length },
+          tabs: [...nav.querySelectorAll(':scope > button')].map((x) => (x.title || '?') + ':' + hitAt(x)[2][0]),
+          icon: b.querySelector('svg') ? hitAt(b.querySelector('svg')) : null, self: hitAt(b) };
+        nav.style.overflowX = 'visible'; out.visibleOverflow = hitAt(b); nav.style.overflowX = '';
+        return JSON.stringify(out);`,
       args: [el],
     });
     console.log(`DIAG ${label} click failed (${e.message}): ${probe}`);
     await new Promise((r) => setTimeout(r, 500));
-    const again = await wd("POST", `${s}/execute/sync`, {
-      script: "return JSON.stringify({ now: performance.now(), active: window.__vtActive });", args: [] });
-    console.log(`DIAG after 500ms: ${again}`);
-    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
     console.log(`DIAG ${label} retry click ok`);
   }
   await onView(s, label);
