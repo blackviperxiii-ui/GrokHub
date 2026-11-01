@@ -353,6 +353,18 @@ pub const GITHUB_TILES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// A page body that scrolls under a fixed header. Pages drawn straight into
+/// a CentralPanel run off the bottom of the window once their content is
+/// taller than it; this fills the rest of the panel and scrolls instead.
+/// `salt` keeps each page's scroll offset its own.
+pub fn page_body<R>(ui: &mut egui::Ui, salt: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(("page_body", salt))
+        .auto_shrink([false, false])
+        .show(ui, add)
+        .inner
+}
+
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     let mut clicked = false;
     ui.add_space(4.0);

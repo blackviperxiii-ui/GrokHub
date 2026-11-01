@@ -115,113 +115,115 @@ impl Cabin {
                     .color(crate::theme::subtle()),
                 );
                 ui.add_space(10.0);
+                crate::cards::page_body(ui, "journal", |ui| {
 
-                let now = now_ms();
-                let due: Vec<(String, String)> = due_nudges(&self.journal, now)
-                    .into_iter()
-                    .map(|e| (e.id.clone(), e.question.clone()))
-                    .collect();
-                let mut dismiss: Option<String> = None;
-                for (id, question) in &due {
-                    egui::Frame::NONE
-                        .fill(crate::theme::elevated())
-                        .corner_radius(8.0)
-                        .stroke(egui::Stroke::new(1.0, crate::theme::border()))
-                        .inner_margin(egui::Margin::symmetric(10, 8))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!("Due to revisit: {question}"))
-                                        .size(13.0)
-                                        .color(crate::theme::fg()),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if crate::cards::ghost_pill(ui, "Dismiss") {
-                                            dismiss = Some(id.clone());
-                                        }
-                                        if crate::cards::ghost_pill(ui, "Open") {
-                                            self.journal_open_editor(id);
-                                        }
-                                    },
-                                );
+                    let now = now_ms();
+                    let due: Vec<(String, String)> = due_nudges(&self.journal, now)
+                        .into_iter()
+                        .map(|e| (e.id.clone(), e.question.clone()))
+                        .collect();
+                    let mut dismiss: Option<String> = None;
+                    for (id, question) in &due {
+                        egui::Frame::NONE
+                            .fill(crate::theme::elevated())
+                            .corner_radius(8.0)
+                            .stroke(egui::Stroke::new(1.0, crate::theme::border()))
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(format!("Due to revisit: {question}"))
+                                            .size(13.0)
+                                            .color(crate::theme::fg()),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if crate::cards::ghost_pill(ui, "Dismiss") {
+                                                dismiss = Some(id.clone());
+                                            }
+                                            if crate::cards::ghost_pill(ui, "Open") {
+                                                self.journal_open_editor(id);
+                                            }
+                                        },
+                                    );
+                                });
                             });
-                        });
-                    ui.add_space(6.0);
-                }
-                if let Some(id) = dismiss {
-                    if dismiss_nudge(&mut self.journal, &id) {
-                        self.flush_journal();
+                        ui.add_space(6.0);
                     }
-                }
-
-                ui.horizontal(|ui| {
-                    crate::cards::search_bar(
-                        ui,
-                        &mut self.journal_view.search,
-                        "Search journal",
-                        280.0,
-                    );
-                });
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.journal_view.draft_question)
-                            .hint_text("What should we decide?")
-                            .desired_width((ui.available_width() - 100.0).max(120.0)),
-                    );
-                    let create = crate::cards::white_pill(ui, "Add")
-                        || (r.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                            && !self.journal_view.draft_question.trim().is_empty());
-                    if create {
-                        if let Some(id) =
-                            create_entry(&mut self.journal, &self.journal_view.draft_question)
-                        {
-                            self.journal_view.draft_question.clear();
-                            self.journal_open_editor(&id);
+                    if let Some(id) = dismiss {
+                        if dismiss_nudge(&mut self.journal, &id) {
                             self.flush_journal();
-                            self.status = "Journal entry added".into();
                         }
                     }
+
+                    ui.horizontal(|ui| {
+                        crate::cards::search_bar(
+                            ui,
+                            &mut self.journal_view.search,
+                            "Search journal",
+                            280.0,
+                        );
+                    });
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut self.journal_view.draft_question)
+                                .hint_text("What should we decide?")
+                                .desired_width((ui.available_width() - 100.0).max(120.0)),
+                        );
+                        let create = crate::cards::white_pill(ui, "Add")
+                            || (r.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                && !self.journal_view.draft_question.trim().is_empty());
+                        if create {
+                            if let Some(id) =
+                                create_entry(&mut self.journal, &self.journal_view.draft_question)
+                            {
+                                self.journal_view.draft_question.clear();
+                                self.journal_open_editor(&id);
+                                self.flush_journal();
+                                self.status = "Journal entry added".into();
+                            }
+                        }
+                    });
+                    ui.add_space(12.0);
+
+                    if self.journal.is_empty() {
+                        let _ = crate::cards::empty_prompt_tile(
+                            ui,
+                            crate::icons::TileIcon::List,
+                            "No open questions yet",
+                            "Capture a decision-shaped question so interesting ideas do not become silent commitments.",
+                        );
+                        return;
+                    }
+
+                    let q = self.journal_view.search.clone();
+                    let ids: Vec<String> = search_entries(&self.journal, &q)
+                        .into_iter()
+                        .map(|e| e.id.clone())
+                        .collect();
+                    if ids.is_empty() {
+                        ui.label(
+                            RichText::new("No matches.")
+                                .size(13.0)
+                                .color(crate::theme::muted()),
+                        );
+                        return;
+                    }
+
+                    let open = self.journal_view.open_id.clone();
+                    for id in ids {
+                        let Some(entry) = self.journal.iter().find(|e| e.id == id).cloned() else {
+                            continue;
+                        };
+                        let expanded = open.as_deref() == Some(id.as_str());
+                        self.paint_journal_row(ui, &entry, expanded);
+                        ui.add_space(6.0);
+                    }
                 });
-                ui.add_space(12.0);
-
-                if self.journal.is_empty() {
-                    let _ = crate::cards::empty_prompt_tile(
-                        ui,
-                        crate::icons::TileIcon::List,
-                        "No open questions yet",
-                        "Capture a decision-shaped question so interesting ideas do not become silent commitments.",
-                    );
-                    return;
-                }
-
-                let q = self.journal_view.search.clone();
-                let ids: Vec<String> = search_entries(&self.journal, &q)
-                    .into_iter()
-                    .map(|e| e.id.clone())
-                    .collect();
-                if ids.is_empty() {
-                    ui.label(
-                        RichText::new("No matches.")
-                            .size(13.0)
-                            .color(crate::theme::muted()),
-                    );
-                    return;
-                }
-
-                let open = self.journal_view.open_id.clone();
-                for id in ids {
-                    let Some(entry) = self.journal.iter().find(|e| e.id == id).cloned() else {
-                        continue;
-                    };
-                    let expanded = open.as_deref() == Some(id.as_str());
-                    self.paint_journal_row(ui, &entry, expanded);
-                    ui.add_space(6.0);
-                }
             });
     }
 
