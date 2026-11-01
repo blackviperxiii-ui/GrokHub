@@ -1,0 +1,1 @@
+- Loadout says Loadout in its version line, chat exports, copied diagnostics, Linux app menu, Local AI models label and the default Work project.
