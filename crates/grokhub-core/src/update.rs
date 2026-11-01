@@ -1375,7 +1375,7 @@ mod tests {
         #[cfg(windows)]
         {
             let prev = std::env::var_os("LOCALAPPDATA");
-            std::env::set_var("LOCALAPPDATA", &root);
+            unsafe { std::env::set_var("LOCALAPPDATA", &root) };
             let bin = root.join("Programs").join("GrokHub").join("grokhub.exe");
             fs::create_dir_all(bin.parent().unwrap()).unwrap();
             fs::write(&bin, b"MZ").unwrap();
@@ -1389,8 +1389,8 @@ mod tests {
                 "Windows overlay must win over current_exe"
             );
             match prev {
-                Some(v) => std::env::set_var("LOCALAPPDATA", v),
-                None => std::env::remove_var("LOCALAPPDATA"),
+                Some(v) => unsafe { std::env::set_var("LOCALAPPDATA", v) },
+                None => unsafe { std::env::remove_var("LOCALAPPDATA") },
             }
         }
         assert_eq!(

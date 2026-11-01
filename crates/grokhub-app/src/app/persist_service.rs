@@ -7,14 +7,14 @@ enum PersistMsg {
     FullSnap {
         dir: PathBuf,
         snap: Box<PersistSnap>,
-        gen: u64,
+        r#gen: u64,
         done: Option<mpsc::Sender<()>>,
         err: Arc<Mutex<Option<String>>>,
     },
     Settings {
         dir: PathBuf,
         slot: Arc<Mutex<CfgSlot>>,
-        gen: u64,
+        r#gen: u64,
         err: Arc<Mutex<Option<String>>>,
     },
     Projects {
@@ -31,7 +31,7 @@ enum PersistMsg {
     Secrets {
         dir: PathBuf,
         secrets: Box<secrets::Secrets>,
-        gen: u64,
+        r#gen: u64,
         err: Option<Arc<Mutex<Option<String>>>>,
     },
     Flush(mpsc::Sender<()>),
@@ -67,14 +67,14 @@ impl PersistService {
         &self,
         dir: PathBuf,
         snap: PersistSnap,
-        gen: u64,
+        r#gen: u64,
         done: Option<mpsc::Sender<()>>,
         err: Arc<Mutex<Option<String>>>,
     ) {
         self.send(PersistMsg::FullSnap {
             dir,
             snap: Box::new(snap),
-            gen,
+            r#gen,
             done,
             err,
         });
@@ -84,13 +84,13 @@ impl PersistService {
         &self,
         dir: PathBuf,
         slot: Arc<Mutex<CfgSlot>>,
-        gen: u64,
+        r#gen: u64,
         err: Arc<Mutex<Option<String>>>,
     ) {
         self.send(PersistMsg::Settings {
             dir,
             slot,
-            gen,
+            r#gen,
             err,
         });
     }
@@ -123,13 +123,13 @@ impl PersistService {
         &self,
         dir: PathBuf,
         secrets: secrets::Secrets,
-        gen: u64,
+        r#gen: u64,
         err: Option<Arc<Mutex<Option<String>>>>,
     ) {
         self.send(PersistMsg::Secrets {
             dir,
             secrets: Box::new(secrets),
-            gen,
+            r#gen,
             err,
         });
     }
@@ -196,14 +196,14 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
         PersistMsg::FullSnap {
             dir,
             snap,
-            gen,
+            r#gen,
             done,
             err,
         } => {
             let _pin = pin_scheduled_dir(dir.clone());
             match io.lock() {
                 Ok(_g) => {
-                    if let Err(e) = write_persist_disk_in_order(&dir, &snap, gen, mark) {
+                    if let Err(e) = write_persist_disk_in_order(&dir, &snap, r#gen, mark) {
                         note_persist_err(&err, Err(e), "chats");
                     }
                 }
@@ -220,7 +220,7 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
         PersistMsg::Settings {
             dir,
             slot,
-            gen,
+            r#gen,
             err,
         } => {
             let _pin = pin_scheduled_dir(dir.clone());
@@ -229,7 +229,7 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
                 return;
             };
             let cfg = match slot.lock() {
-                Ok(g) => cfg_if_current(&g, gen),
+                Ok(g) => cfg_if_current(&g, r#gen),
                 Err(_) => return,
             };
             if let Some(cfg) = cfg {
@@ -268,7 +268,7 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
         PersistMsg::Secrets {
             dir,
             secrets,
-            gen,
+            r#gen,
             err,
         } => {
             let _pin = pin_scheduled_dir(dir);
@@ -279,7 +279,7 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
                 return;
             };
             let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
-            if !mark.take_secrets(gen) {
+            if !mark.take_secrets(r#gen) {
                 return;
             }
             let saved = secrets::save(&secrets);

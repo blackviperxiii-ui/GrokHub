@@ -209,7 +209,11 @@ pub fn budgets(p: &LocalProfile, backend: Backend, state: GovState) -> (u64, u64
     (gpu_free * pct / 100, ram)
 }
 
-fn ctx_steps(meta: &GgufMeta, state: GovState, want: Option<u32>) -> impl Iterator<Item = u32> {
+fn ctx_steps(
+    meta: &GgufMeta,
+    state: GovState,
+    want: Option<u32>,
+) -> impl Iterator<Item = u32> + use<> {
     let model_max = if meta.context_length > 0 {
         meta.context_length
     } else {

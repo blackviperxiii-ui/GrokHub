@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 version = "3.5.0"
 rust-version = "1.95"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/blackviperxiii-ui/GrokHub.git"
 
@@ -33,6 +33,13 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # the crates themselves are target-gated, so Linux still only compiles Secret Service.
 keyring = { version = "4", default-features = false, features = ["v1"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
+
+# Edition 2024 turns clippy's collapsible_if on for nested `if let`s (it asks
+# for let chains). Rewriting the existing ones is out of LU-09's scope; core,
+# agent and app opt in here so new code may use let chains and old code stays
+# as written. Drop this with a deliberate let-chain sweep.
+[workspace.lints.clippy]
+collapsible_if = "allow"
 
 # Smaller, faster release binaries. Thin LTO + one codegen unit; strip symbols
 # (keep the binary runnable; crash UI cards do not need DWARF). Panic stays unwind.

@@ -1153,7 +1153,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("thr");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut t = ChatThread::new("night", true);
         t.messages_mut().push(("user".into(), "hi".into()));
         save(&[t.clone()]).expect("save");
@@ -1177,7 +1177,7 @@ mod tests {
         assert_eq!(old.accessed_ms, 0);
         assert!(old.grok_cwd.is_none());
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1185,7 +1185,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("save-mixed");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut chat = ChatThread::new("Dock \"fix\"", false);
         chat.messages = Arc::new(vec![
             ("user".into(), "wrap the dock\nthen the rail — ✓".into()),
@@ -1231,7 +1231,7 @@ mod tests {
         assert_eq!(back[1].grok_session, pending.grok_session);
         assert_eq!(back[2].id, empty.id);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1239,7 +1239,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("unloaded-pin");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut pinned = ChatThread::new("Night watch", false);
         pinned.pinned = true;
         pinned.pinned_ms = 50;
@@ -1276,7 +1276,7 @@ mod tests {
         );
         assert_eq!(load()[0].messages.len(), 1);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1284,7 +1284,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("shrink-bak");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut big = ChatThread::new("Night watch", false);
         big.messages_mut().push(("user".into(), "x".repeat(12_000)));
         save(&[big]).expect("save big");
@@ -1299,7 +1299,7 @@ mod tests {
         save(&[ChatThread::new("Chat", false)]).expect("save small again");
         assert_eq!(fs::metadata(&bak).expect("bak2").len(), kept.len() as u64);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1382,7 +1382,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("bighist");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         // Ordinary use: a few dozen conversations of a hundred turns each. This is well
         // past the 1 MiB memory-file cap the loader used to read through, at which point
@@ -1434,7 +1434,7 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1493,7 +1493,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("hist-32mib");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         let want = heavy_history(300);
         save(&want).expect("save");
@@ -1534,7 +1534,7 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1542,7 +1542,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("hist-fit");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let cap = 256 * 1024;
 
         let mut shots = ChatThread::new("Screens", false);
@@ -1610,7 +1610,7 @@ mod tests {
         assert_eq!(fs::read(&path).expect("after"), before, "nothing written");
 
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1618,7 +1618,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("save-fast");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         let mut chat = ChatThread::new("Dock \"fix\"", false);
         chat.messages_mut().extend([
@@ -1714,7 +1714,7 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1722,7 +1722,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("hist-recover");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         fs::create_dir_all(&root).expect("root");
 
         // What an older cabin left behind: the real history set aside for being over
@@ -1783,7 +1783,7 @@ mod tests {
         assert_eq!(names_in(&root), names);
 
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

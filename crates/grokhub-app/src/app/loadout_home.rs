@@ -1712,7 +1712,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("dock-pop-out-click");
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_nyx = true;
         cabin.cfg.desktop_nyx_undocked = false;
@@ -1920,23 +1920,23 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_pedestal = std::env::var("GROKHUB_DECK_PEDESTAL").ok();
-        std::env::remove_var("GROKHUB_DECK_SHOT");
-        std::env::remove_var("GROKHUB_DECK_PEDESTAL");
+        unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_PEDESTAL") };
         assert!(!pedestal_preview_pinned());
-        std::env::set_var("GROKHUB_DECK_PEDESTAL", "1");
+        unsafe { std::env::set_var("GROKHUB_DECK_PEDESTAL", "1") };
         assert!(
             !pedestal_preview_pinned(),
             "nothing without GROKHUB_DECK_SHOT"
         );
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
         assert!(pedestal_preview_pinned());
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_pedestal {
-            Some(v) => std::env::set_var("GROKHUB_DECK_PEDESTAL", v),
-            None => std::env::remove_var("GROKHUB_DECK_PEDESTAL"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_PEDESTAL", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_PEDESTAL") },
         }
     }
 
@@ -2189,19 +2189,19 @@ mod tests {
         // A deck pin for the raunchy picture follows the switch too.
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::set_var("GROKHUB_DECK_MOOD", "raunchy");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::set_var("GROKHUB_DECK_MOOD", "raunchy") };
         cabin.threads[0].personality = String::new();
         let pinned_off = cabin.companion_mood();
         cabin.cfg.explicit_personalities = true;
         let pinned_on = cabin.companion_mood();
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_mood {
-            Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
-            None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_MOOD", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_MOOD") },
         }
         assert_eq!(pinned_off, Mood::HangingOut);
         assert_eq!(pinned_on, Mood::Raunchy);
@@ -2258,7 +2258,7 @@ mod tests {
         let _paint = crate::theme::hold_paint_test();
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::remove_var("GROKHUB_DECK_SHOT");
+        unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") };
         let mut chat = ChatThread::new("Build", false);
         chat.messages = Arc::new(vec![
             ("user".into(), "the build fails".into()),
@@ -2277,8 +2277,8 @@ mod tests {
         }];
         let chips = cabin.composer_chips();
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         assert!(
             chips.iter().any(|c| c.id == "ctx-fix")
@@ -2297,10 +2297,10 @@ mod tests {
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
         let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::remove_var("GROKHUB_DECK_MOOD");
-        std::env::remove_var("GROKHUB_DECK_NAV");
-        std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_MOOD") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_NAV") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_LAST_CHAT") };
         let transcript = deck_transcript();
         let mut seeded = ChatThread::new("Hangout", false);
         seeded.id = DECK_THREAD_ID.to_string();
@@ -2368,30 +2368,30 @@ mod tests {
         assert!(chat_first.perm_ask.is_none());
         assert_ne!(chat_first.nav, Nav::Settings);
 
-        std::env::set_var("GROKHUB_DECK_OPEN_SETTINGS", "1");
-        std::env::set_var("GROKHUB_DECK_ACTIVITY", "0");
+        unsafe { std::env::set_var("GROKHUB_DECK_OPEN_SETTINGS", "1") };
+        unsafe { std::env::set_var("GROKHUB_DECK_ACTIVITY", "0") };
         let mut settings = Cabin::quiet_cabin(vec![ChatThread::new("Hangout", false)], 0);
         settings.apply_deck_shot_seed();
-        std::env::remove_var("GROKHUB_DECK_OPEN_SETTINGS");
-        std::env::remove_var("GROKHUB_DECK_ACTIVITY");
+        unsafe { std::env::remove_var("GROKHUB_DECK_OPEN_SETTINGS") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_ACTIVITY") };
         assert_eq!(settings.nav, Nav::Settings);
         assert!(!settings.activity.open);
         assert!(settings.perm_ask.is_none());
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_mood {
-            Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
-            None => std::env::remove_var("GROKHUB_DECK_MOOD"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_MOOD", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_MOOD") },
         }
         match prev_nav {
-            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
-            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_NAV", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_NAV") },
         }
         match prev_last {
-            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
-            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_LAST_CHAT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_LAST_CHAT") },
         }
     }
 
@@ -2401,9 +2401,9 @@ mod tests {
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
-        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_LAST_CHAT") };
+        unsafe { std::env::set_var("GROKHUB_DECK_NAV", "home") };
         let mut cabin = Cabin::quiet_for_test();
         cabin.nav = Nav::Chat;
         cabin.apply_deck_shot_seed();
@@ -2417,16 +2417,16 @@ mod tests {
             "Home Mission Control deck shots must not open the Activity popover"
         );
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_nav {
-            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
-            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_NAV", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_NAV") },
         }
         match prev_last {
-            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
-            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_LAST_CHAT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_LAST_CHAT") },
         }
     }
 
@@ -2438,9 +2438,9 @@ mod tests {
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
         let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::remove_var("GROKHUB_DECK_NAV");
-        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "home");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_NAV") };
+        unsafe { std::env::set_var("GROKHUB_DECK_LAST_CHAT", "home") };
         let mut cabin = Cabin::quiet_for_test();
         cabin.apply_deck_shot_seed();
         assert!(
@@ -2449,21 +2449,21 @@ mod tests {
         );
         assert_eq!(cabin.cfg.last_chat_tab, DECK_THREAD_ID);
         assert_ne!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
-        std::env::set_var("GROKHUB_DECK_LAST_CHAT", "chat");
+        unsafe { std::env::set_var("GROKHUB_DECK_LAST_CHAT", "chat") };
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.threads[cabin.thread_idx].id, DECK_THREAD_ID);
         assert_eq!(cabin.messages.len(), 4);
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_last {
-            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
-            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_LAST_CHAT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_LAST_CHAT") },
         }
         match prev_nav {
-            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
-            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_NAV", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_NAV") },
         }
     }
 
@@ -2472,7 +2472,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
         let mut cabin = Cabin::quiet_for_test();
         for (pinned, nav, id) in [
             (" Pulse ", Nav::Pulse, "pulse"),
@@ -2481,14 +2481,14 @@ mod tests {
             ("mission", Nav::Objectives, "objectives"),
             ("workboard", Nav::Workboard, "workboard"),
         ] {
-            std::env::set_var("GROKHUB_DECK_NAV", pinned);
+            unsafe { std::env::set_var("GROKHUB_DECK_NAV", pinned) };
             cabin.activity.open = true;
             cabin.apply_deck_shot_seed();
             assert_eq!(cabin.nav, nav, "{pinned}");
             assert_eq!(cabin.nav_id(), id, "{pinned}");
             assert!(!cabin.activity.open, "{pinned} closes the Activity list");
         }
-        std::env::set_var("GROKHUB_DECK_NAV", "pulsee");
+        unsafe { std::env::set_var("GROKHUB_DECK_NAV", "pulsee") };
         cabin.activity.open = true;
         cabin.apply_deck_shot_seed();
         assert_eq!(
@@ -2499,26 +2499,26 @@ mod tests {
         assert!(cabin.activity.open, "an unknown page leaves the list alone");
         cabin.nav = Nav::Chat;
         cabin.settings_menu_open = false;
-        std::env::set_var("GROKHUB_DECK_NAV", "profile");
+        unsafe { std::env::set_var("GROKHUB_DECK_NAV", "profile") };
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.nav, Nav::Settings);
         assert_eq!(cabin.settings_sec, SettingsSec::Account);
         assert_eq!(cabin.rail_id(), "profile");
         assert!(!cabin.activity.open, "profile is a known page");
         cabin.settings_menu_open = false;
-        std::env::remove_var("GROKHUB_DECK_NAV");
+        unsafe { std::env::remove_var("GROKHUB_DECK_NAV") };
         cabin.apply_deck_shot_seed();
         assert!(
             cabin.activity.open,
             "without a pinned page the list stays open"
         );
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_nav {
-            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
-            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_NAV", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_NAV") },
         }
     }
 
@@ -2526,9 +2526,9 @@ mod tests {
     fn the_age_check_deck_shot_opens_settings_with_adults_only_still_off() {
         let _g = crate::config::hold_test_config();
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::set_var("GROKHUB_DECK_NAV", "settings");
-        std::env::set_var("GROKHUB_DECK_AGE_CHECK", "1");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::set_var("GROKHUB_DECK_NAV", "settings") };
+        unsafe { std::env::set_var("GROKHUB_DECK_AGE_CHECK", "1") };
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.personality = "nyx".into();
         cabin.cfg.explicit_personalities = false;
@@ -2538,8 +2538,8 @@ mod tests {
         assert_eq!(cabin.cfg.personality, "nyx");
         assert!(!cabin.cfg.explicit_personalities);
         assert!(!cabin.cfg.adult_confirmed);
-        std::env::remove_var("GROKHUB_DECK_AGE_CHECK");
-        std::env::remove_var("GROKHUB_DECK_NAV");
+        unsafe { std::env::remove_var("GROKHUB_DECK_AGE_CHECK") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_NAV") };
         cabin.apply_deck_shot_seed();
         assert_eq!(
             cabin.cfg.personality, "viper",
@@ -2547,8 +2547,8 @@ mod tests {
         );
         assert!(cabin.cfg.explicit_personalities);
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
     }
 
@@ -2556,19 +2556,19 @@ mod tests {
     fn deck_settings_sec_opens_personality_without_a_click() {
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "personality");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "personality") };
         let mut cabin = Cabin::quiet_for_test();
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.nav, Nav::Settings);
         assert!(matches!(cabin.settings_sec, SettingsSec::Personality));
         match prev_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
         match prev_sec {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
-            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC") },
         }
     }
 
@@ -2577,8 +2577,8 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
         let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
-        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
-        std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS");
+        unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1") };
+        unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS") };
         let cite = "https://doc.rust-lang.org/stable/releases.html";
         let seed = serde_json::json!({
             "id": "ws-openrouter",
@@ -2608,12 +2608,12 @@ mod tests {
         );
         assert!(proof_shot_requested());
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
-            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT") },
         }
         match prev_set {
-            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
-            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS") },
         }
     }
 
@@ -2623,25 +2623,25 @@ mod tests {
         let prev = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
         let prev_set = std::env::var("GROKHUB_WEB_SEARCH_SETTINGS").ok();
         let prev_sec = std::env::var("GROKHUB_DECK_SETTINGS_SEC").ok();
-        std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
-        std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", "1");
-        std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "defaults");
+        unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1") };
+        unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", "1") };
+        unsafe { std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", "defaults") };
         let mut cabin = Cabin::quiet_cabin(vec![ChatThread::new("Chat", false)], 0);
         cabin.open_fresh_home();
         cabin.apply_web_search_shot_seed();
         assert!(matches!(cabin.nav, Nav::Settings));
         assert!(matches!(cabin.settings_sec, SettingsSec::Defaults));
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
-            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT") },
         }
         match prev_set {
-            Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v),
-            None => std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SETTINGS", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SETTINGS") },
         }
         match prev_sec {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v),
-            None => std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SETTINGS_SEC", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SETTINGS_SEC") },
         }
     }
 

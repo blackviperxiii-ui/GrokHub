@@ -2410,7 +2410,7 @@ mod pulse_tex_tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let prev = std::env::var_os("GROKHUB_CONFIG");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         let url = "https://example.com/pulse-opt-thumb.png";
         let path = pulse_image_path(url);
@@ -2442,8 +2442,8 @@ mod pulse_tex_tests {
         assert_eq!(cabin.pulse_view_texture_size(url), Some([12, 8]));
 
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-            None => std::env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2458,7 +2458,7 @@ mod pulse_tex_tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let prev = std::env::var_os("GROKHUB_CONFIG");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         let url = "https://example.com/pulse-bad-thumb.bin";
         let path = pulse_image_path(url);
@@ -2485,8 +2485,8 @@ mod pulse_tex_tests {
         assert!(cabin.pulse_image_failed(url));
 
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-            None => std::env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
         }
         let _ = std::fs::remove_dir_all(&root);
     }

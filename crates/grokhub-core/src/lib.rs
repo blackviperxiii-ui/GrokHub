@@ -11,6 +11,7 @@ pub mod automation;
 pub mod autonomy;
 pub mod backup_nudge;
 pub mod battlenet;
+pub mod battlenet_api;
 pub mod bg_task;
 pub mod brain_policy;
 pub mod brand;

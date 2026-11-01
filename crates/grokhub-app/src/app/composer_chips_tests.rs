@@ -922,7 +922,7 @@ fn clear_chat_attach_clears_name_url_and_status() {
 fn chip_nav_changes_page_and_dismiss_drops_it() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("chip-acts");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     let chips = vec![grokhub_core::QuickChip {
         id: "nav-ideas".into(),
@@ -946,7 +946,7 @@ fn chip_nav_changes_page_and_dismiss_drops_it() {
 fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("plus-attach");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.apply_plus_ready(
         grokhub_core::PlusTarget::Chat,
@@ -996,7 +996,7 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
 fn session_pills_save_chat_and_ask() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("session-pills");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.set_session_mode(SessionMode::Chat);
     assert_eq!(cabin.session_mode, SessionMode::Chat);
@@ -1049,12 +1049,12 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     impl Drop for RestoreEnv148 {
         fn drop(&mut self) {
             match self.config.take() {
-                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
             match self.grok.take() {
-                Some(v) => std::env::set_var("GROKHUB_GROK", v),
-                None => std::env::remove_var("GROKHUB_GROK"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_GROK", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_GROK") },
             }
         }
     }
@@ -1083,8 +1083,8 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
         config: std::env::var_os("GROKHUB_CONFIG"),
         grok: std::env::var_os("GROKHUB_GROK"),
     };
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz") };
 
     let mut mode = super::Cabin::quiet_for_test();
     mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
@@ -1140,8 +1140,8 @@ fn followup_queue_drains_one_and_stays_off_a_run() {
     let root = crate::config::test_config_root("followup-queue");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", root.join("missing-grok")) };
 
     let mut composer = Cabin::quiet_for_test();
     assert!(!composer.running);
@@ -1181,8 +1181,8 @@ fn followup_queue_drains_one_and_stays_off_a_run() {
     );
     assert!(!cabin.running);
 
-    std::env::remove_var("GROKHUB_GROK");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #156.
@@ -1192,7 +1192,7 @@ fn shell_chip_stays_off_a_run_when_host_is_blocked() {
     let root = crate::config::test_config_root("shell-chip");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let project = root.join("proj");
     std::fs::create_dir_all(&project).expect("project");
@@ -1251,7 +1251,7 @@ fn composer_action_chips_stay_off_a_run() {
     let root = config::test_config_root("composer-action-chips");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(matches!(cabin.nav, Nav::Chat));
@@ -1321,7 +1321,7 @@ fn empty_queue_keeps_nothing_queued_label() {
     let root = crate::config::test_config_root("empty-queue");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1358,7 +1358,7 @@ fn empty_queue_keeps_nothing_queued_label() {
     assert!(!cabin.running);
     assert!(cabin.followup_queue.is_empty());
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #174.
@@ -1368,7 +1368,7 @@ fn leaving_a_chat_clears_attach_and_asks() {
     let root = crate::config::test_config_root("leave-chrome");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("isolated config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = false;
@@ -1411,7 +1411,7 @@ fn leaving_a_chat_clears_attach_and_asks() {
     assert!(cabin.acp.is_none());
     assert!(!cabin.running);
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Folded from PR #266. Test only: `append_composer` already drops whitespace-only text, so the PR's code guard was redundant.

@@ -70,18 +70,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let bin = dir.join(bin_name());
         let prev = std::env::var_os("GROKHUB_GROK");
-        std::env::set_var("GROKHUB_GROK", dir.join("missing"));
+        unsafe { std::env::set_var("GROKHUB_GROK", dir.join("missing")) };
         assert_eq!(
             locate(),
             None,
             "a missing explicit path does not fall back to PATH"
         );
         std::fs::write(&bin, "not a program; reading it would fail").unwrap();
-        std::env::set_var("GROKHUB_GROK", &bin);
+        unsafe { std::env::set_var("GROKHUB_GROK", &bin) };
         assert_eq!(locate(), Some(bin.clone()));
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_GROK", v),
-            None => std::env::remove_var("GROKHUB_GROK"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_GROK", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_GROK") },
         }
         let _ = std::fs::remove_dir_all(&dir);
         let src = include_str!("google_mcp_via_cli.rs").replace("\r\n", "\n");

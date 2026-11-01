@@ -1744,13 +1744,13 @@ mod tests {
         impl Drop for RestorePath {
             fn drop(&mut self) {
                 match self.0.take() {
-                    Some(v) => std::env::set_var("PATH", v),
-                    None => std::env::remove_var("PATH"),
+                    Some(v) => unsafe { std::env::set_var("PATH", v) },
+                    None => unsafe { std::env::remove_var("PATH") },
                 }
             }
         }
         let path = RestorePath(std::env::var_os("PATH"));
-        std::env::set_var("PATH", dir.join("empty"));
+        unsafe { std::env::set_var("PATH", dir.join("empty")) };
         // No sidecar or start error left over from another test.
         stop_global();
         assert_eq!(runtime(&dir), Runtime::Missing);
@@ -1789,12 +1789,12 @@ mod tests {
         std::fs::write(path_dir.join(llama_server_name()), b"x").unwrap();
         std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
         let prev = std::env::var_os("PATH");
-        std::env::set_var("PATH", &path_dir);
+        unsafe { std::env::set_var("PATH", &path_dir) };
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.binary.ends_with(llama_server_name()));
         match prev {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
+            Some(v) => unsafe { std::env::set_var("PATH", v) },
+            None => unsafe { std::env::remove_var("PATH") },
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

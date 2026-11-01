@@ -236,7 +236,7 @@ impl Conn {
 
 struct State {
     path: PathBuf,
-    gen: u64,
+    r#gen: u64,
     mtime: Option<SystemTime>,
     /// Hash of enabled plugins. A disable or content change drops plugin servers.
     server_stamp: String,
@@ -252,7 +252,7 @@ impl State {
     fn empty() -> Self {
         Self {
             path: PathBuf::new(),
-            gen: 0,
+            r#gen: 0,
             mtime: None,
             server_stamp: String::new(),
             offline: false,
@@ -989,12 +989,12 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
     // Plugin state is read while this lock is held. Plugin code must not take it.
     let stamp = crate::plugins::listing_stamp(&workspace);
     let path = config::config_file();
-    let (gen, mtime) = fingerprint(&path);
+    let (r#gen, mtime) = fingerprint(&path);
     let offline = grokhub_core::offline::enabled();
     if !held.loaded
         || held.offline != offline
         || held.path != path
-        || held.gen != gen
+        || held.r#gen != r#gen
         || held.mtime != mtime
         || held.server_stamp != stamp
     {
@@ -1014,7 +1014,7 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
         }
         held.loaded = true;
         held.path = path;
-        held.gen = gen;
+        held.r#gen = r#gen;
         held.mtime = mtime;
         held.server_stamp = stamp;
         held.offline = offline;
@@ -1023,11 +1023,11 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
 }
 
 fn fingerprint(path: &Path) -> (u64, Option<SystemTime>) {
-    let gen = GEN.load(Ordering::Relaxed);
+    let r#gen = GEN.load(Ordering::Relaxed);
     let mtime = std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok();
-    (gen, mtime)
+    (r#gen, mtime)
 }
 
 fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {

@@ -71,6 +71,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before its http::agent; DDG/SearXNG go through PageFetch"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/local_ai_ui.rs", 1, "HttpRuntimeFetch::open: runtime_download_url_ok + egress_ok on every hop to GitHub"),
+    ("grokhub-app/src/app/battlenet_ui.rs", 1, "agent callers api_send / exchange: egress_ok (no user data; client secret only in the token request's Authorization header, the token only in the profile calls' header) to oauth.battle.net and the region's api.blizzard.com, no redirects, public IPs only"),
     ("grokhub-app/src/app/destiny_ui.rs", 1, "api_send: egress_ok (no user data; key only in the X-API-Key header) to www.bungie.net, no redirects, public IPs only"),
     ("grokhub-app/src/app/osrs_ui.rs", 1, "fetch_stats: egress_ok (no user data beyond the public display name) to Jagex's hiscores, no redirects, public IPs only"),
     ("grokhub-app/src/app/gw2_ui.rs", 1, "api_get: egress_ok (no user data; key only in the Authorization header) to api.guildwars2.com, no redirects, public IPs only"),

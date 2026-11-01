@@ -1273,23 +1273,27 @@ mod win {
     }
 
     unsafe fn make_pipe() -> Result<(HANDLE, HANDLE), String> {
-        let mut attrs: SECURITY_ATTRIBUTES = std::mem::zeroed();
-        attrs.nLength = u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(0);
-        attrs.bInheritHandle = TRUE;
-        attrs.lpSecurityDescriptor = ptr::null_mut();
-        let mut read = ptr::null_mut();
-        let mut write = ptr::null_mut();
-        if CreatePipe(&mut read, &mut write, &attrs, 0) == 0 {
-            return Err(os_err("could not create pipe"));
+        unsafe {
+            let mut attrs: SECURITY_ATTRIBUTES = std::mem::zeroed();
+            attrs.nLength = u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(0);
+            attrs.bInheritHandle = TRUE;
+            attrs.lpSecurityDescriptor = ptr::null_mut();
+            let mut read = ptr::null_mut();
+            let mut write = ptr::null_mut();
+            if CreatePipe(&mut read, &mut write, &attrs, 0) == 0 {
+                return Err(os_err("could not create pipe"));
+            }
+            Ok((read, write))
         }
-        Ok((read, write))
     }
 
     unsafe fn hide_inherit(handle: HANDLE) -> Result<(), String> {
-        if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0 {
-            return Err(os_err("could not set handle flags"));
+        unsafe {
+            if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0 {
+                return Err(os_err("could not set handle flags"));
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     fn powershell_exe() -> String {

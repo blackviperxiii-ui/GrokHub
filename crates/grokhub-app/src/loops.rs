@@ -31,7 +31,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("loops");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let rows = vec![GrokLoop {
             id: "loop-1".into(),
             interval: "30m".into(),
@@ -46,7 +46,7 @@ mod tests {
         save(&rows).unwrap();
         let loaded = load();
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
         assert_eq!(loaded, rows);
     }
 }

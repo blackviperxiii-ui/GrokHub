@@ -591,7 +591,10 @@ fn start_ydotoold() {
     if let Some(parent) = sock.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::env::set_var("YDOTOOL_SOCKET", &sock);
+    // SAFETY: same call as before edition 2024, so ydotool children inherit
+    // the socket. std's env lock covers Rust readers; a libc getenv on another
+    // thread could still race (follow-up: pass it with Command::env).
+    unsafe { std::env::set_var("YDOTOOL_SOCKET", &sock) };
     let mut sys = Command::new("systemctl");
     sys.args(["--user", "start", "ydotoold"]);
     let _ = run_limited(sys, DESK_LIST_TIMEOUT);
@@ -1146,7 +1149,10 @@ fn pin_wayland_for_capture() {
     }
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok();
     if let Some(name) = infer_wayland_display(None, runtime.as_deref()) {
-        std::env::set_var("WAYLAND_DISPLAY", name);
+        // SAFETY: same call as before edition 2024, so capture tools inherit the
+        // display. std's env lock covers Rust readers; a libc getenv on another
+        // thread could still race (follow-up: pass it with Command::env).
+        unsafe { std::env::set_var("WAYLAND_DISPLAY", name) };
     }
 }
 

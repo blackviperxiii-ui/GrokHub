@@ -1303,7 +1303,7 @@ mod chip_apply_tests {
         let root = crate::config::test_config_root("chip-insert");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("config root");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
         let mut cabin = Cabin::quiet_for_test();
         cabin.composer = "fix the leak".into();
@@ -1322,6 +1322,6 @@ mod chip_apply_tests {
         assert!(cabin.messages.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }

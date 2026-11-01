@@ -8,7 +8,7 @@ use super::*;
 
 #[derive(Clone)]
 struct HistoryCache {
-    gen: u64,
+    r#gen: u64,
     at: u64,
     rows: Vec<grokhub_agent::HistoryRow>,
 }
@@ -37,11 +37,11 @@ pub(super) fn merged_native_history(cli_home: Option<&Path>) -> Vec<grokhub_agen
 }
 
 fn cached_merged_rows(ui: &egui::Ui) -> Vec<grokhub_agent::HistoryRow> {
-    let gen = grokhub_agent::history_generation();
+    let r#gen = grokhub_agent::history_generation();
     let now = now_ms();
     let id = egui::Id::new("native-history-cache");
     if let Some(hit) = ui.data(|data| data.get_temp::<HistoryCache>(id)) {
-        if hit.gen == gen && now.saturating_sub(hit.at) < 2_000 {
+        if hit.r#gen == r#gen && now.saturating_sub(hit.at) < 2_000 {
             return hit.rows;
         }
     }
@@ -50,7 +50,7 @@ fn cached_merged_rows(ui: &egui::Ui) -> Vec<grokhub_agent::HistoryRow> {
         data.insert_temp(
             id,
             HistoryCache {
-                gen,
+                r#gen,
                 at: now,
                 rows: rows.clone(),
             },

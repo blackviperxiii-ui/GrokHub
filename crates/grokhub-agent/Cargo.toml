@@ -7,6 +7,9 @@ license.workspace = true
 description = "Native xAI responses engine"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
 serde.workspace = true

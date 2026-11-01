@@ -18,8 +18,8 @@ fn empty_home() -> PathBuf {
     let home = std::env::temp_dir().join(format!("gh-eval-r6-home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("home");
-    std::env::set_var("HOME", &home);
-    std::env::set_var("USERPROFILE", &home);
+    unsafe { std::env::set_var("HOME", &home) };
+    unsafe { std::env::set_var("USERPROFILE", &home) };
     home
 }
 

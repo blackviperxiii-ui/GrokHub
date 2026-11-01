@@ -10,7 +10,7 @@ use super::*;
 fn recall_finds_a_memory_line_and_reports_a_miss() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("recall");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body = "harbor light\n".into();
@@ -50,7 +50,7 @@ fn recall_finds_a_memory_line_and_reports_a_miss() {
         "recall miss did not land: {:?}",
         cabin.messages
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 fn wait_recall(cabin: &mut super::Cabin) -> String {
@@ -78,7 +78,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("recall-legacy-amr");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert_eq!(
         cabin.cfg.memory_backend,
@@ -125,7 +125,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
         !body.contains("amr:"),
         "legacy recall returned an AMR node: {body}"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("recall-amr");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
     cabin.mem_name = "MEMORY.md".into();
@@ -175,7 +175,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
         "AMR recall returned legacy memory: {body}"
     );
     assert!(!body.contains("harbor light"), "{body}");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Spike-4b: a private AMR note is sealed on disk, /recall opens it with the
@@ -187,7 +187,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
     let root = crate::config::test_config_root("recall-sealed");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let store_keys = std::sync::Arc::new(hx::MemoryKeyStore::new());
     hx::use_key_store_for(&root, store_keys.clone());
     let mut cabin = Cabin::quiet_for_test();
@@ -233,7 +233,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
         super::slash::locked_recall_line(2, None).as_deref(),
         Some("2 private notes not searched. Private memory is locked.")
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 fn amr_node_files(root: &std::path::Path) -> Vec<String> {
@@ -270,7 +270,7 @@ fn amr_reflect_writes_one_node_and_recall_reads_both_stores() {
     let root = crate::config::test_config_root("amr-reflect");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     crate::config::write_memory("MEMORY.md", "old harbor line\n").unwrap();
     let memory_before = crate::config::read_memory("MEMORY.md");
     let user_before = crate::config::read_memory("USER.md");
@@ -351,7 +351,7 @@ fn amr_reflect_writes_one_node_and_recall_reads_both_stores() {
         lines[1].starts_with("Chat: I prefer the harbor light on at night"),
         "{after}"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Scratch chats write no node and can't forget one.
@@ -361,7 +361,7 @@ fn amr_scratch_writes_nothing_and_blocks_forget() {
     let root = crate::config::test_config_root("amr-scratch");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
     cabin.new_thread(false);
@@ -393,7 +393,7 @@ fn amr_scratch_writes_nothing_and_blocks_forget() {
         .join("amr/nodes")
         .join(format!("{id}.tombstone"))
         .exists());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // A secret in a saved MEMORY.md line is redacted in the node; a personal line
@@ -405,7 +405,7 @@ fn amr_save_redacts_secrets_and_pauses_personal_lines_without_a_key() {
     let root = crate::config::test_config_root("amr-save");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
     hx::use_key_store_for(
         &root,
@@ -453,7 +453,7 @@ fn amr_save_redacts_secrets_and_pauses_personal_lines_without_a_key() {
         cabin.status
     );
     assert_eq!(amr_node_files(&root).len(), 1);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // A line the memory repo refuses stays in MEMORY.md instead of vanishing.
@@ -463,7 +463,7 @@ fn amr_save_keeps_a_line_the_store_could_not_write() {
     let root = crate::config::test_config_root("amr-save-fail");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
     // `amr` is a file, so the store can't open.
     std::fs::write(root.join("amr"), "not a folder").unwrap();
@@ -485,7 +485,7 @@ fn amr_save_keeps_a_line_the_store_could_not_write() {
         crate::config::read_memory("MEMORY.md"),
         "keep this line\nprefer nvim\n"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // AMR M2 through the cabin: the first AMR read imports insights and chip
@@ -496,7 +496,7 @@ fn amr_first_recall_imports_learning_and_chips_once() {
     let root = crate::config::test_config_root("amr-import");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let seed = |cabin: &mut Cabin| {
         cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
         cabin.learning.insights = [
@@ -587,7 +587,7 @@ fn amr_first_recall_imports_learning_and_chips_once() {
         .iter()
         .any(|m| m.1.contains("Memory import:")));
     assert_eq!(amr_node_files(&root).len(), 10);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Legacy stays legacy: a reflect and a note write MEMORY.md and never make amr/.
@@ -597,7 +597,7 @@ fn legacy_reflect_and_note_never_create_amr() {
     let root = crate::config::test_config_root("legacy-no-amr");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
     cabin.mem_name = "MEMORY.md".into();
@@ -629,14 +629,14 @@ fn legacy_reflect_and_note_never_create_amr() {
         "{body}"
     );
     assert!(!root.join("amr").exists(), "legacy must never create amr/");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 fn amr_dream_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
     let root = crate::config::test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
     cabin.running = false;
@@ -849,7 +849,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
     assert!(later
         .dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now)
         .is_none());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -872,7 +872,7 @@ fn amr_dream_halt_skips_the_night() {
         .join("dreams")
         .join("2026-10-07.md")
         .exists());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -896,5 +896,5 @@ fn legacy_never_dreams_or_creates_amr() {
     cabin.run_slash_line("/memory dream");
     assert!(last_chat_text(&cabin).contains("No dream yet."));
     assert!(!root.join("amr").exists(), "legacy must never create amr/");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }

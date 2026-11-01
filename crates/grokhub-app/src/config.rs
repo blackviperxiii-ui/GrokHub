@@ -1886,7 +1886,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("cfg");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let cfg = AppConfig {
             api_key: "xai-test".into(),
             device_name: "cabin".into(),
@@ -1986,7 +1986,7 @@ mod tests {
             assert_eq!(mode, 0o600, "app.json is private config");
         }
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -1994,14 +1994,14 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("devname");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         fs::create_dir_all(&root).expect("dir");
         fs::write(root.join("app.json"), "{}").expect("write");
         let loaded = load();
         assert!(!loaded.device_name.trim().is_empty());
         assert_eq!(loaded.device_name, default_device_name());
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -2009,7 +2009,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cfg = AppConfig::default();
         assert_eq!(cfg.session_mode, "chat");
         assert_eq!(cfg.permission_mode, "ask");
@@ -2040,7 +2040,7 @@ mod tests {
         assert_eq!(fallback.session_mode, "chat");
         assert_eq!(fallback.permission_mode, "ask");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -2048,7 +2048,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("cabin-defaults");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cfg = AppConfig::default();
         assert!(!cfg.always_collapse_thoughts);
         assert!(!cfg.close_to_tray_tip_seen);
@@ -2132,7 +2132,7 @@ mod tests {
             "a missing closeToTrayTipSeen key stays false"
         );
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -2140,7 +2140,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("effort");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         fs::create_dir_all(&root).expect("dir");
         fs::write(
             root.join("app.json"),
@@ -2165,7 +2165,7 @@ mod tests {
             "the effort setting is never written back: {body}"
         );
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -2197,7 +2197,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("mem-cap");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         fs::create_dir_all(memory_dir()).unwrap();
         fs::write(
             memory_dir().join("MEMORY.md"),
@@ -2218,7 +2218,7 @@ mod tests {
             "saving Memory must not write a huge file on the UI thread: {write}"
         );
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -2350,7 +2350,7 @@ mod tests {
         let _g = hold_test_config();
         let root = test_config_root("cfg-empty");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let loaded = load();
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
@@ -2411,7 +2411,7 @@ mod tests {
         assert_eq!(loaded.display_name, "User");
         assert_eq!(loaded.profile_picture, "/cfg/profile.png");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

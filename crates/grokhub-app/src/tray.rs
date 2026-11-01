@@ -118,7 +118,9 @@ pub fn pin_session_bus() {
         return;
     };
     if env_addr.as_deref() != Some(addr.as_str()) {
-        env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
+        // SAFETY: cabin startup, before the window and the tray thread start; no
+        // other thread reads the environment yet.
+        unsafe { env::set_var("DBUS_SESSION_BUS_ADDRESS", addr) };
     }
 }
 
@@ -482,11 +484,14 @@ pub fn force_x11_for_close_to_tray(has_display: bool, wayland_set: bool) {
         return;
     }
     if should_clear_wayland(has_display, wayland_set) {
-        env::remove_var("WAYLAND_DISPLAY");
-        env::remove_var("WAYLAND_SOCKET");
+        // SAFETY: cabin startup, before the window and the tray thread start; no
+        // other thread reads the environment yet.
+        unsafe { env::remove_var("WAYLAND_DISPLAY") };
+        unsafe { env::remove_var("WAYLAND_SOCKET") };
     }
     if prefer_x11_backend(env::var("WINIT_UNIX_BACKEND").ok().as_deref(), has_display).is_some() {
-        env::set_var("WINIT_UNIX_BACKEND", "x11");
+        // SAFETY: as above, cabin startup before the window opens.
+        unsafe { env::set_var("WINIT_UNIX_BACKEND", "x11") };
     }
 }
 
@@ -822,16 +827,16 @@ mod tests {
         assert!(should_hide_on_close(true, true));
         assert!(!should_hide_on_close(false, true));
         let prev = std::env::var("GROKHUB_TRAY").ok();
-        std::env::remove_var("GROKHUB_TRAY");
+        unsafe { std::env::remove_var("GROKHUB_TRAY") };
         assert!(
             should_hide_on_close(true, false),
             "Close to tray still hides when the icon failed to spawn"
         );
-        std::env::set_var("GROKHUB_TRAY", "0");
+        unsafe { std::env::set_var("GROKHUB_TRAY", "0") };
         assert!(!should_hide_on_close(true, false));
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_TRAY", v),
-            None => std::env::remove_var("GROKHUB_TRAY"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_TRAY", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_TRAY") },
         }
     }
 
@@ -1242,7 +1247,7 @@ mod tests {
     #[test]
     fn visible_launch_registers_the_tray_icon() {
         let prev = std::env::var("GROKHUB_TRAY").ok();
-        std::env::remove_var("GROKHUB_TRAY");
+        unsafe { std::env::remove_var("GROKHUB_TRAY") };
         assert!(
             tray_needed_at_launch(false),
             "A visible cabin must already have a tray icon"
@@ -1251,11 +1256,11 @@ mod tests {
             tray_needed_at_launch(true),
             "--agent starts hidden with a tray"
         );
-        std::env::set_var("GROKHUB_TRAY", "0");
+        unsafe { std::env::set_var("GROKHUB_TRAY", "0") };
         assert!(!tray_needed_at_launch(true));
         match prev {
-            Some(v) => std::env::set_var("GROKHUB_TRAY", v),
-            None => std::env::remove_var("GROKHUB_TRAY"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_TRAY", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_TRAY") },
         }
     }
 

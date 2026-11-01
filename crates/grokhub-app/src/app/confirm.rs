@@ -519,7 +519,7 @@ mod tests {
     fn always_confirm_runs_once_then_sticks() {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("always-confirm-once");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         assert!(!cabin.cfg.always_confirmed);
         cabin.arm_session_always();
@@ -548,7 +548,7 @@ mod tests {
         again.arm_session_always();
         assert!(again.confirm.is_none());
         assert_eq!(again.permission_mode, PermissionMode::AlwaysApprove);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
         let _ = std::fs::remove_dir_all(&root);
     }
 

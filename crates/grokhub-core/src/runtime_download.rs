@@ -1283,11 +1283,11 @@ mod tests {
         let bin = dir.join("llama-server");
         fs::write(&bin, b"x").unwrap();
         let prev = std::env::var_os("PATH");
-        std::env::set_var("PATH", &dir);
+        unsafe { std::env::set_var("PATH", &dir) };
         assert_eq!(find_on_path("llama-server").unwrap(), bin);
         match prev {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
+            Some(p) => unsafe { std::env::set_var("PATH", p) },
+            None => unsafe { std::env::remove_var("PATH") },
         }
         let _ = fs::remove_dir_all(&dir);
     }

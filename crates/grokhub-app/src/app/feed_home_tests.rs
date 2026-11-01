@@ -22,7 +22,7 @@ fn roll_today_stays_put_on_same_day() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("roll-today-same-day");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.status = "Harbor".into();
     let today = Cabin::local_day();
@@ -37,7 +37,7 @@ fn roll_today_stays_put_on_same_day() {
     assert!(cabin.chat_job_thread.is_none());
     drop(cabin);
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Folded from PR #375.
@@ -152,7 +152,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
     let root = crate::config::test_config_root("card-menu-hide");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _pin = crate::config::TestConfigDir::set(root.clone());
 
     let mut cabin = Cabin::quiet_for_test();
@@ -270,7 +270,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
     assert!(!signals.contains("ZephyrHideBody9f3a"), "{signals}");
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn reset_all_clears_what_home_learned() {
     let root = crate::config::test_config_root("home-learned-reset");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _pin = crate::config::TestConfigDir::set(root.clone());
 
     let mut cabin = Cabin::quiet_for_test();
@@ -343,7 +343,7 @@ fn reset_all_clears_what_home_learned() {
     assert_eq!(signals_before, signals_after);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Folded from PR #410.

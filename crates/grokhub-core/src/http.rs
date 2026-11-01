@@ -962,7 +962,7 @@ mod tests {
                 .iter()
                 .map(|&name| {
                     let was = std::env::var_os(name);
-                    std::env::set_var(name, format!("http://127.0.0.1:{port}"));
+                    unsafe { std::env::set_var(name, format!("http://127.0.0.1:{port}")) };
                     (name, was)
                 })
                 .collect();
@@ -974,8 +974,8 @@ mod tests {
         fn drop(&mut self) {
             for (name, was) in self.old.drain(..) {
                 match was {
-                    Some(v) => std::env::set_var(name, v),
-                    None => std::env::remove_var(name),
+                    Some(v) => unsafe { std::env::set_var(name, v) },
+                    None => unsafe { std::env::remove_var(name) },
                 }
             }
         }

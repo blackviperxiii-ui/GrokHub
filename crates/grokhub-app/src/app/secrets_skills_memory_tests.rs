@@ -32,7 +32,7 @@ fn mark_get_started_done_sets_flag() {
     let root = crate::config::test_config_root("mark-get-started-done");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.cfg.get_started_done);
@@ -44,7 +44,7 @@ fn mark_get_started_done_sets_flag() {
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -478,7 +478,7 @@ fn commit_proposed_skill_remembers_in_list() {
     let root = crate::config::test_config_root("commit-skill");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(cabin.chat_job_thread.is_none());
@@ -521,5 +521,5 @@ fn commit_proposed_skill_remembers_in_list() {
         },
     );
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }

@@ -355,7 +355,8 @@ fn ensure_windows_home() {
     }
     if let Ok(up) = env::var("USERPROFILE") {
         if !up.is_empty() {
-            env::set_var("HOME", up);
+            // SAFETY: runs at the top of main, before any thread is started.
+            unsafe { env::set_var("HOME", up) };
         }
     }
 }
@@ -379,7 +380,7 @@ mod win_console {
     };
 
     #[link(name = "ucrt")]
-    extern "C" {
+    unsafe extern "C" {
         fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
         fn _dup2(fd1: i32, fd2: i32) -> i32;
     }
@@ -402,13 +403,15 @@ mod win_console {
     }
 
     unsafe fn bind_stdio(std_id: u32, fd: i32) {
-        let h = GetStdHandle(std_id);
-        if h.is_null() || h == (-1isize as _) {
-            return;
-        }
-        let osfh = _open_osfhandle(h as isize, O_TEXT);
-        if osfh != -1 {
-            let _ = _dup2(osfh, fd);
+        unsafe {
+            let h = GetStdHandle(std_id);
+            if h.is_null() || h == (-1isize as _) {
+                return;
+            }
+            let osfh = _open_osfhandle(h as isize, O_TEXT);
+            if osfh != -1 {
+                let _ = _dup2(osfh, fd);
+            }
         }
     }
 }

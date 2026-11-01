@@ -241,7 +241,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let prev_env = std::env::var_os("GROKHUB_CONFIG");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         let done = run_check("", devices, |_| Ok((48_000, clipped_pcm())));
         let report = done.clone().unwrap().1;
@@ -284,8 +284,8 @@ mod tests {
         // Put the process-wide variable back as it was: unsetting it would send
         // every later test in this process to the real config folder.
         match prev_env {
-            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-            None => std::env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
         }
     }
 

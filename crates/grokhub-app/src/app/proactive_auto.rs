@@ -335,7 +335,7 @@ mod tests {
 
     impl Drop for Rig {
         fn drop(&mut self) {
-            std::env::remove_var("GROKHUB_CONFIG");
+            unsafe { std::env::remove_var("GROKHUB_CONFIG") };
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }
@@ -347,7 +347,7 @@ mod tests {
         let root = crate::config::test_config_root(label);
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("config root");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let pin = crate::config::TestConfigDir::set(root.clone());
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;

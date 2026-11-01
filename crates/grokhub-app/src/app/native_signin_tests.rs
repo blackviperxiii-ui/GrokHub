@@ -130,7 +130,7 @@ impl Sandbox {
             (concat!("GROK", "_HOME"), "home/.grok-env"),
         ] {
             prev.push((key, std::env::var_os(key)));
-            std::env::set_var(key, root.join(dir));
+            unsafe { std::env::set_var(key, root.join(dir)) };
         }
         crate::oauth::set_token_url_for_test(None);
         set_responses_url_for_test(None);
@@ -165,8 +165,8 @@ impl Drop for Sandbox {
         set_responses_url_for_test(None);
         for (key, value) in self.prev.drain(..) {
             match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
             }
         }
         let _ = std::fs::remove_dir_all(&self.root);

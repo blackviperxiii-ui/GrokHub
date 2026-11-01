@@ -496,7 +496,7 @@ fn command_palette_opens_and_navigates() {
 fn save_settings_stores_quiet_hours_and_clears_the_key() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("save-settings");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.api_key = "secret-key".into();
     cabin.quiet_start_buf = "22:00".into();
@@ -510,7 +510,7 @@ fn save_settings_stores_quiet_hours_and_clears_the_key() {
     assert_eq!(cabin.cfg.quiet_end, "07:00");
     assert_eq!(cabin.cfg.daily_auto_cap, 12);
     assert_eq!(cabin.cfg.host_hour_cap, 4);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #150.
@@ -519,7 +519,7 @@ fn set_nav_id_opens_each_page() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("set-nav");
     let _ = std::fs::create_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -632,7 +632,7 @@ fn set_nav_id_opens_each_page() {
 
     std::thread::sleep(std::time::Duration::from_millis(100));
     drop(io.lock().unwrap_or_else(|e| e.into_inner()));
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #164.
@@ -641,7 +641,7 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("palette-diag");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.open_palette();
@@ -687,7 +687,7 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #169.

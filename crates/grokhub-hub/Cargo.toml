@@ -2,7 +2,7 @@
 name = "grokhub-hub"
 version.workspace = true
 rust-version.workspace = true
-edition = "2024"
+edition.workspace = true
 license.workspace = true
 description = "LAN hub HTTP server — /v1 contract for paired computers"
 publish = false

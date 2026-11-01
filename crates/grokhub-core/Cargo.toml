@@ -7,6 +7,9 @@ license.workspace = true
 description = "Shared GrokHub brain — pair, tasks, frames, inhabit."
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 grokhub-proto = { path = "../grokhub-proto" }
 serde.workspace = true

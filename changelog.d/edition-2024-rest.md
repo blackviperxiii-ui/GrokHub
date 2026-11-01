@@ -1,0 +1,1 @@
+- Internal: core, agent, app and the desktop shell (src-tauri) move to Rust edition 2024, and every crate now takes its edition from the workspace. Formatting stays on the 2021 style. No app behavior change.

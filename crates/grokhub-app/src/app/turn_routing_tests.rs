@@ -2132,7 +2132,7 @@ fn update_queues_while_a_job_is_running() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("update-queue");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.running = true;
     cabin.start_overlay_update(vec!["echo grokhub-update-queued".into()]);
@@ -2150,14 +2150,14 @@ fn update_queues_while_a_job_is_running() {
     assert!(cabin.rx.is_none(), "a busy cabin must not start the update");
     drop(cabin);
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
 fn halt_work_stops_a_running_turn() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("halt-work");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = true;
     cabin.imagine_pending = true;
@@ -2165,14 +2165,14 @@ fn halt_work_stops_a_running_turn() {
     assert!(!cabin.running);
     assert!(!cabin.imagine_pending);
     assert_eq!(cabin.status, "Stopped");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
 fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("stop-spares-bg");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let fg_id = format!("native-stop-fg-{}", std::process::id());
     let bg_id = format!("native-stop-bg-{}", std::process::id());
     let fg = grokhub_agent::CancelToken::new();
@@ -2192,7 +2192,7 @@ fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
     grokhub_agent::forget_session(&fg_id);
     grokhub_agent::forget_session(&bg_id);
     drop(cabin);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #160.
@@ -2201,7 +2201,7 @@ fn worktree_stays_off_a_send() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("worktree-send");
     let _ = std::fs::create_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -2231,8 +2231,8 @@ fn a_turn_that_cannot_start_stays_off_a_run() {
     impl Drop for RestoreConfig170 {
         fn drop(&mut self) {
             match self.0.take() {
-                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
         }
     }
@@ -2242,7 +2242,7 @@ fn a_turn_that_cannot_start_stays_off_a_run() {
     let root = crate::config::test_config_root("ask-denied");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     for detail in ["native engine is not running", "timeout"] {

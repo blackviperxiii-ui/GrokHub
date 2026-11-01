@@ -545,7 +545,7 @@ mod tests {
         let root = crate::config::test_config_root("connectors-disconnect");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         let row =
             cabin_connector_rows(&[doctor("ctx7", "connected", "", SignIn::NotOffered)]).remove(0);
@@ -560,7 +560,7 @@ mod tests {
         // Cancel is the sheet dropping `confirm`: nothing ran.
         cabin.confirm = None;
         assert!(cabin.connector_note.is_empty());
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -569,7 +569,7 @@ mod tests {
         let root = crate::config::test_config_root("connectors-open");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         cabin.nav = Nav::Skills;
         cabin.open_connectors();
@@ -582,7 +582,7 @@ mod tests {
             Nav::Skills,
             "a second open keeps the page behind Settings"
         );
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
     #[test]
     fn an_unknown_connector_points_at_settings_connectors() {

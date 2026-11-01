@@ -20,7 +20,7 @@ struct DraftKey {
 }
 
 struct GhostReply {
-    gen: u64,
+    r#gen: u64,
     draft: String,
     suggestion: String,
 }
@@ -179,7 +179,7 @@ impl ComposerGhost {
         self.debounce_at = None;
         let draft = composer.to_string();
         self.scheduled_draft = draft.clone();
-        let gen = self.generation;
+        let r#gen = self.generation;
         let (tx, rx) = mpsc::channel();
         self.pending_rx = Some(rx);
         let api_key = api_key.to_string();
@@ -200,7 +200,7 @@ impl ComposerGhost {
             .map(|s| normalize_suggestion(&s, &draft))
             .unwrap_or_default();
             let _ = tx.send(GhostReply {
-                gen,
+                r#gen,
                 draft,
                 suggestion,
             });
@@ -214,7 +214,7 @@ impl ComposerGhost {
         match rx.try_recv() {
             Ok(reply) => {
                 self.pending_rx = None;
-                if reply.gen != self.generation {
+                if reply.r#gen != self.generation {
                     return;
                 }
                 if self.key.as_ref().map(|k| k.text.as_str()) != Some(reply.draft.as_str()) {
@@ -434,7 +434,7 @@ mod tests {
         });
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(GhostReply {
-            gen: 1,
+            r#gen: 1,
             draft: "hello".into(),
             suggestion: " world".into(),
         });

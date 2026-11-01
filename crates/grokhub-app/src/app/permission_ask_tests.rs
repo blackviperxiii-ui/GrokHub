@@ -351,7 +351,7 @@ fn set_session_mode_ask_and_chat() {
 fn set_permission_mode_saves_auto_and_always() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("permission-mode");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.set_permission_mode(PermissionMode::Auto);
     assert_eq!(cabin.permission_mode, PermissionMode::Auto);
@@ -368,7 +368,7 @@ fn set_permission_mode_saves_auto_and_always() {
         cabin.cfg.always_confirmed,
         "confirm flag stays so the next Always pick skips the sheet"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 fn perm_ask_for_test(id: u64, title: &str) -> grokhub_core::wire::PermissionAsk {
