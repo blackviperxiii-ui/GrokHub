@@ -14,6 +14,7 @@
 //! (read only), and nothing else.
 
 mod ops;
+pub mod work;
 
 use serde_json::{json, Value};
 
@@ -91,7 +92,21 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
         Some(_) => return None,
         None => name,
     };
-    SELF_TOOLS.iter().find(|(n, _)| *n == leaf).map(|(n, _)| *n)
+    SELF_TOOLS
+        .iter()
+        .find(|(n, _)| *n == leaf)
+        .map(|(n, _)| *n)
+        .or_else(|| work::work_tool(leaf))
+}
+
+/// The base class of a table name, from [`SELF_TOOLS`] or the lazy
+/// [`work::WORK_TOOLS`].
+fn base_class(tool: &str) -> Option<SelfClass> {
+    SELF_TOOLS
+        .iter()
+        .find(|(n, _)| *n == tool)
+        .map(|(_, c)| *c)
+        .or_else(|| work::class(tool))
 }
 
 /// Path E: run one call on the native engine. A token is asked on the
@@ -110,20 +125,13 @@ pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
 
 /// A list tool: runs like the read-only tools.
 pub fn is_read(name: &str) -> bool {
-    self_tool(name).is_some_and(|t| {
-        SELF_TOOLS
-            .iter()
-            .any(|(n, c)| *n == t && *c == SelfClass::Read)
-    })
+    self_tool(name).is_some_and(|t| base_class(t) == Some(SelfClass::Read))
 }
 
 /// Class for one call. A connection write that needs a token is credentials.
 pub fn self_class(name: &str, args: &Value) -> Option<SelfClass> {
     let tool = self_tool(name)?;
-    let base = SELF_TOOLS
-        .iter()
-        .find(|(n, _)| *n == tool)
-        .map(|(_, c)| *c)?;
+    let base = base_class(tool)?;
     if matches!(tool, "connection_add" | "connection_modify") && needs_token(args) {
         return Some(SelfClass::Credentials);
     }

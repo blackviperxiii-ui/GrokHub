@@ -1,4 +1,4 @@
-//! Streamable HTTP and legacy SSE. Synchronous `ureq` only.
+//! Streamable HTTP and legacy SSE. Synchronous, on the `grokhub_core::http` facade.
 //!
 //! Requests send the `Authorization` header the caller hands in: the one on
 //! the server entry (`headers.Authorization`, `bearerToken` / `bearer_token`,
@@ -16,6 +16,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+use grokhub_core::http;
 
 use super::headers::{self, ParamHeader};
 use super::rpc::{self, Era, RawTool};
@@ -58,7 +60,7 @@ impl PostErr {
 
 pub(crate) struct HttpConn {
     server: String,
-    agent: ureq::Agent,
+    agent: http::Agent,
     /// Message URL. Legacy SSE replaces this with the `endpoint` event.
     post_url: String,
     headers: BTreeMap<String, String>,
@@ -484,42 +486,47 @@ fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, St
     Ok(all)
 }
 
-pub(super) fn agent(read: Duration) -> ureq::Agent {
+/// Tests reach a loopback server under a `.test` name, so the guard sees a
+/// real (non-loopback) destination. Production resolves as usual.
+#[cfg(test)]
+const RESOLVE: Option<http::Resolve> = Some(tests::resolve_test_host);
+#[cfg(not(test))]
+const RESOLVE: Option<http::Resolve> = None;
+
+pub(super) fn agent(read: Duration) -> http::Agent {
     let read = if read.is_zero() {
         Duration::from_secs(60)
     } else {
         read
     };
-    let builder = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(3600).max(read))
-        .timeout_write(Duration::from_secs(30))
-        .redirects(0);
-    // Tests reach a loopback server under a `.test` name, so the guard sees a
-    // real (non-loopback) destination. Production resolves as usual.
-    #[cfg(test)]
-    let builder = builder.resolver(tests::resolve_test_host);
-    builder.build()
+    http::agent(http::Opts {
+        connect: Duration::from_secs(10),
+        read: Some(Duration::from_secs(3600).max(read)),
+        write: Some(Duration::from_secs(30)),
+        redirects: 0,
+        resolve: RESOLVE,
+        ..Default::default()
+    })
 }
 
 /// The legacy SSE stream opens before `initialize`: no session or version yet.
 fn open_get(
-    agent: &ureq::Agent,
+    agent: &http::Agent,
     url: &str,
     headers: &BTreeMap<String, String>,
-) -> Result<ureq::Response, String> {
-    let mut req = agent.get(url);
+) -> Result<http::Response, String> {
+    let mut req = agent.get(url).any_status();
     req = apply_headers(req, headers, &[]);
-    req = req.set("Accept", "text/event-stream");
+    req = req.header("Accept", "text/event-stream");
     match req.call() {
+        Ok(resp) if resp.status() >= 400 => Err(http_err(resp)),
         Ok(resp) => Ok(resp),
-        Err(ureq::Error::Status(code, resp)) => Err(http_err(code, resp)),
-        Err(ureq::Error::Transport(err)) => Err(err.to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
 fn post_value(
-    agent: &ureq::Agent,
+    agent: &http::Agent,
     url: &str,
     headers: &BTreeMap<String, String>,
     extra: &[(String, String)],
@@ -527,19 +534,20 @@ fn post_value(
     timeout: Duration,
 ) -> Result<Posted, PostErr> {
     let text = serde_json::to_string(body).map_err(|err| PostErr::Transport(err.to_string()))?;
-    let mut req = agent.post(url);
+    let mut req = agent.post(url).any_status();
     req = apply_headers(req, headers, extra);
     req = req
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
         .timeout(timeout.max(Duration::from_secs(1)));
     let resp = match req.send_string(&text) {
-        Ok(resp) => resp,
-        Err(ureq::Error::Status(code, resp)) => {
+        Ok(resp) if resp.status() >= 400 => {
+            let code = resp.status();
             let body = resp.into_string().unwrap_or_default();
             return Err(PostErr::Status(code, body.trim().to_string()));
         }
-        Err(ureq::Error::Transport(err)) => return Err(PostErr::Transport(err.to_string())),
+        Ok(resp) => resp,
+        Err(err) => return Err(PostErr::Transport(err.to_string())),
     };
     let session = resp.header("mcp-session-id").map(str::to_string);
     let ctype = resp.content_type().to_ascii_lowercase();
@@ -569,16 +577,16 @@ fn post_value(
 /// same-named user header. Before `initialize` answers there is no version
 /// yet, so none is sent.
 fn apply_headers(
-    mut req: ureq::Request,
+    mut req: http::Request,
     headers: &BTreeMap<String, String>,
     extra: &[(String, String)],
-) -> ureq::Request {
-    req = req.set("User-Agent", USER_AGENT);
+) -> http::Request {
+    req = req.header("User-Agent", USER_AGENT);
     for (key, value) in headers {
-        req = req.set(key, value);
+        req = req.header(key, value);
     }
     for (key, value) in extra {
-        req = req.set(key, value);
+        req = req.header(key, value);
     }
     req
 }
@@ -588,7 +596,9 @@ pub(super) fn is_unauthorized(err: &str) -> bool {
     err.contains("HTTP 401")
 }
 
-fn http_err(code: u16, resp: ureq::Response) -> String {
+/// A 4xx/5xx answer (sent with `any_status`) as `HTTP {code}[: body]`.
+fn http_err(resp: http::Response) -> String {
+    let code = resp.status();
     let body = resp.into_string().unwrap_or_default();
     let body = body.trim();
     if body.is_empty() {

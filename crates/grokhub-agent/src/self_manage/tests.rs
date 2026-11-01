@@ -708,3 +708,169 @@ fn know_me_tags_reports_the_saved_tags_with_their_source() {
     assert!(is_read("know_me_tags"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// KB-02: a maximal agent card (every cap filled), a user card, a touched agent
+/// card, and 30 more agent cards with long titles.
+fn seed_board(root: &Path) -> (String, String, String) {
+    use grokhub_core::work_item::{Checkpoint, StepStatus, WorkKind, WorkStep};
+    use grokhub_core::work_run as wr;
+    let long = "x".repeat(400);
+    wr::edit_board_file(&wr::board_path(root), 1, |cards| {
+        for i in 0..30 {
+            wr::open_run_card(cards, WorkKind::Task, &format!("{i} {long}"), "", "", 1);
+        }
+        let big = wr::open_run_card(cards, WorkKind::Task, &long, "s", "m", 1);
+        let c = cards.iter_mut().find(|c| c.id == big).unwrap();
+        c.steps = (0..20)
+            .map(|i| WorkStep {
+                text: format!("{i} {long}"),
+                status: StepStatus::Planned,
+            })
+            .collect();
+        c.checkpoint = Some(Checkpoint {
+            goal: long.clone(),
+            next: long.clone(),
+            blocker: long.clone(),
+            refs: vec![long.clone(); 6],
+            session: long.clone(),
+            model: long.clone(),
+            attempt: 9,
+            at_ms: 1,
+        });
+        grokhub_core::clean_work_card(c);
+        let touched = wr::open_run_card(cards, WorkKind::Task, "Tidy the logs", "", "", 1);
+        cards.iter_mut().find(|c| c.id == touched).unwrap().touched = true;
+        let mut user = grokhub_core::BoardCard::new("Buy a cable", "", "");
+        user.status = grokhub_core::BoardStatus::Todo;
+        let user_id = user.id.clone();
+        cards.push(user);
+        (big, touched, user_id)
+    })
+    .unwrap()
+}
+
+#[test]
+fn work_tools_respect_caps_and_ownership_and_have_no_delete() {
+    use grokhub_core::work_run as wr;
+    let root = dir("work-tools");
+    let (big, touched, user) = seed_board(&root);
+    let ctx = SelfCtx::new(&root);
+
+    let list = run_with(&ctx, "work_list", &json!({}));
+    assert!(!list.failed, "{}", list.text);
+    assert!(
+        list.text.len() <= work::WORK_LIST_MAX,
+        "{}",
+        list.text.len()
+    );
+    let rows = list.text.lines().filter(|l| !l.starts_with('+')).count();
+    assert!(rows <= work::WORK_LIST_ROWS, "{rows}");
+    assert!(list.text.ends_with(" more"), "{}", list.text);
+    assert!(!list.text.contains(&user), "the user's card is not listed");
+    assert!(
+        list.text.starts_with(&touched),
+        "newest first: {}",
+        list.text
+    );
+
+    let got = run_with(&ctx, "work_get", &json!({ "id": big }));
+    assert!(!got.failed, "{}", got.text);
+    assert!(got.text.len() <= work::WORK_GET_MAX, "{}", got.text.len());
+    assert!(got.text.contains("status: doing · kind: task · attempt 9"));
+    let theirs = run_with(&ctx, "work_get", &json!({ "id": user }));
+    assert!(theirs.failed && theirs.text.contains("the user's card"));
+
+    let rev0 = wr::read_board_file(&wr::board_path(&root))
+        .unwrap()
+        .iter()
+        .find(|c| c.id == big)
+        .unwrap()
+        .rev;
+    let upd = run_with(
+        &ctx,
+        "work_update",
+        &json!({ "id": big, "step": 1, "status": "done", "note": "first step landed" }),
+    );
+    assert!(!upd.failed, "{}", upd.text);
+    assert!(upd.text.len() <= work::WORK_GET_MAX);
+    let cards = wr::read_board_file(&wr::board_path(&root)).unwrap();
+    let c = cards.iter().find(|c| c.id == big).unwrap();
+    assert_eq!(c.steps[0].status, grokhub_core::StepStatus::Done);
+    assert!(c.checkpoint.as_ref().unwrap().next.starts_with("1 xxx"));
+    assert!(c.rev > rev0, "the update wins the cabin's merge");
+    let log = grokhub_core::work_item::read_work_log(&wr::work_dir(&root), &big);
+    assert_eq!(
+        log.last().map(|e| e.text.as_str()),
+        Some("first step landed")
+    );
+    let refused = run_with(
+        &ctx,
+        "work_update",
+        &json!({ "id": user, "next": "mine now" }),
+    );
+    assert!(refused.failed);
+    let bad_step = run_with(
+        &ctx,
+        "work_update",
+        &json!({ "id": big, "step": 99, "status": "done" }),
+    );
+    assert!(bad_step.failed && bad_step.text.contains("no step 99"));
+
+    let added = run_with(
+        &ctx,
+        "work_add",
+        &json!({ "title": "Check the backups", "steps": ["Open the share", "Count files"] }),
+    );
+    assert!(!added.failed, "{}", added.text);
+    let cards = wr::read_board_file(&wr::board_path(&root)).unwrap();
+    let new = cards.last().unwrap();
+    assert_eq!(new.title, "Check the backups");
+    assert_eq!(new.status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(new.origin, Some(grokhub_core::WorkOrigin::Agent));
+    assert_eq!(new.checkpoint.as_ref().unwrap().next, "Open the share");
+
+    let keep = run_with(&ctx, "work_archive", &json!({ "id": touched }));
+    assert!(
+        keep.failed && keep.text.contains("user touched"),
+        "{}",
+        keep.text
+    );
+    let keep = run_with(&ctx, "work_archive", &json!({ "id": user }));
+    assert!(keep.failed);
+    let gone = run_with(&ctx, "work_archive", &json!({ "id": big }));
+    assert!(!gone.failed, "{}", gone.text);
+    let cards = wr::read_board_file(&wr::board_path(&root)).unwrap();
+    assert_eq!(
+        cards.iter().find(|c| c.id == big).unwrap().status,
+        grokhub_core::BoardStatus::Dismissed,
+        "archived, never deleted"
+    );
+    assert_eq!(cards.len(), 34);
+
+    // No delete: no work tool deletes, and none is classed delete.
+    assert!(work::WORK_TOOLS
+        .iter()
+        .all(|(n, c)| *c != SelfClass::Delete && !n.contains("delete")));
+    assert!(self_tool("work_delete").is_none());
+    assert!(self_tool("grokhub-self__work_get").is_some());
+    assert!(is_read("work_list") && is_read("work_get"));
+    assert_eq!(self_class("work_update", &json!({})), Some(SelfClass::Soft));
+    // Reads run even in a read-only session; writes follow the gate.
+    let ro = Gate {
+        readonly_session: true,
+        ..gate(PermMode::Ask, true)
+    };
+    assert_eq!(
+        native(&ro, "work_get", &json!({ "id": big })),
+        Decision::Run
+    );
+    assert_ne!(
+        native(&ro, "work_update", &json!({ "id": big })),
+        Decision::Run
+    );
+    // Not in the MCP list either: no schema byte in Grok Build's tools.
+    assert!(mcp_tools()
+        .iter()
+        .all(|t| !t["name"].as_str().unwrap().starts_with("work_")));
+    let _ = std::fs::remove_dir_all(root);
+}
