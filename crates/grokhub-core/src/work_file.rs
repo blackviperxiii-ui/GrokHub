@@ -119,8 +119,8 @@ pub fn board_stamp(path: &Path) -> u64 {
 
 /// Under the board lock: read the board, let `change` edit it, and when it
 /// returns `Ok`, bump the rev of every card it changed and write the merge.
-/// `change` returning `Err` writes nothing. Returns `change`'s value and the
-/// cards now on disk.
+/// `change` returning `Err`, or changing nothing, writes nothing. Returns
+/// `change`'s value and the cards now on disk.
 pub fn update_board<R>(
     path: &Path,
     change: impl FnOnce(&mut Vec<BoardCard>) -> Result<R, String>,
@@ -134,7 +134,14 @@ pub fn update_board<R>(
     // Under the lock the disk cannot move, so this keeps `mine` as written,
     // through the same per-card rule every other writer uses.
     let merged = merge_cards(&base, &mine, &disk);
-    write_board(path, &merged)?;
+    let same = |a: &[BoardCard], b: &[BoardCard]| {
+        serde_json::to_value(a)
+            .ok()
+            .is_some_and(|a| serde_json::to_value(b).ok() == Some(a))
+    };
+    if !same(&merged, &disk) {
+        write_board(path, &merged)?;
+    }
     Ok((out, merged))
 }
 
@@ -275,6 +282,12 @@ mod tests {
         assert_eq!(after[1].rev, before[1].rev + 1, "b bumped");
         assert_eq!(read_board(&path).unwrap()[1].status, BoardStatus::Done);
         assert!(!lock_path(&path).exists());
+
+        let stamp = board_stamp(&path);
+        std::thread::sleep(Duration::from_millis(20));
+        let ((), same) = update_board(&path, |_| Ok(())).unwrap();
+        assert_eq!(same.len(), 2);
+        assert_eq!(board_stamp(&path), stamp, "no change, no write");
 
         let err = update_board(&path, |cards| -> Result<(), String> {
             cards.clear();

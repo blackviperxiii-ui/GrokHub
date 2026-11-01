@@ -54,7 +54,7 @@ pub fn refused() -> String {
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
 /// The web app's commands: chat with approvals, automations, memory,
-/// connectors and Pulse, and reading the settings.
+/// connectors, Pulse, the Agents page and the workboard, and reading the settings.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
@@ -93,13 +93,19 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_feed_prompt",
     "save_feed_prompt",
     "pulse_image",
-    "get_behavior",
-    "get_privacy",
-    "get_background",
-    // The Workboard, read only: the cards, the change check and a card's log.
+    "get_queue",
+    "stop_task",
+    // The Workboard: every change goes through the shared board lock and merge.
+    // Resume stays in the desktop shell.
     "get_workboard",
     "workboard_stamp",
     "workboard_log",
+    "workboard_add",
+    "workboard_act",
+    "workboard_work",
+    "get_behavior",
+    "get_privacy",
+    "get_background",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -921,6 +927,12 @@ mod tests {
             "get_feed_prompt",
             "save_feed_prompt",
             "pulse_image",
+            "get_queue",
+            "stop_task",
+            "get_workboard",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
             "stage_attachment",
             "remove_attachment",
         ] {
@@ -982,13 +994,18 @@ mod tests {
     }
 
     #[test]
-    fn the_web_reads_the_workboard_but_changes_none() {
-        for name in ["get_workboard", "workboard_stamp", "workboard_log"] {
+    fn the_web_has_the_workboard_but_not_resume() {
+        for name in [
+            "get_workboard",
+            "workboard_stamp",
+            "workboard_log",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
+        ] {
             assert!(web_command(name), "{name}");
         }
-        for name in ["workboard_act", "workboard_resume"] {
-            assert!(!web_command(name), "{name}");
-        }
+        assert!(!web_command("workboard_resume"));
     }
 
     #[test]

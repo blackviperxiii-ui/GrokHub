@@ -19,17 +19,7 @@ import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
-export type View =
-  | "chat"
-  | "pulse"
-  | "workboard"
-  | "journal"
-  | "automations"
-  | "memory"
-  | "connectors"
-  | "settings"
-  | "library"
-  | "devices";
+export type View = "chat" | "pulse" | "journal" | "automations" | "agents" | "memory" | "connectors" | "settings" | "library" | "workboard" | "devices";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -70,29 +60,30 @@ const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], sla
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
   pulse: "Pulse",
-  workboard: "Workboard",
   journal: "Journal",
   automations: "Automations",
+  agents: "Agents",
   memory: "Memory",
   connectors: "Connectors",
   settings: "Settings",
+  workboard: "Workboard",
   devices: "Devices",
   library: "Library",
 };
 
 /** The pages this platform shows, in tab order. The journal is this
- * computer's file, so the web app leaves it on the desktop; the web app shows
- * the Workboard read only. Devices is about this computer's Web access, so
+ * computer's file, so the web app leaves it on the desktop. Devices is about this computer's Web access, so
  * only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
     "chat",
     ...(caps.pulse ? (["pulse"] as const) : []),
-    "workboard",
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
+    "agents",
     "memory",
     "connectors",
+    "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
     "settings",

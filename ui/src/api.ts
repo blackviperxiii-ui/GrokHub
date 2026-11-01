@@ -756,18 +756,25 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
-/** One work card on the Workboard (src-tauri/src/workboard.rs). */
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
 export interface WorkStepView {
   text: string;
   status: "planned" | "doing" | "done" | "skipped" | "failed";
 }
 
-export interface WorkCard {
+export interface BoardCard {
   id: string;
   title: string;
   detail: string;
+  /** Your notes for the agent; Work hands them over. */
   notes: string;
-  column: "todo" | "doing" | "blocked" | "done" | "followUp" | "archived";
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
   /** Who owns it, as the cabin's badge reads. */
   owner: "Agent" | "You";
   /** Automation, Background, Episode or Flow; a plain task has none. */
@@ -780,28 +787,29 @@ export interface WorkCard {
   progress: [number, number];
   /** A paused or interrupted run: Resume and Hand back apply. */
   canResume: boolean;
-  /** The chat that works it. */
+  /** The cabin chat that works it. */
   chat: string | null;
   updatedMs: number;
-  fresh: boolean;
 }
 
-export interface WorkColumn {
-  id: "todo" | "doing" | "blocked" | "done";
+export interface BoardColumn {
+  lane: BoardLane;
   label: string;
-  cards: WorkCard[];
+  cards: BoardCard[];
 }
 
-export interface WorkBoard {
-  followUp: WorkCard[];
-  columns: WorkColumn[];
-  archived: WorkCard[];
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
   /** The file's mtime, for the change check. */
   stamp: number;
 }
 
-export type WorkAct =
-  | { kind: "move"; column: WorkColumn["id"] }
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
   | { kind: "rank"; up: boolean }
   | { kind: "handBack" }
   | { kind: "archive" }
@@ -814,15 +822,21 @@ export interface WorkLogLine {
   text: string;
 }
 
-/** What Resume puts in the chat box, and the chat it goes to. */
-export interface WorkResume {
-  conversationId: string;
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
   prompt: string;
-  board: WorkBoard;
+  page: BoardPage;
 }
 
-export function getWorkboard(): Promise<WorkBoard> {
-  return invoke<WorkBoard>("get_workboard");
+/** What Resume puts in the chat box, and the chat it goes to. */
+export interface BoardResume {
+  conversationId: string;
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
 }
 
 /** The board file's mtime; cheap enough to poll. */
@@ -830,18 +844,26 @@ export function workboardStamp(): Promise<number> {
   return invoke<number>("workboard_stamp");
 }
 
-/** A card's progress log tail. Read only when its drawer opens. */
+/** A card's progress log tail. Read only when you open its log. */
 export function workboardLog(id: string): Promise<WorkLogLine[]> {
   return invoke<WorkLogLine[]>("workboard_log", { id });
 }
 
-export function workboardAct(id: string, act: WorkAct): Promise<WorkBoard> {
-  return invoke<WorkBoard>("workboard_act", { id, act });
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
 }
 
 /** Resume a paused run. A stub until KB-03 fills in the real resume. */
-export function workboardResume(id: string, conversationId: string): Promise<WorkResume> {
-  return invoke<WorkResume>("workboard_resume", { id, conversationId });
+export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
+  return invoke<BoardResume>("workboard_resume", { id, conversationId });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
@@ -1334,6 +1356,39 @@ export function installShellUpdate(): Promise<void> {
 
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** A background task's status on the Agents page (src-tauri/src/queue.rs). */
+export type TaskStatus = "running" | "failed" | "done" | "stopped";
+
+/** A background command, subagent or monitor of the open chat. */
+export interface QueueTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Still going, so Stop has something to stop. */
+  live: boolean;
+}
+
+/** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
+export interface QueueTodo {
+  id: string;
+  content: string;
+  status: string;
+}
+
+export interface Queue {
+  todos: QueueTodo[];
+  tasks: QueueTask[];
+}
+
+export function getQueue(conversationId: string): Promise<Queue> {
+  return invoke<Queue>("get_queue", { conversationId });
+}
+
+/** Stops one task, or every task of the chat when `taskId` is left out. */
+export function stopTask(conversationId: string, taskId?: string): Promise<Queue> {
+  return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
 }
 
 /** Settings → Behavior, saved in shell.json. Everything starts off. */

@@ -1,0 +1,1 @@
+- Pulse: every card now has the same two buttons, its main action and a second one, with anything else in its ··· menu. The type word ("Do", "Learn") is a plain tag, not something that looks clickable.

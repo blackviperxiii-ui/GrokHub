@@ -377,37 +377,6 @@ impl Cabin {
     }
 }
 
-/// Feed pills for screen recording and audio check report cards.
-pub(super) fn paint_diagnosis_report_actions(
-    ui: &mut egui::Ui,
-    card: &grokhub_core::UpdateCard,
-) -> Option<super::pulse_ui::FeedPostAct> {
-    if card.status == grokhub_core::UpdateStatus::Dismissed {
-        return None;
-    }
-    let is_screen = grokhub_core::screen_recording_dir(card).is_some();
-    let is_audio = card.source_id.starts_with("audiocheck:");
-    if !is_screen && !is_audio {
-        return None;
-    }
-    let mut act = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if is_screen {
-            if card.action.is_some() && super::change_undo::click_pill(ui, "Open") {
-                act = Some(super::pulse_ui::FeedPostAct::Open);
-            }
-            if super::change_undo::click_pill(ui, "Delete recording") {
-                act = Some(super::pulse_ui::FeedPostAct::DeleteRecording);
-            }
-        }
-        if super::change_undo::click_pill(ui, "Fix it") {
-            act = Some(super::pulse_ui::FeedPostAct::FixIt(card.id.clone()));
-        }
-    });
-    act
-}
-
 pub(super) fn is_diagnosis_report_card(card: &grokhub_core::UpdateCard) -> bool {
     grokhub_core::screen_recording_dir(card).is_some() || card.source_id.starts_with("audiocheck:")
 }

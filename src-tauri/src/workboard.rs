@@ -1,12 +1,21 @@
-//! Workboard (shell parity, KB-06): the cabin's work cards from the same
-//! `workboard.json`. Every change goes through `grokhub_core::work_file`'s lock
-//! and per-card merge, the same rule as the cabin's saves, so neither app
-//! overwrites the other. A card's progress log is read only when its drawer
-//! opens, and only its tail.
+//! Workboard (shell parity): the cabin's kanban of cards from the same
+//! `workboard.json`, with the same `grokhub_core::workboard` types and rules,
+//! so a card added or moved in either shows in both. Work puts the card's
+//! first message in the main chat box and moves the card to Doing; nothing
+//! is sent for you. The in-card chat (Say, Stop) stays in the cabin.
+//!
+//! Every change goes through `grokhub_core::work_file`: the one board lock
+//! that the cabin, the shell and the agent's `work_*` tools all take, a
+//! re-read under it, and the per-card merge (the higher `rev` wins), so no
+//! writer loses another's change. A file that does not parse is an error and
+//! is never written over. A change that changes nothing writes nothing.
+//!
+//! The page shows each card's steps, where it left off and who owns it. A
+//! card's progress log is read only when the card is opened, and only its
+//! tail. Resume only drafts a short first message that you send yourself.
 //!
 //! Token budget (KB-04): all of this is local file work. Nothing here reaches
-//! a prompt or the tool list; Resume only drafts a short first message that you
-//! send yourself.
+//! a prompt or the tool list.
 
 use std::path::{Path, PathBuf};
 
@@ -17,22 +26,57 @@ use grokhub_core::{
 };
 use serde::{Deserialize, Serialize};
 
-const FILE: &str = "workboard.json";
-/// Lines the log drawer shows, newest last (the cabin's drawer shows as many).
+pub const FILE: &str = "workboard.json";
+/// The cabin's caps on a card's title and detail.
+const TITLE_MAX: usize = 120;
+const DETAIL_MAX: usize = 2000;
+/// Lines the log shows, newest last (the cabin's drawer shows as many).
 pub const LOG_LINES: usize = 20;
-/// Most of a progress log the drawer reads: its tail, never the whole file.
+/// Most of a progress log the page reads: its tail, never the whole file.
 pub const LOG_READ_MAX: u64 = 32 * 1024;
 /// Longest Resume draft. KB-04's `RESUME_BLOCK_MAX` (1,200 B) caps the real
 /// resume block KB-03 sends; the draft stays inside the same cap.
 pub const RESUME_DRAFT_MAX: usize = 1200;
-const GONE: &str = "That card is gone. It may have been removed in the cabin.";
+pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
 
-fn path(config_dir: &Path) -> PathBuf {
+pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
 }
 
 fn work_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("work")
+}
+
+/// A column on the page: the Follow up row, then the four kanban columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Lane {
+    FollowUp,
+    Todo,
+    Doing,
+    Blocked,
+    Done,
+}
+
+impl Lane {
+    /// In the order the page shows them.
+    pub const ALL: [Lane; 5] = [
+        Lane::FollowUp,
+        Lane::Todo,
+        Lane::Doing,
+        Lane::Blocked,
+        Lane::Done,
+    ];
+
+    fn column(self) -> KanbanColumn {
+        match self {
+            Self::FollowUp => KanbanColumn::FollowUp,
+            Self::Todo => KanbanColumn::Todo,
+            Self::Doing => KanbanColumn::Doing,
+            Self::Blocked => KanbanColumn::Blocked,
+            Self::Done => KanbanColumn::Done,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,9 +102,13 @@ pub struct Card {
     pub id: String,
     pub title: String,
     pub detail: String,
+    /// Your notes for the agent; Work hands them over.
     pub notes: String,
-    /// todo, doing, blocked, done, followUp or archived.
-    pub column: &'static str,
+    pub priority: String,
+    /// A new report you have not opened yet.
+    pub fresh: bool,
+    /// A Follow up card's latest report from its automation.
+    pub report: String,
     /// "Agent" or "You", as the cabin's badge reads.
     pub owner: &'static str,
     /// Automation, Background, Episode or Flow; a plain task has none.
@@ -73,27 +121,25 @@ pub struct Card {
     pub progress: [u32; 2],
     /// A paused or interrupted run: Resume and Hand back apply.
     pub can_resume: bool,
-    /// The chat that works it.
+    /// The cabin chat that works it.
     pub chat: Option<String>,
     pub updated_ms: u64,
-    pub fresh: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Column {
-    pub id: &'static str,
-    pub label: &'static str,
+    pub lane: Lane,
+    pub label: String,
     pub cards: Vec<Card>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Board {
-    /// Reports from scheduled runs, above the columns.
-    pub follow_up: Vec<Card>,
+pub struct Page {
+    /// Follow up first (newest run first), then Todo, Doing, Blocked, Done.
     pub columns: Vec<Column>,
-    /// Off the board, newest first.
+    /// Archived cards, off the board, newest first.
     pub archived: Vec<Card>,
     /// The file's mtime, for the view's change check.
     pub stamp: u64,
@@ -106,22 +152,38 @@ pub struct Board {
     rename_all_fields = "camelCase"
 )]
 pub enum Act {
-    /// To the end of a column: todo, doing, blocked or done.
+    Edit {
+        title: String,
+        detail: String,
+    },
+    Notes {
+        notes: String,
+    },
+    /// To the end of a column.
     Move {
-        column: String,
+        to: Lane,
     },
     /// One place up or down in its column, through `rank` like the cabin.
     Rank {
         up: bool,
     },
-    /// A paused run becomes yours: back to To do, and the sweep leaves it.
+    /// A paused run becomes yours: back to Todo, and the sweep leaves it.
     HandBack,
     Archive,
     Restore,
-    /// Gone for good, with its progress log.
+    /// For good, with its progress log. The UI asks first.
     Delete,
 }
 
+/// What Work puts in the chat box, and the board after the card moved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Work {
+    pub prompt: String,
+    pub page: Page,
+}
+
+/// What Resume puts in the chat box, and the chat it goes to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resume {
@@ -129,21 +191,7 @@ pub struct Resume {
     pub conversation_id: String,
     /// The first message, put in the chat box for you to send.
     pub prompt: String,
-    pub board: Board,
-}
-
-fn column_id(column: KanbanColumn) -> &'static str {
-    match column {
-        KanbanColumn::Todo => "todo",
-        KanbanColumn::Doing => "doing",
-        KanbanColumn::Blocked => "blocked",
-        KanbanColumn::Done => "done",
-        KanbanColumn::FollowUp => "followUp",
-    }
-}
-
-fn parse_column(id: &str) -> Option<KanbanColumn> {
-    KanbanColumn::ALL.into_iter().find(|c| column_id(*c) == id)
+    pub page: Page,
 }
 
 fn step_status(s: StepStatus) -> &'static str {
@@ -214,13 +262,15 @@ fn progress(card: &BoardCard) -> [u32; 2] {
     [filled, total]
 }
 
-fn card_view(c: &BoardCard) -> Card {
+fn card(c: &BoardCard) -> Card {
     Card {
         id: c.id.clone(),
         title: c.title.clone(),
         detail: c.detail.clone(),
         notes: c.notes.clone(),
-        column: c.status.column().map(column_id).unwrap_or("archived"),
+        priority: c.priority.clone(),
+        fresh: c.fresh,
+        report: c.report.clone(),
         owner: match c.origin {
             Some(WorkOrigin::Agent) => "Agent",
             Some(WorkOrigin::User) | None => "You",
@@ -249,7 +299,6 @@ fn card_view(c: &BoardCard) -> Card {
         can_resume: can_resume(c),
         chat: c.thread_id.clone(),
         updated_ms: c.updated_ms.max(c.active_ms),
-        fresh: c.fresh,
     }
 }
 
@@ -262,37 +311,50 @@ fn in_column(cards: &[BoardCard], column: KanbanColumn) -> Vec<usize> {
     idx
 }
 
-fn board(cards: &[BoardCard], stamp: u64) -> Board {
-    let views = |column| {
-        in_column(cards, column)
-            .into_iter()
-            .map(|i| card_view(&cards[i]))
-            .collect::<Vec<_>>()
-    };
+/// The rank that puts a card at the end of `column`.
+fn end_rank(cards: &[BoardCard], column: KanbanColumn) -> i64 {
+    in_column(cards, column)
+        .last()
+        .map(|&j| cards[j].rank.saturating_add(1))
+        .unwrap_or(0)
+}
+
+fn page(cards: &[BoardCard], stamp: u64) -> Page {
+    let columns = Lane::ALL
+        .iter()
+        .map(|&lane| {
+            let col = lane.column();
+            let mut here = in_column(cards, col);
+            if lane == Lane::FollowUp {
+                here.sort_by_key(|&i| std::cmp::Reverse(cards[i].updated_ms));
+            }
+            Column {
+                lane,
+                label: col.label().to_string(),
+                cards: here.into_iter().map(|i| card(&cards[i])).collect(),
+            }
+        })
+        .collect();
     let mut archived: Vec<&BoardCard> = cards
         .iter()
         .filter(|c| c.status == BoardStatus::Dismissed)
         .collect();
     archived.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
-    Board {
-        follow_up: views(KanbanColumn::FollowUp),
-        columns: KanbanColumn::ALL
-            .into_iter()
-            .map(|c| Column {
-                id: column_id(c),
-                label: c.label(),
-                cards: views(c),
-            })
-            .collect(),
-        archived: archived.into_iter().map(card_view).collect(),
+    Page {
+        columns,
+        archived: archived.into_iter().map(card).collect(),
         stamp,
     }
 }
 
-pub fn load(config_dir: &Path) -> Result<Board, String> {
+fn clip(text: &str, max: usize) -> String {
+    text.trim().chars().take(max).collect()
+}
+
+pub fn load(config_dir: &Path) -> Result<Page, String> {
     let path = path(config_dir);
     let cards = read_board(&path)?;
-    Ok(board(&cards, board_stamp(&path)))
+    Ok(page(&cards, board_stamp(&path)))
 }
 
 /// The file's mtime, so the view reloads only after a save.
@@ -306,22 +368,60 @@ pub fn log_tail(config_dir: &Path, id: &str) -> Vec<WorkLogEvent> {
     read_work_log_tail(&work_dir(config_dir), id, LOG_READ_MAX, LOG_LINES)
 }
 
+/// One read-change-write under the board lock; the page as it is on disk after.
+fn change<R>(
+    config_dir: &Path,
+    edit: impl FnOnce(&mut Vec<BoardCard>) -> Result<R, String>,
+) -> Result<(R, Page), String> {
+    let path = path(config_dir);
+    let (out, cards) = update_board(&path, edit)?;
+    Ok((out, page(&cards, board_stamp(&path))))
+}
+
+/// Adds a card to the end of Todo, as the cabin's New card does.
+pub fn add(config_dir: &Path, title: &str, detail: &str) -> Result<Page, String> {
+    if title.trim().is_empty() {
+        return Err("Type a title first.".into());
+    }
+    let ((), page) = change(config_dir, |cards| {
+        let mut new = BoardCard::new(&clip(title, TITLE_MAX), &clip(detail, DETAIL_MAX), "");
+        new.status = BoardStatus::Todo;
+        new.rank = end_rank(cards, KanbanColumn::Todo);
+        cards.push(new);
+        Ok(())
+    })?;
+    Ok(page)
+}
+
 fn find(cards: &[BoardCard], id: &str) -> Result<usize, String> {
     cards.iter().position(|c| c.id == id).ok_or(GONE.into())
 }
 
-fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<(), String> {
+/// Applies `act`; true when it changed the card. A no-op (a drop on the
+/// card's own column, a rank past the end) changes nothing and writes nothing.
+fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bool, String> {
     let i = find(cards, id)?;
     let changed = match act {
-        Act::Move { column } => {
-            let column = parse_column(column).ok_or("That column isn't on the board.")?;
+        Act::Edit { title, detail } => {
+            let (title, detail) = (clip(title, TITLE_MAX), clip(detail, DETAIL_MAX));
+            let c = &mut cards[i];
+            let changed = c.title != title || c.detail != detail;
+            c.title = title;
+            c.detail = detail;
+            changed
+        }
+        Act::Notes { notes } => {
+            let notes = grokhub_core::clean_card_notes(notes);
+            let changed = cards[i].notes != notes;
+            cards[i].notes = notes;
+            changed
+        }
+        Act::Move { to } => {
+            let column = to.column();
             if cards[i].status.column() == Some(column) {
                 false
             } else {
-                let rank = in_column(cards, column)
-                    .last()
-                    .map(|&j| cards[j].rank.saturating_add(1))
-                    .unwrap_or(0);
+                let rank = end_rank(cards, column);
                 let c = &mut cards[i];
                 c.status = column.status();
                 c.rank = rank;
@@ -368,24 +468,52 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<()
         Act::Restore => grokhub_core::restore_work_card(cards, id, now),
         Act::Delete => grokhub_core::delete_work_card(cards, id),
     };
-    if !changed {
-        return Err("Nothing changed.".into());
-    }
-    // A move, a reorder or a hand back is yours, so the sweep leaves the card.
-    if matches!(act, Act::Move { .. } | Act::Rank { .. } | Act::HandBack) {
+    // A change you made is yours, so the sweep leaves the card.
+    let yours = matches!(
+        act,
+        Act::Edit { .. } | Act::Notes { .. } | Act::Move { .. } | Act::Rank { .. } | Act::HandBack
+    );
+    if changed && yours {
         grokhub_core::mark_touched(cards, id, now);
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Board, String> {
-    let path = path(config_dir);
+pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
+    if let Act::Edit { title, .. } = &act {
+        if title.trim().is_empty() {
+            return Err("A card needs a title.".into());
+        }
+    }
     let now = grokhub_core::now_ms();
-    let ((), cards) = update_board(&path, |cards| apply(cards, id, &act, now))?;
-    if matches!(act, Act::Delete) {
+    let (changed, page) = change(config_dir, |cards| apply(cards, id, &act, now))?;
+    if changed && matches!(act, Act::Delete) {
         remove_work_log(&work_dir(config_dir), id);
     }
-    Ok(board(&cards, board_stamp(&path)))
+    Ok(page)
+}
+
+/// The card's first message for the main chat, with its notes. As the
+/// cabin's Work on it does, the card moves to the end of Doing unless it is
+/// done or an automation's Follow up, and stops being new. The chat is the
+/// shell's own, so the card is not linked to a cabin chat.
+pub fn work(config_dir: &Path, id: &str) -> Result<Work, String> {
+    let (prompt, page) = change(config_dir, |cards| {
+        let i = find(cards, id)?;
+        let prompt = grokhub_core::card_work_prompt(&cards[i]);
+        let to_doing = cards[i].status != BoardStatus::Done
+            && cards[i].automation.is_none()
+            && cards[i].status.column() != Some(KanbanColumn::Doing);
+        let rank = end_rank(cards, KanbanColumn::Doing);
+        let c = &mut cards[i];
+        if to_doing {
+            c.status = BoardStatus::InProgress;
+            c.rank = rank;
+        }
+        c.fresh = false;
+        Ok(prompt)
+    })?;
+    Ok(Work { prompt, page })
 }
 
 /// The first message Resume puts in the chat box: the card and where it left
@@ -422,9 +550,8 @@ fn cap_bytes(text: &str, max: usize) -> String {
 /// the card's chat. KB-03 replaces this body with the real resume (the capped
 /// resume block sent in the turn input); the command and its reply stay.
 pub fn resume(config_dir: &Path, id: &str, new_conversation: &str) -> Result<Resume, String> {
-    let path = path(config_dir);
     let now = grokhub_core::now_ms();
-    let ((conversation, prompt), cards) = update_board(&path, |cards| {
+    let ((conversation_id, prompt), page) = change(config_dir, |cards| {
         let i = find(cards, id)?;
         if !can_resume(&cards[i]) {
             return Err("Only a paused or interrupted run can resume.".into());
@@ -438,9 +565,9 @@ pub fn resume(config_dir: &Path, id: &str, new_conversation: &str) -> Result<Res
         Ok((conversation, prompt))
     })?;
     Ok(Resume {
-        conversation_id: conversation,
+        conversation_id,
         prompt,
-        board: board(&cards, board_stamp(&path)),
+        page,
     })
 }
 
@@ -450,18 +577,55 @@ mod tests {
     use grokhub_core::work_item::append_work_log;
     use grokhub_core::{Checkpoint, WorkStep};
 
-    fn dir(name: &str) -> PathBuf {
-        let config = std::env::temp_dir().join(format!(
-            "grokhub-shell-workboard-{name}-{}-{}",
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-shell-board-{name}-{}-{}",
             std::process::id(),
             grokhub_core::now_ms()
         ));
-        let _ = std::fs::remove_dir_all(&config);
-        std::fs::create_dir_all(&config).expect("cfg");
-        config
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
     }
 
-    fn card(id: &str, status: BoardStatus) -> BoardCard {
+    /// As the cabin writes it: a run card linked to its chat, a proposed card,
+    /// a blocked one, a Follow up from an automation and an archived one.
+    const CABIN: &str = r#"[
+  {"id":"w-1","title":"Fix the build","detail":"CI is red","status":"in_progress","priority":"high","threadId":"t-1","run":true,"notes":"Start with the lint job","notesSent":42},
+  {"id":"w-2","title":"Write release notes","detail":"","status":"proposed","priority":""},
+  {"id":"w-3","title":"Wait on review","detail":"","status":"blocked","priority":""},
+  {"id":"w-4","title":"Inbox digest","detail":"Two new mails","status":"follow_up","priority":"","automation":"auto-1","report":"Two new mails need a reply.","fresh":true,"updatedMs":1800000000000},
+  {"id":"w-5","title":"Old idea","detail":"","status":"dismissed","priority":""}
+]"#;
+
+    fn seed(name: &str) -> PathBuf {
+        let dir = temp_dir(name);
+        std::fs::write(path(&dir), CABIN).expect("seed");
+        dir
+    }
+
+    fn lane(page: &Page, lane: Lane) -> &[Card] {
+        &page
+            .columns
+            .iter()
+            .find(|c| c.lane == lane)
+            .expect("lane")
+            .cards
+    }
+
+    fn titles(page: &Page, l: Lane) -> Vec<String> {
+        lane(page, l).iter().map(|c| c.title.clone()).collect()
+    }
+
+    fn ids(page: &Page, l: Lane) -> Vec<String> {
+        lane(page, l).iter().map(|c| c.id.clone()).collect()
+    }
+
+    fn raw(dir: &Path) -> Vec<BoardCard> {
+        serde_json::from_str(&std::fs::read_to_string(path(dir)).expect("read")).expect("parse")
+    }
+
+    fn board_card(id: &str, status: BoardStatus) -> BoardCard {
         let mut c = BoardCard::new(id, "", "");
         c.id = id.into();
         c.title = format!("Card {id}");
@@ -470,7 +634,7 @@ mod tests {
     }
 
     fn paused(id: &str) -> BoardCard {
-        let mut c = card(id, BoardStatus::Blocked);
+        let mut c = board_card(id, BoardStatus::Blocked);
         c.run = true;
         c.origin = Some(WorkOrigin::Agent);
         c.thread_id = Some(format!("chat-{id}"));
@@ -499,46 +663,113 @@ mod tests {
 
     /// The cabin's save of a whole board, as `serde_json::to_string_pretty`.
     fn cabin_writes(config: &Path, cards: &[BoardCard]) {
-        std::fs::write(
-            config.join(FILE),
-            serde_json::to_string_pretty(cards).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(path(config), serde_json::to_string_pretty(cards).unwrap()).unwrap();
     }
 
     fn on_disk(config: &Path) -> Vec<BoardCard> {
-        read_board(&config.join(FILE)).unwrap()
+        read_board(&path(config)).unwrap()
     }
 
     #[test]
-    fn no_file_is_an_empty_board_with_four_columns() {
-        let config = dir("empty");
-        let b = load(&config).unwrap();
-        let ids: Vec<_> = b.columns.iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["todo", "doing", "blocked", "done"]);
-        assert!(b.columns.iter().all(|c| c.cards.is_empty()));
-        assert!(b.archived.is_empty() && b.follow_up.is_empty());
-        assert_eq!(b.stamp, 0);
-        assert!(!config.join(FILE).exists(), "loading writes nothing");
+    fn a_board_the_cabin_wrote_loads_into_its_columns() {
+        let dir = seed("cabin");
+        let page = load(&dir).expect("load");
+        assert_eq!(
+            page.columns
+                .iter()
+                .map(|c| (c.lane, c.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (Lane::FollowUp, "Follow up"),
+                (Lane::Todo, "Todo"),
+                (Lane::Doing, "Doing"),
+                (Lane::Blocked, "Blocked"),
+                (Lane::Done, "Done"),
+            ]
+        );
+        assert_eq!(titles(&page, Lane::FollowUp), vec!["Inbox digest"]);
+        assert_eq!(titles(&page, Lane::Todo), vec!["Write release notes"]);
+        assert_eq!(titles(&page, Lane::Doing), vec!["Fix the build"]);
+        assert_eq!(titles(&page, Lane::Blocked), vec!["Wait on review"]);
+        assert_eq!(titles(&page, Lane::Done), Vec::<String>::new());
+        assert_eq!(
+            page.archived
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["w-5"]
+        );
+        let digest = &page.columns[0].cards[0];
+        assert_eq!(
+            (digest.report.as_str(), digest.fresh),
+            ("Two new mails need a reply.", true)
+        );
+        assert_eq!(page.columns[2].cards[0].notes, "Start with the lint job");
+        assert!(page.stamp > 0);
+        // Loading writes nothing.
+        assert_eq!(std::fs::read_to_string(path(&dir)).expect("kept"), CABIN);
     }
 
     #[test]
-    fn a_card_made_by_the_cabin_shows_in_the_shell() {
-        let config = dir("cabin-card");
-        let mut follow = card("f", BoardStatus::FollowUp);
+    fn a_missing_file_is_an_empty_board_and_add_files_a_todo() {
+        let dir = temp_dir("add");
+        let empty = load(&dir).expect("empty");
+        assert!(empty.columns.iter().all(|c| c.cards.is_empty()));
+        assert!(empty.archived.is_empty());
+        assert_eq!(empty.stamp, 0);
+        assert!(!path(&dir).exists(), "loading writes nothing");
+
+        assert_eq!(
+            add(&dir, "   ", "x"),
+            Err("Type a title first.".to_string())
+        );
+        assert!(!path(&dir).exists());
+
+        let page = add(&dir, "  Ship the board  ", " in the shell ").expect("add");
+        assert_eq!(titles(&page, Lane::Todo), vec!["Ship the board"]);
+        let saved = raw(&dir);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].status, BoardStatus::Todo);
+        assert_eq!(saved[0].detail, "in the shell");
+        assert!(saved[0].id.starts_with('w'), "{}", saved[0].id);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp") || n.ends_with(".lock"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+
+        let page = add(&dir, "Second", "").expect("add");
+        assert_eq!(
+            titles(&page, Lane::Todo),
+            vec!["Ship the board", "Second"],
+            "a new card goes to the end of Todo"
+        );
+    }
+
+    #[test]
+    fn a_card_made_by_the_cabin_shows_its_run_in_the_shell() {
+        let config = temp_dir("cabin-card");
+        let mut follow = board_card("f", BoardStatus::FollowUp);
         follow.automation = Some("daily".into());
         // Saved before owners: loading fills the owner and the kind.
         follow.origin = None;
-        let mut gone = card("z", BoardStatus::Dismissed);
+        let mut gone = board_card("z", BoardStatus::Dismissed);
         gone.archived_ms = 5;
         cabin_writes(
             &config,
-            &[card("a", BoardStatus::Todo), paused("p"), follow, gone],
+            &[
+                board_card("a", BoardStatus::Todo),
+                paused("p"),
+                follow,
+                gone,
+            ],
         );
         let b = load(&config).unwrap();
-        assert_eq!(b.columns[0].cards[0].title, "Card a");
-        assert_eq!(b.columns[0].cards[0].owner, "You");
-        let p = &b.columns[2].cards[0];
+        assert_eq!(lane(&b, Lane::Todo)[0].title, "Card a");
+        assert_eq!(lane(&b, Lane::Todo)[0].owner, "You");
+        let p = &lane(&b, Lane::Blocked)[0];
         assert_eq!(p.owner, "Agent");
         assert!(p.can_resume);
         assert_eq!(p.left_off.as_deref(), Some("Finish the lexer"));
@@ -546,29 +777,104 @@ mod tests {
         assert_eq!(p.steps[1].status, "doing");
         assert_eq!(p.checkpoint.as_ref().unwrap().blocker, "Which grammar?");
         assert_eq!(p.chat.as_deref(), Some("chat-p"));
-        assert_eq!(b.follow_up[0].kind, Some("Automation"), "migrated on read");
-        assert_eq!(b.archived[0].column, "archived");
+        assert_eq!(
+            lane(&b, Lane::FollowUp)[0].kind,
+            Some("Automation"),
+            "migrated on read"
+        );
+        assert_eq!(b.archived[0].id, "z");
         assert!(b.stamp > 0);
     }
 
     #[test]
+    fn move_changes_one_card_and_keeps_the_others() {
+        let dir = seed("move");
+        let page = act(&dir, "w-2", Act::Move { to: Lane::Doing }).expect("move");
+        assert_eq!(
+            titles(&page, Lane::Doing),
+            vec!["Fix the build", "Write release notes"]
+        );
+        assert_eq!(titles(&page, Lane::Todo), Vec::<String>::new());
+        let saved = raw(&dir);
+        assert_eq!(
+            saved
+                .iter()
+                .map(|c| (c.id.as_str(), c.status))
+                .collect::<Vec<_>>(),
+            vec![
+                ("w-1", BoardStatus::InProgress),
+                ("w-2", BoardStatus::InProgress),
+                ("w-3", BoardStatus::Blocked),
+                ("w-4", BoardStatus::FollowUp),
+                ("w-5", BoardStatus::Dismissed),
+            ]
+        );
+        // The cabin's own fields ride along untouched.
+        assert_eq!(saved[0].thread_id.as_deref(), Some("t-1"));
+        assert!(saved[0].run);
+        assert_eq!(saved[0].notes_sent, 42);
+        assert_eq!(saved[3].automation.as_deref(), Some("auto-1"));
+        assert_eq!(saved[3].updated_ms, 1_800_000_000_000);
+        // The move is yours, and wins the cabin's merge.
+        assert!(saved[1].touched);
+        assert!(saved[1].rev > saved[2].rev);
+    }
+
+    #[test]
+    fn a_drop_on_its_own_column_writes_nothing() {
+        let dir = seed("same");
+        // Proposed already sits in Todo.
+        let page = act(&dir, "w-2", Act::Move { to: Lane::Todo }).expect("noop");
+        assert_eq!(titles(&page, Lane::Todo), vec!["Write release notes"]);
+        assert_eq!(std::fs::read_to_string(path(&dir)).expect("kept"), CABIN);
+    }
+
+    #[test]
+    fn an_edit_after_the_cabin_changed_the_file_keeps_the_cabin_change() {
+        let dir = seed("reload");
+        let first = load(&dir).expect("load");
+        assert_eq!(titles(&first, Lane::Blocked), vec!["Wait on review"]);
+        // The cabin adds a card and finishes the blocked one while the page is open.
+        let mut cabin = raw(&dir);
+        cabin[2].status = BoardStatus::Done;
+        let mut added = BoardCard::new("Added in the cabin", "", "");
+        added.status = BoardStatus::Todo;
+        cabin.push(added);
+        std::fs::write(path(&dir), serde_json::to_string(&cabin).expect("json")).expect("cabin");
+
+        let page = act(
+            &dir,
+            "w-2",
+            Act::Notes {
+                notes: "  Keep it short  ".into(),
+            },
+        )
+        .expect("notes");
+        assert_eq!(
+            titles(&page, Lane::Todo),
+            vec!["Write release notes", "Added in the cabin"]
+        );
+        assert_eq!(titles(&page, Lane::Done), vec!["Wait on review"]);
+        let saved = raw(&dir);
+        assert_eq!(saved.len(), 6);
+        assert_eq!(saved[1].notes, "Keep it short");
+        assert_eq!(saved[2].status, BoardStatus::Done);
+    }
+
+    #[test]
     fn a_shell_move_survives_a_cabin_save() {
-        let config = dir("merge");
+        let config = temp_dir("merge");
         cabin_writes(
             &config,
-            &[card("a", BoardStatus::Todo), card("b", BoardStatus::Todo)],
+            &[
+                board_card("a", BoardStatus::Todo),
+                board_card("b", BoardStatus::Todo),
+            ],
         );
         // The cabin loads the board, then the shell moves a card.
         let cabin_base = on_disk(&config);
-        let b = act(
-            &config,
-            "a",
-            Act::Move {
-                column: "doing".into(),
-            },
-        )
-        .unwrap();
-        assert_eq!(b.columns[1].cards[0].id, "a");
+        let b = act(&config, "a", Act::Move { to: Lane::Doing }).unwrap();
+        assert_eq!(ids(&b, Lane::Doing), ["a"]);
         let moved = on_disk(&config);
         assert!(moved[0].touched, "a move is yours");
         assert!(moved[0].rev > cabin_base[0].rev);
@@ -582,101 +888,188 @@ mod tests {
         cabin_writes(&config, &merged);
 
         let b = load(&config).unwrap();
-        assert_eq!(b.columns[1].cards[0].id, "a", "the shell's move kept");
+        assert_eq!(ids(&b, Lane::Doing), ["a"], "the shell's move kept");
         assert_eq!(
-            b.columns[0].cards[0].notes, "check the cable",
+            lane(&b, Lane::Todo)[0].notes,
+            "check the cable",
             "the cabin's edit kept"
         );
     }
 
     #[test]
-    fn rank_reorders_within_a_column_and_the_ends_refuse() {
-        let config = dir("rank");
-        cabin_writes(
-            &config,
-            &[
-                card("a", BoardStatus::Todo),
-                card("b", BoardStatus::Todo),
-                card("c", BoardStatus::Todo),
-            ],
-        );
-        let b = act(&config, "c", Act::Rank { up: true }).unwrap();
-        let ids: Vec<_> = b.columns[0].cards.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["a", "c", "b"]);
+    fn a_broken_file_is_an_error_and_is_left_alone() {
+        let dir = temp_dir("broken");
+        std::fs::write(path(&dir), "[{not json").expect("seed");
+        assert!(load(&dir)
+            .expect_err("broken")
+            .starts_with("workboard.json: "));
+        assert!(add(&dir, "New", "").is_err());
+        assert!(act(&dir, "w-1", Act::Archive).is_err());
+        assert!(work(&dir, "w-1").is_err());
+        assert!(resume(&dir, "w-1", "x").is_err());
         assert_eq!(
-            act(&config, "a", Act::Rank { up: true }).unwrap_err(),
-            "Nothing changed."
-        );
-        let b = act(&config, "a", Act::Rank { up: false }).unwrap();
-        let ids: Vec<_> = b.columns[0].cards.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["c", "a", "b"]);
-        // A moved card goes to the end of its new column.
-        act(
-            &config,
-            "b",
-            Act::Move {
-                column: "done".into(),
-            },
-        )
-        .unwrap();
-        let b = act(
-            &config,
-            "c",
-            Act::Move {
-                column: "done".into(),
-            },
-        )
-        .unwrap();
-        let ids: Vec<_> = b.columns[3].cards.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["b", "c"]);
-        assert_eq!(
-            act(
-                &config,
-                "c",
-                Act::Move {
-                    column: "nope".into()
-                }
-            )
-            .unwrap_err(),
-            "That column isn't on the board."
+            std::fs::read_to_string(path(&dir)).expect("kept"),
+            "[{not json"
         );
     }
 
     #[test]
-    fn hand_back_archive_restore_and_delete() {
-        let config = dir("life");
-        cabin_writes(&config, &[paused("p"), card("t", BoardStatus::Todo)]);
-        let b = act(&config, "p", Act::HandBack).unwrap();
-        let p = &b.columns[0].cards.iter().find(|c| c.id == "p").unwrap();
-        assert_eq!((p.owner, p.column), ("You", "todo"));
+    fn delete_removes_that_card_only_with_its_log() {
+        let dir = seed("delete");
+        append_work_log(&work_dir(&dir), "w-3", 1, "step", "did it").unwrap();
+        let page = act(&dir, "w-3", Act::Delete).expect("delete");
+        assert_eq!(titles(&page, Lane::Blocked), Vec::<String>::new());
         assert_eq!(
-            act(&config, "t", Act::HandBack).unwrap_err(),
-            "Nothing changed."
+            raw(&dir).iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["w-1", "w-2", "w-4", "w-5"]
         );
+        assert!(log_tail(&dir, "w-3").is_empty(), "its log is gone too");
+        assert_eq!(act(&dir, "w-3", Act::Delete), Err(GONE.to_string()));
+    }
 
-        let b = act(&config, "t", Act::Archive).unwrap();
-        assert_eq!(b.archived[0].id, "t");
-        let b = act(&config, "t", Act::Restore).unwrap();
-        assert!(b.archived.is_empty());
+    #[test]
+    fn archive_restore_and_edit() {
+        let dir = seed("archive");
+        let page = act(&dir, "w-3", Act::Archive).expect("archive");
+        assert_eq!(
+            page.archived
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["w-3", "w-5"]
+        );
+        let page = act(&dir, "w-5", Act::Restore).expect("restore");
+        assert_eq!(
+            titles(&page, Lane::Todo),
+            vec!["Write release notes", "Old idea"]
+        );
+        assert_eq!(
+            act(
+                &dir,
+                "w-5",
+                Act::Edit {
+                    title: " ".into(),
+                    detail: "x".into()
+                }
+            ),
+            Err("A card needs a title.".to_string())
+        );
+        let page = act(
+            &dir,
+            "w-5",
+            Act::Edit {
+                title: " New idea ".into(),
+                detail: " Try it ".into(),
+            },
+        )
+        .expect("edit");
+        assert_eq!(
+            titles(&page, Lane::Todo),
+            vec!["Write release notes", "New idea"]
+        );
+        assert_eq!(raw(&dir)[4].detail, "Try it");
+    }
 
-        append_work_log(&work_dir(&config), "t", 1, "step", "did it").unwrap();
-        let b = act(&config, "t", Act::Delete).unwrap();
-        assert!(b
-            .columns
-            .iter()
-            .all(|c| c.cards.iter().all(|x| x.id != "t")));
-        assert!(log_tail(&config, "t").is_empty(), "its log is gone too");
-        assert_eq!(act(&config, "t", Act::Archive).unwrap_err(), GONE);
+    #[test]
+    fn rank_reorders_within_a_column_and_the_ends_change_nothing() {
+        let config = temp_dir("rank");
+        cabin_writes(
+            &config,
+            &[
+                board_card("a", BoardStatus::Todo),
+                board_card("b", BoardStatus::Todo),
+                board_card("c", BoardStatus::Todo),
+            ],
+        );
+        let b = act(&config, "c", Act::Rank { up: true }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["a", "c", "b"]);
+        let before = std::fs::read_to_string(path(&config)).unwrap();
+        let b = act(&config, "a", Act::Rank { up: true }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["a", "c", "b"]);
+        assert_eq!(
+            std::fs::read_to_string(path(&config)).unwrap(),
+            before,
+            "the top card going up writes nothing"
+        );
+        let b = act(&config, "a", Act::Rank { up: false }).unwrap();
+        assert_eq!(ids(&b, Lane::Todo), ["c", "a", "b"]);
+        // A moved card goes to the end of its new column.
+        act(&config, "b", Act::Move { to: Lane::Done }).unwrap();
+        let b = act(&config, "c", Act::Move { to: Lane::Done }).unwrap();
+        assert_eq!(ids(&b, Lane::Done), ["b", "c"]);
+    }
+
+    #[test]
+    fn hand_back_makes_a_paused_run_yours() {
+        let config = temp_dir("hand-back");
+        cabin_writes(&config, &[paused("p"), board_card("t", BoardStatus::Todo)]);
+        let b = act(&config, "p", Act::HandBack).unwrap();
+        let p = lane(&b, Lane::Todo).iter().find(|c| c.id == "p").unwrap();
+        assert_eq!(p.owner, "You");
+        assert!(on_disk(&config)[0].touched);
+        // Your own card has nothing to hand back.
+        let before = std::fs::read_to_string(path(&config)).unwrap();
+        act(&config, "t", Act::HandBack).unwrap();
+        assert_eq!(std::fs::read_to_string(path(&config)).unwrap(), before);
+    }
+
+    #[test]
+    fn work_returns_the_prompt_and_moves_the_card_to_doing() {
+        let dir = seed("work");
+        act(
+            &dir,
+            "w-2",
+            Act::Notes {
+                notes: "Use the changelog fragments".into(),
+            },
+        )
+        .expect("notes");
+        let started = work(&dir, "w-2").expect("work");
+        assert_eq!(
+            started.prompt,
+            "Work on this workboard card: Write release notes\n\nMy notes for this card (follow them):\nUse the changelog fragments\n\nWhen it is done, say so in one line."
+        );
+        assert_eq!(
+            titles(&started.page, Lane::Doing),
+            vec!["Fix the build", "Write release notes"]
+        );
+        let saved = raw(&dir);
+        assert_eq!(saved[1].status, BoardStatus::InProgress);
+        // The shell's chat is not a cabin chat, so the card stays unlinked.
+        assert_eq!(saved[1].thread_id, None);
+        assert_eq!(saved[1].notes_sent, 0);
+
+        // A Follow up card is opened (no longer new) and stays in Follow up.
+        let digest = work(&dir, "w-4").expect("digest");
+        assert_eq!(
+            digest.prompt,
+            "Work on this workboard card: Inbox digest\n\nWhen it is done, say so in one line."
+        );
+        assert_eq!(titles(&digest.page, Lane::FollowUp), vec!["Inbox digest"]);
+        assert!(!raw(&dir)[3].fresh);
+        assert_eq!(raw(&dir)[3].status, BoardStatus::FollowUp);
+
+        assert_eq!(work(&dir, "w-9"), Err(GONE.to_string()));
+    }
+
+    #[test]
+    fn work_on_a_done_card_leaves_it_done() {
+        let dir = seed("done");
+        act(&dir, "w-3", Act::Move { to: Lane::Done }).expect("done");
+        let before = std::fs::read_to_string(path(&dir)).expect("before");
+        let started = work(&dir, "w-3").expect("work");
+        assert_eq!(titles(&started.page, Lane::Done), vec!["Wait on review"]);
+        assert_eq!(std::fs::read_to_string(path(&dir)).expect("after"), before);
     }
 
     #[test]
     fn resume_drafts_the_message_in_the_cards_chat() {
-        let config = dir("resume");
+        let config = temp_dir("resume");
         let mut no_chat = paused("q");
         no_chat.thread_id = None;
         cabin_writes(
             &config,
-            &[paused("p"), no_chat, card("t", BoardStatus::Todo)],
+            &[paused("p"), no_chat, board_card("t", BoardStatus::Todo)],
         );
         let r = resume(&config, "p", "shell-new").unwrap();
         assert_eq!(r.conversation_id, "chat-p");
@@ -700,7 +1093,7 @@ mod tests {
 
     #[test]
     fn the_log_is_read_on_ask_and_only_its_tail() {
-        let config = dir("log");
+        let config = temp_dir("log");
         for i in 0..30 {
             append_work_log(&work_dir(&config), "p", i, "step", &format!("line {i}")).unwrap();
         }
@@ -708,5 +1101,20 @@ mod tests {
         assert_eq!(lines.len(), LOG_LINES);
         assert_eq!(lines.last().unwrap().text, "line 29");
         assert!(log_tail(&config, "../escape").is_empty());
+    }
+
+    #[test]
+    fn acts_arrive_as_the_ui_sends_them() {
+        let parsed: Act = serde_json::from_str(r#"{"kind":"move","to":"followUp"}"#).expect("move");
+        assert!(matches!(parsed, Act::Move { to: Lane::FollowUp }));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"edit","title":"A","detail":"B"}"#).expect("edit");
+        assert!(matches!(parsed, Act::Edit { title, detail } if title == "A" && detail == "B"));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"delete"}"#).expect("delete");
+        assert!(matches!(parsed, Act::Delete));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"rank","up":true}"#).expect("rank");
+        assert!(matches!(parsed, Act::Rank { up: true }));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"handBack"}"#).expect("hand back");
+        assert!(matches!(parsed, Act::HandBack));
     }
 }
