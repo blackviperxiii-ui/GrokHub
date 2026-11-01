@@ -488,6 +488,41 @@ select:focus-visible {
   background: var(--user);
 }
 
+/* A row's key sits at its right edge. */
+.palette li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.palette kbd {
+  font: inherit;
+  font-size: 0.85em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.shortcuts h2 {
+  font-size: 1em;
+  margin: 0;
+}
+
+.shortcuts table {
+  border-collapse: collapse;
+}
+
+.shortcuts th,
+.shortcuts td {
+  padding: 4px 8px 4px 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.shortcuts th {
+  font-weight: normal;
+}
+
 .palette > button {
   align-self: flex-end;
 }
