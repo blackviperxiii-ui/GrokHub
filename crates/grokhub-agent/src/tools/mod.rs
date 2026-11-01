@@ -208,7 +208,7 @@ pub fn dispatch_for_job(
         }
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
-            None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
+            None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
         },
         other => ToolOutput::err(gate::readonly_refusal(other)),
     }
