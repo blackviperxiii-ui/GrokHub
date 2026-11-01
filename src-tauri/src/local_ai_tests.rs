@@ -336,6 +336,7 @@ fn saving_writes_the_pick_and_the_governors_rules() {
             deny: vec!["blender".into()],
             throttle_on_battery: false,
             pause_for_games: false,
+            unload_for_games: true,
             use_idle_time: false,
         }
     );
@@ -345,11 +346,12 @@ fn saving_writes_the_pick_and_the_governors_rules() {
 }
 
 #[test]
-fn a_third_party_file_needs_the_notice_once() {
+fn a_third_party_or_abliterated_file_needs_the_notice_once() {
     let seen = vec!["/m/Llama-3-8B-abliterated.Q4_K_M.gguf".to_string()];
-    // The catalog's own abliterated builds carry the badge but no notice.
+    // The catalog's own abliterated builds carry the badge and ask once too.
+    let catalog_path = "/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
     let catalog = file_row(
-        Path::new("/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"),
+        Path::new(catalog_path),
         5 * 1_024 * 1_024 * 1_024,
         "Loadout models",
         &[],
@@ -360,9 +362,19 @@ fn a_third_party_file_needs_the_notice_once() {
             catalog.abliterated,
             catalog.needs_notice
         ),
-        (false, true, false)
+        (false, true, true)
     );
     assert_eq!(catalog.size, "5 GB");
+    let catalog_read = file_row(
+        Path::new(catalog_path),
+        0,
+        "GrokHub models",
+        &[catalog_path.to_string()],
+    );
+    assert_eq!(
+        (catalog_read.abliterated, catalog_read.needs_notice),
+        (true, false)
+    );
     // A stock Gemma 4 file from the older catalog is a third-party file now.
     let stock = file_row(
         Path::new("/m/gemma-4-E4B-it-Q4_K_M.gguf"),
@@ -491,4 +503,17 @@ fn limited_detection_is_named() {
         ),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn saving_keeps_the_cabins_unload_choice() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-unload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let gov = dir.join("local").join("governor.json");
+    std::fs::create_dir_all(gov.parent().unwrap()).unwrap();
+    std::fs::write(&gov, r#"{"unloadForGames": false}"#).unwrap();
+    save(&dir, &LocalAiConfig::default()).unwrap();
+    let rules = Rules::from_json(&std::fs::read_to_string(&gov).unwrap());
+    assert!(!rules.unload_for_games);
+    let _ = std::fs::remove_dir_all(dir);
 }

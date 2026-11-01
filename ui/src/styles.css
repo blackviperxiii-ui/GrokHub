@@ -1391,6 +1391,42 @@ button.danger {
   flex: 1;
 }
 
+/* Local engine and draft model: cards like .card, full width. */
+.local-engine,
+.local-draft-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.local-engine h3,
+.local-draft-offer h3,
+.local-engine p,
+.local-draft-offer p {
+  margin: 0;
+}
+
+.local-engine button,
+.local-draft-offer button {
+  align-self: flex-start;
+}
+
+.note.local-engine-progress,
+.note.local-draft-progress {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.local-ai .note.error {
+  color: var(--danger-text);
+}
+
 .local-ai .notice {
   border: 1px solid var(--danger);
   border-radius: 8px;

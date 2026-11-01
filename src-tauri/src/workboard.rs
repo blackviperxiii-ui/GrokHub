@@ -871,7 +871,7 @@ mod tests {
   {"id":"w-2","title":"Write release notes","detail":"","status":"proposed","priority":""},
   {"id":"w-3","title":"Wait on review","detail":"","status":"blocked","priority":""},
   {"id":"w-4","title":"Inbox digest","detail":"Two new mails","status":"follow_up","priority":"","automation":"auto-1","report":"Two new mails need a reply.","fresh":true,"updatedMs":1800000000000},
-  {"id":"w-5","title":"Old idea","detail":"","status":"dismissed","priority":""}
+  {"id":"w-5","title":"Old idea","detail":"","status":"dismissed","priority":"","updatedMs":1700000000000}
 ]"#;
 
     fn seed(name: &str) -> PathBuf {

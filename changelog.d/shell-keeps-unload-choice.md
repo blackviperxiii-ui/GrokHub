@@ -1,0 +1,1 @@
+- Shell: saving Local AI settings keeps the cabin's "When a game or fullscreen app runs" choice in `local/governor.json` instead of failing to build.

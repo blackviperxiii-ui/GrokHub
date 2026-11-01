@@ -515,6 +515,84 @@ pub fn rank_efficient(
     keyed.into_iter().map(|k| k.5.to_string()).collect()
 }
 
+/// A busy answer (429/503) counts for [`rank_efficient`] this long.
+pub const BUSY_WINDOW_MS: u64 = 15 * 60_000;
+
+/// Rank for a tight week ("Auto: all models" with the budget at 80%): among
+/// the models that fit the step nearly as well as the best one (85% of its
+/// capability score, so a hard step never lands on a tiny model), the one
+/// that answers for the least without a slowdown or a limit. Degraded last,
+/// then a model that answered busy (429/503) in its last few calls within
+/// [`BUSY_WINDOW_MS`], then the good-enough ones first, then the lowest
+/// expected cost (an unpriced model counts as dearest), then the quickest
+/// recent answers, then the id.
+pub fn rank_efficient(
+    class: &str,
+    candidates: &[&str],
+    reg: &Registry,
+    ctx_tokens: u64,
+    now_ms: u64,
+) -> Vec<String> {
+    let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
+    let busy = |id: &str| {
+        reg.get(id).is_some_and(|r| {
+            r.health
+                .recent
+                .iter()
+                .rev()
+                .take(3)
+                .any(|c| c.pressure && now_ms.saturating_sub(c.ts_ms) <= BUSY_WINDOW_MS)
+        })
+    };
+    let cost = |id: &str| {
+        reg.get(id)
+            .and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens))
+            .unwrap_or(f64::MAX)
+    };
+    let p50 = |id: &str| {
+        let mut ms: Vec<u64> = reg
+            .get(id)
+            .map(|r| {
+                r.health
+                    .recent
+                    .iter()
+                    .filter(|c| c.ok)
+                    .map(|c| c.latency_ms)
+                    .collect()
+            })
+            .unwrap_or_default();
+        ms.sort_unstable();
+        ms.get(ms.len() / 2).copied().unwrap_or(u64::MAX)
+    };
+    let need = super::capabilities::class_need(class);
+    let lane = super::capabilities::BaselineLane::of(class);
+    let caps_of = |id: &str| {
+        let mut caps = super::capabilities::derive_caps(
+            &reg.get(id)
+                .map(|r| r.meta.clone())
+                .unwrap_or_else(|| grokhub_core::model_registry::ModelMeta::bare(id)),
+        );
+        super::capabilities::apply_seed(id, &mut caps);
+        caps
+    };
+    let plan_caps: Vec<_> = candidates.iter().map(|id| caps_of(id)).collect();
+    let plan_max_r = super::capabilities::plan_max_reasoning(plan_caps.iter());
+    let fit = |id: &str| super::capabilities::baseline_score(&caps_of(id), &need, lane, plan_max_r);
+    let best = candidates.iter().map(|id| fit(id)).fold(f64::MIN, f64::max);
+    let short = |id: &str| fit(id) < best * 0.85;
+    let mut out: Vec<&str> = candidates.to_vec();
+    out.sort_by(|a, b| {
+        degraded(a)
+            .cmp(&degraded(b))
+            .then(busy(a).cmp(&busy(b)))
+            .then(short(a).cmp(&short(b)))
+            .then(cost(a).total_cmp(&cost(b)))
+            .then(p50(a).cmp(&p50(b)))
+            .then(a.cmp(b))
+    });
+    out.into_iter().map(str::to_string).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
