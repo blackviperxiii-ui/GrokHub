@@ -5,8 +5,10 @@ import {
   cancelChat,
   closeChat,
   getSettings,
+  setModel,
   onChatEvent,
   onEventGap,
+  runSlash,
   saveSettings,
   sendChat,
   type Answer,
@@ -15,12 +17,15 @@ import {
   type ElicitAction,
   type SessionMode,
   type Settings,
+  type SlashEffect,
+  type SlashHit,
   type Suggestion,
 } from "./api";
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
+import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 
 export type Item =
@@ -38,6 +43,8 @@ export type Item =
     }
   | { kind: "suggest"; items: Suggestion[] }
   | ({ kind: "notice" } & RunNotice)
+  /** What a slash command did. It stays in the log and never reaches the model. */
+  | { kind: "slash"; command: string; text: string }
   | ElicitItem;
 
 /** How much of a run's reply its notice shows; Automations has the rest. */
@@ -86,28 +93,39 @@ export interface Prefill {
 }
 
 const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: "Message Grok",
+  chat: `Message ${PRODUCT_NAME}`,
   plan: "Describe what to plan",
   btw: "Ask on the side",
 };
 
-export const CHAT_EMPTY = "Ask Grok anything.";
+export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
   `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
+export const SIGNED_OUT_GROK =
+  `Sign in with your Grok account, or add an xAI API key. Either one is kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";
 export const SIGNED_OUT_REMOTE =
-  `${PRODUCT_NAME} on your computer has no API key yet. Add one there, then chat here.`;
+  `${PRODUCT_NAME} on your computer isn't signed in yet. Sign in there, then chat here.`;
 
 /** One primary sign-in button and one hint, on every platform. The web app
  * signs in on the computer, so it only says so. */
-function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void }) {
+function SignedOut({
+  remote,
+  grok,
+  onSignIn,
+}: {
+  remote: boolean;
+  /** This device offers Sign in with Grok. */
+  grok: boolean;
+  onSignIn: () => void;
+}) {
   if (remote) return <p className="empty">{SIGNED_OUT_REMOTE}</p>;
   return (
     <div className="signed-out" role="region" aria-label="Sign in">
       <h2>Sign in to start</h2>
-      <p>{SIGNED_OUT}</p>
+      <p>{grok ? SIGNED_OUT_GROK : SIGNED_OUT}</p>
       <button type="button" onClick={onSignIn}>
-        Add your API key
+        {grok ? "Sign in with Grok" : "Add your API key"}
       </button>
       <p className="note">{SIGNED_OUT_KEY_HINT}</p>
     </div>
@@ -139,6 +157,13 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     }
     case "permission":
       return [...items, { ...event, answer: null }];
+    // Deny on a notification: the card shows what ran, unless the turn already ended.
+    case "answered":
+      return items.map((item) =>
+        item.kind === "permission" && item.id === event.id && item.answer !== "ended"
+          ? { ...item, answer: event.answer }
+          : item,
+      );
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
@@ -254,19 +279,25 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenAutomations,
+  onOpenView,
   prefill,
   notice,
   active = true,
   remote = false,
+  grokSignIn = false,
 }: {
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
   onOpenAutomations?: () => void;
+  /** `/memory`, `/connectors` and the like open their page. */
+  onOpenView?: (view: Extract<SlashEffect, { kind: "open" }>["view"]) => void;
   prefill?: Prefill;
   notice?: RunNotice & { n: number };
   active?: boolean;
   remote?: boolean;
+  /** Settings → Account offers Sign in with Grok here. */
+  grokSignIn?: boolean;
 }) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
@@ -277,10 +308,24 @@ export function Chat({
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const slashRows = useSlashHits(draft);
+  const [slashAt, setSlashAt] = useState(0);
+  // Escape hides the list until the draft changes.
+  const [slashShut, setSlashShut] = useState<string | null>(null);
+  const slashOpen = slashRows.length > 0 && slashShut !== draft;
+  const slashPick = Math.min(slashAt, slashRows.length - 1);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
+
+  async function pickModel(id: string) {
+    try {
+      setSettings(await setModel(id));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   async function setApprovals(approvals: Approvals) {
     if (!settings) return;
@@ -353,11 +398,16 @@ export function Chat({
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
-  /** Sends the draft, or `picked` from a suggestion (the draft stays). */
-  async function send(event?: FormEvent, picked?: string) {
+  /** Sends the draft, or `picked` from a suggestion (the draft stays).
+   * `as` sends in that mode, for `/plan <text>`. A slash line runs here. */
+  async function send(event?: FormEvent, picked?: string, as?: SessionMode) {
     event?.preventDefault();
     const text = (picked ?? draft).trim();
     if (!text || busy) return;
+    if (picked === undefined && isSlashCommand(text)) {
+      await slash(text);
+      return;
+    }
     // Suggestions belong to the reply they followed.
     setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
     if (picked === undefined) setDraft("");
@@ -365,7 +415,7 @@ export function Chat({
     busyRef.current = true;
     setBusy(true);
     try {
-      await sendChat(conversationId, text, mode);
+      await sendChat(conversationId, text, as ?? mode);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -401,7 +451,78 @@ export function Chat({
     }
   }
 
+  /** Runs a slash line and applies what it did. */
+  async function slash(line: string) {
+    setError(null);
+    let effect: SlashEffect;
+    try {
+      effect = await runSlash(line);
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    setDraft("");
+    const command = line.split(/\s+/)[0];
+    switch (effect.kind) {
+      case "newChat":
+        startOver();
+        break;
+      case "mode":
+        setMode(effect.mode);
+        if (effect.text) void send(undefined, effect.text, effect.mode);
+        break;
+      case "open":
+        onOpenView?.(effect.view);
+        break;
+      case "modelSet":
+        getSettings().then(setSettings, () => {});
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+      case "notice":
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+    }
+  }
+
+  /** Tab fills a row in; Enter or a click runs one that takes no text. */
+  function pickSlash(hit: SlashHit | undefined, run: boolean) {
+    if (!hit) return;
+    if (hit.disabled) {
+      setError(`${hit.cmd}: ${hit.disabled}`);
+      return;
+    }
+    if (run && hit.runOnPick) void slash(hit.cmd);
+    else setDraft(hit.insert);
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (slashOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setSlashAt((slashPick + step + slashRows.length) % slashRows.length);
+        return;
+      }
+      if (event.key === "Tab" && !event.shiftKey) {
+        event.preventDefault();
+        pickSlash(slashRows[slashPick], false);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashShut(draft);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        const hit = slashRows[slashPick];
+        // A typed full command runs as typed; otherwise the pick is used.
+        if (hit && hit.cmd !== draft.trim().toLowerCase()) {
+          event.preventDefault();
+          pickSlash(hit, true);
+          return;
+        }
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
@@ -427,8 +548,8 @@ export function Chat({
     <section className="chat" aria-label="Chat">
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
-        {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
-          <SignedOut remote={remote} onSignIn={onSignIn} />
+        {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
+          <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
           items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
         )}
@@ -491,6 +612,18 @@ export function Chat({
                   </div>
                 </div>
               );
+            case "slash":
+              return (
+                <div
+                  key={i}
+                  className="card notice slash-notice"
+                  role="status"
+                  aria-label={`${item.command} result`}
+                >
+                  <span className="card-title">{item.command}</span>
+                  <p className="card-detail-line plain">{item.text}</p>
+                </div>
+              );
             case "suggest":
               return (
                 <SuggestRow
@@ -526,14 +659,31 @@ export function Chat({
         onApprovals={(a) => void setApprovals(a)}
         busy={busy}
         remote={remote}
+        model={settings?.model ?? null}
+        onModel={(id) => void pickModel(id)}
       />
-      <form className="composer" onSubmit={send}>
+      <form className="composer slash-wrap" onSubmit={send}>
+        {slashOpen && (
+          <SlashMenu
+            hits={slashRows}
+            at={slashPick}
+            onHover={setSlashAt}
+            onPick={(hit) => pickSlash(hit, true)}
+          />
+        )}
         <textarea
           aria-label="Message"
           placeholder={PLACEHOLDERS[mode]}
           value={draft}
           rows={2}
-          onChange={(e) => setDraft(e.target.value)}
+          role={slashOpen ? "combobox" : undefined}
+          aria-expanded={slashOpen ? true : undefined}
+          aria-controls={slashOpen ? "slash-menu" : undefined}
+          aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setSlashAt(0);
+          }}
           onKeyDown={onKeyDown}
         />
         {busy ? (

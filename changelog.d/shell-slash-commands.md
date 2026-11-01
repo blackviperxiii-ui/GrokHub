@@ -1,0 +1,1 @@
+- Shell: typing `/` in the composer lists commands (Up, Down, Tab, Enter, Escape) and runs /new, /clear, /chat, /plan, /btw, /remember, /model, /help, /settings, /memory, /automations and /connectors without sending them to the model; the cabin's other commands show greyed with where they live.

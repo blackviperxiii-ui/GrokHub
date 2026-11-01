@@ -65,6 +65,20 @@ pub(super) fn local_model_hint(
     }
 }
 
+/// LO-48: the typo tidy switch's title.
+pub(super) const PROMPT_CLEANUP_TITLE: &str = "Tidy typos on this computer (can change wording)";
+
+/// The typo tidy switch's hint, by state. It leads with On or Off (SB-07).
+pub(super) fn prompt_cleanup_hint(local_on: bool, on: bool) -> String {
+    match (local_on, on) {
+        (false, _) => "Off. Turn on the on-device model first.".into(),
+        (true, false) => "Off. Your messages go to the model exactly as you type them.".into(),
+        (true, true) => "On. The on-device model fixes typos first (up to 0.3 s). \
+Your chat keeps what you typed; numbers, names, paths and links are never changed."
+            .into(),
+    }
+}
+
 /// The quiet status line after a flip, naming the live tier when the route is live.
 pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> String {
     match (on, installed) {
@@ -76,9 +90,7 @@ pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> Strin
     }
 }
 
-struct HttpRuntimeFetch {
-    url: String,
-}
+struct HttpRuntimeFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {
     // Redirects are followed by hand so every hop is checked; public IPs only.
@@ -109,8 +121,8 @@ fn is_redirect(status: u16) -> bool {
 }
 
 impl RuntimeFetch for HttpRuntimeFetch {
-    fn open(&self, offset: u64) -> Result<md::Opened, String> {
-        let mut url = self.url.clone();
+    fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
+        let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
             runtime_download_url_ok(&url)?;
             crate::xai::egress_ok(&url, &[])?;
@@ -147,6 +159,42 @@ impl RuntimeFetch for HttpRuntimeFetch {
     }
 }
 
+/// The faster-engine row for platform `key`: its note, its button label and
+/// the build the button gets. CUDA is offered for an NVIDIA card with a new
+/// enough driver, ROCm for a recent discrete Radeon; with either installed,
+/// the row offers the way back.
+fn faster_engine_row(
+    key: &str,
+    installed: Option<&str>,
+    gpus: &[grokhub_core::local_profile::Gpu],
+) -> Option<(String, String, Manifest)> {
+    let size = |m: &Manifest| grokhub_core::local_setup::size_label(m.total_size() / MIB);
+    let names = |v: &str| match v {
+        "cuda" => ("CUDA", "NVIDIA"),
+        _ => ("ROCm", "AMD"),
+    };
+    if let Some(v) = installed.filter(|v| matches!(*v, "cuda" | "rocm")) {
+        let m = rd::manifest_for_key(key)?;
+        let (build, card) = names(v);
+        let label = format!("Use the standard engine ({})", size(&m));
+        return Some((
+            format!("Engine build: {build}, for your {card} GPU."),
+            label,
+            m,
+        ));
+    }
+    let m = rd::faster_engine_for(key, gpus)?;
+    let (build, card) = names(m.variant.as_deref().unwrap_or_default());
+    let note = format!(
+        "Faster engine for your {card} GPU: llama.cpp {} {build} build · {} · from {}",
+        m.version,
+        size(&m),
+        m.asset.source_host().unwrap_or("github.com")
+    );
+    let label = format!("Get faster engine ({})", size(&m));
+    Some((note, label, m))
+}
+
 pub(super) fn runtime_outcome_status(
     manifest: &Manifest,
     out: &RuntimeOutcome,
@@ -161,7 +209,7 @@ pub(super) fn runtime_outcome_status(
         ),
         RuntimeOutcome::Paused { done } => format!(
             "Paused the engine download at {}. Resume picks up where it stopped.",
-            md::progress_line(*done, Some(manifest.asset.size))
+            md::progress_line(*done, Some(manifest.total_size()))
         ),
         RuntimeOutcome::Cancelled => "Cancelled the engine download.".into(),
         RuntimeOutcome::BadChecksum => {
@@ -245,6 +293,7 @@ impl Cabin {
         }
         self.persist_cfg();
         local::set_enabled(on);
+        local::set_prompt_cleanup(on && self.cfg.prompt_cleanup);
         if on {
             local_sidecar::cancel_pending_stop();
         } else {
@@ -274,6 +323,7 @@ impl Cabin {
         ) {
             self.set_local_model(on);
         }
+        self.ui_prompt_cleanup_row(ui);
         if !installed
             && crate::cards::settings_action(
                 ui,
@@ -315,12 +365,38 @@ impl Cabin {
         }
     }
 
+    /// LO-48: the typo tidy switch, off by default and greyed out while
+    /// Local AI is off.
+    fn ui_prompt_cleanup_row(&mut self, ui: &mut egui::Ui) {
+        let local_on = self.cfg.local_model;
+        let mut on = self.cfg.prompt_cleanup;
+        let hint = prompt_cleanup_hint(local_on, on);
+        let hit = ui
+            .add_enabled_ui(local_on, |ui| {
+                crate::cards::settings_toggle(ui, PROMPT_CLEANUP_TITLE, &hint, &mut on)
+            })
+            .inner;
+        if hit && local_on {
+            self.set_prompt_cleanup(on);
+        }
+    }
+
+    /// Save the typo tidy switch and hand it to the agent now.
+    pub(super) fn set_prompt_cleanup(&mut self, on: bool) {
+        if self.cfg.prompt_cleanup == on {
+            return;
+        }
+        self.cfg.prompt_cleanup = on;
+        self.persist_cfg();
+        local::set_prompt_cleanup(self.cfg.local_model && on);
+    }
+
     fn runtime_engine_row_hint(&self, manifest: &Manifest) -> String {
         let host = manifest.asset.source_host().unwrap_or("github.com");
         format!(
             "llama.cpp {} · {} · from {}",
             manifest.version,
-            grokhub_core::local_setup::size_label(manifest.asset.size / MIB),
+            grokhub_core::local_setup::size_label(manifest.total_size() / MIB),
             host
         )
     }
@@ -332,6 +408,9 @@ impl Cabin {
             &format!("Local engine: {}", local_sidecar::runtime_label(&runtime)),
         );
         if runtime != local_sidecar::Runtime::Missing {
+            if rd::engine_installed(&self.config_dir()) {
+                self.ui_faster_engine_row(ui);
+            }
             return;
         }
         let manifest = match rd::manifest_for_host() {
@@ -341,6 +420,95 @@ impl Cabin {
                 return;
             }
         };
+        if self.ui_runtime_download_progress(ui) {
+            return;
+        }
+        let partial = rd::partial_total(&rd::bin_dir(&self.config_dir()), &manifest);
+        let label = match partial {
+            Some(b) => format!(
+                "Resume engine {} ({})",
+                manifest.version,
+                md::progress_line(b, Some(manifest.total_size()))
+            ),
+            None => format!(
+                "Get engine {} ({})",
+                manifest.version,
+                grokhub_core::local_setup::size_label(manifest.total_size() / MIB)
+            ),
+        };
+        crate::cards::settings_note(ui, &self.runtime_engine_row_hint(&manifest));
+        let mut get = false;
+        let mut discard = false;
+        ui.horizontal(|ui| {
+            if crate::cards::white_pill(ui, &label) {
+                get = true;
+            }
+            if partial.is_some() && crate::cards::ghost_pill(ui, "Discard") {
+                discard = true;
+            }
+        });
+        if get {
+            self.start_runtime_download(manifest);
+        } else if discard {
+            self.discard_runtime_partial(&manifest);
+        }
+        self.ui_runtime_download_error(ui);
+    }
+
+    /// With the standard engine in `{config}/bin` and an NVIDIA card whose
+    /// driver is new enough: offer the CUDA build. With the CUDA build in:
+    /// offer the way back. Never downloaded unasked; it is hundreds of MB.
+    fn ui_faster_engine_row(&mut self, ui: &mut egui::Ui) {
+        if self.ui_runtime_download_progress(ui) {
+            return;
+        }
+        let cfg = self.config_dir();
+        let gpus = grokhub_agent::route::local_autoconfig::profile()
+            .map(|p| p.gpus)
+            .unwrap_or_default();
+        let row = rd::platform_key()
+            .and_then(|key| faster_engine_row(key, rd::installed_variant(&cfg).as_deref(), &gpus));
+        let Some((note, label, manifest)) = row else {
+            return;
+        };
+        let partial = rd::partial_total(&rd::bin_dir(&cfg), &manifest);
+        let label = match partial {
+            Some(b) => format!(
+                "Resume ({})",
+                md::progress_line(b, Some(manifest.total_size()))
+            ),
+            None => label,
+        };
+        crate::cards::settings_note(ui, &note);
+        let mut get = false;
+        let mut discard = false;
+        ui.horizontal(|ui| {
+            if crate::cards::ghost_pill(ui, &label) {
+                get = true;
+            }
+            if partial.is_some() && crate::cards::ghost_pill(ui, "Discard") {
+                discard = true;
+            }
+        });
+        if get {
+            self.start_runtime_download(manifest);
+        } else if discard {
+            self.discard_runtime_partial(&manifest);
+        }
+        self.ui_runtime_download_error(ui);
+    }
+
+    fn ui_runtime_download_error(&mut self, ui: &mut egui::Ui) {
+        if let Some(err) = self.setup.runtime_dl_error.as_deref() {
+            crate::cards::settings_note(ui, err);
+            if crate::cards::ghost_pill(ui, "Clear error") {
+                self.setup.runtime_dl_error = None;
+            }
+        }
+    }
+
+    /// The running engine download's progress, Pause and Cancel; false when none runs.
+    fn ui_runtime_download_progress(&mut self, ui: &mut egui::Ui) -> bool {
         if let Some(dl) = &self.setup.runtime_dl {
             let line = if dl.verifying {
                 format!("Downloading engine {}: checking…", dl.manifest.version)
@@ -370,43 +538,9 @@ impl Cabin {
             if cancel {
                 self.cancel_runtime_download();
             }
-            return;
+            return true;
         }
-        let partial = rd::partial_bytes(&rd::bin_dir(&self.config_dir()), &manifest.asset);
-        let label = match partial {
-            Some(b) => format!(
-                "Resume engine {} ({})",
-                manifest.version,
-                md::progress_line(b, Some(manifest.asset.size))
-            ),
-            None => format!(
-                "Get engine {} ({})",
-                manifest.version,
-                grokhub_core::local_setup::size_label(manifest.asset.size / MIB)
-            ),
-        };
-        crate::cards::settings_note(ui, &self.runtime_engine_row_hint(&manifest));
-        let mut get = false;
-        let mut discard = false;
-        ui.horizontal(|ui| {
-            if crate::cards::white_pill(ui, &label) {
-                get = true;
-            }
-            if partial.is_some() && crate::cards::ghost_pill(ui, "Discard") {
-                discard = true;
-            }
-        });
-        if get {
-            self.start_runtime_download(manifest);
-        } else if discard {
-            self.discard_runtime_partial(&manifest);
-        }
-        if let Some(err) = self.setup.runtime_dl_error.as_deref() {
-            crate::cards::settings_note(ui, err);
-            if crate::cards::ghost_pill(ui, "Clear error") {
-                self.setup.runtime_dl_error = None;
-            }
-        }
+        false
     }
 
     pub(super) fn start_runtime_download(&mut self, manifest: Manifest) {
@@ -414,23 +548,32 @@ impl Cabin {
             return;
         }
         let cfg = self.config_dir();
-        let total_bytes = manifest.asset.size;
+        let total_bytes = manifest.total_size();
         let version = manifest.version.clone();
         let ctl = Arc::new(Control::default());
         let (tx, rx) = mpsc::channel();
-        let fetch = HttpRuntimeFetch {
-            url: manifest.asset.url.clone(),
-        };
+        let fetch = HttpRuntimeFetch;
         let worker = ctl.clone();
         let man = manifest.clone();
         let cfg_worker = cfg.clone();
+        // Swapping builds under a running engine: stop it once the last
+        // archive is checked, so its libraries can be replaced.
+        let swap = rd::engine_installed(&cfg);
+        let archives = manifest.assets().count();
         std::thread::spawn(move || {
+            let mut checked = 0;
             let out = rd::download_engine(&cfg_worker, &man, &fetch, &worker, &mut |p| {
+                if matches!(p, Progress::Verifying) {
+                    checked += 1;
+                    if swap && checked == archives {
+                        local_sidecar::stop_global();
+                    }
+                }
                 let _ = tx.send(RuntimeDlEvent::Progress(p));
             });
             let _ = tx.send(RuntimeDlEvent::Finished(out));
         });
-        let done = rd::partial_bytes(&rd::bin_dir(&cfg), &manifest.asset).unwrap_or(0);
+        let done = rd::partial_total(&rd::bin_dir(&cfg), &manifest).unwrap_or(0);
         self.status = format!(
             "Downloading llama.cpp {} to {}",
             version,
@@ -453,10 +596,10 @@ impl Cabin {
     }
 
     fn discard_runtime_partial(&mut self, manifest: &Manifest) {
-        let _ = std::fs::remove_file(rd::part_path_for_asset(
-            &rd::bin_dir(&self.config_dir()),
-            &manifest.asset,
-        ));
+        let bin = rd::bin_dir(&self.config_dir());
+        for asset in manifest.assets() {
+            let _ = std::fs::remove_file(rd::part_path_for_asset(&bin, asset));
+        }
         self.status = "Discarded the partial engine download.".into();
     }
 
@@ -532,6 +675,65 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn card(
+        vendor: grokhub_core::local_profile::GpuVendor,
+        driver: &str,
+    ) -> grokhub_core::local_profile::Gpu {
+        grokhub_core::local_profile::Gpu {
+            vendor,
+            name: "card".into(),
+            vram_mb: 8192,
+            free_vram_mb: None,
+            integrated: false,
+            unified: false,
+            driver: driver.into(),
+        }
+    }
+
+    #[test]
+    fn the_faster_engine_is_offered_for_nvidia_and_can_be_undone() {
+        use grokhub_core::local_profile::GpuVendor::{Amd, Nvidia};
+        for key in ["windows-x86_64", "linux-x86_64"] {
+            let (note, label, m) =
+                faster_engine_row(key, None, &[card(Nvidia, "560.94")]).expect(key);
+            assert!(
+                note.starts_with("Faster engine for your NVIDIA GPU"),
+                "{note}"
+            );
+            assert!(label.starts_with("Get faster engine ("), "{label}");
+            assert_eq!(m.variant.as_deref(), Some("cuda"));
+            assert!(faster_engine_row(key, None, &[card(Amd, "24.10")]).is_none());
+            assert!(faster_engine_row(key, None, &[card(Nvidia, "470.10")]).is_none());
+            let (note, label, back) = faster_engine_row(key, Some("cuda"), &[]).expect(key);
+            assert_eq!(note, "Engine build: CUDA, for your NVIDIA GPU.");
+            assert!(label.starts_with("Use the standard engine ("), "{label}");
+            assert_eq!(back.variant, None);
+        }
+        assert!(faster_engine_row("macos-aarch64", None, &[card(Nvidia, "560.94")]).is_none());
+    }
+
+    #[test]
+    fn the_faster_engine_is_offered_for_a_recent_radeon_on_windows() {
+        use grokhub_core::local_profile::GpuVendor::Amd;
+        let radeon = grokhub_core::local_profile::Gpu {
+            name: "AMD Radeon RX 7800 XT".into(),
+            ..card(Amd, "32.0.21001.9024")
+        };
+        let (note, _, m) =
+            faster_engine_row("windows-x86_64", None, std::slice::from_ref(&radeon)).unwrap();
+        assert!(
+            note.starts_with("Faster engine for your AMD GPU: llama.cpp "),
+            "{note}"
+        );
+        assert!(note.contains(" ROCm build "), "{note}");
+        assert_eq!(m.variant.as_deref(), Some("rocm"));
+        assert!(faster_engine_row("linux-x86_64", None, &[radeon]).is_none());
+        let (note, label, back) = faster_engine_row("windows-x86_64", Some("rocm"), &[]).unwrap();
+        assert_eq!(note, "Engine build: ROCm, for your AMD GPU.");
+        assert!(label.starts_with("Use the standard engine ("), "{label}");
+        assert_eq!(back.variant, None);
+    }
 
     #[test]
     fn settings_reads_this_pc_before_offering_a_default_model() {
@@ -660,6 +862,33 @@ mod tests {
             local_model_status(true, false, "local:small"),
             "On-device model for background tasks: on, no local model installed"
         );
+    }
+
+    #[test]
+    fn the_typo_tidy_is_off_by_default_and_needs_local_ai() {
+        let root = std::env::temp_dir().join(format!("grokhub-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        assert!(!app.cfg.prompt_cleanup);
+        assert_eq!(
+            prompt_cleanup_hint(false, false),
+            "Off. Turn on the on-device model first."
+        );
+        assert!(prompt_cleanup_hint(true, true).starts_with("On. "));
+        // On with Local AI off: saved, but the agent keeps it off.
+        app.set_prompt_cleanup(true);
+        assert!(app.cfg.prompt_cleanup);
+        assert!(!local::prompt_cleanup());
+        app.cfg.local_model = true;
+        app.set_prompt_cleanup(false);
+        app.set_prompt_cleanup(true);
+        assert!(local::prompt_cleanup());
+        app.set_prompt_cleanup(false);
+        assert!(!local::prompt_cleanup());
+        local::set_enabled(false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

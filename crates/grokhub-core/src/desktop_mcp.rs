@@ -28,8 +28,14 @@ pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
 const PREFERRED_PROTOCOL: &str = PROTOCOLS[0];
 const PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub const OFF_MSG: &str =
-    "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
+/// Settings → Defaults: the desktop-control switch's label.
+pub static DESKTOP_CONTROL_ROW: std::sync::LazyLock<&'static str> =
+    std::sync::LazyLock::new(|| crate::brand::filled("Let {product} control the desktop"));
+pub static OFF_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled(
+        "Desktop control is off. Turn on Settings → Let {product} control the desktop.",
+    )
+});
 pub static HALT_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
     crate::brand::filled(
         "Desktop control was halted (Ctrl+Alt+H). Open {product} again to use the screen.",
@@ -658,7 +664,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
         };
         if !gate.enabled {
             self.backend.suspend_input();
-            return tool_fail(id, OFF_MSG, false);
+            return tool_fail(id, *OFF_MSG, false);
         }
         if gate.halted {
             self.backend.release_input();
@@ -3199,7 +3205,7 @@ mod tests {
         );
         assert!(!off.ok);
         assert!(!off.exit);
-        assert_eq!(off.error.as_deref(), Some(OFF_MSG));
+        assert_eq!(off.error.as_deref(), Some(*OFF_MSG));
         assert_eq!(fake.suspended, 1);
         assert_eq!(fake.shots, 0);
 
@@ -3275,7 +3281,7 @@ mod tests {
         };
         let refused = call(&mut s, off, "open_app", json!({ "app": "firefox" }));
         assert_eq!(refused["isError"], true);
-        assert_eq!(refused["content"][0]["text"], OFF_MSG);
+        assert_eq!(refused["content"][0]["text"], *OFF_MSG);
         assert_eq!(
             s.backend_mut().log.len(),
             2,
@@ -3391,7 +3397,7 @@ mod tests {
             "set_window_geometry",
             json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }),
         );
-        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        assert_eq!(off["content"][0]["text"], *OFF_MSG);
         assert_eq!(
             s.backend_mut().window,
             Some(WindowGeom {
@@ -3458,7 +3464,7 @@ mod tests {
             "watch_events",
             json!({ "id": "w1" }),
         );
-        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        assert_eq!(off["content"][0]["text"], *OFF_MSG);
         let stopped = call(&mut s, on(), "unwatch_path", json!({ "id": "w1" }));
         assert_eq!(
             stopped["content"][0]["text"],

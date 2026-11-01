@@ -16,7 +16,11 @@ pub mod journal;
 pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
+pub mod models;
+pub mod oauth;
 pub mod opener;
+#[cfg(desktop)]
+mod os_extras;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -27,6 +31,7 @@ pub mod remote;
 pub mod remote_tls;
 pub mod settings;
 pub mod shell_update;
+pub mod slash;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,6 +55,10 @@ struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    sign_in: Arc<oauth::SignIn>,
+    /// Asks whose notifications are out (os_extras.rs).
+    #[cfg(desktop)]
+    notified: os_extras::Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,6 +67,8 @@ pub struct SettingsView {
     pub model: String,
     pub close_to_tray: bool,
     pub has_api_key: bool,
+    /// Signed in with Grok: who, when xAI said.
+    pub signed_in: Option<oauth::SignedIn>,
     /// The folder picked in Settings, empty for the default.
     pub workspace: String,
     /// The folder the agent actually works in.
@@ -67,6 +78,10 @@ pub struct SettingsView {
     pub theme: settings::Theme,
     /// Settings → About.
     pub version: String,
+    /// Settings → General → the summon hotkey.
+    pub summon_hotkey: bool,
+    /// Settings → General → notifications while the window is in the background.
+    pub notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +96,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         model: settings.model.clone(),
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
+        signed_in: oauth::signed_in(&oauth::Keychain),
         workspace: settings.workspace.clone(),
         workspace_path: agent::workspace_for(&settings.workspace)
             .display()
@@ -89,6 +105,8 @@ fn view(settings: &ShellSettings) -> SettingsView {
         desktop_control: settings.desktop_control,
         theme: settings.theme,
         version: shell_update::version(),
+        summon_hotkey: settings.summon_hotkey,
+        notifications: settings.notifications,
     }
 }
 
@@ -146,6 +164,78 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     Ok(view(&next))
 }
 
+/// Settings → General and the composer chip: the models to pick from.
+/// `refresh` reads the account's list again instead of the 10-minute cache.
+#[tauri::command]
+async fn list_models(
+    state: State<'_, ShellState>,
+    refresh: Option<bool>,
+) -> Result<models::ModelList, String> {
+    let model = current(&state).model;
+    let config_dir = state.config_dir.clone();
+    off_main(move || {
+        // The loopback mock model lists nothing; tests see the catalog.
+        if credential::test_responses_url().is_some() {
+            return models::list(&model, None);
+        }
+        match credential::load_key() {
+            Ok(bearer) => {
+                let api = grokhub_agent::route::sources::XaiApiSource {
+                    config_dir,
+                    bearer: bearer.clone(),
+                };
+                let cached = models::Cached {
+                    inner: &api,
+                    bearer_tag: models::bearer_tag(&bearer),
+                    refresh: refresh.unwrap_or(false),
+                };
+                models::list(&model, Some(&cached))
+            }
+            Err(_) => models::list(&model, None),
+        }
+    })
+    .await
+}
+
+/// The picker's choice, saved for the next message. Unknown ids are kept.
+#[tauri::command]
+fn set_model(state: State<'_, ShellState>, id: String) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        model: models::clean_id(&id)?,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// The composer's command list for a draft that starts with `/`.
+#[tauri::command]
+fn slash_hits(draft: String) -> Vec<slash::Hit> {
+    slash::hits(&draft, false)
+}
+
+/// Runs a slash line instead of sending it. Nothing reaches the model.
+#[tauri::command]
+fn run_slash(state: State<'_, ShellState>, line: String) -> Result<slash::Effect, String> {
+    run_slash_line(&state, &line, false)
+}
+
+fn run_slash_line(state: &ShellState, line: &str, remote: bool) -> Result<slash::Effect, String> {
+    let action = slash::parse(line, remote)?;
+    let settings = current(state);
+    slash::apply(action, &workspace(state), &settings.model, |id| {
+        let next = ShellSettings {
+            model: models::clean_id(id)?,
+            ..current(state)
+        };
+        settings::save(&state.config_dir, &next)?;
+        let id = next.model.clone();
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+        Ok(id)
+    })
+}
+
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
     opener::open(&url)
@@ -154,6 +244,28 @@ fn open_external(url: String) -> Result<(), String> {
 #[tauri::command]
 fn set_api_key(state: State<'_, ShellState>, key: String) -> Result<SettingsView, String> {
     credential::save_key(&key)?;
+    Ok(view(&current(&state)))
+}
+
+/// Sign in with Grok, step one: the code and the page to type it at.
+#[tauri::command]
+async fn start_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Started, String> {
+    capabilities::needs(capabilities::current().grok_sign_in, "Sign in with Grok")?;
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.start()).await?
+}
+
+/// Step two, asked every few seconds by Settings → Account.
+#[tauri::command]
+async fn poll_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Poll, String> {
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.poll(&oauth::Keychain)).await?
+}
+
+#[tauri::command]
+fn grok_sign_out(state: State<'_, ShellState>) -> Result<SettingsView, String> {
+    state.sign_in.cancel();
+    oauth::sign_out(&oauth::Keychain)?;
     Ok(view(&current(&state)))
 }
 
@@ -174,21 +286,39 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-/// The model client for the signed-in key, or the loopback mock in tests.
-fn model_client() -> Result<XaiClient, String> {
-    Ok(match credential::test_responses_url() {
-        Some(url) => XaiClient::new(
-            credential::LOOPBACK_TEST_BEARER,
+/// The model client: the loopback mock in tests, else Grok sign-in first,
+/// else the saved API key. The kind says which meter the turn uses.
+fn model_client() -> Result<(XaiClient, AuthKind), String> {
+    let idle = Duration::from_secs(120);
+    if let Some(url) = credential::test_responses_url() {
+        let client = XaiClient::new(credential::LOOPBACK_TEST_BEARER, AuthKind::ApiKey, idle)
+            .with_loopback_url(&url)?;
+        return Ok((client, AuthKind::ApiKey));
+    }
+    signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
+}
+
+/// Picks the bearer: a live Grok sign-in wins over a key. A sign-in that
+/// ended falls back to the key when there is one.
+fn signed_client(
+    oauth: Result<Option<String>, String>,
+    key: impl FnOnce() -> Result<String, String>,
+    idle: Duration,
+) -> Result<(XaiClient, AuthKind), String> {
+    match oauth {
+        Ok(Some(bearer)) => Ok((
+            XaiClient::new(bearer, AuthKind::OAuth, idle),
+            AuthKind::OAuth,
+        )),
+        Ok(None) => Ok((
+            XaiClient::new(key()?, AuthKind::ApiKey, idle),
             AuthKind::ApiKey,
-            Duration::from_secs(120),
-        )
-        .with_loopback_url(&url)?,
-        None => XaiClient::new(
-            credential::load_key()?,
-            AuthKind::ApiKey,
-            Duration::from_secs(120),
-        ),
-    })
+        )),
+        Err(ended) => match key() {
+            Ok(k) => Ok((XaiClient::new(k, AuthKind::ApiKey, idle), AuthKind::ApiKey)),
+            Err(_) => Err(ended),
+        },
+    }
 }
 
 fn route(
@@ -196,10 +326,10 @@ fn route(
     session: agent::SessionMode,
     config_dir: &Path,
 ) -> Result<agent::Route, String> {
-    let client = model_client()?;
+    let (client, auth_kind) = model_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
-        auth_kind: AuthKind::ApiKey,
+        auth_kind,
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
@@ -248,6 +378,8 @@ async fn chat_turn(
             &text,
             route,
             Box::new(move |event| {
+                #[cfg(desktop)]
+                os_extras::on_chat_event(&app, &id, &event);
                 let _ = app.emit(
                     CHAT_EVENT,
                     ChatEvent {
@@ -264,17 +396,30 @@ async fn chat_turn(
 
 #[tauri::command]
 fn answer_permission(
+    app: AppHandle,
     state: State<'_, ShellState>,
     conversation_id: String,
     call_id: String,
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
-    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
-    let session = chats
+    let session = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&conversation_id)
+        .cloned()
         .ok_or_else(|| "That chat is closed.".to_string())?;
-    session.answer(&call_id, answer);
+    // A notification for this ask comes down, and can't answer it after this.
+    #[cfg(desktop)]
+    os_extras::answered_in_window(&app, &conversation_id, &call_id, || {
+        session.answer(&call_id, answer)
+    });
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        session.answer(&call_id, answer);
+    }
     Ok(())
 }
 
@@ -379,6 +524,27 @@ fn remove_automation(
 /// would need an OK is refused.
 #[tauri::command]
 async fn run_automation(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<automations::RunResult, String> {
+    let result = run_automation_now(state, id.clone()).await;
+    #[cfg(desktop)]
+    if result.is_ok() {
+        let name = automations::load(&app.state::<ShellState>().config_dir)
+            .ok()
+            .and_then(|list| list.into_iter().find(|a| a.id == id))
+            .map(|a| a.name)
+            .unwrap_or_default();
+        os_extras::automation_finished(&app, &name);
+    }
+    #[cfg(mobile)]
+    let _ = app;
+    result
+}
+
+/// [`run_automation`] without the notification, as a paired browser runs it.
+async fn run_automation_now(
     state: State<'_, ShellState>,
     id: String,
 ) -> Result<automations::RunResult, String> {
@@ -1029,6 +1195,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         }
         "answer_permission" => {
             answer_permission(
+                app.clone(),
                 state,
                 own(args)?,
                 arg(args, "callId")?,
@@ -1061,7 +1228,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
-        "run_automation" => out(block_on(run_automation(state, arg(args, "id")?))?),
+        "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
             state,
@@ -1070,6 +1237,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "base")?,
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
+        "slash_hits" => out(slash::hits(&arg::<String>(args, "draft")?, true)),
+        "run_slash" => out(run_slash_line(&state, &arg::<String>(args, "line")?, true)?),
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
         "edit_memory_row" => out(edit_memory_row(
             state,
@@ -1261,10 +1430,49 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     };
     let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
         .title(grokhub_core::brand::product_name());
+    // A start at login stays in the tray when closing keeps it there.
+    #[cfg(desktop)]
+    let builder = builder.visible(!os_extras::starts_hidden(
+        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
+        current(&app.state::<ShellState>()).close_to_tray && capabilities::current().tray,
+    ));
     #[cfg(windows)]
     let builder = webview2_driver_overrides(builder);
     builder.build()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+
+    #[test]
+    fn a_grok_sign_in_wins_over_a_key_and_an_ended_one_falls_back() {
+        let idle = Duration::from_secs(1);
+        let key = || Ok("xai-key".to_string());
+        let none = || Err(grokhub_core::XAI_NEED_SIGNIN.to_string());
+        let kind = |r: Result<(XaiClient, AuthKind), String>| r.map(|(_, k)| k);
+        assert_eq!(
+            kind(signed_client(Ok(Some("at".into())), key, idle)),
+            Ok(AuthKind::OAuth)
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), none, idle)),
+            Err(oauth::EXPIRED.to_string())
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), none, idle)),
+            Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -1336,6 +1544,8 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
+    let builder = os_extras::plugins(builder);
+    #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let built = builder
         .setup(|app| {
@@ -1353,14 +1563,19 @@ pub fn run() {
             pulse_feed::start(config_dir.clone(), {
                 let config_dir = config_dir.clone();
                 move || {
-                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?);
+                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                     Ok((client, settings::load(&config_dir).model))
                 }
             });
+            #[cfg(desktop)]
+            os_extras::setup(app.handle(), &loaded);
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                sign_in: Arc::default(),
+                #[cfg(desktop)]
+                notified: os_extras::Pending::default(),
             });
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
@@ -1393,7 +1608,14 @@ pub fn run() {
             set_theme,
             open_external,
             set_api_key,
+            list_models,
+            set_model,
+            slash_hits,
+            run_slash,
             clear_api_key,
+            start_grok_sign_in,
+            poll_grok_sign_in,
+            grok_sign_out,
             send_chat,
             answer_permission,
             answer_elicit,
@@ -1465,7 +1687,15 @@ pub fn run() {
             get_update_status,
             set_update_channel,
             check_shell_update,
-            install_shell_update
+            install_shell_update,
+            #[cfg(desktop)]
+            os_extras::get_autostart,
+            #[cfg(desktop)]
+            os_extras::set_autostart,
+            #[cfg(desktop)]
+            os_extras::set_summon_hotkey,
+            #[cfg(desktop)]
+            os_extras::set_notifications
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

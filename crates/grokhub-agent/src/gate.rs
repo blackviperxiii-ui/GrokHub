@@ -257,10 +257,10 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     }
     if is_desktop(name) {
         if !gate.desktop {
-            return Decision::Refuse(OFF_MSG.to_string());
+            return Decision::Refuse((*OFF_MSG).to_string());
         }
         match desk {
-            None => return Decision::Refuse(OFF_MSG.to_string()),
+            None => return Decision::Refuse((*OFF_MSG).to_string()),
             Some(DeskFlags { halted: true, .. }) => {
                 return Decision::Refuse((*HALT_MSG).to_string())
             }
@@ -451,11 +451,11 @@ mod tests {
         let off = gate(PermMode::Always, false, true, false);
         assert_eq!(
             decide(&off, "screenshot", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
         assert_eq!(
             decide(&off, "type", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
 
         let on = gate(PermMode::Always, false, true, true);
@@ -497,7 +497,7 @@ mod tests {
         );
         assert_eq!(
             decide(&on, "screenshot", false, None),
-            Decision::Refuse(OFF_MSG.into())
+            Decision::Refuse((*OFF_MSG).into())
         );
 
         let ask_desk = gate(PermMode::Ask, false, true, true);

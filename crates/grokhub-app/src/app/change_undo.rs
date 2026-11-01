@@ -1,7 +1,7 @@
 //! Spike-5b in the cabin (ChangeLedger, harness design §12 P3): what GrokHub
 //! changed on its own in skills, connections, and automations.
 //!
-//! - Work-tree rows: "Grok added connection notes" with ghost Undo and Keep,
+//! - Work-tree rows: "Loadout added connection notes" with ghost Undo and Keep,
 //!   under the approval cards. A self-made change posts one row as it lands,
 //!   and changes from the last day come back as rows after a restart (the
 //!   ledger is on disk).
@@ -268,7 +268,13 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
     ChangeRow {
         kind,
         id: c.id.clone(),
-        label: format!("Grok {} {} {}", what(c.op), kind.as_str(), c.shown_name()),
+        label: format!(
+            "{} {} {} {}",
+            grokhub_core::brand::product_name(),
+            what(c.op),
+            kind.as_str(),
+            c.shown_name()
+        ),
         keep: true,
     }
 }
@@ -365,7 +371,7 @@ fn done_line(row: &ChangeRow, act: ChangeAct, done: &Result<Option<Vec<u8>>, Str
 }
 
 impl ChangeRow {
-    /// The name part of the label (after "Grok added connection ", or
+    /// The name part of the label (after "Loadout added connection ", or
     /// before " · " on a report row).
     fn label_name(&self) -> &str {
         let head = format!(" {} ", self.kind.as_str());
@@ -791,8 +797,8 @@ mod tests {
         assert_eq!(
             rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
             [
-                "Grok added automation inbox sweep",
-                "Grok changed automation board digest"
+                "Loadout added automation inbox sweep",
+                "Loadout changed automation board digest"
             ]
         );
         hx::accept_change(
@@ -825,7 +831,7 @@ mod tests {
         let row = ChangeRow {
             kind: ChangeKind::Connection,
             id: "notes".into(),
-            label: "Grok added connection notes".into(),
+            label: "Loadout added connection notes".into(),
             keep: true,
         };
         cabin.harness.work_rows = vec![row.clone()];
@@ -851,7 +857,7 @@ mod tests {
             ChangeRow {
                 kind: ChangeKind::Connection,
                 id: "notes".into(),
-                label: "Grok added connection notes".into(),
+                label: "Loadout added connection notes".into(),
                 keep: true,
             },
             ChangeRow {
@@ -898,7 +904,7 @@ mod tests {
             "{texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t == "Grok added connection notes"),
+            texts.iter().any(|t| t == "Loadout added connection notes"),
             "{texts:?}"
         );
         assert_eq!(hit, None);
@@ -927,7 +933,7 @@ mod tests {
         let row = ChangeRow {
             kind: ChangeKind::Connection,
             id: "notes".into(),
-            label: "Grok added connection notes".into(),
+            label: "Loadout added connection notes".into(),
             keep: true,
         };
         assert_eq!(row.label_name(), "notes");

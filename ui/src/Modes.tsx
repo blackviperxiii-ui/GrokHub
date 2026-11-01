@@ -3,6 +3,7 @@ import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
 import { externalUrlOk } from "./external";
 import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
+import { ModelPicker } from "./ModelPicker";
 import { ExternalLink } from "./ui";
 
 /** The cabin's composer chips, each with its hover line. */
@@ -10,17 +11,17 @@ export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] 
   {
     mode: "chat",
     label: "Chat",
-    tip: "Normal chat. Grok can edit files and use tools in your work folder. Everyday work.",
+    tip: `Normal chat. ${PRODUCT_NAME} can edit files and use tools in your work folder. Everyday work.`,
   },
   {
     mode: "plan",
     label: "Plan",
-    tip: "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
+    tip: `${PRODUCT_NAME} writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.`,
   },
   {
     mode: "btw",
     label: "btw",
-    tip: "A look-only side ask. Grok can read and answer, but changes nothing.",
+    tip: `A look-only side ask. ${PRODUCT_NAME} can read and answer, but changes nothing.`,
   },
 ];
 
@@ -30,12 +31,14 @@ export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
   { value: "always", label: "Always" },
 ];
 
-export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard Grok thinks for each step.`;
+export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard the model thinks for each step.`;
 export const REMOTE_APPROVALS_TIP = `Set in ${PRODUCT_NAME} on your computer.`;
 
-/** Chat / Plan / btw, Ask / Auto / Always, and the read-only effort chip.
- * `approvals` is null until Settings loads. On the web app the approvals
- * stay the computer's, so those chips only show it. */
+export const REMOTE_MODEL_TIP = `The model is set in ${PRODUCT_NAME} on your computer.`;
+
+/** Chat / Plan / btw, Ask / Auto / Always, the model and the read-only effort
+ * chip. `approvals` and `model` are null until Settings loads. On the web app
+ * the approvals and the model stay the computer's, so those chips only show it. */
 export function ModeChips({
   mode,
   onMode,
@@ -43,6 +46,8 @@ export function ModeChips({
   onApprovals,
   busy,
   remote,
+  model = null,
+  onModel,
 }: {
   mode: SessionMode;
   onMode: (mode: SessionMode) => void;
@@ -50,6 +55,8 @@ export function ModeChips({
   onApprovals: (approvals: Approvals) => void;
   busy: boolean;
   remote: boolean;
+  model?: string | null;
+  onModel?: (id: string) => void;
 }) {
   return (
     <div className="chips">
@@ -83,6 +90,14 @@ export function ModeChips({
           </button>
         ))}
       </div>
+      {model !== null &&
+        (remote || !onModel ? (
+          <span className="chip quiet" title={REMOTE_MODEL_TIP}>
+            Model: {model}
+          </span>
+        ) : (
+          <ModelPicker value={model} onPick={onModel} disabled={busy} chip />
+        ))}
       <span className="effort-label" title={EFFORT_TIP}>
         Effort: auto
       </span>
@@ -106,7 +121,7 @@ export type ElicitItem = {
 };
 
 const PLAN_ANSWERS: Record<ElicitAction | "ended", string> = {
-  accept: "Approved. Grok can make the changes now.",
+  accept: `Approved. ${PRODUCT_NAME} can make the changes now.`,
   decline: "Kept in plan mode.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
@@ -119,7 +134,7 @@ const ANSWERS: Record<ElicitAction | "ended", string> = {
   ended: "Not answered: the turn ended.",
 };
 
-/** A plan to approve, Grok's question, or a connector's form or link. */
+/** A plan to approve, the agent's question, or a connector's form or link. */
 export function ElicitCard({
   item,
   onAnswer,
@@ -140,9 +155,9 @@ export function ElicitCard({
         .trim()
     : item.message;
   const title = plan
-    ? "Grok's plan"
+    ? "The plan"
     : item.server === "Question"
-      ? "Grok asks"
+      ? `${PRODUCT_NAME} asks`
       : `${item.server} needs something from you`;
 
   function send(event: FormEvent) {

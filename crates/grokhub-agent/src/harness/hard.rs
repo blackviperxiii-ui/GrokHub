@@ -723,7 +723,7 @@ pub fn click_rule(args: &serde_json::Value) -> Option<ClickRule> {
     click_target_in(t.effect.as_deref(), &t.label, &t.role, &t.context)
 }
 
-/// The hard card line for a parked click: "Grok wants to click Send in Mail".
+/// The hard card line for a parked click: "Loadout wants to click Send in Mail".
 pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
     let t = click_target(args);
     let place = if t.context.is_empty() {
@@ -731,7 +731,11 @@ pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
     } else {
         t.context.chars().take(60).collect()
     };
-    format!("Grok wants to click {} in {place}", rule.word())
+    format!(
+        "{} wants to click {} in {place}",
+        grokhub_core::brand::product_name(),
+        rule.word()
+    )
 }
 
 /// Delete and Shift+Delete. On a file manager they delete the selection.
@@ -3358,7 +3362,7 @@ mod tests {
         assert_eq!(rule.id, "send:Send");
         assert_eq!(
             click_action(&ax, &rule),
-            "Grok wants to click Send in Compose — Mail"
+            "Loadout wants to click Send in Compose — Mail"
         );
         assert_eq!(click_target(&ax).source, "ax");
         // The caller's own element (Cua `element`, path D frames) counts too.
@@ -3370,7 +3374,7 @@ mod tests {
         assert_eq!(click_target(&named).source, "args");
         assert_eq!(
             click_action(&named, &click_rule(&named).unwrap()),
-            "Grok wants to click Pay in the focused window"
+            "Loadout wants to click Pay in the focused window"
         );
         let unknown = serde_json::json!({"x": 1, "y": 2, "_target": {"unknown": true}});
         assert_eq!(desk_classify("click", &unknown), HardHit::None);

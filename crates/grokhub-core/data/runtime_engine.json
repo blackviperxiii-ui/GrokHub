@@ -8,9 +8,9 @@
       "format": "tar.gz"
     },
     "linux-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-arm64.tar.gz",
-      "size": 18571024,
-      "sha256": "676e8f99db67fbecd7854b948ed50d0bf5d7db463613fc8fcd8f4491a7709bec",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-vulkan-arm64.tar.gz",
+      "size": 28987180,
+      "sha256": "095da6719ba1ea85fbb528ca64b9834206c4bd61ad2944eff399c3257d47bb0e",
       "format": "tar.gz"
     },
     "windows-x86_64": {
@@ -20,10 +20,74 @@
       "format": "zip"
     },
     "windows-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-cpu-arm64.zip",
-      "size": 13068809,
-      "sha256": "602a97c5bbf770713c6ef15ca395ef0ae27e19022735b8c2eeec3ec4bc29c549",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-vulkan-arm64.zip",
+      "size": 25594289,
+      "sha256": "7587b451281ff73272d188acc82a1814c5810d138d1a38ba54bb58f1dd4b506b",
       "format": "zip"
+    },
+    "macos-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-macos-arm64.tar.gz",
+      "size": 16508951,
+      "sha256": "4cfa51501cc3c602b404f43682e713405b4b946847876c5081d0a3f93ff26914",
+      "format": "tar.gz"
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-macos-x64.tar.gz",
+      "size": 12248734,
+      "sha256": "f51371545526a8655f30bdf2e2f157d00d7ed9bddf1939106b09ac76148e59e5",
+      "format": "tar.gz"
+    }
+  },
+  "variants": {
+    "windows-x86_64-cuda": {
+      "platform": "windows-x86_64",
+      "backend": "cuda",
+      "min_driver": 528,
+      "assets": [
+        {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-cuda-12.4-x64.zip",
+          "size": 279943357,
+          "sha256": "294eb8f846bdcd21a7b59b8483fac56fc44f14f7d7580107022a911ee76fab48",
+          "format": "zip"
+        },
+        {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+          "format": "zip"
+        }
+      ]
+    },
+    "linux-x86_64-cuda": {
+      "platform": "linux-x86_64",
+      "backend": "cuda",
+      "min_driver": 525,
+      "assets": [
+        {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-cuda-12.8-x64.tar.gz",
+          "size": 182779856,
+          "sha256": "642fcc4d8682de2aa3790f9294a6236a2792e5701c27a3129d36c78c30219299",
+          "format": "tar.gz"
+        },
+        {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/cudart-llama-b12017-bin-ubuntu-cuda-12.8-x64.tar.gz",
+          "size": 594372371,
+          "sha256": "1fd1ce40b8992758f5819f3f0dfa6d970208a3c43c2c521e30b26daf5060fa53",
+          "format": "tar.gz"
+        }
+      ]
+    },
+    "windows-x86_64-rocm": {
+      "platform": "windows-x86_64",
+      "backend": "rocm",
+      "assets": [
+        {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-rocm-10.0-x64.zip",
+          "size": 265703761,
+          "sha256": "00a98a75c43e45b9640fdaae35f289280012ae3ba080e1c2eac25786df04f589",
+          "format": "zip"
+        }
+      ]
     }
   }
 }

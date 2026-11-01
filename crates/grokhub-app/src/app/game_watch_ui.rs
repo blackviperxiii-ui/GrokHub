@@ -45,11 +45,11 @@ pub(super) struct WatchState {
     toast_gate: ToastGate,
     /// Tests listen on a free port and use a temp Steam folder.
     port: Option<u16>,
-    steam_root: Option<PathBuf>,
+    pub(super) steam_root: Option<PathBuf>,
 }
 
 impl WatchState {
-    fn steam_root(&self) -> Option<PathBuf> {
+    pub(super) fn steam_root(&self) -> Option<PathBuf> {
         self.steam_root
             .clone()
             .or_else(grokhub_core::steam::detect_root)
@@ -273,6 +273,8 @@ impl Cabin {
         if !self.cfg.game_watch {
             return;
         }
+        let elite = self.elite_line();
+        let stardew = self.stardew_line();
         let w = &self.focus.watch;
         let listening = match (&w.server, w.listening_for) {
             (Some(_), Some(game)) => format!("Listening while {} runs.", game.name()),
@@ -289,13 +291,26 @@ impl Cabin {
             _ => String::new(),
         };
         let note = w.note.clone();
+        let games: Vec<String> = [self.poe_line(), self.minecraft_line()]
+            .into_iter()
+            .flatten()
+            .collect();
         ui.indent("game-watch", |ui| {
+            if let Some(elite) = &elite {
+                crate::cards::help_text(ui, elite);
+            }
+            if let Some(stardew) = &stardew {
+                crate::cards::help_text(ui, stardew);
+            }
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
             }
             crate::cards::help_text(ui, &listening);
             if !heard.is_empty() {
                 crate::cards::help_text(ui, &heard);
+            }
+            for line in &games {
+                crate::cards::help_text(ui, line);
             }
         });
     }
