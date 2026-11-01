@@ -669,8 +669,11 @@ mod win {
     }
 
     unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let out = &mut *(lparam as *mut Vec<HWND>);
-        if IsWindowVisible(hwnd) != 0 && !text_of(hwnd).is_empty() {
+        // SAFETY: `windows()` passes a live `&mut Vec<HWND>` as `lparam`, and
+        // EnumWindows calls back synchronously while that borrow is held.
+        let out = unsafe { &mut *(lparam as *mut Vec<HWND>) };
+        // SAFETY: `hwnd` comes from EnumWindows for this callback.
+        if unsafe { IsWindowVisible(hwnd) } != 0 && !text_of(hwnd).is_empty() {
             out.push(hwnd);
         }
         1
@@ -1044,12 +1047,15 @@ mod tests {
         )
         .unwrap();
         let old_home = std::env::var_os("XDG_DATA_HOME");
-        std::env::set_var("XDG_DATA_HOME", root.join("share"));
+        // SAFETY: tests run one at a time (nextest: a process each; cargo test:
+        // RUST_TEST_THREADS=1), so no other thread touches the environment.
+        unsafe { std::env::set_var("XDG_DATA_HOME", root.join("share")) };
         let found = linux::desktop_file("org.example.Viewer");
         let missing = linux::desktop_file("org.example.Nope");
+        // SAFETY: same single-threaded test as the set_var above.
         match old_home {
-            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-            None => std::env::remove_var("XDG_DATA_HOME"),
+            Some(v) => unsafe { std::env::set_var("XDG_DATA_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_DATA_HOME") },
         }
         assert_eq!(found, Some(apps.join("org.example.Viewer.desktop")));
         assert_eq!(missing, None);

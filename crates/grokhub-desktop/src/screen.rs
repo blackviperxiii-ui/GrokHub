@@ -71,12 +71,11 @@ pub fn lock_titles() -> Vec<String> {
     {
         return Vec::new();
     }
-    if let Ok(last) = LAST_LOCK.lock() {
-        if let Some((at, titles)) = last.as_ref() {
-            if at.elapsed() < LOCK_TTL {
-                return titles.clone();
-            }
-        }
+    if let Ok(last) = LAST_LOCK.lock()
+        && let Some((at, titles)) = last.as_ref()
+        && at.elapsed() < LOCK_TTL
+    {
+        return titles.clone();
     }
     let atspi = atspi(LIST_TIMEOUT);
     let wmctrl = crate::resolve_bin("wmctrl")
