@@ -1141,9 +1141,14 @@ async function probe(s, label) {
       if (!window.__diag) {
         window.__diag = [];
         const t0 = performance.now();
-        for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click', 'submit', 'focusin']) {
-          window.addEventListener(type, (e) => window.__diag.push([Math.round(performance.now() - t0), type, d(e.target), e.clientX, e.clientY, e.isTrusted]), true);
+        const ids = new WeakMap(); let next = 1;
+        const id = (n) => { if (!n) return 0; if (!ids.has(n)) ids.set(n, next++); return ids.get(n); };
+        for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu', 'submit', 'focusin', 'focusout', 'selectstart', 'dragstart', 'gotpointercapture', 'lostpointercapture']) {
+          window.addEventListener(type, (e) => window.__diag.push([Math.round(performance.now() - t0), type, d(e.target), id(e.target), e.clientX, e.clientY, e.detail, e.button, e.buttons, e.defaultPrevented, e.isTrusted]), true);
+          window.addEventListener(type, (e) => { if (e.defaultPrevented) window.__diag.push([Math.round(performance.now() - t0), type + ':prevented-at-bubble', d(e.target)]); }, false);
         }
+        new MutationObserver((list) => { for (const m of list) for (const n of m.removedNodes) window.__diag.push([Math.round(performance.now() - t0), 'removed', d(n.nodeType === 1 ? n : n.parentElement) || String(n.nodeName), d(m.target)]); }).observe(document.body, { childList: true, subtree: true });
+        let frames = 0; const tick = () => { frames++; window.__frames = frames; requestAnimationFrame(tick); }; requestAnimationFrame(tick);
         const de = document.documentElement;
         new ResizeObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'resize', innerWidth, innerHeight, de.scrollWidth, de.scrollHeight])).observe(de);
         const tabs = document.querySelector('nav.tabs');
@@ -1167,6 +1172,7 @@ async function probe(s, label) {
         box: document.querySelector("textarea[aria-label='Message']")?.value,
         active: d(document.activeElement),
         vt: 'activeViewTransition' in document ? String(document.activeViewTransition) : 'n/a',
+        focus: document.hasFocus(), frames: window.__frames || 0, ua: navigator.userAgent.slice(-60),
         log: window.__diag.slice(-40),
       });`,
     args: [],
@@ -1217,6 +1223,11 @@ async function main() {
     await probe(s, "after click");
     await sleep(1500);
     await probe(s, "1.5s later");
+    if (mock.seen.length === 0) {
+      await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
+      await sleep(1500);
+      await probe(s, "second click");
+    }
     await wd("GET", `${s}/screenshot`)
       .then((png) => {
         mkdirSync("smoke-shots", { recursive: true });
