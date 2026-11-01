@@ -422,14 +422,14 @@ mod tests {
         a.hosted_search = true;
         let mut loaded = a.clone();
         loaded.tools.push(tool("browser"));
-        let got = first_break(&Shape::of(&a), &Shape::of(&loaded), false).unwrap();
+        let got = first_break(&Shape::of(&a), &Shape::of(&loaded), None).unwrap();
         assert_eq!(got.part, Part::Tools);
         assert_eq!(got.reason, Reason::ToolsAppended);
         // A tool put in front of the old list is still a rewrite.
         let mut front = a.clone();
         front.tools.insert(0, tool("browser"));
         assert_eq!(
-            first_break(&Shape::of(&a), &Shape::of(&front), false).map(|b| b.reason),
+            first_break(&Shape::of(&a), &Shape::of(&front), None).map(|b| b.reason),
             Some(Reason::Unexpected)
         );
     }
