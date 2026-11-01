@@ -68,21 +68,22 @@ pub(super) fn drafter_done_status(m: &LocalModel) -> String {
 struct HfFetch;
 
 #[cfg(not(test))]
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .build()
+fn agent() -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: std::time::Duration::from_secs(15),
+        read: Some(std::time::Duration::from_secs(60)),
+        proxy_from_env: true,
+        ..Default::default()
+    })
 }
 
 #[cfg(not(test))]
 impl Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
         crate::xai::egress_ok(url, &[])?;
-        let mut req = agent().get(url).set("user-agent", "GrokHub");
+        let mut req = agent().get(url).header("user-agent", "GrokHub");
         if offset > 0 {
-            req = req.set("range", &format!("bytes={offset}-"));
+            req = req.header("range", &format!("bytes={offset}-"));
         }
         let resp = req.call().map_err(|e| e.to_string())?;
         let (start, total) = if resp.status() == 206 {
@@ -106,7 +107,7 @@ impl Fetch for HfFetch {
         crate::xai::egress_ok(&url, &[])?;
         let resp = agent()
             .get(&url)
-            .set("user-agent", "GrokHub")
+            .header("user-agent", "GrokHub")
             .call()
             .map_err(|e| e.to_string())?;
         let mut body = String::new();
