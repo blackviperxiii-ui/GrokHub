@@ -46,8 +46,11 @@ pub(super) struct TriageView {
     pub steps: Option<(String, String)>,
     /// Saved recipes and playbooks for Start a flow, read when the menu first
     /// opens: (recipe ids, (playbook id, name)).
-    pub flows: Option<(Vec<String>, Vec<(String, String)>)>,
+    pub flows: Option<FlowChoices>,
 }
+
+/// Start a flow's menu: (recipe ids, (playbook id, name)).
+pub type FlowChoices = (Vec<String>, Vec<(String, String)>);
 
 /// The game guard's word for the queue: wait while an anti-cheat or a game
 /// runs. Nothing else in the guard holds the queue back.
@@ -302,7 +305,7 @@ impl Cabin {
         }
     }
 
-    fn flow_choices(&mut self) -> (Vec<String>, Vec<(String, String)>) {
+    fn flow_choices(&mut self) -> FlowChoices {
         if let Some(f) = self.board_view.triage.flows.clone() {
             return f;
         }
