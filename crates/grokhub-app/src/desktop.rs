@@ -437,7 +437,7 @@ fn cdp_ws_method(ws_url: &str, payload: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let (mut socket, _) = tungstenite::client(ws_url, stream).map_err(|e| e.to_string())?;
     socket
-        .send(tungstenite::Message::Text(payload.to_string()))
+        .send(tungstenite::Message::text(payload))
         .map_err(|e| e.to_string())?;
     let _ = socket.read();
     Ok(())
