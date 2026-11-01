@@ -1,0 +1,1 @@
+- Loadout's own text no longer calls the agent Grok: permission cards, desktop-control settings, background status, slash help and Privacy now say Loadout or the cloud model. Sign-in, model names and the Hey Grok wake word are unchanged.

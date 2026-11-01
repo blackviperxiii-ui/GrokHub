@@ -88,8 +88,11 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
         if name.is_empty() {
             continue;
         }
+        // A slash line never reaches the model in the shell's chat, so a
+        // cabin `/command` trigger is asked for by name instead.
         let trigger = match skill.trigger.trim() {
             "" => by_name(&name),
+            slash if slash.starts_with('/') => by_name(&name),
             phrase => phrase.to_string(),
         };
         let row = Row {
@@ -238,6 +241,16 @@ mod tests {
             b"---\nname: tidy\ndescription: Tidy the repo\n---\n",
         );
         write(
+            &cfg.join("skills/ship/SKILL.md"),
+            grokhub_core::render_skill_md(&grokhub_core::SkillMd {
+                name: "ship".into(),
+                description: "Cut a release".into(),
+                slash: "/ship".into(),
+                ..Default::default()
+            })
+            .as_bytes(),
+        );
+        write(
             &ws.join(".grok/skills/lint-fix/SKILL.md"),
             skill("lint-fix", "Fix lint warnings").as_bytes(),
         );
@@ -259,6 +272,10 @@ mod tests {
         let tidy = find(&page, "tidy");
         assert_eq!(tidy.source, Source::Cabin);
         assert_eq!(tidy.trigger, "Use the tidy skill.");
+        let ship = find(&page, "ship");
+        assert_eq!(ship.source, Source::Cabin);
+        assert_eq!(ship.description, "Cut a release");
+        assert_eq!(ship.trigger, "Use the ship skill.");
 
         let lint = find(&page, "lint-fix");
         assert_eq!(lint.source, Source::Project);

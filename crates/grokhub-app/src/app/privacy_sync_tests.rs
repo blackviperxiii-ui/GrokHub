@@ -862,7 +862,7 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
         "Leaving this computer",
         "Sync to paired computers",
         "What Loadout can read",
-        super::scope_ui::SCOPES_NOTE,
+        *super::scope_ui::SCOPES_NOTE,
         "Files in a folder",
         "Installed apps",
         "Browser history",
@@ -1395,7 +1395,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
             "- Calendar: on since 1m ago",
             "- Files in notes: on since 1m ago",
             "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
-            "- Screen: \"Let Grok control the desktop\" in Settings → Defaults (off)",
+            "- Screen: \"Let Loadout control the desktop\" in Settings → Defaults (off)",
             "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
         ]
         .join("\n")
