@@ -582,6 +582,14 @@ impl Cabin {
             mode,
         );
         remember_chip_click(&mut self.chip_memory, &chip, Some(&tag), now_ms(), hour);
+        grokhub_core::remember_intent(
+            &mut self.chip_memory,
+            &chip.label,
+            &chip.value,
+            now_ms(),
+            hour,
+            Self::local_clock().weekday,
+        );
         self.flush_chips();
         match chip.kind {
             ChipKind::Nav => {
@@ -611,7 +619,10 @@ impl Cabin {
                 // both parse locally instead of inserting a no-op or hitting Grok.
                 if chip_chat_runs_immediately(&chip, &self.composer) {
                     self.composer.clear();
+                    // The send below is the chip's turn, not a typed one.
+                    self.chip_send_key = Some(grokhub_core::chip_memory_key(&chip));
                     self.send_chat(chip.value);
+                    self.chip_send_key = None;
                 } else {
                     self.composer = chip.value;
                     self.composer_want_focus = true;
