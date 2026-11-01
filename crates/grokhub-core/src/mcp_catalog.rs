@@ -230,16 +230,17 @@ fn registry_versions_url(registry_id: &str) -> Result<String, String> {
     Ok(url)
 }
 
-fn registry_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(25))
-        .redirects(0)
-        .resolver(crate::ssrf::public_only_resolve)
-        .build()
+fn registry_agent() -> crate::http::Agent {
+    crate::http::agent(crate::http::Opts {
+        connect: Duration::from_secs(10),
+        overall: Some(Duration::from_secs(25)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
-fn read_registry_body(resp: ureq::Response) -> Result<String, String> {
+fn read_registry_body(resp: crate::http::Response) -> Result<String, String> {
     if !(200..300).contains(&resp.status()) {
         return Err(format!("MCP registry: http {}", resp.status()));
     }

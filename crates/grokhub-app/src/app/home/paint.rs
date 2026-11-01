@@ -50,6 +50,7 @@ pub(super) fn paint_module(
         "connection" => paint_connection(ui, size, &mut actions),
         "updates" => paint_updates(cabin, ui, size, &mut actions),
         "speeds" => paint_speeds(cabin, ui, size, &mut actions),
+        "frame_rate" => paint_frame_rate(ui, size),
         "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
         _ if data == DataStatus::New => coming_soon_card(ui, name, purpose),
@@ -873,6 +874,33 @@ fn paint_speeds(
     if card_clicked(ui, &resp, "home-speeds", "Internet log settings") {
         actions.push(ModuleAction::Settings(SettingsSec::Behavior));
     }
+}
+
+/// The Frame Rate tile says plainly why there is no number yet. Reading FPS
+/// from a running game means hooking or injecting into it, which is what
+/// anti-cheat flags, so Loadout doesn't.
+pub(super) fn frame_rate_text(windows: bool) -> TileText {
+    TileText {
+        big: "Not read".into(),
+        caption: "Loadout never hooks into games".into(),
+        detail: Some(if windows {
+            "Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely".into()
+        } else {
+            "Steam's in-game FPS counter shows it safely".into()
+        }),
+        tone: Tone::Quiet,
+    }
+}
+
+fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
+    let t = frame_rate_text(cfg!(windows));
+    card(ui, |ui| {
+        header(ui, false, "Frame Rate", "", crate::theme::muted());
+        paint_tile_text(ui, &t, size);
+    })
+    .on_hover_text(
+        "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone.",
+    );
 }
 
 fn paint_game_mode(

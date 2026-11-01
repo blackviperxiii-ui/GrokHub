@@ -343,11 +343,15 @@ unsafe fn wide_ptr(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
-    let mut n = 0;
-    while *p.add(n) != 0 {
-        n += 1;
+    // SAFETY: the caller guarantees `p` points at a NUL-terminated UTF-16
+    // string, so every read up to and including the NUL is in bounds.
+    unsafe {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
     }
-    String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
 }
 
 /// Steam's `HKCU\Software\Valve\Steam\RunningAppID`: the running game's app
@@ -394,10 +398,10 @@ fn exclusive_fullscreen() -> bool {
 fn epic_game_exes() -> Vec<String> {
     static EPIC: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
     let mut slot = EPIC.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, exes)) = slot.as_ref() {
-        if at.elapsed() < Duration::from_secs(60) {
-            return exes.clone();
-        }
+    if let Some((at, exes)) = slot.as_ref()
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return exes.clone();
     }
     let dir = std::env::var_os("ProgramData")
         .map(std::path::PathBuf::from)

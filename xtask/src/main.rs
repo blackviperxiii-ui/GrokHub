@@ -504,22 +504,20 @@ fn strip_unreleased(text: &str) -> Result<String, String> {
 fn today_utc() -> String {
     // Prefer SOURCE_DATE_EPOCH / date CLI; fall back to a fixed placeholder the
     // release owner can edit. Avoids pulling chrono into xtask.
-    if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH") {
-        if let Ok(secs) = epoch.parse::<i64>() {
-            if let Some(ymd) = civil_date_from_unix(secs) {
-                return ymd;
-            }
-        }
+    if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH")
+        && let Ok(secs) = epoch.parse::<i64>()
+        && let Some(ymd) = civil_date_from_unix(secs)
+    {
+        return ymd;
     }
     if let Ok(out) = process::Command::new("date")
         .args(["-u", "+%Y-%m-%d"])
         .output()
+        && out.status.success()
     {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if s.len() == 10 {
-                return s;
-            }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.len() == 10 {
+            return s;
         }
     }
     "YYYY-MM-DD".into()

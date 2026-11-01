@@ -695,7 +695,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         .and_then(|s| s.split("fn send_followup_turn").next())
         .expect("send_chat auth");
     assert!(
-        send_auth.contains("persist_user_turn(self.agent_ready())")
+        send_auth.contains("persist_user_turn(self.chat_ready())")
             && send_auth.contains("kick_model(true)"),
         "typed send must check the native sign-in, then kick the turn: {send_auth}"
     );

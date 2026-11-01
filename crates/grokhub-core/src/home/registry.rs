@@ -108,8 +108,8 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "frame_rate",
         "Frame Rate",
         SystemPerformance,
-        New,
-        "Live avg FPS, 1% low, sparkline",
+        Partial,
+        "Says how to see FPS without Loadout hooking into games",
         [Medium, Small]
     ),
     entry!(
