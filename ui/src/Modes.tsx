@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from "react";
 import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
+import { externalUrlOk } from "./external";
 import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
 import { ModelPicker } from "./ModelPicker";
+import { ExternalLink } from "./ui";
 
 /** The cabin's composer chips, each with its hover line. */
 export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] = [
@@ -96,8 +98,8 @@ export function ModeChips({
         ) : (
           <ModelPicker value={model} onPick={onModel} disabled={busy} chip />
         ))}
-      <span className="chip quiet" title={EFFORT_TIP}>
-        Auto effort
+      <span className="effort-label" title={EFFORT_TIP}>
+        Effort: auto
       </span>
     </div>
   );
@@ -168,7 +170,15 @@ export function ElicitCard({
     <div className="card elicit" role="group" aria-label={title}>
       <div className="card-title">{title}</div>
       <pre className="card-detail plain">{message}</pre>
-      {item.mode === "url" && item.url && <code className="card-detail-line">{item.url}</code>}
+      {item.mode === "url" && item.url && (
+        <p className="card-detail-line">
+          {externalUrlOk(item.url) ? (
+            <ExternalLink href={item.url}>Open {item.url}</ExternalLink>
+          ) : (
+            <code>{item.url}</code>
+          )}
+        </p>
+      )}
       {item.answer ? (
         <p className="card-answer">
           {item.answer === "accept" && picked

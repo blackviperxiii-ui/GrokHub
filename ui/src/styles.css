@@ -2060,3 +2060,33 @@ label.toggle-row {
 .model-options .choice[aria-pressed="true"] {
   border-color: var(--accent);
 }
+
+/* A page's one-line result (Pulse, Connectors, Journal, Settings, Memory,
+ * Labs): an error reads in the error colour with a left rule, a success in
+ * the normal muted text. */
+.status,
+.note.status--ok,
+.note.status--error {
+  margin: 4px 0;
+}
+.status--ok {
+  color: var(--muted);
+}
+.status--error,
+.note.status--error {
+  color: var(--danger-text);
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+}
+
+/* "Are you sure?" under a card before a delete, remove or disconnect. */
+.confirm-row > span {
+  flex: 1 1 100%;
+}
+
+/* Effort is set automatically: a plain label, not a chip you can press. */
+.effort-label {
+  font-size: 0.85em;
+  color: var(--muted);
+  cursor: default;
+}

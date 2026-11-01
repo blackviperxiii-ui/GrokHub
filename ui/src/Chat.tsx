@@ -22,6 +22,7 @@ import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
+import { needsSettings } from "./ui";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -520,9 +521,11 @@ export function Chat({
       {error && (
         <div className="error" role="alert">
           <span>{error}</span>
-          <button type="button" className="link" onClick={onOpenSettings}>
-            Open Settings
-          </button>
+          {needsSettings(error) && (
+            <button type="button" className="link" onClick={onOpenSettings}>
+              Open Settings
+            </button>
+          )}
         </div>
       )}
       <ModeChips
