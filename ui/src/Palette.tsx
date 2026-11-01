@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Capabilities } from "./api";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
+import { PRODUCT_NAME } from "./brand";
 
 export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings" | "workboard";
 
@@ -42,7 +43,7 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
-/** The rows for `query`: pages, then Settings sections, then Ask Grok with
+/** The rows for `query`: pages, then Settings sections, then Ask with
  * the typed text, which puts it in the chat box like the cabin's palette. */
 export function paletteRows(caps: Capabilities, query: string): PaletteRow[] {
   const all: PaletteRow[] = [
@@ -59,7 +60,7 @@ export function paletteRows(caps: Capabilities, query: string): PaletteRow[] {
   const q = query.trim().toLowerCase();
   if (!q) return all;
   const hits = all.filter((row) => row.label.toLowerCase().includes(q));
-  return [...hits, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
+  return [...hits, { label: `Ask ${PRODUCT_NAME}: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
 }
 
 /** The list may take half the window, as in the stylesheet. */
