@@ -89,6 +89,61 @@ fn deck_home_mc_keeps_activity_dock_collapsed() {
 }
 
 #[test]
+fn home_paints_the_ranked_row_and_keeps_the_preset_for_deck_shots() {
+    let src = include_str!("home/page.rs");
+    let compose = src.split("fn home_compose(").nth(1).expect("home_compose");
+    assert!(
+        compose.contains("quick_chip_row(ui, &chips)") && compose.contains("self.home_chips"),
+        "Home paints the engine's row with its × and learning: {compose}"
+    );
+    let preset = compose.find("HOME_CHIPS").expect("deck preset");
+    let shot = compose.find("deck_shot_requested()").expect("deck gate");
+    assert!(shot < preset, "the fixed four are for deck shots only");
+}
+
+const HOME_FIXED: [&str; 4] = [
+    "Fix my stutter",
+    "Find a duo tonight",
+    "Free up storage",
+    "Plan my week",
+];
+
+#[test]
+fn home_chips_follow_the_engine_learn_and_dismiss() {
+    let mut quiet = QuietCabin::boot("home-chips-engine");
+    let cabin = &mut quiet.cabin;
+    // A returning user with nothing going on: the empty-chat row, four at most.
+    cabin.usage.messages = 20;
+    cabin.chip_paint_key.clear();
+    cabin.refresh_chips();
+    let row = cabin.home_chips.clone();
+    assert!(!row.is_empty() && row.len() <= super::chips::HOME_CHIP_MAX);
+    assert!(
+        row.iter().all(|c| !HOME_FIXED.contains(&c.label.as_str())),
+        "not the fixed preset: {row:?}"
+    );
+
+    // × drops it from Home's row and remembers the dismiss.
+    let gone = row[0].clone();
+    cabin.take_home_chip_act(crate::cards::ChipRowAct::Dismiss(0), &row);
+    assert!(cabin.home_chips.iter().all(|c| c.id != gone.id));
+
+    // A chat chip opens Chat and is learned.
+    let row = cabin.home_chips.clone();
+    let i = row
+        .iter()
+        .position(|c| c.kind == grokhub_core::ChipKind::Chat)
+        .expect("a chat chip");
+    cabin.open_mission_home();
+    let uses = |c: &Cabin| c.chip_memory.hits.iter().map(|h| h.uses).sum::<u32>();
+    let before = uses(cabin);
+    cabin.take_home_chip_act(crate::cards::ChipRowAct::Apply(i), &row);
+    assert_eq!(cabin.nav, Nav::Chat);
+    assert!(uses(cabin) > before, "a Home click is learned");
+    quiet.settle();
+}
+
+#[test]
 fn home_chip_labels_match_mission_control_preset() {
     let src = include_str!("home/page.rs");
     let chips = src

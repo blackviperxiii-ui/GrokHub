@@ -2158,6 +2158,7 @@ fn quiet_cabin() -> Cabin {
         agent_cursor: None,
         board_view: Default::default(),
         visible_chips: Vec::new(),
+        home_chips: Vec::new(),
         chip_paint_key: String::new(),
         greeting: String::new(),
         greeting_fp: String::new(),
