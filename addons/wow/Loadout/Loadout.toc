@@ -2,7 +2,7 @@
 ## Title: Loadout
 ## Notes: Records your own characters' gear, gold, spec, professions, Mythic+, vault, lockouts, reputations and more for the Loadout desktop app, on Retail and every Classic flavor. Read-only: automates nothing.
 ## Author: Loadout
-## Version: 1.2.0
+## Version: 1.3.0
 ## IconTexture: Interface\Icons\INV_Misc_Note_01
 ## AddonCompartmentFunc: Loadout_OnAddonCompartmentClick
 ## SavedVariables: LoadoutDB

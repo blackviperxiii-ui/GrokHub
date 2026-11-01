@@ -5,7 +5,10 @@
 //! `product.db` in every prefix it finds (and on Windows the system one),
 //! lists the games in the Library, and while the game watcher is on and WoW
 //! runs, follows the combat log WoW itself writes after `/combatlog` into
-//! that flavor's `Logs` folder. It also installs Loadout's own WoW addon
+//! that flavor's `Logs` folder: finished Mythic+ keys, boss kills and the
+//! bosses left standing post to Pulse (`game_watch_wow::WowSession`), and
+//! when no log has been written a minute after WoW starts, a quiet note
+//! says to type `/combatlog`. It also installs Loadout's own WoW addon
 //! (`grokhub_core::wow_addon`) into a flavor when asked, and shows what that
 //! addon saved (`grokhub_core::wow_saved`). Every read is a file on disk,
 //! off the UI thread for the folder scan; nothing opens a handle to the
@@ -15,7 +18,7 @@ use std::path::PathBuf;
 
 use super::*;
 use grokhub_core::battlenet::{self as bnet, BnetGame, WowFlavor};
-use grokhub_core::game_watch_wow::WowWatcher;
+use grokhub_core::game_watch_wow::{self as wowlog, WowSession, WowWatcher};
 use grokhub_core::wow_addon::{self, AddonState};
 use grokhub_core::wow_saved::{self, WowSaved};
 
@@ -25,6 +28,9 @@ const SCAN_EVERY_MS: u64 = 5 * 60_000;
 const SAMPLE_EVERY_MS: u64 = 5_000;
 /// How often the combat log is read while WoW runs.
 const POLL_EVERY_MS: u64 = 1_000;
+/// How long WoW runs before a missing combat log counts as logging off.
+const LOG_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+const LOG_NUDGE: &str = "WoW isn't writing its combat log, so Loadout can't follow your keys and pulls. Type /combatlog in game to turn it on; it stays on until you log out.";
 /// The name the game watcher's toasts and recap use.
 pub(super) const WOW_NAME: &str = "World of Warcraft";
 
@@ -54,6 +60,15 @@ pub(super) struct WowState {
     running: Option<(WowFlavor, PathBuf)>,
     watcher: Option<WowWatcher>,
     polled_ms: u64,
+    /// The running WoW's keys and pulls, summed into Pulse cards.
+    session: WowSession,
+    /// When WoW was seen starting, for the combat log check.
+    started: Option<std::time::SystemTime>,
+    /// Whether combat logging was seen on this session (`None`: not checked
+    /// yet), and whether the reminder showed.
+    logging: Option<bool>,
+    nudged: bool,
+    log_checked_ms: u64,
     /// Tests set the scan and the process sample instead of reading the PC.
     scan_with: Option<fn() -> Vec<BnetGame>>,
     sample_with: Option<fn() -> Option<WowFlavor>>,
@@ -67,6 +82,12 @@ impl WowState {
 
     pub(super) fn running(&self) -> Option<WowFlavor> {
         self.running.as_ref().map(|(f, _)| *f)
+    }
+
+    /// Whether the running WoW is writing its combat log, once that has
+    /// been checked.
+    pub(super) fn logging(&self) -> Option<bool> {
+        self.running.as_ref().and(self.logging)
     }
 }
 
@@ -140,6 +161,16 @@ fn addon_line(addon: &AddonState) -> String {
     }
 }
 
+/// The running WoW's combat log state in a line, once it has been checked.
+fn logging_line(logging: Option<bool>) -> Option<&'static str> {
+    match logging? {
+        true => Some("Combat log on: finished keys and boss pulls post to Pulse."),
+        false => {
+            Some("Combat log off: type /combatlog in game so Loadout can follow keys and pulls.")
+        }
+    }
+}
+
 /// The newest few kills, level-ups and achievements, newest first.
 fn recent_lines(saved: &WowSaved, max: usize) -> Vec<String> {
     saved
@@ -196,11 +227,13 @@ impl Cabin {
             let w = &mut self.focus.wow;
             w.watcher = None;
             w.running = None;
+            w.session = WowSession::default();
             return;
         }
         self.refresh_bnet(now);
         self.sample_wow(now);
         self.poll_wow_log(now);
+        self.check_wow_logging(std::time::SystemTime::now(), now);
     }
 
     fn take_wow_results(&mut self) {
@@ -276,10 +309,60 @@ impl Cabin {
         if found.is_none() && w.running.is_some() {
             w.scanned_ms = 0;
         }
+        // The last lines the old log holds count before its session closes.
+        let now = now_ms();
+        let mut cards = Vec::new();
+        if let Some(watcher) = w.watcher.as_mut() {
+            for event in watcher.poll(now).unwrap_or_default() {
+                cards.extend(w.session.take(&event));
+            }
+        }
+        cards.extend(w.session.close(now));
         w.watcher = found
             .as_ref()
             .map(|(_, dir)| WowWatcher::new(dir.join("Logs")));
+        w.started = found.as_ref().map(|_| std::time::SystemTime::now());
+        w.logging = None;
+        w.nudged = false;
         w.running = found;
+        self.post_wow_cards(cards);
+    }
+
+    /// A minute after WoW starts, check that it writes its combat log, and
+    /// say once how to turn it on when it doesn't. A log that shows up
+    /// later (the player typed /combatlog) turns the check back to on.
+    fn check_wow_logging(&mut self, now: std::time::SystemTime, now_ms: u64) {
+        let w = &mut self.focus.wow;
+        let (Some(started), Some((_, dir))) = (w.started, w.running.as_ref()) else {
+            return;
+        };
+        if w.logging == Some(true)
+            || now.duration_since(started).unwrap_or_default() < LOG_GRACE
+            || now_ms.saturating_sub(w.log_checked_ms) < SAMPLE_EVERY_MS
+        {
+            return;
+        }
+        w.log_checked_ms = now_ms;
+        let on = wowlog::logging_since(&dir.join("Logs"), started);
+        w.logging = Some(on);
+        if !on && !w.nudged {
+            w.nudged = true;
+            self.toasts
+                .info(LOG_NUDGE)
+                .duration(Some(std::time::Duration::from_secs(20)))
+                .closable(true);
+        }
+    }
+
+    /// Post WoW's key, kill and session cards to Pulse.
+    fn post_wow_cards(&mut self, cards: Vec<grokhub_core::UpdateCard>) {
+        let mut posted = false;
+        for card in cards {
+            posted |= grokhub_core::post_update(&mut self.updates, card);
+        }
+        if posted {
+            self.persist_updates();
+        }
     }
 
     fn poll_wow_log(&mut self, now: u64) {
@@ -294,9 +377,13 @@ impl Cabin {
         // A log that can't be read now (WoW holds it while rotating) is
         // tried again next poll.
         let events = watcher.poll(now).unwrap_or_default();
-        for event in events {
-            self.note_watch_event(WOW_NAME, event, now);
+        if events.is_empty() {
+            return;
         }
+        // A line in the log means logging is on, whatever the file times say.
+        w.logging = Some(true);
+        let cards: Vec<_> = events.iter().flat_map(|e| w.session.take(e)).collect();
+        self.post_wow_cards(cards);
     }
 
     /// The Battle.net games found so far; starts a scan the first time.
@@ -358,6 +445,13 @@ impl Cabin {
             }
         });
         if game.is_wow() {
+            if let Some(line) = logging_line(self.focus.wow.logging()) {
+                ui.label(
+                    egui::RichText::new(line)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+            }
             self.ui_wow_flavors(ui, &game.install);
             if !self.cfg.game_watch {
                 ui.label(
@@ -647,6 +741,110 @@ mod tests {
         cabin.note_wow_running(None);
         assert_eq!(cabin.focus.wow.running, None);
         assert!(cabin.focus.wow.watcher.is_none());
+    }
+
+    #[test]
+    fn keys_and_pulls_from_the_log_post_to_pulse_and_closing_sums_the_rest() {
+        let root = tmp("keys");
+        let logs = root.join("_retail_").join("Logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(root.join("_retail_/Interface")).unwrap();
+        let (mut cabin, _dir) = cabin("wow-keys");
+        cabin.cfg.game_watch = true;
+        cabin.focus.wow.games = vec![wow_at(&root)];
+        cabin.note_wow_running(Some(WowFlavor::Retail));
+        let log = logs.join("WoWCombatLog-103126_200000.txt");
+        std::fs::write(&log, "10/31/2026 20:00:00.0000  COMBAT_LOG_VERSION,22\n").unwrap();
+        cabin.poll_wow_log(10_000);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        use std::io::Write;
+        for line in [
+            r#"10/31/2026 20:01:00.0000  CHALLENGE_MODE_START,"Ara-Kara, City of Echoes",2660,503,10,[10,147]"#,
+            r#"10/31/2026 20:05:00.0000  ENCOUNTER_START,2926,"Avanoxx",8,5,2660"#,
+            r#"10/31/2026 20:07:00.0000  ENCOUNTER_END,2926,"Avanoxx",8,5,1,120000"#,
+            "10/31/2026 20:29:00.0000  CHALLENGE_MODE_END,2660,1,10,1680000",
+            r#"10/31/2026 21:00:00.0000  ENCOUNTER_START,2902,"Ulgrax the Devourer",16,20,2657"#,
+            r#"10/31/2026 21:03:00.0000  ENCOUNTER_END,2902,"Ulgrax the Devourer",16,20,0,180000"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+        drop(f);
+        cabin.poll_wow_log(20_000);
+        assert_eq!(cabin.focus.wow.logging(), Some(true));
+        let titles = |cabin: &Cabin| -> Vec<String> {
+            cabin
+                .updates
+                .iter()
+                .filter(|c| c.source_id == wowlog::CARD_SOURCE)
+                .map(|c| c.title.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        assert_eq!(
+            titles(&cabin),
+            vec!["Ara-Kara, City of Echoes +10: finished in 28:00"]
+        );
+        // A wipe written just before WoW closes still counts.
+        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        writeln!(
+            f,
+            r#"10/31/2026 21:10:00.0000  ENCOUNTER_END,2902,"Ulgrax the Devourer",16,20,0,90000"#
+        )
+        .unwrap();
+        drop(f);
+        cabin.note_wow_running(None);
+        assert_eq!(
+            titles(&cabin),
+            vec![
+                "Ara-Kara, City of Echoes +10: finished in 28:00",
+                "WoW session: 2 pulls on 1 boss with no kill",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wow_with_no_combat_log_gets_one_reminder_until_a_log_shows_up() {
+        let root = tmp("nudge");
+        let logs = root.join("_retail_").join("Logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(root.join("_retail_/Interface")).unwrap();
+        let (mut cabin, _dir) = cabin("wow-nudge");
+        cabin.focus.wow.games = vec![wow_at(&root)];
+        cabin.note_wow_running(Some(WowFlavor::Retail));
+        let started = cabin.focus.wow.started.unwrap();
+        // An old session's log doesn't count.
+        let old = logs.join("WoWCombatLog-103026_200000.txt");
+        std::fs::write(&old, "old\n").unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(started - std::time::Duration::from_secs(3600))
+            .unwrap();
+        // Inside the first minute nothing is checked.
+        cabin.check_wow_logging(started + std::time::Duration::from_secs(10), 10_000);
+        assert_eq!(cabin.focus.wow.logging(), None);
+        assert_eq!(logging_line(None), None);
+        cabin.check_wow_logging(started + std::time::Duration::from_secs(70), 70_000);
+        assert_eq!(cabin.focus.wow.logging(), Some(false));
+        assert!(cabin.focus.wow.nudged);
+        assert!(logging_line(Some(false)).unwrap().contains("/combatlog"));
+        // The player typed /combatlog: a fresh log turns it on.
+        let new = logs.join("WoWCombatLog-103126_200100.txt");
+        std::fs::write(&new, "new\n").unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(&new)
+            .unwrap()
+            .set_modified(started + std::time::Duration::from_secs(80))
+            .unwrap();
+        cabin.check_wow_logging(started + std::time::Duration::from_secs(90), 90_000);
+        assert_eq!(cabin.focus.wow.logging(), Some(true));
+        // Closing WoW forgets it.
+        cabin.note_wow_running(None);
+        assert_eq!(cabin.focus.wow.logging(), None);
+        assert!(!cabin.focus.wow.nudged);
     }
 
     #[test]

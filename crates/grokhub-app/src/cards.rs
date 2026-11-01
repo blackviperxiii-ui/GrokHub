@@ -355,11 +355,11 @@ pub const GITHUB_TILES: &[(&str, &str, &str)] = &[
 
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     let mut clicked = false;
-    ui.add_space(4.0);
+    ui.add_space(crate::theme::SPACING_4);
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(title)
-                .font(crate::theme::title_font(28.0))
+                .font(crate::theme::title_font(crate::theme::TYPE_HEADLINE))
                 .color(crate::theme::fg()),
         );
         if !action.is_empty() {
@@ -368,7 +368,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
             });
         }
     });
-    ui.add_space(14.0);
+    ui.add_space(crate::ui_kit::SECTION_HEADER_GAP);
     clicked
 }
 
@@ -1569,6 +1569,23 @@ pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
     });
 }
 
+/// The Loadout card a tile sits in: the raised card fill, flat (the rim that
+/// [`paint_slot_card`] draws does the lifting), with tile padding.
+fn tile_frame() -> egui::Frame {
+    egui::Frame {
+        fill: crate::ui_kit::recipe::look(
+            crate::ui_kit::recipe::Part::Card,
+            crate::ui_kit::recipe::State::Default,
+        )
+        .fill,
+        stroke: Stroke::NONE,
+        shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::None),
+        inner_margin: egui::Margin::same(14),
+        outer_margin: egui::Margin::ZERO,
+        corner_radius: crate::ui_kit::recipe::CARD_RADIUS.into(),
+    }
+}
+
 fn paint_slot_card(
     ui: &mut egui::Ui,
     mut prepared: egui::containers::frame::Prepared,
@@ -1581,19 +1598,14 @@ fn paint_slot_card(
     prepared.frame.fill = crate::theme::veil_over(resting, veil);
     prepared.frame.stroke = Stroke::NONE;
     prepared.paint(ui);
-    let (stroke, stroke_w) = if selected {
-        (crate::theme::fg(), 1.5_f32)
-    } else if resp.hovered() {
-        (crate::theme::border_strong(), 1.0_f32)
-    } else {
-        (crate::theme::border(), 1.0_f32)
-    };
-    ui.painter().rect_stroke(
-        slot.shrink(0.5),
-        rounding,
-        Stroke::new(stroke_w, stroke),
-        egui::StrokeKind::Middle,
-    );
+    // The Loadout card rim (dim signal red), the same at rest, hover and pick.
+    let rim = crate::ui_kit::recipe::look(
+        crate::ui_kit::recipe::Part::Card,
+        crate::ui_kit::recipe::state(resp.hovered(), selected, false),
+    )
+    .stroke;
+    ui.painter()
+        .rect_stroke(slot.shrink(0.5), rounding, rim, egui::StrokeKind::Middle);
     crate::motion::icon::note_card(ui, resp.rect);
     resp
 }
@@ -1781,15 +1793,7 @@ pub fn grok_tile(
     let extra = slot
         .map(|(prev, fill)| tile_row_slack(prev, fill))
         .unwrap_or(0.0);
-    let mut prepared = egui::Frame {
-        fill: crate::theme::elevated(),
-        stroke: Stroke::NONE,
-        shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
-        inner_margin: egui::Margin::same(14),
-        outer_margin: egui::Margin::ZERO,
-        corner_radius: crate::theme::CARD_RADIUS.into(),
-    }
-    .begin(ui);
+    let mut prepared = tile_frame().begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.horizontal(|ui| {
@@ -2633,15 +2637,7 @@ fn wall_slot_feel(ui: &egui::Ui, resp: egui::Response, selected: bool) -> egui::
 }
 
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
-    let mut prepared = egui::Frame {
-        fill: crate::theme::elevated(),
-        stroke: Stroke::NONE,
-        shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
-        inner_margin: egui::Margin::same(14),
-        outer_margin: egui::Margin::ZERO,
-        corner_radius: crate::theme::CARD_RADIUS.into(),
-    }
-    .begin(ui);
+    let mut prepared = tile_frame().begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.set_min_height(100.0);
@@ -2684,6 +2680,10 @@ fn push_tile_metric(metric: TileMetric) {
 fn take_tile_metrics() -> Vec<TileMetric> {
     TILE_METRICS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
+
+#[cfg(test)]
+#[path = "cards_look_tests.rs"]
+mod look_tests;
 
 #[cfg(test)]
 mod tests {

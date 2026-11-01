@@ -12,12 +12,23 @@ impl Cabin {
         let g = crate::window::clamp_geom(self.cfg.window);
         #[cfg(windows)]
         if g.maximized && self.window_visible {
-            if crate::win_native::work_area().is_some() {
+            if let Some((x, y, w, h)) = crate::win_native::work_area() {
                 // Clear winit's own maximized flag (the launch asked for it) this
                 // frame; eframe applies viewport commands at the end of the
                 // frame, so the native fill of the work area waits for the next
-                // one or winit's restore would shrink the window back.
+                // one or winit's restore would shrink the window back. The
+                // work-area size and place go out after the clear, so the
+                // window is full size even if the native fill never lands.
+                let ppp = ctx.pixels_per_point().max(0.5);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    w as f32 / ppp,
+                    h as f32 / ppp,
+                )));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    x as f32 / ppp,
+                    y as f32 / ppp,
+                )));
                 self.native_maximize_due = true;
                 self.win_max = true;
                 self.cfg.window.maximized = true;
@@ -50,7 +61,7 @@ impl Cabin {
         #[cfg(windows)]
         if self.native_maximize_due {
             self.native_maximize_due = false;
-            self.native_maximize();
+            self.native_maximize(ctx);
             self.geom_apply_frames = 0;
             return;
         }
@@ -91,18 +102,24 @@ impl Cabin {
     }
 
     /// Undecorated egui windows ignore SW_MAXIMIZE: fill the monitor work area
-    /// natively and re-apply the frame polish.
+    /// natively and re-apply the frame polish. When the native fill can't
+    /// land (no work area this frame, or the window call fails), winit's own
+    /// maximize takes over, so the window never stays half size while it is
+    /// remembered as maximized.
     #[cfg(windows)]
-    pub(super) fn native_maximize(&mut self) {
-        if let Some((x, y, w, h)) = crate::win_native::work_area() {
-            let _ = crate::win_native::show_cabin(x, y, w, h, true);
+    pub(super) fn native_maximize(&mut self, ctx: &egui::Context) {
+        let filled = crate::win_native::work_area()
+            .is_some_and(|(x, y, w, h)| crate::win_native::show_cabin(x, y, w, h, true));
+        if filled {
             let dark = grokhub_core::resolve_dark(
                 grokhub_core::parse_theme(&self.cfg.theme),
                 crate::theme::desktop_prefers_dark(),
             );
             crate::win_native::polish_hwnd(dark);
-            self.win_max = true;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         }
+        self.win_max = true;
     }
 
     pub(super) fn flush_window(&mut self, ctx: &egui::Context) {

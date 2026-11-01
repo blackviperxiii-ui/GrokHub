@@ -281,7 +281,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
     #[test]
     fn the_built_in_addon_declares_its_saved_variable_and_version() {
         assert_eq!(toc_field(TOC, "## SavedVariables:"), Some("LoadoutDB"));
-        assert_eq!(bundled_version(), "1.2.0");
+        assert_eq!(bundled_version(), "1.3.0");
         assert!(toc_field(TOC, MARK).is_some());
         assert!(LUA.contains("LoadoutDB"));
         // Read-only: no protected or automation calls.
