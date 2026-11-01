@@ -85,7 +85,7 @@ impl Cabin {
     pub(super) fn ui_settings_background(&mut self, ui: &mut egui::Ui) {
         crate::cards::help_text(
             ui,
-            "Everything the cabin does on its own. While you type or a chat is running, heavy jobs wait for you to go idle. Daily token budgets reset each local day; set them in `app.json` under `background.dailyTokens`.",
+            grokhub_core::brand::filled("Everything {product} does on its own. While you type or a chat is running, heavy jobs wait for you to go idle. Daily token budgets reset each local day; set them in `app.json` under `background.dailyTokens`."),
         );
         ui.add_space(8.0);
         crate::cards::settings_note(ui, background_headline(self.user_active_now()));

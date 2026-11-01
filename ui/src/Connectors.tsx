@@ -43,7 +43,7 @@ export function Connectors() {
 
   useEffect(() => {
     listConnectors().then(setRows, fail);
-  }, []);
+  }, [fail]);
 
   async function check() {
     setBusy("*");

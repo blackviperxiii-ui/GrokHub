@@ -240,6 +240,7 @@ mod release_radar_ui;
 mod repaint_timer_tests;
 mod repair_ui;
 mod rhythm_ui;
+mod rl_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
@@ -312,6 +313,7 @@ enum Nav {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
+    AiModels,
     Privacy,
     Appearance,
     Behavior,
@@ -4977,7 +4979,10 @@ impl Cabin {
                     self.cfg.close_to_tray_tip_seen = true;
                 }
                 self.unmap_to_tray(ctx);
-                self.status = "In the tray — Show cabin to sit down".into();
+                self.status = format!(
+                    "In the tray — Show {} to sit down",
+                    grokhub_core::brand::product_name()
+                );
             }
         }
     }

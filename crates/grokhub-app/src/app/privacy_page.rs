@@ -85,8 +85,12 @@ impl OfflineRow {
     }
 }
 
+/// Privacy points to the one page that holds Offline only and the on-device model.
+pub(super) const MODELS_MOVED: &str =
+    "Offline only and the on-device model are in Settings → AI models.";
+
 /// The Offline only switch, its confirm, and any save error.
-fn paint_offline_row(ui: &mut egui::Ui) {
+pub(super) fn paint_offline_row(ui: &mut egui::Ui) {
     let id = egui::Id::new(OFFLINE_ROW_ID);
     let mut row: OfflineRow = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
     // The cabin's config dir (the same folder `offline::set` uses outside tests).
@@ -208,17 +212,6 @@ pub(super) fn cloud_state(week: &Week, cloud: Cloud) -> &'static str {
         Some(0) => "OFF",
         Some(_) => "ON",
         None => "—",
-    }
-}
-
-/// The On-device model switch's hint, by what the router really does.
-pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
-    match (on, installed) {
-        (false, _) => "Background tasks use the cloud model",
-        (true, false) => {
-            "On, but the on-device model isn't installed, so background tasks still use the cloud model"
-        }
-        (true, true) => "Used only when no cloud model answers or you're offline",
     }
 }
 
@@ -598,15 +591,7 @@ impl Cabin {
     }
 
     fn privacy_switches(&mut self, ui: &mut egui::Ui, week: &Week, now: u64) {
-        paint_offline_row(ui);
-        let mut local = self.cfg.local_model;
-        let hint = local_hint(local, local && grokhub_agent::route::local::installed());
-        if crate::cards::settings_toggle(ui, "On-device model", hint, &mut local) {
-            self.set_local_model(local);
-        }
-        for line in local_notes(local, grokhub_agent::route::local::installed()) {
-            crate::cards::settings_note(ui, line);
-        }
+        crate::cards::settings_note(ui, MODELS_MOVED);
         let mut asks = self.permission_mode == PermissionMode::Ask;
         if crate::cards::settings_toggle(
             ui,
@@ -759,18 +744,6 @@ mod tests {
         assert_eq!(
             cloud_line(SIGNED_OUT),
             "Grok isn't signed in, so nothing can leave this PC."
-        );
-        assert_eq!(
-            local_hint(false, true),
-            "Background tasks use the cloud model"
-        );
-        assert_eq!(
-            local_hint(true, false),
-            "On, but the on-device model isn't installed, so background tasks still use the cloud model"
-        );
-        assert_eq!(
-            local_hint(true, true),
-            "Used only when no cloud model answers or you're offline"
         );
         assert_eq!(
             local_notes(true, true),
@@ -927,7 +900,7 @@ mod tests {
                 .clone()
         };
         let (_, hero_rect, hero_justified) = find(HERO_SENT);
-        let (_, switch_rect, _) = find("On-device model");
+        let (_, switch_rect, _) = find("Agent asks before changes");
         assert!(!hero_justified, "the hero is ragged right");
         assert!(
             hero_rect.right() + STORY_GUTTER - 1.0 <= switch_rect.left(),

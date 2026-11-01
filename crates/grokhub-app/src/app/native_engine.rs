@@ -810,7 +810,7 @@ fn serve_native(
 /// Shown when a sign-in or key is on file but can't be used and Local AI
 /// takes the chat instead of the turn failing.
 pub(super) const LOCAL_FALLBACK_NOTE: &str =
-    "Your Grok sign-in needs renewing, so Local AI is answering. Sign in again in Settings → Account to use Grok.";
+    "Your Grok sign-in needs renewing, so Local AI is answering. Sign in again in Settings → AI models to use Grok.";
 
 /// xAI turned the bearer away (`client::ClientError` 401/403 wording).
 fn is_cloud_rejection(err: &str) -> bool {

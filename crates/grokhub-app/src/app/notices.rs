@@ -30,6 +30,10 @@ pub(super) enum NoticeAction {
     OpenFolder(std::path::PathBuf),
     /// Turn this recording folder's stills into a skill draft.
     SaveAsSkill(std::path::PathBuf),
+    /// Undo the board sweep: put these archived cards back.
+    RestoreCards(Vec<String>),
+    /// Open this card on the Workboard.
+    OpenCard(String),
 }
 
 impl NoticeAction {
@@ -38,6 +42,8 @@ impl NoticeAction {
             NoticeAction::Unarchive(_) | NoticeAction::Archive(_) => "Undo",
             NoticeAction::OpenFolder(_) => "Open folder",
             NoticeAction::SaveAsSkill(_) => "Save as skill",
+            NoticeAction::RestoreCards(_) => "Undo",
+            NoticeAction::OpenCard(_) => "Open card",
         }
     }
 }
@@ -160,6 +166,19 @@ impl Cabin {
                 }
             }
             NoticeAction::OpenFolder(path) => self.open_folder_of(&path),
+            NoticeAction::RestoreCards(ids) => {
+                let now = now_ms();
+                let mut back = 0;
+                for id in &ids {
+                    if grokhub_core::restore_work_card(&mut self.board, id, now) {
+                        back += 1;
+                    }
+                }
+                if back > 0 {
+                    self.flush_board();
+                }
+            }
+            NoticeAction::OpenCard(id) => self.open_board_card(&id),
             NoticeAction::SaveAsSkill(dir) => {
                 if super::screen_record_ui::watch_offer_dir().as_deref() != Some(dir.as_path()) {
                     return;
