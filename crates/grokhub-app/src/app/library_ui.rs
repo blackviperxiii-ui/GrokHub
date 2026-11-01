@@ -330,13 +330,14 @@ impl Cabin {
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 if !found || games.is_empty() {
+                    // No Steam games is not a dead end: the header and its
+                    // Skills button stay, and the empty state says what the
+                    // library reads and where to go next.
+                    self.library_empty_header(ui);
+                    ui.add_space(16.0);
                     self.ui_bnet_games(ui);
-                    if crate::ui_kit::empty_state(
-                        ui,
-                        "No Steam library",
-                        "Games you install with Steam on this PC show up here.",
-                        Some("Open Steam"),
-                    ) {
+                    let (title, body) = library_empty_copy(found);
+                    if crate::ui_kit::empty_state(ui, title, body, Some("Open Steam")) {
                         let _ = crate::desktop::open_path("steam://");
                     }
                     return;
@@ -380,6 +381,23 @@ impl Cabin {
                 });
             });
         ui.ctx().data_mut(|d| d.insert_temp(id, view));
+    }
+
+    /// The header with no games to filter: the title and the Skills button,
+    /// which used to vanish with the rest of the page when Steam wasn't found.
+    fn library_empty_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Library")
+                    .font(crate::theme::title_font(28.0))
+                    .color(crate::theme::fg()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, "Skills") {
+                    self.set_nav_id("skills");
+                }
+            });
+        });
     }
 
     fn library_header(&mut self, ui: &mut egui::Ui, view: &mut LibraryView) {
@@ -548,6 +566,22 @@ fn library_grid(
     clicked
 }
 
+/// Empty-state title and body. The library reads installed games from
+/// Steam's own library files on this PC (nothing touches a running game).
+pub(super) fn library_empty_copy(steam_found: bool) -> (&'static str, &'static str) {
+    if steam_found {
+        (
+            "No Steam games installed",
+            "Steam is on this PC but has no installed games yet. Games you install with Steam show up here.",
+        )
+    } else {
+        (
+            "No Steam library found",
+            "The library reads the games Steam has installed on this PC. Install or open Steam and they show up here.",
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +690,15 @@ mod tests {
         assert_eq!(cabin.nav_id(), "library");
         cabin.set_nav_id("skills");
         assert_eq!(cabin.nav, Nav::Skills);
+    }
+
+    #[test]
+    fn empty_library_says_what_it_reads_whether_or_not_steam_is_there() {
+        let (t, b) = super::library_empty_copy(false);
+        assert_eq!(t, "No Steam library found");
+        assert!(b.contains("Steam has installed"));
+        let (t, b) = super::library_empty_copy(true);
+        assert_eq!(t, "No Steam games installed");
+        assert!(b.contains("no installed games yet"));
     }
 }

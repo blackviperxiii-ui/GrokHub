@@ -1,0 +1,1 @@
+- Library without Steam is no longer a dead end: the header and its Skills button stay, and the empty state says what the library reads (Steam's installed games on this PC) with an Open Steam button. Battle.net games still show above it.
