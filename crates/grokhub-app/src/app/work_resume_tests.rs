@@ -5,7 +5,7 @@
 use super::*;
 use grokhub_core::work_item::{read_work_log, Checkpoint, StepStatus, WorkKind, WorkStep};
 use grokhub_core::work_resume::{
-    self as res, InterruptCause, Interruption, AUTO_RESUME_PER_DAY, HOST_CABIN, RESUME_BLOCK_MAX,
+    self as res, InterruptCause, Interruption, HOST_CABIN, RESUME_BLOCK_MAX,
 };
 use grokhub_core::work_run::RunEnd;
 
@@ -254,6 +254,7 @@ fn a_cut_turn_is_interrupted_and_a_swap_cut_halts_the_turn() {
 }
 
 /// The agent's own background card, interrupted, with the run it last had.
+#[cfg(unix)]
 fn agent_bg_card(cabin: &mut Cabin, mode: grokhub_core::wire::PermissionMode) -> String {
     let mut c = BoardCard::new("Check the backups", "", "");
     c.origin = Some(grokhub_core::WorkOrigin::Agent);
@@ -287,7 +288,7 @@ fn agent_background_work_auto_resumes_twice_then_waits_with_a_bell() {
     cabin.tick_board_notices();
     cabin.interrupt_boot_orphans();
     let bells = cabin.notices.items.len();
-    for round in 1..=AUTO_RESUME_PER_DAY {
+    for round in 1..=res::AUTO_RESUME_PER_DAY {
         cabin.tick_board_notices();
         assert_eq!(
             cabin.notices.items.len(),
