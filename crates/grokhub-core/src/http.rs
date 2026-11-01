@@ -3,9 +3,11 @@
 //!
 //! Stage 1: backed by ureq 2, with the same defaults ureq 2 uses today, pinned
 //! in [`Opts::default`] so a later swap cannot quietly change a timeout or the
-//! redirect limit. Only what the moved call sites need is here: GET with
-//! headers, the status, the body as a reader or a string, and an error that
-//! keeps a 4xx/5xx answer's code, body and `Retry-After`.
+//! redirect limit. Only what the moved call sites need is here: GET, and POST
+//! with a string body, with headers; the status, a header, the content type,
+//! the body as a reader or a string; and an error that keeps a 4xx/5xx
+//! answer's code, body and `Retry-After`, or what kind of transport failure it
+//! was.
 //!
 //! This is a factory, not a guard: every caller still runs its own egress
 //! check (or loopback check) before it calls, and the Offline only scans
@@ -74,6 +76,10 @@ impl Agent {
     pub fn get(&self, url: &str) -> Request {
         Request(self.0.get(url))
     }
+
+    pub fn post(&self, url: &str) -> Request {
+        Request(self.0.post(url))
+    }
 }
 
 /// One request, not sent until [`Request::call`].
@@ -89,6 +95,15 @@ impl Request {
     pub fn call(self) -> Result<Response, Error> {
         self.0.call().map(Response).map_err(Error::from_ureq)
     }
+
+    /// Send it with `body` as UTF-8 text. Sets no `Content-Type` of its own:
+    /// name one with [`Request::header`]. Answers as [`Request::call`] does.
+    pub fn send_string(self, body: &str) -> Result<Response, Error> {
+        self.0
+            .send_string(body)
+            .map(Response)
+            .map_err(Error::from_ureq)
+    }
 }
 
 /// A 1xx-3xx answer.
@@ -102,6 +117,12 @@ impl Response {
     /// A header's value; the name is matched without regard to case.
     pub fn header(&self, name: &str) -> Option<&str> {
         self.0.header(name)
+    }
+
+    /// `Content-Type` up to its first `;`, as sent (case kept, no trim);
+    /// `text/plain` when the header is missing.
+    pub fn content_type(&self) -> &str {
+        self.0.content_type()
     }
 
     /// The body, unbounded: cap it with `Read::take`.
@@ -129,7 +150,23 @@ pub enum Error {
         message: String,
     },
     /// No answer: bad URL, refused address, DNS, connect, TLS, timeout or read.
-    Transport { message: String },
+    Transport {
+        kind: TransportKind,
+        message: String,
+    },
+}
+
+/// What failed when there was no answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransportKind {
+    /// The name didn't resolve, or the public-only resolver refused it.
+    Dns,
+    /// The connection couldn't be opened.
+    Connect,
+    /// A read or write failed or timed out after connecting.
+    Io,
+    /// Anything else: bad URL or scheme, TLS, a malformed answer, too many redirects.
+    Other,
 }
 
 impl Error {
@@ -159,7 +196,15 @@ impl Error {
                     message,
                 }
             }
-            ureq::Error::Transport(_) => Error::Transport { message },
+            ureq::Error::Transport(t) => Error::Transport {
+                kind: match t.kind() {
+                    ureq::ErrorKind::Dns => TransportKind::Dns,
+                    ureq::ErrorKind::ConnectionFailed => TransportKind::Connect,
+                    ureq::ErrorKind::Io => TransportKind::Io,
+                    _ => TransportKind::Other,
+                },
+                message,
+            },
         }
     }
 }
@@ -167,7 +212,9 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Status { message, .. } | Error::Transport { message } => f.write_str(message),
+            Error::Status { message, .. } | Error::Transport { message, .. } => {
+                f.write_str(message)
+            }
         }
     }
 }
@@ -183,7 +230,7 @@ mod tests {
     use std::time::Instant;
 
     /// Loopback server: answers `replies` in order, one per connection, and
-    /// returns each request's head.
+    /// returns each request's head followed by its `Content-Length` body.
     fn serve(replies: Vec<String>) -> (u16, JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -196,6 +243,14 @@ mod tests {
                 while !head.ends_with(b"\r\n\r\n") && sock.read(&mut byte).unwrap_or(0) == 1 {
                     head.push(byte[0]);
                 }
+                let text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+                let len = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .map_or(0, |n| n.trim().parse::<usize>().unwrap());
+                let mut body = vec![0u8; len];
+                sock.read_exact(&mut body).unwrap();
+                head.extend_from_slice(&body);
                 heads.push(String::from_utf8_lossy(&head).into_owned());
                 sock.write_all(reply.as_bytes()).unwrap();
             }
@@ -331,7 +386,17 @@ mod tests {
         .call()
         .err()
         .unwrap();
-        assert!(matches!(err, Error::Transport { .. }), "{err:?}");
+        // ureq reports a resolver refusal as a DNS failure.
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Dns,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
         assert!(listener.accept().is_err(), "nothing may connect");
     }
 
@@ -353,8 +418,110 @@ mod tests {
         .call()
         .err()
         .unwrap();
-        assert!(matches!(err, Error::Transport { .. }), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Io,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
         assert!(started.elapsed() < Duration::from_secs(2), "timed out late");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn post_sends_the_string_body_with_the_named_content_type() {
+        let (port, server) = serve(vec![reply("200 OK", "", "{\"ok\":true}")]);
+        let resp = agent(Opts::default())
+            .post(&format!("http://127.0.0.1:{port}/token"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .send_string("a=1&b=%C3%A9")
+            .unwrap();
+        assert_eq!(resp.into_string().unwrap(), "{\"ok\":true}");
+        let req = &server.join().unwrap()[0];
+        assert!(req.starts_with("POST /token HTTP/1.1\r\n"), "{req:?}");
+        assert!(
+            req.contains("content-type: application/x-www-form-urlencoded\r\n"),
+            "{req:?}"
+        );
+        assert!(req.contains("Content-Length: 12\r\n"), "{req:?}");
+        assert!(req.ends_with("\r\n\r\na=1&b=%C3%A9"), "{req:?}");
+    }
+
+    #[test]
+    fn post_status_error_keeps_the_body() {
+        let (port, server) = serve(vec![reply(
+            "400 Bad Request",
+            "",
+            "{\"error\":\"authorization_pending\"}",
+        )]);
+        let err = agent(Opts::default())
+            .post(&format!("http://127.0.0.1:{port}/token"))
+            .send_string("x")
+            .err()
+            .unwrap();
+        server.join().unwrap();
+        match err {
+            Error::Status { code, body, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(body, "{\"error\":\"authorization_pending\"}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn content_type_drops_parameters_and_defaults_to_text_plain() {
+        let (port, server) = serve(vec![
+            reply("200 OK", "Content-Type: Text/HTML ; charset=utf-8\r\n", ""),
+            reply("200 OK", "", ""),
+        ]);
+        let a = agent(Opts::default());
+        let url = format!("http://127.0.0.1:{port}/");
+        assert_eq!(a.get(&url).call().unwrap().content_type(), "Text/HTML ");
+        assert_eq!(a.get(&url).call().unwrap().content_type(), "text/plain");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn transport_kind_tells_connect_from_a_bad_url() {
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let refused = agent(Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .call()
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                refused,
+                Error::Transport {
+                    kind: TransportKind::Connect,
+                    ..
+                }
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(refused.status(), None);
+        let bad = agent(Opts::default())
+            .get("not a url")
+            .call()
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                bad,
+                Error::Transport {
+                    kind: TransportKind::Other,
+                    ..
+                }
+            ),
+            "{bad:?}"
+        );
     }
 }
