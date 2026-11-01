@@ -109,7 +109,7 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "Frame Rate",
         SystemPerformance,
         Partial,
-        "Frames on screen from the display driver (Linux), never inside the game",
+        "Frame rate from the display driver (Linux) or the graphics event log (Windows), never inside the game",
         [Medium, Small]
     ),
     entry!(
