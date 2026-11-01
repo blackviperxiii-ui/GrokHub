@@ -10,6 +10,7 @@ const PATHS: Record<View, string> = {
   automations: "M13 3 5 14h6l-1 7 8-11h-6z",
   agents: "M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1",
   memory: "M12 4c-4 0-7 1.3-7 3v10c0 1.7 3 3 7 3s7-1.3 7-3V7c0-1.7-3-3-7-3zM5 7c0 1.7 3 3 7 3s7-1.3 7-3M5 12c0 1.7 3 3 7 3s7-1.3 7-3",
+  skills: "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6l-5.4 2.9 1.2-6-4.5-4.2 6.1-.7z",
   connectors: "M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5",
   devices: "M3 5h13v9H3zM7 18h5M9.5 14v4M18 9h3v10h-3z",
   settings: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",

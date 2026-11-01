@@ -27,6 +27,7 @@ export type View =
   | "automations"
   | "agents"
   | "memory"
+  | "skills"
   | "connectors"
   | "settings"
   | "library"
@@ -77,6 +78,7 @@ export const VIEW_LABELS: Record<View, string> = {
   automations: "Automations",
   agents: "Agents",
   memory: "Memory",
+  skills: "Skills",
   connectors: "Connectors",
   settings: "Settings",
   workboard: "Workboard",
@@ -97,6 +99,7 @@ export function views(caps: Capabilities): View[] {
     "automations",
     "agents",
     "memory",
+    "skills",
     "connectors",
     "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
