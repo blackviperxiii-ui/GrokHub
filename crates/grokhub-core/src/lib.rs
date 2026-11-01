@@ -41,6 +41,7 @@ pub mod destiny_api;
 pub mod diagnostics;
 pub mod doctor;
 pub mod downloads_tidy;
+pub mod eso_addon;
 pub mod export;
 pub mod feel;
 pub mod file_watch;

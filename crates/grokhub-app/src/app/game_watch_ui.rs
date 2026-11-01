@@ -313,6 +313,7 @@ impl Cabin {
                 crate::cards::help_text(ui, line);
             }
         });
+        self.ui_eso(ui);
         self.ui_gw2(ui);
         self.ui_destiny(ui);
     }

@@ -151,6 +151,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "eso",
+        name: "The Elder Scrolls Online",
+        steam_app_id: Some(306130),
+        protection: Protection::None,
+        channels: &[Channel::OfficialAddon(
+            "a Loadout addon through ZeniMax's Lua addon API and saved variables, installed only when you click",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "destiny2",
         name: "Destiny 2",
         steam_app_id: Some(1085660),
@@ -210,16 +220,6 @@ pub const ALL: &[Integration] = &[
         )],
         status: Status::Built,
     },
-    Integration {
-        id: "eso",
-        name: "The Elder Scrolls Online",
-        steam_app_id: Some(306130),
-        protection: Protection::None,
-        channels: &[Channel::OfficialAddon(
-            "a Loadout addon through ZeniMax's Lua addon API and saved variables",
-        )],
-        status: Status::Planned,
-    },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Integration> {
@@ -269,7 +269,6 @@ mod tests {
             by_id("league").unwrap().how(),
             "Riot's Live Client Data API on this computer. Has Riot Vanguard, so Loadout adds nothing to the game"
         );
-        assert!(by_id("eso").unwrap().how().ends_with(". Planned"));
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
         let d2 = by_id("destiny2").unwrap();
@@ -280,5 +279,6 @@ mod tests {
         assert!(gw2.how().contains("read-only key"));
         assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
         assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
+        assert!(by_id("eso").unwrap().how().contains("only when you click"));
     }
 }
