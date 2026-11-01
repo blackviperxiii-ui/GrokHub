@@ -179,6 +179,7 @@ mod game_companion_ui;
 mod game_watch_ui;
 mod ghost;
 mod glance;
+mod gw2_ui;
 mod harness_ui;
 mod heartbeat_gate;
 mod hobby_paths_ui;
@@ -229,6 +230,7 @@ mod proactive_ui;
 mod projects;
 mod provider_ui;
 mod pulse;
+mod pulse_fix_ui;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
@@ -263,6 +265,7 @@ mod web_search_ui;
 mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
+mod work_log;
 mod wow_ui;
 
 use background::BgWork;
@@ -475,6 +478,8 @@ pub struct Cabin {
     chat_job_thread: Option<String>,
     /// This attempt filed a Doing card. Fail paths use it to undo that write.
     inflight_open: bool,
+    /// Tool calls of this turn already on its card's progress log.
+    run_tools_logged: Vec<String>,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -1136,6 +1141,7 @@ impl Cabin {
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1620,6 +1626,7 @@ impl Cabin {
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
             hub: Arc::new(Mutex::new(grokhub_core::HubState::empty())),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,

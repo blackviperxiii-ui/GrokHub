@@ -20,6 +20,7 @@ use grokhub_core::pc_health::{game_running, nvidia_max_util, parse_nvidia_sensor
 
 use super::*;
 use crate::config;
+use grokhub_core::pc_health_advice as advice;
 
 /// A sensor or process-list command that hasn't answered by now is killed,
 /// and that sample counts as no reading.
@@ -132,22 +133,31 @@ impl Cabin {
             ObserveOut::Idle | ObserveOut::Sampling => {}
             ObserveOut::Ended(summary) => {
                 let mut ledger = load_ledger();
+                let stat = advice::SessionStat::from_summary(&summary, now);
+                let verdict = advice::verdict(&stat, &ledger.history, &self.cfg.pc_health);
+                let key = stat.game.clone();
+                advice::push_history(&mut ledger.history, stat);
                 // At most one summary per 30 minutes for the same game label.
-                let key = summary
-                    .game_label
-                    .as_deref()
-                    .unwrap_or("game")
-                    .to_ascii_lowercase();
                 let cool = now.saturating_sub(ledger.last_summary_ms) < 30 * 60 * 1000
                     && ledger.last_game == key;
-                if !cool {
+                let post = !cool && advice::should_post(&verdict, &self.cfg.pc_health, now);
+                if post {
                     ledger.last_summary_ms = now;
                     ledger.last_game = key;
-                    save_ledger(&ledger);
-                    self.post_feed_card(summary_card(&summary, now));
+                }
+                save_ledger(&ledger);
+                if post {
+                    let mut card = summary_card(&summary, now);
+                    card.pulse.verdict = Some(verdict);
+                    self.post_feed_card(card);
                 }
             }
         }
+    }
+
+    /// The sessions the verdict and the Fix it sheet compare against.
+    pub(super) fn pc_health_history(&self) -> Vec<advice::SessionStat> {
+        load_ledger().history
     }
 }
 
@@ -394,6 +404,59 @@ mod tests {
             !tick.contains(concat!(".out", "put()"))
                 && !tick.contains(concat!("setup_wizard", "::run"))
         );
+    }
+
+    fn ended_session(cabin: &mut Cabin, gpu: f32, start: u64) {
+        let sample = |at_ms| SensorSample {
+            at_ms,
+            gpu_temp_c: Some(gpu),
+            cpu_temp_c: Some(60.0),
+            gpu_util_pct: Some(80),
+            cpu_util_pct: Some(40),
+            game_label: Some("Hades".into()),
+            ..Default::default()
+        };
+        cabin.pc_health.session = Some(GameSession {
+            started_ms: start,
+            samples: vec![sample(start), sample(start + 60_000)],
+            game_label: Some("Hades".into()),
+        });
+        cabin.observe_pc_health(false, None, start + 120_000);
+    }
+
+    #[test]
+    fn a_finished_session_posts_its_verdict_and_quiet_skips_normal_ones() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("pc-health-verdict");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.pc_health.enabled = true;
+        let health = |c: &Cabin| {
+            c.updates
+                .iter()
+                .filter(|u| grokhub_core::is_pc_health_card(u))
+                .count()
+        };
+        ended_session(&mut cabin, 70.0, 1_000_000);
+        assert_eq!(health(&cabin), 1);
+        let card = cabin
+            .updates
+            .iter()
+            .find(|u| grokhub_core::is_pc_health_card(u))
+            .unwrap();
+        let v = card.pulse.verdict.as_ref().expect("verdict");
+        assert!(v.line.starts_with("Looks healthy"), "{}", v.line);
+        assert_eq!(cabin.pc_health_history().len(), 1);
+        // Quiet: a normal session an hour later saves to history but posts nothing.
+        cabin.cfg.pc_health.quiet_when_normal = true;
+        ended_session(&mut cabin, 70.0, 5_000_000);
+        assert_eq!(health(&cabin), 1);
+        assert_eq!(cabin.pc_health_history().len(), 2);
+        // A hot one still posts.
+        ended_session(&mut cabin, 86.0, 9_000_000);
+        assert_eq!(health(&cabin), 2);
     }
 
     #[test]
