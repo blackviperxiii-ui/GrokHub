@@ -22,6 +22,8 @@ vi.mock("./api", () => ({
       desktopControl: false,
       theme: "system",
       version: "3.5.0",
+      summonHotkey: false,
+      notifications: true,
     } satisfies Settings),
   saveSettings: vi.fn(),
   answerElicit: vi.fn(),
