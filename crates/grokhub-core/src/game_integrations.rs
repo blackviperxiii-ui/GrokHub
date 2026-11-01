@@ -107,6 +107,9 @@ pub const ALL: &[Integration] = &[
                 "Loadout's WoW addon saves your characters, gold, item level and boss kills through Blizzard's addon API",
             ),
             Channel::GameFile("WoW's own combat log after /combatlog"),
+            Channel::OfficialWebApi(
+                "Blizzard's Battle.net profile API, once you connect your own Battle.net client",
+            ),
         ],
         status: Status::Built,
     },

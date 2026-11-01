@@ -146,6 +146,7 @@ mod audio_check_ui;
 mod background;
 mod background_ui;
 mod backup_ui;
+mod battlenet_ui;
 mod board_triage;
 mod board_ui;
 mod budget_ui;

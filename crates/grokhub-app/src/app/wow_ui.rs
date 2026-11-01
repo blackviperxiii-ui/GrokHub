@@ -368,6 +368,7 @@ impl Cabin {
                     .color(crate::theme::muted()),
                 );
             }
+            self.ui_bnet_profile(ui);
         }
     }
 
