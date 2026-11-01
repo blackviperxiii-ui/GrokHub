@@ -940,7 +940,7 @@ fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
         }
     })
     .on_hover_text(if linux.is_some() {
-        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) copies Loadout to a small frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. Nothing else on your PC gets it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf"
+        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) installs a frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. The probe opens the frame counters and then drops it, Loadout itself never runs with it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf"
     } else {
         "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone."
     });

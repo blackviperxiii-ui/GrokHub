@@ -204,6 +204,9 @@ pub fn run_probe() -> i32 {
         let Ok(counters) = linux::open() else {
             return 2;
         };
+        // The counters stay readable once open; nothing after this needs
+        // CAP_PERFMON, so the probe answers the pipe with no privilege.
+        drop_privileges();
         let stdin = std::io::stdin();
         let mut out = std::io::stdout().lock();
         for line in stdin.lock().lines() {
@@ -220,6 +223,95 @@ pub fn run_probe() -> i32 {
     #[cfg(not(target_os = "linux"))]
     {
         2
+    }
+}
+
+/// Drop every Linux capability this process holds, unless it runs as root.
+///
+/// The probe copy carries CAP_PERFMON as a file capability, so whatever runs
+/// it gets that capability at exec. `main` calls this first thing on every
+/// path except a bare `--fps-probe`, and the probe calls it as soon as its
+/// counters are open, so the app proper never runs privileged. If the drop
+/// fails while capabilities are held, the process exits rather than go on.
+pub fn drop_privileges() {
+    #[cfg(target_os = "linux")]
+    caps::drop_all();
+}
+
+#[cfg(target_os = "linux")]
+mod caps {
+    const VERSION_3: u32 = 0x2008_0522;
+
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: libc::c_int,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+
+    fn get() -> Option<[Data; 2]> {
+        let mut header = Header {
+            version: VERSION_3,
+            pid: 0,
+        };
+        let mut data = [Data::default(); 2];
+        // SAFETY: capget writes two Data entries for version 3.
+        let rc = unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) };
+        (rc == 0).then_some(data)
+    }
+
+    /// Whether this process holds any capability at all.
+    pub(super) fn held() -> bool {
+        get().is_none_or(|d| {
+            d.iter()
+                .any(|e| e.effective | e.permitted | e.inheritable != 0)
+        })
+    }
+
+    pub(super) fn drop_all() {
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 || !held() {
+            return;
+        }
+        let mut header = Header {
+            version: VERSION_3,
+            pid: 0,
+        };
+        let data = [Data::default(); 2];
+        // SAFETY: capset reads two Data entries for version 3; prctl takes
+        // plain integer arguments.
+        let ok = unsafe {
+            libc::prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_CLEAR_ALL,
+                0,
+                0,
+                0,
+            );
+            libc::syscall(libc::SYS_capset, &mut header, data.as_ptr()) == 0
+        };
+        if !ok || held() {
+            std::process::exit(3);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn dropping_leaves_no_capability() {
+            super::drop_all();
+            // SAFETY: geteuid has no preconditions.
+            if unsafe { libc::geteuid() } != 0 {
+                assert!(!super::held());
+            }
+        }
     }
 }
 
