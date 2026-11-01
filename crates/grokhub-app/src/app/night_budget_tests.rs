@@ -405,9 +405,9 @@ fn nightly_review_stays_quiet() {
     assert!(
         kick.contains("self.fail_turn_start(")
             && fn_src(&src, "fail_turn_start").contains("abandon_turn_card")
-            && fn_src(&src, "poll_acp").contains("abandon_turn_card")
-            && fn_src(&src, "poll_single").contains("abandon_turn_card"),
-        "prompt and stream failures undo the Doing card"
+            && fn_src(&src, "poll_acp").contains("interrupt_turn_card")
+            && fn_src(&src, "poll_single").contains("interrupt_turn_card"),
+        "a prompt failure undoes the Doing card; a stream failure interrupts it (KB-03)"
     );
     let finish = fn_src(&src, "finish_acp_turn");
     assert!(

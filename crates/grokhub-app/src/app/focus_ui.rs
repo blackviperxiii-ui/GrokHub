@@ -75,6 +75,7 @@ impl Cabin {
         self.tick_backup();
         self.tick_board_store();
         self.tick_board_notices();
+        self.tick_work_resume();
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();

@@ -268,6 +268,7 @@ mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
 mod work_log;
+mod work_resume;
 mod wow_ui;
 
 use background::BgWork;
@@ -482,6 +483,8 @@ pub struct Cabin {
     inflight_open: bool,
     /// Tool calls of this turn already on its card's progress log.
     run_tools_logged: Vec<String>,
+    /// KB-03: the resume turn's block, the card it resumes, and the ticks.
+    work_resume: work_resume::WorkResumeView,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -1144,6 +1147,7 @@ impl Cabin {
             chat_job_thread: None,
             inflight_open: false,
             run_tools_logged: Vec::new(),
+            work_resume: Default::default(),
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1629,6 +1633,7 @@ impl Cabin {
             chat_job_thread: None,
             inflight_open: false,
             run_tools_logged: Vec::new(),
+            work_resume: Default::default(),
             hub: Arc::new(Mutex::new(grokhub_core::HubState::empty())),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,

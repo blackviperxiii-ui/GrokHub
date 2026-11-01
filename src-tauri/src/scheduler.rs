@@ -123,6 +123,8 @@ pub fn start(
     route: impl Fn() -> Result<Route, String> + Send + 'static,
     emit: impl Fn(&Fired) + Send + 'static,
 ) {
+    // KB-03: runs this shell left in Doing when it last quit are Interrupted.
+    automations::interrupt_board_orphans(&config_dir);
     std::thread::spawn(move || loop {
         std::thread::sleep(TICK);
         let Some(offset) = utc_offset() else {
