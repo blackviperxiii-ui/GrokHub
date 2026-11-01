@@ -26,6 +26,7 @@ pub mod pulse_feed;
 pub mod remote;
 pub mod remote_tls;
 pub mod settings;
+pub mod shell_update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -87,7 +88,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         approvals: settings.approvals,
         desktop_control: settings.desktop_control,
         theme: settings.theme,
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: shell_update::version(),
     }
 }
 
@@ -1100,6 +1101,80 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     }
 }
 
+#[tauri::command]
+fn get_update_status(state: State<'_, ShellState>) -> shell_update::UpdateView {
+    shell_update::UpdateView::now(&state.config_dir)
+}
+
+#[tauri::command]
+fn set_update_channel(
+    state: State<'_, ShellState>,
+    channel: String,
+) -> Result<shell_update::UpdateView, String> {
+    let channel = grokhub_core::Channel::parse(&channel).ok_or("unknown channel")?;
+    shell_update::set_channel(&state.config_dir, channel)?;
+    Ok(shell_update::UpdateView::now(&state.config_dir))
+}
+
+#[tauri::command]
+async fn check_shell_update(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<shell_update::UpdateView, String> {
+    let dir = state.config_dir.clone();
+    #[cfg(desktop)]
+    {
+        let mut view = shell_update::UpdateView::now(&dir);
+        if view.updatable {
+            view.available = shell_update::plugin::check(&app, &dir)
+                .await?
+                .map(|u| u.version);
+        }
+        Ok(view)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Ok(shell_update::UpdateView::now(&dir))
+    }
+}
+
+#[tauri::command]
+async fn install_shell_update(app: AppHandle, state: State<'_, ShellState>) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    #[cfg(desktop)]
+    {
+        if !shell_update::UpdateView::now(&dir).updatable {
+            return Err("This install doesn't update itself.".into());
+        }
+        shell_update::plugin::install(&app, &dir).await
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, dir);
+        Err("Updates aren't available on this device.".into())
+    }
+}
+
+/// Look for an update now and then while the shell runs; tell the UI, never
+/// install without a click.
+#[cfg(desktop)]
+fn watch_for_updates(app: AppHandle, config_dir: PathBuf) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(90)).await;
+        loop {
+            let mut view = shell_update::UpdateView::now(&config_dir);
+            if view.updatable {
+                if let Ok(Some(update)) = shell_update::plugin::check(&app, &config_dir).await {
+                    view.available = Some(update.version);
+                    let _ = app.emit(shell_update::UPDATE_EVENT, view);
+                }
+            }
+            tokio::time::sleep(shell_update::CHECK_EVERY).await;
+        }
+    });
+}
+
 #[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -1259,7 +1334,10 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let built = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let built = builder
         .setup(|app| {
             #[cfg(mobile)]
             phone_home(app)?;
@@ -1294,6 +1372,8 @@ pub fn run() {
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
+            #[cfg(desktop)]
+            watch_for_updates(app.handle().clone(), grokhub_agent::perm::config_dir());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1381,7 +1461,11 @@ pub fn run() {
             check_model_file,
             run_local_speed_test,
             get_web_access,
-            set_web_access
+            set_web_access,
+            get_update_status,
+            set_update_channel,
+            check_shell_update,
+            install_shell_update
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

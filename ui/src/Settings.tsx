@@ -8,6 +8,7 @@ import {
   type Capabilities,
   type Settings as Shape,
 } from "./api";
+import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
@@ -19,6 +20,7 @@ import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
+import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
@@ -270,6 +272,7 @@ function About({ version }: { version: string }) {
       <p className="note">{TAGLINE}</p>
       <p>Version {version}</p>
       <p className="note">{ABOUT_NOTE}</p>
+      {inShell() && <Updates />}
     </div>
   );
 }
