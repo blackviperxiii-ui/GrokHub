@@ -319,11 +319,11 @@ pub fn cabin_jobs() -> Vec<JobSpec> {
 pub fn default_daily_tokens(kind: JobKind) -> u64 {
     match kind {
         JobKind::Automations => 1_000_000,
-        JobKind::Anticipate => 250_000,
-        JobKind::Ideas => 100_000,
-        JobKind::Digest => 150_000,
-        JobKind::Review => 100_000,
-        JobKind::NightPasses => 100_000,
+        JobKind::Anticipate => 125_000,
+        JobKind::Ideas => 50_000,
+        JobKind::Digest => 75_000,
+        JobKind::Review => 50_000,
+        JobKind::NightPasses => 50_000,
         _ => 0,
     }
 }
@@ -1083,7 +1083,7 @@ mod tests {
                 waiting: Some(JobHold::BudgetSpent),
             }
         );
-        assert_eq!(row(JobKind::Digest).daily_budget, Some(150_000));
+        assert_eq!(row(JobKind::Digest).daily_budget, Some(75_000));
         assert_eq!(row(JobKind::Indexers).daily_budget, None);
         assert_eq!(row(JobKind::Indexers).waiting, Some(JobHold::Quiet));
         assert_eq!(row(JobKind::Proactive).waiting, None);
@@ -1106,12 +1106,14 @@ mod tests {
         let empty: BackgroundBudgets = serde_json::from_str("{}").expect("empty");
         assert!(empty.is_default());
         assert_eq!(empty.daily_tokens(JobKind::Automations), 1_000_000);
-        assert_eq!(empty.daily_tokens(JobKind::Review), 100_000);
+        assert_eq!(empty.daily_tokens(JobKind::Review), 50_000);
+        assert_eq!(empty.daily_tokens(JobKind::Anticipate), 125_000);
+        assert_eq!(empty.daily_tokens(JobKind::NightPasses), 50_000);
         assert_eq!(serde_json::to_string(&empty).expect("ser"), "{}");
         let b: BackgroundBudgets =
             serde_json::from_str(r#"{"dailyTokens":{"digest":5000}}"#).expect("override");
         assert_eq!(b.daily_tokens(JobKind::Digest), 5_000);
-        assert_eq!(b.daily_tokens(JobKind::Ideas), 100_000);
+        assert_eq!(b.daily_tokens(JobKind::Ideas), 50_000);
         assert!(!b.is_default());
     }
 

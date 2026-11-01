@@ -3753,6 +3753,14 @@ impl Cabin {
         ) {
             return;
         }
+        // One Anticipate turn per idle stretch: wait for the user to come back.
+        if grokhub_core::autonomy::anticipated_this_idle(
+            self.last_anticipate_ms,
+            now_ms(),
+            self.last_activity.elapsed().as_millis() as u64,
+        ) {
+            return;
+        }
         let Some(prompt) = anticipated_need(
             &self.learning.insights,
             &self.skill_list,

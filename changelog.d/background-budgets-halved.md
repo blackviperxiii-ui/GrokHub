@@ -1,0 +1,1 @@
+- Background work spends less: Anticipate runs at most once per idle stretch, and the daily token budgets for Anticipate, Ideas, Digest, Review and night passes are halved.
