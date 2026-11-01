@@ -118,6 +118,7 @@ pub mod pair;
 pub mod panel_spec;
 pub mod paths;
 pub mod pc_health;
+pub mod pc_health_advice;
 pub mod personality;
 pub mod pii;
 pub mod pkce;
