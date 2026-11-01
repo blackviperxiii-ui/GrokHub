@@ -52,7 +52,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
 
   useEffect(() => {
     listConnectors().then(setRows, fail);
-  }, []);
+  }, [fail]);
 
   async function check() {
     setBusy("*");

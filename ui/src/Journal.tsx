@@ -26,7 +26,7 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
 
   useEffect(() => {
     getJournal().then(setPage, fail);
-  }, []);
+  }, [fail]);
 
   async function run(work: () => Promise<JournalPage>, done?: string) {
     setBusy(true);
