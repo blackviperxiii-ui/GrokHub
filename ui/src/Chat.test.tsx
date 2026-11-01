@@ -47,7 +47,7 @@ vi.mock("./api", () => ({
   },
 }));
 
-import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
+import { applyEvent, Chat, CHAT_EMPTY, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
 
 const SETTINGS: Settings = {
   model: "grok-4.7",
@@ -582,7 +582,7 @@ describe("applyEvent", () => {
       signedIn: { name: "Sam", email: null },
     });
     render(<Chat onOpenSettings={() => {}} grokSignIn />);
-    expect(await screen.findByText("Ask Grok anything.")).toBeVisible();
+    expect(await screen.findByText(CHAT_EMPTY)).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
   });
 
