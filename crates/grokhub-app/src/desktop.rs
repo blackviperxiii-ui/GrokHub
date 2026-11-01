@@ -194,18 +194,26 @@ pub fn probe_hub_health_body(port: u16) -> Option<String> {
     let url = format!("http://127.0.0.1:{port}/v1/health");
     // Loopback is local, not egress: the guard allows it and logs nothing.
     crate::xai::egress_ok(&url, &[]).ok()?;
-    ureq::get(&url)
-        .timeout(Duration::from_millis(400))
+    loopback_agent()
+        .get(&url)
         .call()
         .ok()
         .and_then(|r| r.into_string().ok())
 }
 
+/// The hub and CDP answer on loopback at once; 400 ms covers the whole call.
+fn loopback_agent() -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        overall: Some(Duration::from_millis(400)),
+        ..Default::default()
+    })
+}
+
 fn cdp_http(port: u16, path: &str) -> Result<String, String> {
     let url = format!("http://127.0.0.1:{port}{path}");
     crate::xai::egress_ok(&url, &[])?;
-    let resp = ureq::get(&url)
-        .timeout(Duration::from_millis(400))
+    let resp = loopback_agent()
+        .get(&url)
         .call()
         .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();

@@ -1,6 +1,7 @@
 //! Imagine's own xAI sign-in. Tokens stay in the OS keychain, never a file.
 //! The cabin OAuth flow in `oauth` is a different scope and is not used here.
 
+use grokhub_core::http;
 use grokhub_core::OAuthAccountStore;
 use grokhub_core::{
     imagine_authorize_url, imagine_code_form, imagine_device_form, imagine_device_poll_form,
@@ -133,7 +134,7 @@ enum PkceStep {
     Failed(String),
 }
 
-fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
+fn read_json_capped(resp: http::Response) -> Result<Value, String> {
     let mut buf = Vec::new();
     resp.into_reader()
         .take(TEXT_FILE_CAP as u64)
@@ -142,20 +143,32 @@ fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
     serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
+// An error answer's body is read to the same cap as an OK one (`post_form`).
+const _: () = assert!(http::STATUS_BODY_CAP == TEXT_FILE_CAP);
+
+/// Every Imagine sign-in call: 20 s for the whole request, ureq 2's other defaults.
+fn auth_agent() -> http::Agent {
+    http::agent(http::Opts {
+        overall: Some(Duration::from_secs(20)),
+        ..Default::default()
+    })
+}
+
 /// EgressGuard (Spike-4c): Imagine's own sign-in, codes and tokens only (no
 /// user data). The log holds the host, never a code or token.
 fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
     crate::xai::egress_ok(url, &[])?;
-    let resp = ureq::post(url)
-        .set("content-type", "application/x-www-form-urlencoded")
-        .set("accept", "application/json")
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20))
+    let resp = auth_agent()
+        .post(url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .header("user-agent", UA)
         .send_string(body);
     match resp {
         Ok(r) => Ok((true, read_json_capped(r)?)),
-        Err(ureq::Error::Status(_code, r)) => {
-            Ok((false, read_json_capped(r).unwrap_or(Value::Null)))
+        // The facade keeps the error body's first STATUS_BODY_CAP bytes.
+        Err(http::Error::Status { body, .. }) => {
+            Ok((false, serde_json::from_str(&body).unwrap_or(Value::Null)))
         }
         Err(e) => Err(e.to_string()),
     }
@@ -163,10 +176,10 @@ fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
 
 fn imagine_discovery() -> Result<ImagineEndpoints, String> {
     crate::xai::egress_ok(XAI_OAUTH_DISCOVERY, &[])?;
-    let resp = ureq::get(XAI_OAUTH_DISCOVERY)
-        .set("accept", "application/json")
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20))
+    let resp = auth_agent()
+        .get(XAI_OAUTH_DISCOVERY)
+        .header("accept", "application/json")
+        .header("user-agent", UA)
         .call()
         .map_err(|e| e.to_string())?;
     parse_imagine_discovery(&read_json_capped(resp)?)
