@@ -307,6 +307,10 @@ export interface AutomationRow {
   enabled: boolean;
   summary: string;
   health: string | null;
+  /** The words for the Edit box; null when words can't say the schedule. */
+  describe: string | null;
+  /** It has a check command, so only the cabin runs it. */
+  cabinOnly: boolean;
 }
 
 export interface RunResult {
@@ -338,6 +342,30 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+export function editAutomation(id: string, text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("edit_automation", { id, text, clock: wallClock() });
+}
+
+/** A scheduled run the shell fired, from `automations://ran`. */
+export interface ScheduledRun {
+  id: string;
+  name: string;
+  result: RunResult;
+}
+
+export const AUTOMATION_RAN_EVENT = "automations://ran";
+
+export function onAutomationRan(handler: (run: ScheduledRun) => void): Promise<UnlistenFn> {
+  return subscribe<ScheduledRun>(AUTOMATION_RAN_EVENT, handler);
+}
+
+/** Tells the shell's scheduler the local time, so jobs fire at local times.
+ * Only the desktop window sends it; a paired browser may be elsewhere. */
+export function shareSchedulerClock(): Promise<void> {
+  if (!inShell()) return Promise.resolve();
+  return invoke<void>("set_scheduler_clock", { clock: wallClock() });
 }
 
 export interface MemoryRow {

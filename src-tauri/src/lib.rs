@@ -33,6 +33,8 @@ pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
 pub mod remote_tls;
+#[cfg(desktop)]
+pub mod scheduler;
 pub mod settings;
 pub mod shell_update;
 pub mod slash;
@@ -639,6 +641,29 @@ fn set_automation_enabled(
     let clock = now_clock(clock);
     let list = automations::set_enabled(&state.config_dir, &id, enabled, clock)?;
     Ok(automations::rows(&list, clock))
+}
+
+/// Edit in place from the row's Edit box. Words with no time are refused.
+#[tauri::command]
+fn edit_automation(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = automations::edit(&state.config_dir, &id, &text, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+/// The window's wall clock, so the scheduler fires jobs at local times. Only
+/// this window reports it: a paired browser may be in another time zone.
+#[tauri::command]
+fn set_scheduler_clock(clock: automations::Clock) {
+    #[cfg(desktop)]
+    scheduler::note_ui_clock(clock, grokhub_core::now_ms());
+    #[cfg(not(desktop))]
+    let _ = clock;
 }
 
 #[tauri::command]
@@ -1558,6 +1583,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
+        "edit_automation" => out(edit_automation(
+            state,
+            arg(args, "id")?,
+            arg(args, "text")?,
+            arg(args, "clock")?,
+        )?),
         "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
@@ -1601,6 +1632,25 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_background" => out(get_background(state)?),
         _ => Err(remote::refused()),
     }
+}
+
+/// Scheduled automations fire from here while the cabin is closed, with the
+/// settings as they are at each run.
+#[cfg(desktop)]
+fn start_scheduler(app: &tauri::App) {
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    let handle = app.handle().clone();
+    scheduler::start(
+        config_dir.clone(),
+        move || {
+            let settings = settings::load(&config_dir);
+            let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
+            Ok((route.client, route.model, route.workspace))
+        },
+        move |fired| {
+            let _ = handle.emit(scheduler::RAN_EVENT, fired);
+        },
+    );
 }
 
 #[tauri::command]
@@ -1948,6 +1998,8 @@ pub fn run() {
             app.listen_any(CHAT_EVENT, move |event| {
                 web.broadcast(CHAT_EVENT, event.payload())
             });
+            #[cfg(desktop)]
+            start_scheduler(app);
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
@@ -1994,6 +2046,8 @@ pub fn run() {
             add_automation,
             set_automation_enabled,
             remove_automation,
+            edit_automation,
+            set_scheduler_clock,
             run_automation,
             get_memory,
             save_memory,

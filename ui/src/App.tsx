@@ -1,8 +1,16 @@
 import { Activity, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
+import {
+  CORE_ONLY,
+  getCapabilities,
+  getSettings,
+  onAutomationRan,
+  onChatEvent,
+  shareSchedulerClock,
+  type Capabilities,
+} from "./api";
 import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
-import { Automations, type RunNotice } from "./Automations";
+import { Automations, resultLine, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
@@ -31,6 +39,9 @@ const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
+
+/** How often the window tells the scheduler its clock. */
+const CLOCK_SHARE_MS = 5 * 60 * 1000;
 
 function preloadViews() {
   for (const load of Object.values(loaders)) void load().catch(() => {});
@@ -103,6 +114,37 @@ export function App() {
         if (next) copy[key] = next;
         else delete copy[key];
         return copy;
+      });
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, []);
+  // The shell's scheduler fires jobs at local times, so it needs this
+  // window's clock; again every few minutes for daylight saving.
+  useEffect(() => {
+    const share = () => void shareSchedulerClock().catch(() => {});
+    share();
+    const timer = window.setInterval(share, CLOCK_SHARE_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  // A scheduled run ended: chat says so and the Activity Dock shows it.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onAutomationRan(({ id, name, result }) => {
+      const run: RunNotice = { id, name, ok: !result.error, text: resultLine(result) };
+      setNotice((now) => ({ ...run, n: (now?.n ?? 0) + 1 }));
+      setActivity((now) => {
+        const item = routineStarted(id, name, Date.now());
+        return {
+          ...pruneActivity(now, Date.now()),
+          [`run:${id}`]: routineFinished(item, run.ok, run.text, Date.now()),
+        };
       });
     }).then((unlisten) => {
       if (dropped) unlisten();
