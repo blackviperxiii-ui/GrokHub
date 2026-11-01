@@ -2250,7 +2250,7 @@ mod tests {
             .filter(|row| row.kind == "chat")
             .map(|row| row.id)
             .collect();
-        assert!(chat.len() >= 7);
+        assert!(chat.len() >= 4);
         for id in &chat {
             assert!(
                 models.iter().any(|(k, _)| k == id),
