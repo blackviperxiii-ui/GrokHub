@@ -21,6 +21,7 @@ import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
+import { needsSettings } from "./ui";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -463,7 +464,7 @@ export function Chat({
                 >
                   <span className="card-title">{item.name}</span>
                   <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-                  <p className="card-detail-line">
+                  <p className="card-detail-line plain">
                     {item.text.length > NOTICE_CHARS
                       ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
                       : item.text}
@@ -511,9 +512,11 @@ export function Chat({
       {error && (
         <div className="error" role="alert">
           <span>{error}</span>
-          <button type="button" className="link" onClick={onOpenSettings}>
-            Open Settings
-          </button>
+          {needsSettings(error) && (
+            <button type="button" className="link" onClick={onOpenSettings}>
+              Open Settings
+            </button>
+          )}
         </div>
       )}
       <ModeChips
