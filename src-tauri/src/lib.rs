@@ -18,6 +18,8 @@ pub mod local_engine;
 pub mod memory;
 pub mod models;
 pub mod opener;
+#[cfg(desktop)]
+mod os_extras;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -52,6 +54,9 @@ struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    /// Asks whose notifications are out (os_extras.rs).
+    #[cfg(desktop)]
+    notified: os_extras::Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -69,6 +74,10 @@ pub struct SettingsView {
     pub theme: settings::Theme,
     /// Settings → About.
     pub version: String,
+    /// Settings → General → the summon hotkey.
+    pub summon_hotkey: bool,
+    /// Settings → General → notifications while the window is in the background.
+    pub notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +100,8 @@ fn view(settings: &ShellSettings) -> SettingsView {
         desktop_control: settings.desktop_control,
         theme: settings.theme,
         version: shell_update::version(),
+        summon_hotkey: settings.summon_hotkey,
+        notifications: settings.notifications,
     }
 }
 
@@ -295,6 +306,8 @@ async fn chat_turn(
             &text,
             route,
             Box::new(move |event| {
+                #[cfg(desktop)]
+                os_extras::on_chat_event(&app, &id, &event);
                 let _ = app.emit(
                     CHAT_EVENT,
                     ChatEvent {
@@ -311,17 +324,30 @@ async fn chat_turn(
 
 #[tauri::command]
 fn answer_permission(
+    app: AppHandle,
     state: State<'_, ShellState>,
     conversation_id: String,
     call_id: String,
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
-    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
-    let session = chats
+    let session = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&conversation_id)
+        .cloned()
         .ok_or_else(|| "That chat is closed.".to_string())?;
-    session.answer(&call_id, answer);
+    // A notification for this ask comes down, and can't answer it after this.
+    #[cfg(desktop)]
+    os_extras::answered_in_window(&app, &conversation_id, &call_id, || {
+        session.answer(&call_id, answer)
+    });
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        session.answer(&call_id, answer);
+    }
     Ok(())
 }
 
@@ -426,6 +452,27 @@ fn remove_automation(
 /// would need an OK is refused.
 #[tauri::command]
 async fn run_automation(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<automations::RunResult, String> {
+    let result = run_automation_now(state, id.clone()).await;
+    #[cfg(desktop)]
+    if result.is_ok() {
+        let name = automations::load(&app.state::<ShellState>().config_dir)
+            .ok()
+            .and_then(|list| list.into_iter().find(|a| a.id == id))
+            .map(|a| a.name)
+            .unwrap_or_default();
+        os_extras::automation_finished(&app, &name);
+    }
+    #[cfg(mobile)]
+    let _ = app;
+    result
+}
+
+/// [`run_automation`] without the notification, as a paired browser runs it.
+async fn run_automation_now(
     state: State<'_, ShellState>,
     id: String,
 ) -> Result<automations::RunResult, String> {
@@ -1099,6 +1146,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         }
         "answer_permission" => {
             answer_permission(
+                app.clone(),
                 state,
                 own(args)?,
                 arg(args, "callId")?,
@@ -1131,7 +1179,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
-        "run_automation" => out(block_on(run_automation(state, arg(args, "id")?))?),
+        "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
             state,
@@ -1332,6 +1380,12 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     };
     let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
         .title(grokhub_core::brand::product_name());
+    // A start at login stays in the tray when closing keeps it there.
+    #[cfg(desktop)]
+    let builder = builder.visible(!os_extras::starts_hidden(
+        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
+        current(&app.state::<ShellState>()).close_to_tray && capabilities::current().tray,
+    ));
     #[cfg(windows)]
     let builder = webview2_driver_overrides(builder);
     builder.build()?;
@@ -1407,6 +1461,8 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
+    let builder = os_extras::plugins(builder);
+    #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let built = builder
         .setup(|app| {
@@ -1428,10 +1484,14 @@ pub fn run() {
                     Ok((client, settings::load(&config_dir).model))
                 }
             });
+            #[cfg(desktop)]
+            os_extras::setup(app.handle(), &loaded);
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                #[cfg(desktop)]
+                notified: os_extras::Pending::default(),
             });
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
@@ -1540,7 +1600,15 @@ pub fn run() {
             get_update_status,
             set_update_channel,
             check_shell_update,
-            install_shell_update
+            install_shell_update,
+            #[cfg(desktop)]
+            os_extras::get_autostart,
+            #[cfg(desktop)]
+            os_extras::set_autostart,
+            #[cfg(desktop)]
+            os_extras::set_summon_hotkey,
+            #[cfg(desktop)]
+            os_extras::set_notifications
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
