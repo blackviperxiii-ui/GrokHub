@@ -408,11 +408,23 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         let retail = root.join("_retail_");
         std::fs::create_dir_all(retail.join("interface/Addons/Details")).unwrap();
         install(&root, &retail).unwrap();
-        assert_eq!(addon_dir(&retail), retail.join("interface/Addons/Loadout"));
-        assert!(retail
-            .join("interface/Addons/Loadout/Loadout.toc")
-            .is_file());
-        assert!(!retail.join("Interface").exists());
+        // The names on disk, not `exists()`, which a case-blind file system
+        // (Windows, macOS) answers yes for either spelling.
+        let names = |dir: &Path| -> Vec<String> {
+            let mut n: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            n.sort();
+            n
+        };
+        assert_eq!(names(&retail), vec!["interface"], "no second Interface");
+        assert_eq!(names(&retail.join("interface")), vec!["Addons"]);
+        assert_eq!(
+            names(&retail.join("interface/Addons")),
+            vec!["Details", "Loadout"]
+        );
+        assert!(addon_dir(&retail).join("Loadout.toc").is_file());
         assert!(state(&retail).installed());
         // With no folder yet, the game's own spelling is used.
         let fresh = root.join("_ptr_");

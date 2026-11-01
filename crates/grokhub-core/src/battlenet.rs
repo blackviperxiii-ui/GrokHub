@@ -412,6 +412,9 @@ pub fn find_in_prefixes(prefixes: &[PathBuf]) -> Vec<BnetGame> {
             &map,
         ));
     }
+    // Wine prefixes are a Linux and macOS thing. On Windows, canonicalize
+    // turns a path into a `\\?\` verbatim one, which is no use to show.
+    #[cfg(unix)]
     for g in &mut out {
         if let Ok(real) = std::fs::canonicalize(&g.install) {
             g.install = real;
