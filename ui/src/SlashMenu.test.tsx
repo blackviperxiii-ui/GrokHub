@@ -39,8 +39,6 @@ const SETTINGS: Settings = {
   approvals: "ask",
   desktopControl: false,
   theme: "system",
-  summonHotkey: false,
-  notifications: true,
   version: "3.1.0",
   summonHotkey: false,
   notifications: true,
