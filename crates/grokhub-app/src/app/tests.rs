@@ -2184,7 +2184,6 @@ fn quiet_cabin() -> Cabin {
         board_link: false,
         settings_menu_open: false,
         settings_menu_ignore: false,
-        sidebar_q: String::new(),
         win_max: false,
         geom_dirty: false,
         geom_applied: false,
