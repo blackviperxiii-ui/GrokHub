@@ -30,6 +30,7 @@ import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
+import { WorkboardTidy } from "./WorkboardTidy";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
 
@@ -241,6 +242,7 @@ export function Settings({
             onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
           />
         )}
+        {section === "behavior" && <WorkboardTidy />}
         {section === "appearance" && (
           <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
         )}

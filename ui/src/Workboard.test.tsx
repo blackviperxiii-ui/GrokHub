@@ -12,12 +12,15 @@ const api = vi.hoisted(() => ({
   workboardAct: vi.fn<(id: string, act: BoardAct) => Promise<BoardPage>>(),
   workboardWork: vi.fn<(id: string) => Promise<BoardWork>>(),
   workboardResume: vi.fn<(id: string, conversationId: string) => Promise<BoardResume>>(),
+  workboardDeleteArchived: vi.fn<(days: number) => Promise<BoardPage>>(),
+  workboardSweepUndo: vi.fn<() => Promise<BoardPage>>(),
+  workboardSweepDismiss: vi.fn<() => Promise<BoardPage>>(),
 }));
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 
-import { BOARD_EMPTY, STAMP_EVERY_MS, Workboard } from "./Workboard";
+import { BOARD_EMPTY, STAMP_EVERY_MS, Workboard, olderCount } from "./Workboard";
 
 const LABELS: Record<BoardLane, string> = {
   followUp: "Follow up",
@@ -45,6 +48,7 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     canResume: false,
     chat: null,
     updatedMs: 0,
+    archivedMs: 0,
     ...over,
   };
 }
@@ -58,6 +62,7 @@ function board(cards: Partial<Record<BoardLane, BoardCard[]>>, archived: BoardCa
     })),
     archived,
     stamp,
+    swept: null,
   };
 }
 
@@ -254,6 +259,93 @@ describe("Workboard", () => {
     await userEvent.click(within(archived).getByRole("button", { name: "Restore" }));
     expect(api.workboardAct).toHaveBeenCalledWith("w-5", { kind: "restore" });
     expect(within(column("Todo")).getByText("Old idea")).toBeVisible();
+  });
+
+  it("finds archived cards, newest first as the file sends them, and shows when each was archived", async () => {
+    const now = Date.now();
+    const day = 86_400_000;
+    api.getWorkboard.mockResolvedValue(
+      board({ todo: [card()] }, [
+        card({ id: "a1", title: "Router notes", archivedMs: now - 2 * day }),
+        card({ id: "a2", title: "Sort photos", archivedMs: now - 40 * day }),
+      ]),
+    );
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archived (2)" }));
+    const list = screen.getByRole("list", { name: "Archived cards" });
+    expect(within(list).getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual([
+      "Router notes",
+      "Sort photos",
+    ]);
+    expect(within(list).getByText("Archived 2d ago")).toBeVisible();
+    await userEvent.type(screen.getByLabelText("Find an archived card"), "PHOTO");
+    expect(within(list).getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual([
+      "Sort photos",
+    ]);
+    await userEvent.clear(screen.getByLabelText("Find an archived card"));
+    await userEvent.type(screen.getByLabelText("Find an archived card"), "nothing like it");
+    expect(screen.getByText("No archived card matches.")).toBeVisible();
+  });
+
+  it("bulk deletes archived cards only after a confirm that shows the count", async () => {
+    const now = Date.now();
+    const day = 86_400_000;
+    const archived = [
+      card({ id: "a1", title: "New", archivedMs: now - day }),
+      card({ id: "a2", title: "Mid", archivedMs: now - 45 * day }),
+      card({ id: "a3", title: "Old", archivedMs: now - 95 * day }),
+    ];
+    expect(olderCount(archived, 0, now)).toBe(3);
+    expect(olderCount(archived, 30, now)).toBe(2);
+    expect(olderCount(archived, 90, now)).toBe(1);
+    api.getWorkboard.mockResolvedValue(board({ todo: [card()] }, archived));
+    api.workboardDeleteArchived.mockResolvedValue(board({ todo: [card()] }, [archived[0]]));
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archived (3)" }));
+    const bulk = screen.getByRole("group", { name: "Delete archived" });
+    expect(within(bulk).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Delete all archived",
+      "Delete archived older than 30 days",
+      "Delete archived older than 90 days",
+    ]);
+
+    await userEvent.click(within(bulk).getByRole("button", { name: "Delete all archived" }));
+    let ask = screen.getByRole("group", { name: "Delete archived cards?" });
+    expect(within(ask).getByText("Delete 3 archived cards and their logs for good?")).toBeVisible();
+    await userEvent.click(within(ask).getByRole("button", { name: "Keep" }));
+    expect(api.workboardDeleteArchived).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete archived older than 30 days" }));
+    ask = screen.getByRole("group", { name: "Delete archived cards?" });
+    expect(within(ask).getByText("Delete 2 archived cards and their logs for good?")).toBeVisible();
+    await userEvent.click(within(ask).getByRole("button", { name: "Delete 2" }));
+    expect(api.workboardDeleteArchived).toHaveBeenCalledWith(30);
+    expect(screen.getByRole("button", { name: "Archived (1)" })).toBeVisible();
+    expect(within(column("Todo")).getByText("Write release notes")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Deleted 2 archived cards.");
+  });
+
+  it("shows the sweep's notice with Undo and Dismiss", async () => {
+    const swept = { ...board({}, [card({ id: "a1", title: "Old run", archivedMs: 5 })]) };
+    swept.swept = { text: "Archived 1 finished card", ids: ["a1"], at: 5 };
+    api.getWorkboard.mockResolvedValue(swept);
+    api.workboardSweepUndo.mockResolvedValue(board({ todo: [card({ id: "a1", title: "Old run" })] }));
+    render(<Workboard onWork={() => {}} />);
+    const tidy = await screen.findByRole("group", { name: "Tidy" });
+    expect(within(tidy).getByText("Archived 1 finished card")).toBeVisible();
+    await userEvent.click(within(tidy).getByRole("button", { name: "Undo" }));
+    expect(api.workboardSweepUndo).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group", { name: "Tidy" })).toBeNull();
+    expect(within(column("Todo")).getByText("Old run")).toBeVisible();
+
+    api.getWorkboard.mockResolvedValue(swept);
+    api.workboardSweepDismiss.mockResolvedValue(board({}, [card({ id: "a1", title: "Old run" })]));
+    const { unmount } = render(<Workboard onWork={() => {}} />);
+    const again = await screen.findByRole("group", { name: "Tidy" });
+    await userEvent.click(within(again).getByRole("button", { name: "Dismiss" }));
+    expect(api.workboardSweepDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group", { name: "Tidy" })).toBeNull();
+    unmount();
   });
 
   it("shows the error and the file's state when a change fails", async () => {

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use grokhub_core::work_file::lock_board;
+use grokhub_core::work_file::{lock_board, sweep_board, TidyRun};
 use grokhub_core::work_item::{
     board_base, merge_cards, migrate_cards, remove_work_log, stamp_changes, BoardBase,
 };
@@ -23,8 +23,8 @@ use crate::config::{atomic_write, peek_json, JSON_STORE_CAP};
 
 /// How often the cabin looks for another writer's save.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
-/// How often the cabin runs the sweep.
-const SWEEP_EVERY_MS: u64 = 60 * 60 * 1000;
+/// How often the cabin's timer runs the sweep: at start, then every six hours.
+const SWEEP_EVERY_MS: u64 = grokhub_core::work_item::SWEEP_EVERY_MS;
 
 /// One writer's view of a board file.
 #[derive(Debug, Default)]
@@ -158,24 +158,65 @@ pub fn reload_if_changed(path: &Path, cards: &mut Vec<BoardCard>) -> bool {
     store.reload_if_changed(path, cards)
 }
 
-/// True once an hour for a board this process loaded.
-pub fn sweep_due(path: &Path, now: u64) -> bool {
+/// When the cabin's timer should sweep a board this process loaded: `Some(0)`
+/// on the first look after start (sweep now), `Some(SWEEP_EVERY_MS)` every six
+/// hours after (sweep unless the shell swept since), `None` in between.
+pub fn sweep_due(path: &Path, now: u64) -> Option<u64> {
     let Ok(mut s) = stores().try_lock() else {
-        return false;
+        return None;
     };
-    let Some(store) = s.get_mut(path) else {
-        return false;
+    let store = s.get_mut(path)?;
+    let every = if store.swept_ms == 0 {
+        0
+    } else if now.saturating_sub(store.swept_ms) < SWEEP_EVERY_MS {
+        return None;
+    } else {
+        SWEEP_EVERY_MS
     };
-    if store.swept_ms != 0 && now.saturating_sub(store.swept_ms) < SWEEP_EVERY_MS {
-        return false;
-    }
     store.swept_ms = now;
-    true
+    Some(every)
+}
+
+/// The local tidy on disk, under the board lock every writer shares, so a sweep
+/// the shell ran a moment ago is not run twice. Local only; no model.
+pub fn sweep(
+    path: &Path,
+    now: u64,
+    live_ids: &[String],
+    every_ms: u64,
+) -> Result<Option<TidyRun>, String> {
+    sweep_board(path, &work_dir(), now, live_ids, every_ms)
+}
+
+/// Merge what is on disk into `cards` now, whatever the two-second check says:
+/// after a sweep wrote the board, so Undo finds the archived cards. True when
+/// `cards` changed.
+pub fn reload_now(path: &Path, cards: &mut Vec<BoardCard>) -> bool {
+    let Ok(mut s) = stores().lock() else {
+        return false;
+    };
+    let store = s.entry(path.to_path_buf()).or_insert_with(|| BoardStore {
+        base: board_base(cards),
+        ..BoardStore::default()
+    });
+    store.mtime = None;
+    store.checked = Some(Instant::now());
+    store.reload_if_changed(path, cards)
 }
 
 /// `{config_dir}/work`, one `<card id>.jsonl` per card.
 pub fn work_dir() -> PathBuf {
     crate::config::config_dir().join("work")
+}
+
+/// Delete archived cards archived at least `older_than_ms` ago (0: all of
+/// them) and their progress logs. Cards on the board stay. Returns their ids.
+pub fn delete_archived(cards: &mut Vec<BoardCard>, older_than_ms: u64, now: u64) -> Vec<String> {
+    let gone = grokhub_core::delete_archived_work_cards(cards, older_than_ms, now);
+    for id in &gone {
+        remove_work_log(&work_dir(), id);
+    }
+    gone
 }
 
 /// Delete a card and its progress log.

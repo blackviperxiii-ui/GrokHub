@@ -285,9 +285,14 @@ pub fn delete_archived(cards: &mut Vec<BoardCard>, older_than_ms: u64, now: u64)
     gone
 }
 
-const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 /// A card with no activity this long and no live run is archived.
 pub const IDLE_ARCHIVE_MS: u64 = 30 * DAY_MS;
+/// How often the cabin, or the shell while the cabin is closed, runs the sweep.
+pub const SWEEP_EVERY_MS: u64 = 6 * 60 * 60 * 1000;
+/// The choices for deleting archived cards on their own: off, or after 30 or
+/// 90 days in Archived. Off is the default.
+pub const AUTO_DELETE_DAYS: [u32; 3] = [0, 30, 90];
 /// An agent's finished card stays in Done this long so you can see the result.
 pub const AGENT_DONE_GRACE_MS: u64 = DAY_MS;
 
