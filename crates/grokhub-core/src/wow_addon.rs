@@ -111,9 +111,32 @@ pub fn toc_for(install: &Path) -> String {
         + "\n"
 }
 
+/// `dir/name`, or the child whose name differs from `name` only in case.
+/// WoW under Wine sees folder names without case, so an existing
+/// `interface/addons` is the folder the game loads from, and writing a
+/// second `Interface/AddOns` next to it would hide the addon from the game.
+pub(crate) fn child_any_case(dir: &Path, name: &str) -> PathBuf {
+    let exact = dir.join(name);
+    if exact.exists() {
+        return exact;
+    }
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .map_or(exact, |e| e.path())
+}
+
 /// The addon folder in one flavor's game folder.
 pub fn addon_dir(flavor_dir: &Path) -> PathBuf {
-    flavor_dir.join("Interface").join("AddOns").join(FOLDER)
+    let interface = child_any_case(flavor_dir, "Interface");
+    let addons = child_any_case(&interface, "AddOns");
+    child_any_case(&addons, FOLDER)
 }
 
 /// Where the addon stands in one flavor.
@@ -246,7 +269,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
     #[test]
     fn the_built_in_addon_declares_its_saved_variable_and_version() {
         assert_eq!(toc_field(TOC, "## SavedVariables:"), Some("LoadoutDB"));
-        assert_eq!(bundled_version(), "1.0.0");
+        assert_eq!(bundled_version(), "1.1.0");
         assert!(toc_field(TOC, MARK).is_some());
         assert!(LUA.contains("LoadoutDB"));
         // Read-only: no protected or automation calls.
@@ -287,7 +310,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         .unwrap();
         let toc = toc_for(&root);
         assert!(
-            toc.contains("## Interface: 120005, 120000, 110207, 50501, 40402, 11508\n"),
+            toc.contains("## Interface: 120105, 120100, 120007, 120005, 120000, 110207, 50501, 40402, 11508\n"),
             "{toc}"
         );
         assert!(toc.contains("## SavedVariables: LoadoutDB\n"));
@@ -305,7 +328,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         assert_eq!(
             state(&retail),
             AddonState::Current {
-                version: "1.0.0".into()
+                version: bundled_version().to_owned()
             }
         );
         assert_eq!(
@@ -314,7 +337,14 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         );
         // An older copy is brought up to date; a current one is left.
         let toc = addon_dir(&retail).join("Loadout.toc");
-        std::fs::write(&toc, TOC.replace("## Version: 1.0.0", "## Version: 0.9.0")).unwrap();
+        std::fs::write(
+            &toc,
+            TOC.replace(
+                &format!("## Version: {}", bundled_version()),
+                "## Version: 0.9.0",
+            ),
+        )
+        .unwrap();
         assert_eq!(
             state(&retail),
             AddonState::Outdated {
@@ -365,10 +395,41 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
                 (
                     WowFlavor::ClassicEra,
                     AddonState::Current {
-                        version: "1.0.0".into()
+                        version: bundled_version().to_owned()
                     }
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn an_addons_folder_in_another_case_is_the_one_used() {
+        let root = tmp("case");
+        let retail = root.join("_retail_");
+        std::fs::create_dir_all(retail.join("interface/Addons/Details")).unwrap();
+        install(&root, &retail).unwrap();
+        assert_eq!(addon_dir(&retail), retail.join("interface/Addons/Loadout"));
+        assert!(retail
+            .join("interface/Addons/Loadout/Loadout.toc")
+            .is_file());
+        assert!(!retail.join("Interface").exists());
+        assert!(state(&retail).installed());
+        // With no folder yet, the game's own spelling is used.
+        let fresh = root.join("_ptr_");
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert_eq!(addon_dir(&fresh), fresh.join("Interface/AddOns/Loadout"));
+    }
+
+    #[test]
+    fn the_toc_shows_loadout_in_the_addon_menu() {
+        assert_eq!(
+            toc_field(TOC, "## AddonCompartmentFunc:"),
+            Some("Loadout_OnAddonCompartmentClick")
+        );
+        assert!(LUA.contains("function Loadout_OnAddonCompartmentClick()"));
+        assert!(TOC.starts_with("## Interface:"));
+        // Gold and item level read as 0 at logout, so the addon never
+        // reads then.
+        assert!(!LUA.contains("PLAYER_LOGOUT\")"));
     }
 }

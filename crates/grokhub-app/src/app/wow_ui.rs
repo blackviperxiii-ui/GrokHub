@@ -416,8 +416,39 @@ impl Cabin {
                         .color(crate::theme::muted()),
                 );
             };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
             for c in info.saved.characters.iter().take(3) {
-                muted(ui, wow_saved::character_line(c));
+                let details = wow_saved::detail_lines(c, now);
+                if details.is_empty() && c.gear.is_empty() {
+                    muted(ui, wow_saved::character_line(c));
+                    continue;
+                }
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(wow_saved::character_line(c))
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::fg()),
+                )
+                .id_salt(("wow-char", &info.dir, &c.name, &c.realm))
+                .show(ui, |ui| {
+                    for line in details {
+                        muted(ui, line);
+                    }
+                    if !c.gear.is_empty() {
+                        egui::CollapsingHeader::new(
+                            egui::RichText::new("Gear").size(crate::theme::TYPE_CAPTION),
+                        )
+                        .id_salt(("wow-gear", &info.dir, &c.name, &c.realm))
+                        .show(ui, |ui| {
+                            for item in &c.gear {
+                                let level =
+                                    item.level.map(|l| format!(" · {l}")).unwrap_or_default();
+                                muted(ui, format!("{}: {}{level}", item.slot, item.name));
+                            }
+                        });
+                    }
+                });
             }
             for line in recent_lines(&info.saved, 3) {
                 muted(ui, line);
@@ -438,7 +469,7 @@ impl Cabin {
         let result = match action {
             AddonAction::Install => wow_addon::install(&info.install, &info.dir).map(|()| {
                 format!(
-                    "Installed the Loadout addon for WoW {}. Type /reload in game or restart WoW to load it.",
+                    "Installed the Loadout addon for WoW {}. Quit and restart WoW to load it: the game only finds new addons when it starts. Then it says hello in chat and sits in the minimap's addon menu.",
                     info.flavor.label()
                 )
             }),
