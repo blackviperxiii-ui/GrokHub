@@ -707,6 +707,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         escalate_bias,
         prior_escalated,
         care_first,
+        prefs: super::prefs::model_prefs(),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     laps.mark("route:choose");
@@ -1197,6 +1198,21 @@ pub fn stream_routed(
         effort.clone()
     };
     sent.model = model.clone();
+    // The prompt calls the assistant Grok: a call that goes anywhere else is
+    // told which model really answers, so it says so when asked.
+    let local_name = || {
+        super::local_sidecar::resolve_paths(&dir).and_then(|p| {
+            p.model
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+    };
+    super::identity::stamp(
+        &mut sent.input,
+        &model,
+        on_device.then(local_name).flatten().as_deref(),
+        super::providers::routing().fallback,
+    );
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));
     let enter = timing::take_enter();
@@ -1230,7 +1246,20 @@ pub fn stream_routed(
     let out = if on_device {
         // Pass the full request so cabin web_search / web_fetch tool calls round-trip
         // through the agent loop (OpenAI-compatible tools on the local sidecar).
-        super::local::serve_request(class, &sent, cancel)
+        let out = super::local::serve_request(class, &sent, cancel);
+        // The chat shows streamed text only, so the device's answer goes out
+        // as one delta, like a provider's; without this the reply is saved to
+        // the session but never reaches the screen.
+        if let Ok(turn) = &out {
+            if !turn.text.is_empty() {
+                super::adult::guard(
+                    &mut reply,
+                    &mut *sink,
+                    StreamEvent::TextDelta(turn.text.clone()),
+                );
+            }
+        }
+        out
     } else if on_provider {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);
@@ -1280,6 +1309,12 @@ pub fn stream_routed(
                 if screen.heads_up_local.is_some() {
                     note = screen.heads_up_local.clone();
                 }
+                super::identity::stamp(
+                    &mut sent.input,
+                    super::local::live_tier(),
+                    local_name().as_deref(),
+                    false,
+                );
                 let out = super::local::serve_request(class, &sent, cancel);
                 if let Ok(turn) = &out {
                     if let Some(note) = &note {

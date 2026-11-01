@@ -354,6 +354,27 @@ pub struct AppConfig {
     /// for your own chats. Used only while its key and your grant exist.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider_model: String,
+    /// Settings → AI models → OpenRouter routing (sort, fallback, data policy).
+    /// Sent only to openrouter.ai.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_agent::route::providers::Routing::is_default"
+    )]
+    pub provider_routing: grokhub_agent::route::providers::Routing,
+    /// Settings → AI models → Local AI: how the on-device model runs.
+    #[serde(default, skip_serializing_if = "LocalTuning::is_default")]
+    pub local_tuning: LocalTuning,
+    /// Settings → AI models → Models Auto may use: where Auto may send each
+    /// model on its own, and the effort it sends. By model id.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_agent::route::prefs::ModelPrefs::is_empty"
+    )]
+    pub model_prefs: grokhub_agent::route::prefs::ModelPrefs,
+    /// "Use for your chats" → "Auto: all models": every model on a provider
+    /// you allowed joins Auto's pool next to xAI and Local AI.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_all_models: bool,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -778,6 +799,29 @@ fn default_price_ceiling() -> u32 {
     grokhub_core::model_registry::cost_class::DEFAULT_CEILING_USD_PER_M as u32
 }
 
+/// Settings → AI models → Local AI: how the on-device model runs
+/// (`app.json` `localTuning`). Defaults mean "Auto" everywhere.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalTuning {
+    /// "Local AI for chats": "" (only when nothing else can answer), "chat", "all".
+    pub first: String,
+    /// Context tokens for the launch; 0 is Auto.
+    pub ctx: u32,
+    /// GPU offload: "" Auto, "all" (every layer), "cpu" (none).
+    pub gpu: String,
+    /// CPU threads: "" Auto (by power state), "all", "half".
+    pub threads: String,
+    /// Never unload the model for idling.
+    pub keep_loaded: bool,
+}
+
+impl LocalTuning {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
@@ -832,6 +876,10 @@ impl Default for AppConfig {
             prompt_cleanup: false,
             brief_model_fallback: false,
             provider_model: String::new(),
+            provider_routing: Default::default(),
+            local_tuning: LocalTuning::default(),
+            model_prefs: Default::default(),
+            auto_all_models: false,
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_confirmed: false,
@@ -954,6 +1002,19 @@ pub fn config_dir() -> PathBuf {
     if let Ok(p) = std::env::var("GROKHUB_CONFIG") {
         return PathBuf::from(p);
     }
+    unpinned_fallback()
+}
+
+/// A test that pinned nothing (or one that unset `GROKHUB_CONFIG` for the
+/// whole process, as plain `cargo test` shares one) must never reach the
+/// user's real stores: one `cargo test` run rewrote them with defaults.
+#[cfg(test)]
+fn unpinned_fallback() -> PathBuf {
+    std::env::temp_dir().join(format!("grokhub-test-unpinned-{}", std::process::id()))
+}
+
+#[cfg(not(test))]
+fn unpinned_fallback() -> PathBuf {
     dirs_fallback()
 }
 
@@ -963,6 +1024,7 @@ pub fn cabin_grok_home() -> PathBuf {
     config_dir().join("grok-home")
 }
 
+#[cfg(not(test))]
 fn dirs_fallback() -> PathBuf {
     if cfg!(windows) {
         if let Ok(app) = std::env::var("APPDATA") {

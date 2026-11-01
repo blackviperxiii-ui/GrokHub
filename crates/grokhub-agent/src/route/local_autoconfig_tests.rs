@@ -521,3 +521,103 @@ fn a_remembered_cpu_fallback_keeps_the_next_start_off_the_gpu() {
     assert!(!old.cpu_only);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_launch_is_sized_to_the_memory_a_game_leaves_free_and_grows_back_after() {
+    let p = rtx_4070_laptop();
+    // Nothing read: the profile stands.
+    assert_eq!(with_free_now(p.clone(), FreeNow::default()), p);
+    // A game holds most of the card: the plan sees 3 GB free, not the 11.5 GB
+    // the setup probe saw, and RAM follows the live read too.
+    let game = with_free_now(
+        p.clone(),
+        FreeNow {
+            vram_free_mb: Some(3_000),
+            ram_free_mb: Some(10_000),
+        },
+    );
+    assert_eq!(game.gpus[0].free_vram_mb, Some(3_000));
+    assert_eq!(game.free_ram_mb, Some(10_000));
+    let (gpu_before, _) = budgets(&p, Backend::Cuda, GovState::Throttle);
+    let (gpu_game, ram_game) = budgets(&game, Backend::Cuda, GovState::Throttle);
+    assert_eq!((gpu_before, gpu_game, ram_game), (5_750, 1_500, 5_000));
+    // Fewer layers on the GPU and a short context, instead of an OOM start.
+    let full = autoconfig(
+        &p,
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    let shared = autoconfig(
+        &game,
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Throttle,
+        &Overrides::default(),
+    );
+    assert_eq!(full.ngl, full.all_layers);
+    assert!(shared.ngl < shared.all_layers, "{shared:?}");
+    assert!(shared.ctx <= 8_192 && shared.ctx >= 4_096, "{shared:?}");
+    // The game took much more than the launch planned for: relaunch; a small
+    // wobble does not.
+    assert!(vram_dropped(11_500, 3_000));
+    assert!(!vram_dropped(11_500, 9_000));
+    assert!(!vram_dropped(0, 0));
+    // Two cards share the live read in proportion to their size.
+    let two = machine(
+        vec![
+            gpu(GpuVendor::Nvidia, "A", 24_000, Some(20_000)),
+            gpu(GpuVendor::Nvidia, "B", 12_000, Some(10_000)),
+        ],
+        65_536,
+        Some(40_000),
+        CpuInfo::new(32, 16, 0, CpuSimd::Avx2),
+    );
+    let two = with_free_now(
+        two,
+        FreeNow {
+            vram_free_mb: Some(9_000),
+            ram_free_mb: None,
+        },
+    );
+    assert_eq!(
+        (
+            two.gpus[0].free_vram_mb,
+            two.gpus[1].free_vram_mb,
+            two.free_ram_mb
+        ),
+        (Some(6_000), Some(3_000), Some(40_000))
+    );
+}
+
+#[test]
+fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as_a_game() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FREE: AtomicU64 = AtomicU64::new(0);
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(FREE.load(Ordering::SeqCst)),
+        ram_free_mb: None,
+    }));
+    // 7.5 GB free before launch; planning never sets the baseline.
+    FREE.store(7_500, Ordering::SeqCst);
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+    }
+    assert!(
+        !vram_dropped_since_launch(),
+        "no baseline before the model is resident"
+    );
+    // The model took 3.3 GB: that is the baseline, not a drop.
+    FREE.store(4_200, Ordering::SeqCst);
+    mark_resident();
+    assert!(!vram_dropped_since_launch());
+    FREE.store(3_500, Ordering::SeqCst);
+    assert!(!vram_dropped_since_launch(), "a small dip stays");
+    // A game took most of what was left.
+    FREE.store(1_200, Ordering::SeqCst);
+    assert!(vram_dropped_since_launch());
+    // A new launch starts: the old model's baseline no longer counts.
+    clear_resident();
+    assert!(!vram_dropped_since_launch());
+}

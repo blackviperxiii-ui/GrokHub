@@ -287,7 +287,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let boot = src
         .split("pub fn new(hidden: bool)")
         .nth(1)
-        .and_then(|s| s.split("fn apply_saved_geom(").next())
+        .and_then(|s| s.split("fn scratch(").next())
         .expect("Cabin::new");
     assert!(
         boot.contains("begin_update_probe"),
@@ -463,7 +463,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let boot = src
         .split("pub fn new(hidden: bool)")
         .nth(1)
-        .and_then(|s| s.split("fn apply_saved_geom(").next())
+        .and_then(|s| s.split("fn scratch(").next())
         .expect("Cabin::new");
     assert!(
         boot.contains("ensure_memory_seeds") && boot.contains("default_device_name"),
@@ -1054,7 +1054,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let boot = src
         .split("pub fn new(hidden: bool)")
         .nth(1)
-        .and_then(|s| s.split("fn apply_saved_geom(").next())
+        .and_then(|s| s.split("fn scratch(").next())
         .expect("Cabin::new");
     assert!(
         !boot.contains("write_cli_auth_if_needed")

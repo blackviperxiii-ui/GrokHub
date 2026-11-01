@@ -1099,13 +1099,118 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
     Ok(out)
 }
 
-fn error_of(status: u16, body: &str) -> ClientError {
+/// What the chat says when OpenRouter's account settings leave a model with
+/// no endpoint. OpenRouter answers HTTP 404 with "guardrail" / "ZDR" / "data
+/// policy" in the message; the raw text names its dashboards, not what to do.
+pub const POLICY_REFUSED: &str = "OpenRouter has no endpoint for this model under your account's privacy settings (zero data retention or a guardrail excluded it). Pick another model in Settings → AI models → Use for your chats, or change them at https://openrouter.ai/settings/privacy and https://openrouter.ai/settings/guardrails.";
+
+/// A provider reply that is a policy refusal from the account's own settings,
+/// not a model or network fault: HTTP 404 whose message names a guardrail,
+/// zero data retention or the data policy.
+pub fn policy_refusal(status: u16, message: &str) -> bool {
+    status == 404
+        && ["guardrail", "ZDR", "zero data retention", "data policy"]
+            .iter()
+            .any(|w| message.contains(w))
+}
+
+/// OpenRouter's own routers: the free pool and Auto. Pickable like any model.
+pub const OPENROUTER_FREE_ROUTER: &str = "openrouter/free";
+pub const OPENROUTER_AUTO_ROUTER: &str = "openrouter/auto";
+
+/// A free tier on OpenRouter: a `:free` variant or its free router. Takes the
+/// wire model (`google/x:free`) or the registry id (`openrouter/google/x:free`).
+pub fn is_free_model(id: &str) -> bool {
+    let id = id.trim();
+    id.ends_with(":free") || id == OPENROUTER_FREE_ROUTER || id.ends_with("/openrouter/free")
+}
+
+/// One of OpenRouter's routers (`openrouter/free`, `openrouter/auto`, ...)
+/// rather than a single model. Wire model or registry id.
+pub fn is_openrouter_router(id: &str) -> bool {
+    let id = id.trim();
+    (id.starts_with("openrouter/") && id.matches('/').count() == 1)
+        || id.starts_with("openrouter/openrouter/")
+}
+
+/// Settings → AI models → OpenRouter routing: how OpenRouter picks the
+/// endpoint for the model you chose. Sent only to openrouter.ai, as its
+/// `provider` and `models` request fields; a plain OpenAI-compatible host
+/// never sees them. All off is OpenRouter's own default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Routing {
+    /// `provider.sort`: "" (OpenRouter's default), "price", "throughput" or "latency".
+    pub sort: String,
+    /// `models`: when the model you picked has no endpoint left, OpenRouter
+    /// goes on to its free router (for a free pick) or Auto instead of failing.
+    pub fallback: bool,
+    /// "" (your account's default), "zdr" (`provider.zdr`: zero-data-retention
+    /// endpoints only) or "allow" (`provider.data_collection: allow`).
+    pub data: String,
+}
+
+impl Routing {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+static ROUTING: Mutex<Option<Routing>> = Mutex::new(None);
+
+/// The cabin sets this on start and whenever Settings changes it.
+pub fn set_routing(r: Routing) {
+    *ROUTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+}
+
+/// The OpenRouter routing as last set.
+pub fn routing() -> Routing {
+    ROUTING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
+/// Add OpenRouter's routing fields to an OpenAI-compatible body. `wire_model`
+/// is the model as OpenRouter names it (`google/gemma-4-31b-it:free`).
+pub fn apply_openrouter_routing(body: &mut Value, wire_model: &str, r: &Routing) {
+    if matches!(r.sort.as_str(), "price" | "throughput" | "latency") {
+        body["provider"]["sort"] = json!(r.sort);
+    }
+    match r.data.as_str() {
+        "zdr" => body["provider"]["zdr"] = json!(true),
+        "allow" => body["provider"]["data_collection"] = json!("allow"),
+        _ => {}
+    }
+    if r.fallback && !is_openrouter_router(wire_model) {
+        let next = if is_free_model(wire_model) {
+            OPENROUTER_FREE_ROUTER
+        } else {
+            OPENROUTER_AUTO_ROUTER
+        };
+        // `model` goes first; `models` lists only what comes after it.
+        body["models"] = json!([next]);
+    }
+}
+
+/// `host` is openrouter.ai or one of its subdomains.
+pub fn is_openrouter_host(host: &str) -> bool {
+    host_is(host, "openrouter.ai")
+}
+
+/// `openrouter`: the reply came from openrouter.ai, whose 404s name the
+/// account's privacy settings; any other host keeps its own error.
+fn error_of(status: u16, body: &str, openrouter: bool) -> ClientError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let msg = v["error"]["message"]
         .as_str()
         .or_else(|| v["error"].as_str())
         .or_else(|| v["message"].as_str())
         .unwrap_or("");
+    if openrouter && policy_refusal(status, msg) {
+        return ClientError::Protocol(POLICY_REFUSED.to_string());
+    }
     map_http_status(
         status,
         &grokhub_core::redact_secrets(msg),
@@ -1168,7 +1273,12 @@ pub fn call_model(
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
-    let body = request_body(p.kind, wire_model, effort, &req, max_output).to_string();
+    let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
+    let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
+    if openrouter {
+        apply_openrouter_routing(&mut body, wire_model, &routing());
+    }
+    let body = body.to_string();
     let r = transport_for(config_dir)
         .post_within(&url, &p.headers(&key), &body, req.call_timeout)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
@@ -1177,7 +1287,7 @@ pub fn call_model(
         return Err(ClientError::Cancelled);
     }
     if !(200..300).contains(&r.status) {
-        return Err(error_of(r.status, &r.body));
+        return Err(error_of(r.status, &r.body, openrouter));
     }
     match p.kind {
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),

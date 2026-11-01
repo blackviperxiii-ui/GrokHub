@@ -384,12 +384,25 @@ fn offline_only_sends_chat_local_queues_cloud_work_and_never_picks_the_cloud() {
     assert_eq!((r.model.as_str(), r.no_route), ("local:small", false));
     assert!(!r.rule_ids.iter().any(|x| x == "local:escalate_verify"));
 
-    // Too long for the device: the cloud would take it, the switch holds it.
-    let mut long = ask("chat:default", gate);
+    // A long chat still goes to the device: the request is trimmed to its
+    // window on the way (oldest turns first), never held for its length.
+    let mut long = ask("chat:default", gate.clone());
     long.ctx_tokens = 50_000;
     let r = Router::choose(&long, &reg, &profiles, &table, 10);
+    assert_eq!(
+        (r.model.as_str(), r.provider.as_str(), r.no_route),
+        ("local:small", "local", false)
+    );
+    assert!(
+        r.rule_ids.contains(&"offline:local".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // A long background step sends its text whole, so the switch holds it.
+    let mut long_bg = ask("background:summarize", gate);
+    long_bg.ctx_tokens = 50_000;
+    let r = Router::choose(&long_bg, &reg, &profiles, &table, 10);
     assert!(r.no_route, "{r:?}");
-    assert_eq!((r.model.as_str(), r.provider.as_str()), ("grok-4.7", "xai"));
     assert!(
         r.rule_ids.contains(&"offline:switch".into()),
         "{:?}",
@@ -444,5 +457,173 @@ fn ready_for_offline_needs_local_ai_on_and_a_runtime() {
     local::set_enabled(false);
     let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
     assert!(local::ready_for_offline());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn local_first_sends_chats_to_the_device_while_online_and_all_covers_background_too() {
+    let reg = fleet();
+    let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut gate = LocalGate::now(false, false, false);
+    gate.offline = false;
+    gate.offline_switch = false;
+    assert!(gate.enabled);
+
+    // Default: online chat stays on the cloud.
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:first"),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // First for chats: chat goes local, a cloud-only step does not.
+    gate.first = local::LocalFirst::Chat;
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str(), r.no_route),
+        ("local", "local:small", false)
+    );
+    assert!(
+        r.rule_ids.contains(&"local:first".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    let r = Router::choose(
+        &ask("media:image", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:first"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_ne!(r.model, "local:small");
+
+    // A long chat goes too: it is trimmed to the device's window on the way.
+    let mut long = ask("chat:default", gate.clone());
+    long.ctx_tokens = 50_000;
+    let r = Router::choose(&long, &reg, &profiles, &table, 10);
+    assert!(
+        r.rule_ids.iter().any(|x| x == "local:first"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(local::fits_by_trimming("chat:default"));
+    assert!(!local::fits_by_trimming("background:summarize"));
+
+    // For everything it can run: a background step goes local too.
+    gate.first = local::LocalFirst::All;
+    let r = Router::choose(
+        &ask("background:summarize", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("local", "local:small")
+    );
+    assert!(
+        r.rule_ids.contains(&"local:first".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(local::first_takes(&gate, "chat:quick", 1_000));
+    assert!(!local::first_takes(&gate, "prepare:hard", 1_000));
+
+    // A game keeps the device busy (the governor throttles it): the cloud
+    // wins while it can answer, and the device stays the fallback.
+    gate.capacity = local::LocalCapacity {
+        ready: true,
+        level: grokhub_core::local_governor::Level::Throttle,
+    };
+    assert!(!local::first_takes(&gate, "chat:quick", 1_000));
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:first"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
+}
+
+#[test]
+fn a_local_answer_streams_to_the_chat_like_any_other() {
+    use crate::client::{
+        ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
+    };
+    struct Never;
+    impl ModelClient for Never {
+        fn stream(
+            &self,
+            _r: &ResponsesRequest,
+            _c: &crate::client::CancelToken,
+            _s: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            panic!("an offline chat never reaches the xAI client")
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("gh-local-stream-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    grokhub_core::model_registry::store::save_registry(&dir, &fleet()).unwrap();
+    let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
+    let _off = grokhub_core::offline::force_for_thread(true);
+    let req = ResponsesRequest {
+        model: "grok-4.7".into(),
+        effort: None,
+        input: vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("hi".into())],
+        }],
+        conversation_id: "local-stream-1".into(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    let mut shown = String::new();
+    let out = super::live::stream_routed(
+        &Never,
+        &req,
+        &crate::client::CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("the device answers");
+    assert_eq!(out.text, "hello offline");
+    // The run loop shows only streamed text: a local answer that is returned
+    // but never streamed is saved to the session and never seen in the chat.
+    assert_eq!(shown, "hello offline");
     let _ = std::fs::remove_dir_all(dir);
 }

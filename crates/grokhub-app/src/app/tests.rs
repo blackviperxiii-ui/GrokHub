@@ -97,15 +97,12 @@ mod chat_threads_tests;
 
 #[path = "composer_chips_tests.rs"]
 mod composer_chips_tests;
-
 #[path = "live_turn_tests.rs"]
 mod live_turn_tests;
-
-#[path = "permission_ask_tests.rs"]
-mod permission_ask_tests;
-
 #[path = "night_budget_tests.rs"]
 mod night_budget_tests;
+#[path = "permission_ask_tests.rs"]
+mod permission_ask_tests;
 
 #[path = "slash_gate_tests.rs"]
 mod slash_gate_tests;
@@ -143,6 +140,7 @@ fn cabin_src() -> String {
         include_str!("ideas_ui.rs"),
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
+        include_str!("window_geom.rs"), // last: its final fn runs to the end
     )
     .replace("\r\n", "\n")
     .replace("pub(super) ", "")
@@ -2196,6 +2194,8 @@ fn quiet_cabin() -> Cabin {
         geom_dirty: false,
         geom_applied: false,
         geom_apply_frames: 0,
+        #[cfg(windows)]
+        native_maximize_due: false,
         imagine_want_focus: false,
         composer_want_focus: false,
         settings_sec: super::SettingsSec::Account,

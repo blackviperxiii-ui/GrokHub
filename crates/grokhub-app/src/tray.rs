@@ -217,10 +217,25 @@ pub fn hidden_raise_ready(elapsed_ms: u64) -> bool {
     elapsed_ms >= HIDE_RAISE_GRACE_MS
 }
 
-/// Re-send unmap only while leftover focus is still on the withdrawn cabin.
-/// Spamming Visible(false) every pulse after FocusLost can flash it back.
-pub fn reapply_unmap(hidden: bool, focused: bool) -> bool {
-    hidden && focused
+/// How long after a hide the unmap is re-sent while leftover focus still sits
+/// on the withdrawn cabin. X11 can keep reporting the unmapped window focused
+/// for good, and a Visible(false) on every pulse after that maps it back.
+pub const REAPPLY_UNMAP_MS: u64 = 1_500;
+
+/// Re-send unmap only while leftover focus is still on the withdrawn cabin,
+/// and only in the first [`REAPPLY_UNMAP_MS`] after the hide. Spamming
+/// Visible(false) every pulse after FocusLost can flash it back.
+pub fn reapply_unmap(hidden: bool, focused: bool, since_hide_ms: u64) -> bool {
+    hidden && focused && since_hide_ms < REAPPLY_UNMAP_MS
+}
+
+/// Whether a focused-while-hidden cabin means the user clicked its taskbar
+/// button. That is Windows (the cloaked window keeps a taskbar stub). Linux
+/// unmaps the window, which has no taskbar entry, and X11 focus events after
+/// an unmap are unreliable: raising on them reopened the cabin right after ×.
+/// There the tray's Show and a second launch bring it back.
+pub fn raise_on_focus() -> bool {
+    cfg!(windows)
 }
 
 /// Latch: a hide that never saw FocusLost must not treat leftover focus as a raise.
@@ -1072,14 +1087,19 @@ mod tests {
         assert!(!hidden_raise_ready(HIDE_RAISE_GRACE_MS - 1));
         assert!(hidden_raise_ready(HIDE_RAISE_GRACE_MS));
         assert!(
-            reapply_unmap(true, true),
+            reapply_unmap(true, true, 0),
             "leftover focus after × must keep the cabin unmapped"
         );
         assert!(
-            !reapply_unmap(true, false),
+            !reapply_unmap(true, false, 0),
             "an unfocused tray cabin must not be sent Visible(false) every pulse"
         );
-        assert!(!reapply_unmap(false, true));
+        assert!(!reapply_unmap(false, true, 0));
+        assert!(
+            !reapply_unmap(true, true, REAPPLY_UNMAP_MS),
+            "stale focus on X11 must not re-send Visible(false) for good: that maps the cabin back"
+        );
+        assert_eq!(raise_on_focus(), cfg!(windows));
     }
 
     #[test]
