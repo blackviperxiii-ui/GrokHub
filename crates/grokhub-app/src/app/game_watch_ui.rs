@@ -289,7 +289,10 @@ impl Cabin {
             _ => String::new(),
         };
         let note = w.note.clone();
-        let poe = self.poe_line();
+        let games: Vec<String> = [self.poe_line(), self.minecraft_line()]
+            .into_iter()
+            .flatten()
+            .collect();
         ui.indent("game-watch", |ui| {
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
@@ -298,8 +301,8 @@ impl Cabin {
             if !heard.is_empty() {
                 crate::cards::help_text(ui, &heard);
             }
-            if let Some(poe) = &poe {
-                crate::cards::help_text(ui, poe);
+            for line in &games {
+                crate::cards::help_text(ui, line);
             }
         });
     }

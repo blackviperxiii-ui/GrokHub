@@ -5398,6 +5398,15 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::game_watch_poe::session_card("Path of Exile", &poe, at),
             "Path of Exile",
         ));
+        let mc = crate::game_watch_minecraft::McSession {
+            deaths: 1,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_minecraft::session_card(&mc, at),
+            "Minecraft",
+        ));
         rows.push((
             "recap_card",
             crate::game_watch::recap_card(

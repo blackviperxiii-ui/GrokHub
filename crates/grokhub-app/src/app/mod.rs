@@ -198,6 +198,7 @@ mod local_probe;
 mod local_signals;
 mod marketplace_ui;
 mod memory_tidy;
+mod minecraft_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
