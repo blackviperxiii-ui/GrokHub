@@ -507,13 +507,13 @@ describe("applyEvent", () => {
       fieldTitle: "",
       secret: false,
     });
-    const card = screen.getByRole("group", { name: "Grok's plan" });
+    const card = screen.getByRole("group", { name: "The plan" });
     expect(card).toHaveTextContent("1. Read build.rs");
     expect(screen.getAllByText("1. Read build.rs")).toHaveLength(1);
     expect(screen.queryByText("…")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", null, "");
-    expect(card).toHaveTextContent("Approved. Grok can make the changes now.");
+    expect(card).toHaveTextContent("Approved. Loadout can make the changes now.");
     finish();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"),
@@ -540,7 +540,7 @@ describe("applyEvent", () => {
     expect(send).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Your answer"), "blue{Enter}");
     expect(api.answerElicit).toHaveBeenCalledWith(id, "ask-1", "accept", "answer", "blue");
-    expect(screen.getByRole("group", { name: "Grok asks" })).toHaveTextContent("Sent.");
+    expect(screen.getByRole("group", { name: "Loadout asks" })).toHaveTextContent("Sent.");
     emit(id, ask(2));
     finish();
     await waitFor(() =>
@@ -562,7 +562,7 @@ describe("applyEvent", () => {
         "Add your API key" +
         "No key yet? Make one at console.x.ai.",
     );
-    expect(screen.queryByText("Ask Grok anything.")).toBeNull();
+    expect(screen.queryByText("Ask Loadout anything.")).toBeNull();
     await userEvent.click(within(card).getByRole("button", { name: "Add your API key" }));
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });

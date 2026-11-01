@@ -130,7 +130,7 @@ describe("Settings", () => {
     api.saveSettings.mockResolvedValue(shape({ desktopControl: true }));
     render(<Settings caps={DESKTOP} />);
 
-    const desk = await screen.findByLabelText("Let Grok control the desktop");
+    const desk = await screen.findByLabelText("Let Loadout control the desktop");
     expect(desk).not.toBeChecked();
     expect(screen.queryByText(DESKTOP_NOTE)).not.toBeInTheDocument();
     await userEvent.click(desk);
@@ -139,7 +139,7 @@ describe("Settings", () => {
 
     expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "ask", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Let Grok control the desktop")).toBeChecked();
+    expect(screen.getByLabelText("Let Loadout control the desktop")).toBeChecked();
   });
 
   it("saves a key without echoing it, then removes it", async () => {
@@ -199,7 +199,7 @@ describe("Settings", () => {
     await userEvent.clear(folder);
     await userEvent.type(folder, "/home/user/scratch");
     const hotkey = screen.getByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
-    const notify = screen.getByLabelText(/Notify me when Grok needs an OK/);
+    const notify = screen.getByLabelText(/Notify me when the agent needs an OK/);
     expect(hotkey).not.toBeChecked();
     expect(notify).toBeChecked();
 
@@ -225,7 +225,7 @@ describe("Settings", () => {
     render(<Settings caps={{ ...BASICS, summonHotkey: false }} />);
     expect(await screen.findByLabelText("Start Loadout when you sign in")).toBeInTheDocument();
     expect(screen.queryByLabelText(/from anywhere with/)).toBeNull();
-    expect(screen.getByLabelText(/Notify me when Grok needs an OK/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Notify me when the agent needs an OK/)).toBeInTheDocument();
   });
 
   it("shows a keychain error instead of hanging", async () => {
@@ -243,7 +243,7 @@ describe("Settings", () => {
     render(<Settings caps={PHONE} />);
 
     expect(await screen.findByLabelText("Model")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
+    expect(screen.queryByLabelText("Let Loadout control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
     expect(screen.queryByRole("group", { name: "On this computer" })).toBeNull();
@@ -262,7 +262,7 @@ describe("Settings", () => {
 
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
-    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps Loadout in the tray/)).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
