@@ -35,6 +35,7 @@ import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachC
 import type { RunNotice } from "./Automations";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
+import { appendDraft, Mic } from "./Mic";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
@@ -767,6 +768,9 @@ export function Chat({
           onKeyDown={onKeyDown}
           onPaste={attach.onPaste}
         />
+        {!remote && (
+          <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+        )}
         {busy ? (
           <button type="button" onClick={() => void cancelChat(conversationId)}>
             Stop

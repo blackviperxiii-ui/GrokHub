@@ -796,6 +796,17 @@ button.md-copy {
   align-items: flex-end;
 }
 
+/* Push to talk: held, it reads as on. */
+.composer .mic {
+  min-height: 52px;
+  touch-action: none;
+}
+
+.composer .mic.recording {
+  color: var(--danger-text);
+  border-color: currentColor;
+}
+
 .composer textarea {
   flex: 1;
   min-height: 52px;

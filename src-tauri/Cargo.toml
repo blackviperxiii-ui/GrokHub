@@ -74,6 +74,10 @@ tauri-plugin-autostart = "2.7.0"
 # the release key the cabin already trusts.
 tauri-plugin-updater = "=2.14.1"
 
+# Push to talk: WebKitGTK asks the app before a page may use the mic.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -775,7 +775,9 @@ impl Cabin {
             return;
         }
         let live: Vec<String> = self.chat_job_thread.iter().cloned().collect();
-        if !grokhub_core::sweep_work_cards(&mut self.board, now, &live).is_empty() {
+        let report = grokhub_core::sweep_work_cards(&mut self.board, now, &live);
+        if !report.is_empty() {
+            self.note_board_sweep(&report);
             self.flush_board();
         }
     }
