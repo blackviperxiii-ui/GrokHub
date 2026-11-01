@@ -1293,8 +1293,11 @@ mod tests {
         // config.rs only seeds a new install's pick (Nyx); it never reads it into a prompt.
         // loadout_home.rs pins Viper (+ adults-only) for GROKHUB_DECK_SHOT seeds only —
         // titlebar/proof shots; it never layers personality into a chat or night-job prompt.
+        // loadout_home/wardrobe_parity.rs is a #[cfg(test)] module: it lists the voice ids
+        // to check the cabin and shell outfit tables match, and builds no prompt.
         let want: std::collections::BTreeSet<String> = [
             "app/loadout_home.rs",
+            "app/loadout_home/wardrobe_parity.rs",
             "app/native_engine.rs",
             "app/personality_ui.rs",
             "config.rs",
