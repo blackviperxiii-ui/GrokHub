@@ -2,7 +2,7 @@ use crate::host_plan::strip_host_cmd_line;
 use serde_json::{json, Value};
 
 pub const XAI_BASE: &str = "https://api.x.ai/v1";
-pub const DEFAULT_MODEL: &str = "grok-3-mini-fast";
+pub const DEFAULT_MODEL: &str = "grok-4.3";
 /// Default `grok -p --model` id, plus greeting and chips.
 /// Grok CLI alpha accepts `-m` / `--model grok-4.7` (xAI model name).
 pub const CABIN_FAST_MODEL: &str = "grok-4.7";
@@ -202,12 +202,12 @@ pub fn model_for_mode(mode: &str) -> &'static str {
         "max" | "deep" | "heavy" => CABIN_FAST_MODEL,
         "think" | "build" | "expert" => CABIN_FAST_MODEL,
         "balanced" | "balance" => "grok-4.3",
-        "auto" | "fast" => "grok-3-mini-fast",
+        "auto" | "fast" => "grok-4.3",
         _ => DEFAULT_MODEL,
     }
 }
 
-/// Legacy Max and Think send Grok 4.7. Balance sends Grok 4.3. Fast sends mini.
+/// Legacy Max and Think send Grok 4.7. Balance and Fast send Grok 4.3.
 /// Auto keeps a real Settings pin; leftover ladder defaults do not count.
 pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
@@ -291,10 +291,12 @@ pub fn effective_chat_mode(mode: &str, prompt: &str, pinned_model: &str) -> Stri
 pub fn failover_model(current: &str) -> Option<&'static str> {
     let tier = tier_of_model(current);
     let next = crate::next_failover_tier(tier);
-    if next == tier {
+    let model = model_for_mode(next);
+    // Fast and Balance share Grok 4.3, so 4.3 has nothing lower to fail over to.
+    if next == tier || model == current.trim() {
         None
     } else {
-        Some(model_for_mode(next))
+        Some(model)
     }
 }
 
@@ -654,7 +656,7 @@ mod tests {
             "grok-4.3",
             "a pin on retired grok-3 sends what xAI serves it with"
         );
-        assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
+        assert_eq!(resolve_chat_model("auto", ""), "grok-4.3");
         assert_eq!(
             resolve_chat_model("auto", "gpt-4"),
             DEFAULT_MODEL,
@@ -745,13 +747,13 @@ mod tests {
         assert_eq!(body["model"], "grok-4.3");
         assert!(body.get("reasoning_effort").is_none());
         assert_ne!(model_for_mode("think"), "grok-4.3");
-        assert_eq!(failover_model("grok-4.3"), Some("grok-3-mini-fast"));
+        assert_eq!(failover_model("grok-4.3"), None);
     }
 
     #[test]
     fn failover_follows_new_mode_ladder() {
         assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
-        assert_eq!(failover_model("grok-4.3"), Some("grok-3-mini-fast"));
+        assert_eq!(failover_model("grok-4.3"), None);
         assert_eq!(failover_model("grok-3-mini-fast"), None);
         assert_eq!(failover_model("grok-3"), None);
         assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));
@@ -762,7 +764,7 @@ mod tests {
         assert_eq!(model_for_mode(crate::next_failover_tier("max")), "grok-4.3");
         assert_eq!(
             model_for_mode(crate::next_failover_tier("balanced")),
-            "grok-3-mini-fast"
+            "grok-4.3"
         );
     }
 
@@ -786,7 +788,7 @@ mod tests {
             route_auto_mode("think as hard as possible about this proof"),
             "max"
         );
-        assert_eq!(model_for_mode(route_auto_mode("hi")), "grok-3-mini-fast");
+        assert_eq!(model_for_mode(route_auto_mode("hi")), "grok-4.3");
         assert_eq!(reasoning_effort_for_mode(route_auto_mode("hi")), None);
         assert_eq!(
             model_for_mode(route_auto_mode(
@@ -818,7 +820,7 @@ mod tests {
         );
         assert_eq!(
             resolve_chat_model(&effective_chat_mode("", "hi", ""), ""),
-            "grok-3-mini-fast"
+            "grok-4.3"
         );
         assert_eq!(effective_chat_mode("auto", "hi", "grok-3"), "auto");
         assert_eq!(
@@ -875,10 +877,10 @@ mod tests {
         assert_eq!(effective_chat_mode("auto", "hi", "grok-4-latest"), "auto");
         assert_eq!(
             resolve_chat_model(&effective_chat_mode("auto", "hi", "grok-4.6"), "grok-4.6"),
-            "grok-3-mini-fast"
+            "grok-4.3"
         );
-        assert_eq!(resolve_chat_model("fast", "grok-4.6"), "grok-3-mini-fast");
-        assert_eq!(resolve_chat_model("fast", "grok-3"), "grok-3-mini-fast");
+        assert_eq!(resolve_chat_model("fast", "grok-4.6"), "grok-4.3");
+        assert_eq!(resolve_chat_model("fast", "grok-3"), "grok-4.3");
         assert!(settings_pin_blocks_auto("grok-3"));
         assert!(settings_pin_blocks_auto("grok-4-latest"));
         assert!(!settings_pin_blocks_auto("grok-3-mini-fast"));

@@ -39,6 +39,11 @@ pub const MODEL_CATALOG: &[ModelRow] = &[
         kind: "imagine-video",
     },
     ModelRow {
+        id: "grok-voice-3.0",
+        label: "Grok Voice 3.0",
+        kind: "voice",
+    },
+    ModelRow {
         id: "grok-voice-think-fast-2.0",
         label: "Grok Voice Think Fast 2.0",
         kind: "voice",
@@ -115,6 +120,7 @@ mod tests {
         assert!(catalog_line().contains("Grok 4.7"));
         assert!(!catalog_line().contains("Grok 4.6 xhigh"));
         assert!(!catalog_line().contains("Grok 4.7 xhigh"));
+        assert!(catalog_line().contains("grok-voice-3.0"));
         assert!(catalog_line().contains("grok-voice-think-fast-2.0"));
         assert!(catalog_line().contains("grok-voice-latest"));
         assert!(catalog_line().contains("grok-imagine-image-2.0"));

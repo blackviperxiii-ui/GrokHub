@@ -1,0 +1,2 @@
+- Fast mode, Auto's quick answers and the cheap background tier now use Grok 4.3 instead of Grok 3 Mini Fast. Grok 3 Mini Fast stays pickable in Settings, and a saved pin on it still counts as a ladder default.
+- Voice mode now defaults to Grok Voice 3.0 (`grok-voice-3.0`). A voice model you set yourself is kept.
