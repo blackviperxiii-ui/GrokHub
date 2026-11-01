@@ -70,7 +70,7 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
-    expect(screen.getByText("Pulse page")).toBeInTheDocument();
+    expect(await screen.findByText("Pulse page")).toBeInTheDocument();
     expect(tabs()).toEqual([
       "Chat",
       "Pulse",
@@ -81,7 +81,7 @@ describe("App", () => {
       "Settings",
     ]);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getByText("Settings for a desktop")).toBeInTheDocument();
+    expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
   });
 
   it("puts the saved theme on the page at startup", async () => {
@@ -111,7 +111,7 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
-    await userEvent.click(screen.getByRole("button", { name: "To mission" }));
+    await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -136,7 +136,7 @@ describe("App", () => {
     expect(within(dialog).getByLabelText("Search pages and commands")).toHaveFocus();
     await userEvent.keyboard("local{Enter}");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText("Settings for a desktop at localAi")).toBeVisible();
+    expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
   });
 
   it("the Command button opens it too, and Ask Grok fills the chat box", async () => {
@@ -155,7 +155,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(screen.getByText("Settings for a desktop at account")).toBeVisible();
+    expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
   });
 
   it("the Activity Dock shows an approval waiting from any page and opens the chat", async () => {

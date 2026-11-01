@@ -1,0 +1,1 @@
+- Home: the Frame Rate tile no longer says "coming soon". It says plainly that Loadout never hooks into games (so it can't trip anti-cheat) and points to the safe built-in FPS counters (Xbox Game Bar, Steam) instead.

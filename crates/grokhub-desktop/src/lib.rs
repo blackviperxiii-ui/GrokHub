@@ -141,10 +141,12 @@ fn cua_line<C: grokhub_agent::harness::CuaChild>(
     if gate.halted {
         proxy.halt();
     }
-    if gate.enabled && gate.flag && !proxy.is_halted() {
-        if let Some(reply) = guard_refusal_line(line, guard()) {
-            return Some(reply);
-        }
+    if gate.enabled
+        && gate.flag
+        && !proxy.is_halted()
+        && let Some(reply) = guard_refusal_line(line, guard())
+    {
+        return Some(reply);
     }
     proxy.handle_line(line, gate, dir, halted)
 }

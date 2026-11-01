@@ -1,0 +1,1 @@
+- Home's chips now come from the same quick-chip engine as the composer: they follow your game, drive, updates and habits instead of the same four every time, each has an × to dismiss, and taps are learned. A chat chip still opens a new chat and sends.

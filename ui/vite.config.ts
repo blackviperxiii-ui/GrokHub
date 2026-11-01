@@ -23,6 +23,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // Vitest swaps CSS imports for empty strings; contrast.test.ts reads the real theme sheet.
+    css: { include: [/styles\.css/] },
     setupFiles: ["./src/setupTests.ts"],
   },
 });

@@ -100,7 +100,7 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "speeds",
         "Speeds",
         SystemPerformance,
-        New,
+        Partial,
         "Down/up Mbps, ping, jitter, game-server ping",
         [Large, Medium, Small]
     ),
@@ -108,8 +108,8 @@ pub const REGISTRY: &[ModuleEntry] = &[
         "frame_rate",
         "Frame Rate",
         SystemPerformance,
-        New,
-        "Live avg FPS, 1% low, sparkline",
+        Partial,
+        "Says how to see FPS without Loadout hooking into games",
         [Medium, Small]
     ),
     entry!(
@@ -479,10 +479,12 @@ mod tests {
 
     #[test]
     fn coming_soon_modules_keep_a_purpose_line() {
-        let speeds = lookup("speeds").expect("speeds");
-        assert_eq!(speeds.data, DataStatus::New);
-        assert_eq!(speeds.data.label(), "coming soon");
-        assert!(speeds.purpose.contains("ping"));
+        let deals = lookup("deals").expect("deals");
+        assert_eq!(deals.data, DataStatus::New);
+        assert_eq!(deals.data.label(), "coming soon");
+        assert!(deals.purpose.contains("discounts"));
+        // Speeds reads the internet log now; upload and game-server ping are still to come.
+        assert_eq!(lookup("speeds").map(|m| m.data), Some(DataStatus::Partial));
         let fitting: Vec<_> = modules_fitting(ModuleSize::Large).map(|m| m.id).collect();
         assert!(fitting.contains(&"objectives"));
         assert!(!fitting.contains(&"frame_rate"));

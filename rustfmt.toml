@@ -1,0 +1,4 @@
+# Keep rustfmt's 2021 style while crates move to edition 2024 one stage at a
+# time (edition 2024 would otherwise switch the default style and reformat
+# every untouched file). Drop this pin only with a deliberate reformat PR.
+style_edition = "2021"

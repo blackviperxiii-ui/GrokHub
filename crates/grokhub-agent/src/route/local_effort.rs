@@ -77,13 +77,14 @@ pub fn fetch_levels(host: &str, port: u16, token: &str, timeout: Duration) -> Ve
     if !super::local_sidecar::is_loopback_host(host) {
         return Vec::new();
     }
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: timeout,
+        read: Some(timeout),
+        ..Default::default()
+    });
     let resp = agent
         .get(&format!("http://{host}:{port}/props"))
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .call();
     match resp {
         Ok(r) if r.status() == 200 => parse_levels(&r.into_string().unwrap_or_default()),

@@ -29,6 +29,8 @@ const EXITS: &[&str] = &[
     "ureq::builder(",
     "ureq::AgentBuilder::new(",
     "ureq::Agent::new(",
+    // The app's own client (`grokhub_core::http`): each agent counts where it's built.
+    "http::agent(",
     "reqwest::blocking::Client::builder(",
     "reqwest::Client::builder(",
     "reqwest::blocking::Client::new(",
@@ -56,6 +58,8 @@ const EXITS: &[&str] = &[
 /// wrappers): it refuses any host that isn't loopback or the LAN while the
 /// switch is on. "loopback" and "LAN" sites stay allowed by design.
 const GUARDED: &[(&str, usize, &str)] = &[
+    // The HTTP facade: a factory, counted again at every caller listed here.
+    ("crates/grokhub-core/src/http.rs", 1, "agent factory (LU-12): no guard of its own; each caller below runs its guard first, and public_only dials public_only_resolve (refuses all while on)"),
     // Model providers.
     ("crates/grokhub-agent/src/client.rs", 1, "XaiClient::once: egress guard (api.x.ai); a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
@@ -227,6 +231,27 @@ fn every_network_exit_obeys_offline_only() {
         "the walk found too little: {found:?}"
     );
     assert_eq!(unguarded(&found, GUARDED), Vec::<String>::new());
+}
+
+#[test]
+fn an_agent_from_the_http_facade_counts_as_an_exit() {
+    let root = std::env::temp_dir().join(format!("offline-guard-facade-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let src = root.join("crates").join("demo").join("src");
+    fs::create_dir_all(&src).unwrap();
+    let fixture = "pub fn a() { let _ = grokhub_core::http::agent(Default::default()); }\n\
+                   pub fn b() { let _ = crate::http::agent(Default::default()); }\n";
+    fs::write(src.join("feed.rs"), fixture).unwrap();
+    let found = scan(&root, &["crates"]);
+    assert_eq!(
+        found,
+        BTreeMap::from([("crates/demo/src/feed.rs".to_string(), 2)])
+    );
+    assert_eq!(
+        unguarded(&found, &[]),
+        vec!["crates/demo/src/feed.rs: 2 network exit(s) with no Offline only entry".to_string()]
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
