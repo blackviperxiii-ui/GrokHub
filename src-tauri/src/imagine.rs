@@ -2,8 +2,9 @@
 //!
 //! Generation runs the chat's own media tool (`grokhub_agent::run_media_tool`):
 //! the same request builders, EgressGuard and download caps, so this page adds
-//! no HTTP client of its own. It signs in with the shell's API key. Imagine's
-//! own sign-in lives in the cabin, so a missing or refused key points there.
+//! no HTTP client of its own. It signs with chat's bearer (Sign in with Grok,
+//! else the API key). Imagine's own sign-in lives in the cabin, so a missing
+//! or refused bearer points there.
 //!
 //! Results land in `{config}/imagine/` and are pinned to the cabin's wall file
 //! (`{config}/imagine-wall.json`), which is the page's gallery. The wall keeps
@@ -67,7 +68,7 @@ pub struct Tile {
 pub struct Page {
     /// Newest first.
     pub tiles: Vec<Tile>,
-    /// A key is there to make something with.
+    /// A Grok sign-in or a key is there to make something with.
     pub ready: bool,
 }
 
@@ -92,11 +93,7 @@ fn wall_path(config_dir: &Path) -> PathBuf {
     config_dir.join(WALL_FILE)
 }
 
-/// The key this page sends. The loopback test bearer never goes to xAI.
-pub fn bearer() -> Result<String, String> {
-    if crate::credential::test_responses_url().is_some() {
-        return Err(NEED_SIGNIN.into());
-    }
+fn key() -> Result<String, String> {
     crate::credential::load_key().map_err(|err| {
         if err == grokhub_core::XAI_NEED_SIGNIN {
             NEED_SIGNIN.to_string()
@@ -104,6 +101,27 @@ pub fn bearer() -> Result<String, String> {
             err
         }
     })
+}
+
+/// The bearer chat would send: a live Grok sign-in first, else the API key.
+/// The loopback test bearer never goes to xAI.
+pub fn bearer() -> Result<String, String> {
+    if crate::credential::test_responses_url().is_some() {
+        return Err(NEED_SIGNIN.into());
+    }
+    match crate::oauth::bearer(&crate::oauth::Keychain) {
+        Ok(Some(bearer)) => Ok(bearer),
+        Ok(None) => key(),
+        Err(ended) => key().map_err(|_| ended),
+    }
+}
+
+/// There is something to sign the call with. Reads the keychain only; no
+/// refresh goes out.
+pub fn ready() -> bool {
+    crate::credential::test_responses_url().is_none()
+        && (crate::oauth::signed_in(&crate::oauth::Keychain).is_some()
+            || crate::credential::load_key().is_ok())
 }
 
 /// Holds the wall file between its read and its write in this process; the

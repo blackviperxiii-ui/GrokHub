@@ -2237,6 +2237,17 @@ label.toggle-row {
   }
 }
 
+/* Settings → Account: Sign in with Grok. */
+.grok-sign-in {
+  margin-bottom: 1.5rem;
+}
+.device-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.6rem;
+  letter-spacing: 0.15em;
+  margin: 0.5rem 0;
+  user-select: all;
+}
 /* Composer slash commands: the list sits just above the composer. */
 .slash-wrap {
   position: relative;

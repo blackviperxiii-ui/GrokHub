@@ -148,7 +148,7 @@ describe("Imagine", () => {
     await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
     await userEvent.click(screen.getByRole("button", { name: "Make" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Sign in to Imagine in the cabin. Or add an xAI API key in Settings → Account on your computer.",
+      "Sign in to Imagine in the cabin. Or sign in with Grok or add an xAI API key in Settings → Account.",
     );
   });
 });

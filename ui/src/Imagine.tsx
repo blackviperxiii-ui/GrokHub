@@ -12,7 +12,7 @@ import { Lightbox } from "./FeedCard";
 
 /** What the shell says when there is no key, or Imagine refuses it. */
 export const NEED_SIGNIN = "Sign in to Imagine in the cabin.";
-export const SIGNIN_HINT = "Or add an xAI API key in Settings → Account on your computer.";
+export const SIGNIN_HINT = "Or sign in with Grok or add an xAI API key in Settings → Account.";
 export const GALLERY_EMPTY = "Nothing yet. What you make shows up here and on the cabin's wall.";
 
 /** Square first: the default. Values are what the shell accepts. */

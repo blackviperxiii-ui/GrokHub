@@ -18,6 +18,7 @@ pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
 pub mod models;
+pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
@@ -55,6 +56,7 @@ struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    sign_in: Arc<oauth::SignIn>,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
@@ -66,6 +68,8 @@ pub struct SettingsView {
     pub model: String,
     pub close_to_tray: bool,
     pub has_api_key: bool,
+    /// Signed in with Grok: who, when xAI said.
+    pub signed_in: Option<oauth::SignedIn>,
     /// The folder picked in Settings, empty for the default.
     pub workspace: String,
     /// The folder the agent actually works in.
@@ -93,6 +97,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         model: settings.model.clone(),
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
+        signed_in: oauth::signed_in(&oauth::Keychain),
         workspace: settings.workspace.clone(),
         workspace_path: agent::workspace_for(&settings.workspace)
             .display()
@@ -243,6 +248,28 @@ fn set_api_key(state: State<'_, ShellState>, key: String) -> Result<SettingsView
     Ok(view(&current(&state)))
 }
 
+/// Sign in with Grok, step one: the code and the page to type it at.
+#[tauri::command]
+async fn start_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Started, String> {
+    capabilities::needs(capabilities::current().grok_sign_in, "Sign in with Grok")?;
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.start()).await?
+}
+
+/// Step two, asked every few seconds by Settings → Account.
+#[tauri::command]
+async fn poll_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Poll, String> {
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.poll(&oauth::Keychain)).await?
+}
+
+#[tauri::command]
+fn grok_sign_out(state: State<'_, ShellState>) -> Result<SettingsView, String> {
+    state.sign_in.cancel();
+    oauth::sign_out(&oauth::Keychain)?;
+    Ok(view(&current(&state)))
+}
+
 #[tauri::command]
 fn clear_api_key(state: State<'_, ShellState>) -> Result<SettingsView, String> {
     credential::delete_key()?;
@@ -260,21 +287,39 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-/// The model client for the signed-in key, or the loopback mock in tests.
-fn model_client() -> Result<XaiClient, String> {
-    Ok(match credential::test_responses_url() {
-        Some(url) => XaiClient::new(
-            credential::LOOPBACK_TEST_BEARER,
+/// The model client: the loopback mock in tests, else Grok sign-in first,
+/// else the saved API key. The kind says which meter the turn uses.
+fn model_client() -> Result<(XaiClient, AuthKind), String> {
+    let idle = Duration::from_secs(120);
+    if let Some(url) = credential::test_responses_url() {
+        let client = XaiClient::new(credential::LOOPBACK_TEST_BEARER, AuthKind::ApiKey, idle)
+            .with_loopback_url(&url)?;
+        return Ok((client, AuthKind::ApiKey));
+    }
+    signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
+}
+
+/// Picks the bearer: a live Grok sign-in wins over a key. A sign-in that
+/// ended falls back to the key when there is one.
+fn signed_client(
+    oauth: Result<Option<String>, String>,
+    key: impl FnOnce() -> Result<String, String>,
+    idle: Duration,
+) -> Result<(XaiClient, AuthKind), String> {
+    match oauth {
+        Ok(Some(bearer)) => Ok((
+            XaiClient::new(bearer, AuthKind::OAuth, idle),
+            AuthKind::OAuth,
+        )),
+        Ok(None) => Ok((
+            XaiClient::new(key()?, AuthKind::ApiKey, idle),
             AuthKind::ApiKey,
-            Duration::from_secs(120),
-        )
-        .with_loopback_url(&url)?,
-        None => XaiClient::new(
-            credential::load_key()?,
-            AuthKind::ApiKey,
-            Duration::from_secs(120),
-        ),
-    })
+        )),
+        Err(ended) => match key() {
+            Ok(k) => Ok((XaiClient::new(k, AuthKind::ApiKey, idle), AuthKind::ApiKey)),
+            Err(_) => Err(ended),
+        },
+    }
 }
 
 fn route(
@@ -282,10 +327,10 @@ fn route(
     session: agent::SessionMode,
     config_dir: &Path,
 ) -> Result<agent::Route, String> {
-    let client = model_client()?;
+    let (client, auth_kind) = model_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
-        auth_kind: AuthKind::ApiKey,
+        auth_kind,
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
@@ -980,11 +1025,11 @@ async fn pulse_act(
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
 }
 
-/// The Imagine page: the gallery (the cabin's wall) and whether a key is set.
+/// The Imagine page: the gallery (the cabin's wall) and whether chat can sign a call.
 #[tauri::command]
 async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
     let dir = state.config_dir.clone();
-    off_main(move || imagine::load(&dir, imagine::bearer().is_ok())).await?
+    off_main(move || imagine::load(&dir, imagine::ready())).await?
 }
 
 /// Makes images, or one video, through chat's guarded media tool. Resolves
@@ -1458,6 +1503,39 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+
+    #[test]
+    fn a_grok_sign_in_wins_over_a_key_and_an_ended_one_falls_back() {
+        let idle = Duration::from_secs(1);
+        let key = || Ok("xai-key".to_string());
+        let none = || Err(grokhub_core::XAI_NEED_SIGNIN.to_string());
+        let kind = |r: Result<(XaiClient, AuthKind), String>| r.map(|(_, k)| k);
+        assert_eq!(
+            kind(signed_client(Ok(Some("at".into())), key, idle)),
+            Ok(AuthKind::OAuth)
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), none, idle)),
+            Err(oauth::EXPIRED.to_string())
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), none, idle)),
+            Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
+        );
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -1546,7 +1624,7 @@ pub fn run() {
             pulse_feed::start(config_dir.clone(), {
                 let config_dir = config_dir.clone();
                 move || {
-                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?);
+                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                     Ok((client, settings::load(&config_dir).model))
                 }
             });
@@ -1556,6 +1634,7 @@ pub fn run() {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                sign_in: Arc::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
             });
@@ -1595,6 +1674,9 @@ pub fn run() {
             slash_hits,
             run_slash,
             clear_api_key,
+            start_grok_sign_in,
+            poll_grok_sign_in,
+            grok_sign_out,
             send_chat,
             answer_permission,
             answer_elicit,
