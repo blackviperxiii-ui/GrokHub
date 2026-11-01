@@ -63,6 +63,7 @@ impl Cabin {
         self.tick_wind_down();
         self.tick_downloads_tidy();
         self.tick_backup();
+        self.tick_board_store();
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();
