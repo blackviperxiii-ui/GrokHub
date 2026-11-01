@@ -115,7 +115,7 @@ impl Cabin {
                     .color(crate::theme::subtle()),
                 );
                 ui.add_space(10.0);
-                crate::cards::page_body(ui, "journal", |ui| {
+                super::pages::page_body(ui, "journal", |ui| {
 
                     let now = now_ms();
                     let due: Vec<(String, String)> = due_nudges(&self.journal, now)

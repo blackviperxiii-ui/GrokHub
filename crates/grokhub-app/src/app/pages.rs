@@ -14,6 +14,22 @@ const NATIVE_SIGNIN_NOTE: &str =
 pub(super) const LOCAL_ONLY_NOTE: &str =
     "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
 
+/// A page body that scrolls under a fixed header. Pages drawn straight into
+/// a CentralPanel run off the bottom of the window once their content is
+/// taller than it; this fills the rest of the panel and scrolls instead.
+/// `salt` keeps each page's scroll offset its own.
+pub(super) fn page_body<R>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(("page_body", salt))
+        .auto_shrink([false, false])
+        .show(ui, add)
+        .inner
+}
+
 /// Rows that fill a Memory editor `height` points tall, so an empty file
 /// still shows a full editor and a long one scrolls inside it.
 pub(super) fn memory_editor_rows(height: f32, row_h: f32) -> usize {
@@ -314,7 +330,7 @@ impl Cabin {
                     RichText::new("Background jobs for this thread.").color(crate::theme::muted()),
                 );
                 ui.add_space(12.0);
-                crate::cards::page_body(ui, "queue", |ui| {
+                page_body(ui, "queue", |ui| {
                     if !self.cfg.goal_pin.is_empty() {
                         crate::cards::status_chip(
                             ui,
@@ -438,7 +454,7 @@ impl Cabin {
                     self.start_hub();
                 }
 
-                crate::cards::page_body(ui, "devices", |ui| {
+                page_body(ui, "devices", |ui| {
                     crate::cards::section_label(ui, "This computer");
                     let mut rotated = false;
                     let (name, sharing, pair_code) = if let Ok(mut st) = self.hub.lock() {
@@ -609,7 +625,7 @@ impl Cabin {
                 // itself; notes above it scroll the page, so a 400-line file
                 // never pushes Save or the file tabs off screen.
                 let editor_h = (ui.available_height() - 36.0).max(240.0);
-                crate::cards::page_body(ui, "memory", |ui| {
+                page_body(ui, "memory", |ui| {
                 if self.mem_name != "MEMORY.md"
                     && grokhub_core::learn_notes::is_placeholder(&self.mem_body)
                 {
@@ -825,7 +841,7 @@ impl Cabin {
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
             self.history_header(ui);
-crate::cards::page_body(ui, "history", |ui| {
+page_body(ui, "history", |ui| {
             ui.add_space(8.0);
             // Projects + History list (moved off the Chat rail drawer).
             self.ui_projects_and_history(ui, ui.available_width().min(320.0));
