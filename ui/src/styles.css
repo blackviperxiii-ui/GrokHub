@@ -661,7 +661,8 @@ select:focus-visible {
 }
 
 .settings form,
-.settings .key {
+.settings .key,
+.settings .settings-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
