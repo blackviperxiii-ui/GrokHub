@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use grokhub_core::interests::InterestSignal;
+use grokhub_core::pc_health_advice as advice;
 use grokhub_core::pulse::{self as pc, LedgerReason};
 use grokhub_core::pulse_writer::TasteKind;
 use grokhub_core::reactions::{self, Outcome};
@@ -58,6 +59,28 @@ pub struct Post {
     /// The first source link the research step returned.
     pub link: String,
     pub loved: bool,
+    /// One line on what the card's numbers mean, when it has one.
+    pub verdict: Option<Verdict>,
+}
+
+/// A card's one-line read of its own numbers, with how worried to be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Verdict {
+    /// "fine", "watch" or "act".
+    pub tone: &'static str,
+    pub line: String,
+}
+
+fn verdict(card: &UpdateCard) -> Option<Verdict> {
+    card.pulse.verdict.as_ref().map(|v| Verdict {
+        tone: match v.tone {
+            pc::VerdictTone::Fine => "fine",
+            pc::VerdictTone::Watch => "watch",
+            pc::VerdictTone::Act => "act",
+        },
+        line: v.line.clone(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -73,6 +96,22 @@ pub struct Idea {
     pub kind: String,
     /// What Let's do it puts in the chat box.
     pub action: String,
+    pub verdict: Option<Verdict>,
+    /// "Fix it" or "Options" on a PC health card, whose main button opens
+    /// the options window instead of Let's do it. Empty on other ideas.
+    pub fix: String,
+}
+
+/// A PC health card's options window: the verdict, what to try, and the
+/// last few sessions side by side. Read only: settings rows stay in the
+/// desktop app, which owns them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixView {
+    pub title: String,
+    pub verdict: Option<Verdict>,
+    pub options: Vec<advice::FixOption>,
+    pub compare: Vec<advice::CompareRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -260,6 +299,7 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
             .cloned()
             .unwrap_or_default(),
         loved: card.reaction == Some(CardReaction::Up),
+        verdict: verdict(card),
     }
 }
 
@@ -276,6 +316,8 @@ fn idea(card: &UpdateCard) -> Idea {
         } else {
             action
         },
+        verdict: verdict(card),
+        fix: advice::fix_label(card).unwrap_or_default().to_string(),
     }
 }
 
@@ -482,6 +524,48 @@ pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, Strin
         s.note_taste(TasteKind::Discuss, &card.title, now_ms);
     })?;
     Ok(grokhub_core::pulse_writer::discuss_seed(&card))
+}
+
+/// The PC health settings the desktop app saved in its `app.json`, or the
+/// defaults when it has none.
+fn pc_health_settings(config_dir: &Path) -> grokhub_core::PcHealthSettings {
+    std::fs::read_to_string(config_dir.join("app.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("pcHealth").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// The options window for a PC health card. Sessions come from the same
+/// ledger the desktop app writes; nothing here changes the PC.
+pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
+    let card = find(config_dir, id)?;
+    if !grokhub_core::is_pc_health_card(&card) {
+        return Err("That card has no options.".into());
+    }
+    let ledger: grokhub_core::PcHealthLedger =
+        std::fs::read_to_string(config_dir.join(grokhub_core::pc_health::LEDGER_FILE))
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+    let settings = pc_health_settings(config_dir);
+    let stat = advice::card_session(&card.source_id, &ledger.history);
+    let options = advice::sheet_options(stat, &ledger.history, &settings)
+        .into_iter()
+        .filter(|o| !o.kind.is_setting())
+        .collect();
+    let compare = if stat.is_some() {
+        advice::compare_rows(stat, &ledger.history)
+    } else {
+        Vec::new()
+    };
+    Ok(FixView {
+        title: card.title.trim().to_string(),
+        verdict: verdict(&card),
+        options,
+        compare,
+    })
 }
 
 /// Why this post is in the feed: the writer's line, else the interest it
@@ -965,5 +1049,71 @@ mod tests {
         );
         assert!(image(&d.config, "../updates.json").is_err());
         assert!(image(&d.config, "0123456789abcdef.svg").is_err());
+    }
+
+    /// A PC health card reads its verdict on the Ideas row and opens an
+    /// options window from the desktop app's session ledger. The window
+    /// leaves out the settings rows, which only the desktop app changes.
+    #[test]
+    fn a_pc_health_card_shows_its_verdict_and_opens_its_options() {
+        let at = NOW - 60_000;
+        let mut card = grokhub_core::suggestion_card(
+            &format!("pchealth:hades:{at}"),
+            "PC health after Hades",
+            "Max GPU 88°C.",
+            at,
+        );
+        card.pulse.verdict = Some(grokhub_core::pulse::PulseVerdict {
+            tone: pc::VerdictTone::Watch,
+            line: "Warmer than usual: GPU peaked at 88°C.".into(),
+        });
+        let d = dirs("pchealth", &[card.clone()]);
+        let stat = |ms: u64, gpu: u8| advice::SessionStat {
+            at_ms: ms,
+            game: "hades".into(),
+            label: "Hades".into(),
+            mins: 40,
+            max_gpu_c: Some(gpu),
+            max_cpu_c: Some(70),
+            avg_gpu_pct: Some(90),
+            bound: "gpu".into(),
+            ..Default::default()
+        };
+        let ledger = grokhub_core::PcHealthLedger {
+            history: vec![stat(at - 3_600_000, 78), stat(at, 88)],
+            ..Default::default()
+        };
+        std::fs::write(
+            d.config.join(grokhub_core::pc_health::LEDGER_FILE),
+            serde_json::to_string(&ledger).expect("json"),
+        )
+        .expect("ledger");
+
+        let page = load(&d.config, None, NOW).expect("load");
+        let idea = page
+            .ideas
+            .iter()
+            .flat_map(|g| &g.ideas)
+            .find(|i| i.id == card.id)
+            .expect("the card is an Ideas row");
+        assert_eq!(idea.fix, "Fix it");
+        assert_eq!(idea.verdict.as_ref().map(|v| v.tone), Some("watch"));
+
+        let view = fix(&d.config, &card.id).expect("fix");
+        let kinds: Vec<advice::FixKind> = view.options.iter().map(|o| o.kind).collect();
+        assert!(kinds.contains(&advice::FixKind::Compare), "{kinds:?}");
+        assert!(kinds.contains(&advice::FixKind::FpsCap), "{kinds:?}");
+        assert!(kinds.contains(&advice::FixKind::Ask), "{kinds:?}");
+        assert!(!kinds.iter().any(|k| k.is_setting()), "{kinds:?}");
+        assert_eq!(view.compare.len(), 2);
+        assert_eq!(view.compare[0].session, "This one");
+        assert_eq!(view.compare[0].gpu_peak, "88°C");
+
+        let other = &sample()[1];
+        let d2 = dirs("pchealth-other", &sample());
+        assert!(
+            fix(&d2.config, &other.id).is_err(),
+            "only PC health cards have options"
+        );
     }
 }
