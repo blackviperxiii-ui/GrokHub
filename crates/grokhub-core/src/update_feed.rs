@@ -5447,6 +5447,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         ));
         rows.push((
             "session_card",
+            crate::eso_addon::session_card(
+                &crate::eso_addon::EsoSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "The Elder Scrolls Online",
+        ));
+        rows.push((
+            "session_card",
             crate::factorio_state::session_card(
                 &crate::factorio_state::FactorioSession {
                     before: None,
