@@ -31,7 +31,7 @@ evdev = { version = "0.13.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 xcap = "0.9.8"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",

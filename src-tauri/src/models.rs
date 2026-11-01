@@ -229,15 +229,7 @@ mod tests {
         let list = list("grok-4.3", None);
         assert_eq!(
             ids(&list),
-            vec![
-                "grok-3-mini-fast",
-                "grok-3",
-                "grok-4.3",
-                "grok-4.6",
-                "grok-4.7",
-                "grok-4-latest",
-                "grok-4-1-fast-non-reasoning",
-            ]
+            vec!["grok-3-mini-fast", "grok-4.3", "grok-4.6", "grok-4.7"]
         );
         assert!(list.options.iter().all(|o| o.source == Source::Catalog));
         assert_eq!(list.note.as_deref(), Some(NO_KEY_NOTE));
@@ -260,7 +252,7 @@ mod tests {
         ]));
         let list = list("grok-4.3", Some(&source));
         assert_eq!(list.note, None);
-        let tail: Vec<_> = list.options[7..].iter().collect();
+        let tail: Vec<_> = list.options[4..].iter().collect();
         assert_eq!(
             tail,
             vec![
@@ -287,7 +279,7 @@ mod tests {
     fn a_failing_source_still_returns_the_catalog() {
         let source = fake(Err("HTTP 401".into()));
         let list = list("grok-4.3", Some(&source));
-        assert_eq!(list.options.len(), 7);
+        assert_eq!(list.options.len(), 4);
         assert_eq!(
             list.note.as_deref(),
             Some("Couldn't read your account's models (HTTP 401). Showing the built-in list.")

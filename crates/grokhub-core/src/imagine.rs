@@ -10,8 +10,12 @@ pub const FALLBACK_VIDEO_MODEL: &str = "grok-imagine-video";
 /// xAI retired grok-2-image / grok-2-image-1212 (EOL 2026-02-28).
 pub fn retired_imagine_model(user: &str) -> bool {
     let u = user.trim().to_ascii_lowercase();
-    u == "grok-2-image" || u.starts_with("grok-2-image-")
+    u == "grok-2-image" || u.starts_with("grok-2-image-") || u == RETIRED_QUALITY_IMAGE_MODEL
 }
+
+/// xAI retired this on Nov 2, 2026 and serves it with grok-imagine-image-2.0
+/// at `quality: low`, so a request for it goes out as exactly that.
+const RETIRED_QUALITY_IMAGE_MODEL: &str = "grok-imagine-image-quality";
 
 /// Imagine never shares the chat model. Only a live *image* model wins.
 pub fn dedicated_imagine_model(user: &str) -> String {
@@ -985,11 +989,7 @@ pub fn imagine_dest(project: Option<&str>) -> String {
 }
 
 /// Image models the Imagine page offers. Default is 2.0.
-pub const IMAGINE_IMAGE_MODELS: &[&str] = &[
-    "grok-imagine-image-2.0",
-    "grok-imagine-image-quality",
-    "grok-imagine-image",
-];
+pub const IMAGINE_IMAGE_MODELS: &[&str] = &["grok-imagine-image-2.0", "grok-imagine-image"];
 
 /// Video models the Imagine page offers. Default is 1.5.
 pub const IMAGINE_VIDEO_MODELS: &[&str] = &["grok-imagine-video-1.5", "grok-imagine-video"];
@@ -1077,6 +1077,14 @@ pub fn imagine_generation_body(
     quality: &str,
     response_format: &str,
 ) -> Value {
+    let quality = if model
+        .trim()
+        .eq_ignore_ascii_case(RETIRED_QUALITY_IMAGE_MODEL)
+    {
+        "low"
+    } else {
+        quality
+    };
     let model = imagine_image_model_id(model);
     let mut body = json!({
         "model": model,
@@ -1396,6 +1404,8 @@ mod tests {
         );
         assert!(retired_imagine_model("grok-2-image-1212"));
         assert!(!retired_imagine_model("grok-imagine-image-2.0"));
+        assert!(retired_imagine_model("grok-imagine-image-quality"));
+        assert!(!retired_imagine_model("grok-imagine-image"));
         let b = imagine_request_body("a cabin at night", "grok-3-mini-fast");
         assert_eq!(b["model"], DEFAULT_IMAGINE_MODEL);
         assert_eq!(b["response_format"], "url");
@@ -1963,18 +1973,26 @@ mod tests {
         );
         assert!(auto.get("aspect_ratio").is_none());
         assert_eq!(auto["quality"], "auto");
-        let other = imagine_generation_body(
+        let other =
+            imagine_generation_body("cabin", "grok-imagine-image", 1, "2k", "1:1", "low", "url");
+        assert_eq!(other["model"], "grok-imagine-image");
+        assert!(other.get("quality").is_none(), "quality only on 2.0");
+        assert_eq!(other["aspect_ratio"], "1:1");
+        let retired = imagine_generation_body(
             "cabin",
-            "grok-imagine-image-quality",
+            " grok-imagine-image-quality ",
             1,
             "2k",
             "1:1",
-            "low",
+            "medium",
             "url",
         );
-        assert_eq!(other["model"], "grok-imagine-image-quality");
-        assert!(other.get("quality").is_none(), "quality only on 2.0");
-        assert_eq!(other["aspect_ratio"], "1:1");
+        assert_eq!(retired["model"], "grok-imagine-image-2.0");
+        assert_eq!(
+            retired["quality"], "low",
+            "xAI serves the retired id at low"
+        );
+        assert!(!IMAGINE_IMAGE_MODELS.contains(&"grok-imagine-image-quality"));
         assert!(IMAGINE_API_ASPECTS.contains(&"19.5:9"));
         assert!(IMAGINE_QUALITIES.contains(&"medium"));
         assert_eq!(IMAGINE_IMAGE_MODELS[0], DEFAULT_IMAGINE_MODEL);
