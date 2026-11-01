@@ -4,7 +4,9 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
+  getLastChat,
   getSettings,
+  loadChat,
   onChatEvent,
   onEventGap,
   saveSettings,
@@ -16,6 +18,7 @@ import {
   type SessionMode,
   type Settings,
   type Suggestion,
+  type Transcript,
 } from "./api";
 import type { RunNotice } from "./Automations";
 import { Markdown } from "./Markdown";
@@ -39,6 +42,8 @@ export type Item =
       answer: Answer | "ended" | null;
     }
   | { kind: "suggest"; items: Suggestion[] }
+  /** A saved chat's tool steps, named on one muted line instead of cards. */
+  | { kind: "tools"; text: string }
   | ({ kind: "notice" } & RunNotice)
   | ElicitItem;
 
@@ -115,6 +120,20 @@ function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void
     </div>
   );
 }
+
+/** A saved chat's lines as the log shows them. */
+export function itemsFrom(transcript: Transcript): Item[] {
+  return transcript.lines.map((line): Item => {
+    if (line.role === "user") return { kind: "user", text: line.text };
+    if (line.role === "tools") return { kind: "tools", text: line.text };
+    return { kind: "assistant", text: line.text, streaming: false };
+  });
+}
+
+/** How many more older lines each Show earlier loads. */
+export const EARLIER_STEP = 200;
+
+export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open the chat again.";
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
@@ -252,13 +271,18 @@ function PermissionCard({
  * like Start over, unless it is already there. `active`: the Chat tab is
  * showing, so the approvals chips read Settings again. `remote`: the web app,
  * where the approvals stay the computer's. `notice`: an automation run that
- * ended; a new `n` posts it in this chat. */
+ * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
+ * a new `n` shows it, and the next message carries it on. `deleted`: a chat
+ * History deleted; if it is the open one, a new chat starts. On the desktop
+ * the chat open at the last close comes back on mount. */
 export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenAutomations,
   prefill,
   notice,
+  open,
+  deleted,
   active = true,
   remote = false,
 }: {
@@ -268,12 +292,18 @@ export function Chat({
   onOpenAutomations?: () => void;
   prefill?: Prefill;
   notice?: RunNotice & { n: number };
+  open?: { id: string; n: number };
+  deleted?: { id: string; n: number };
   active?: boolean;
   remote?: boolean;
 }) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
+  /** Older lines of a reopened chat not shown yet. */
+  const [earlier, setEarlier] = useState(0);
+  /** The person already moved on, so the last chat must not land on top. */
+  const touched = useRef(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -302,6 +332,48 @@ export function Chat({
     }
   }
 
+  function show(transcript: Transcript) {
+    setConversationId(transcript.id);
+    setItems(itemsFrom(transcript));
+    setEarlier(transcript.earlier);
+    setError(null);
+  }
+
+  useEffect(() => {
+    if (remote) return;
+    getLastChat().then((last) => {
+      if (last && !touched.current) show(last);
+    }, () => {});
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    if (open.id === conversationId) return;
+    if (busyRef.current) {
+      setError(OPEN_BUSY);
+      return;
+    }
+    touched.current = true;
+    void closeChat(conversationId);
+    loadChat(open.id).then(show, (err) => setError(String(err)));
+    // Only a new pick acts.
+  }, [open]);
+
+  useEffect(() => {
+    if (deleted && deleted.id === conversationId) startFresh();
+  }, [deleted]);
+
+  /** Reloads the saved chat with more of its start. The log has at least as
+   * many items as the saved lines it shows, so nothing shown drops off. */
+  async function showEarlier() {
+    if (busyRef.current) return;
+    try {
+      show(await loadChat(conversationId, items.length + EARLIER_STEP));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   useEffect(() => {
     if (!prefill) return;
     const to = prefill.conversationId;
@@ -310,8 +382,10 @@ export function Chat({
         setError(MISSION_BUSY);
         return;
       }
+      touched.current = true;
       void closeChat(conversationId);
       setItems([]);
+      setEarlier(0);
       setError(null);
       setConversationId(to);
     }
@@ -361,6 +435,7 @@ export function Chat({
     event?.preventDefault();
     const text = (picked ?? draft).trim();
     if (!text || busy) return;
+    touched.current = true;
     // Suggestions belong to the reply they followed.
     setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
     if (picked === undefined) setDraft("");
@@ -411,12 +486,19 @@ export function Chat({
     }
   }
 
+  /** A new conversation; the old one stays saved for History. */
+  function startFresh() {
+    touched.current = true;
+    setItems([]);
+    setEarlier(0);
+    setError(null);
+    setConversationId(newConversationId());
+  }
+
   function startOver() {
     if (busy) return;
     void closeChat(conversationId);
-    setItems([]);
-    setError(null);
-    setConversationId(newConversationId());
+    startFresh();
   }
 
   // The "…" bubble shows only while nothing else in the log is moving.
@@ -434,6 +516,16 @@ export function Chat({
           <SignedOut remote={remote} onSignIn={onSignIn} />
         ) : (
           items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
+        )}
+        {earlier > 0 && (
+          <button
+            type="button"
+            className="link earlier"
+            disabled={busy}
+            onClick={() => void showEarlier()}
+          >
+            Show earlier messages ({earlier})
+          </button>
         )}
         {items.map((item, i) => {
           switch (item.kind) {
@@ -493,6 +585,12 @@ export function Chat({
                     )}
                   </div>
                 </div>
+              );
+            case "tools":
+              return (
+                <p key={i} className="tools-ran" data-role="tools">
+                  Tools ran: {item.text}
+                </p>
               );
             case "suggest":
               return (

@@ -18,11 +18,13 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  history: () => import("./History").then((m) => ({ default: m.History })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
+const History = lazy(loaders.history);
 const Journal = lazy(loaders.journal);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
@@ -39,6 +41,8 @@ export function App() {
   const [palette, setPalette] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
+  const [open, setOpen] = useState<{ id: string; n: number }>();
+  const [deleted, setDeleted] = useState<{ id: string; n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   const barAway = useHidingBar(palette);
   // Closing Settings goes back to the screen that was open before it.
@@ -157,6 +161,8 @@ export function App() {
           onOpenAutomations={() => setView("automations")}
           prefill={prefill}
           notice={notice}
+          open={open}
+          deleted={deleted}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
         />
@@ -195,6 +201,15 @@ export function App() {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");
             }}
+          />
+        )}
+        {view === "history" && !caps.remote && (
+          <History
+            onOpen={(id) => {
+              setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+              setView("chat");
+            }}
+            onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
           />
         )}
         {view === "memory" && <Memory />}

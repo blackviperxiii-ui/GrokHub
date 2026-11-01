@@ -11,6 +11,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
+pub mod history;
 pub mod interests;
 pub mod journal;
 pub mod local_ai;
@@ -225,7 +226,24 @@ async fn send_chat(
     mode: Option<agent::SessionMode>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
+    set_last_chat(&state, &conversation_id);
     chat_turn(app, &state, conversation_id, text, mode, current(&state)).await
+}
+
+/// The chat the window has open, reopened at the next launch; empty for none.
+/// A failed write only loses that, so chat goes on.
+fn set_last_chat(state: &ShellState, conversation_id: &str) {
+    let now = current(state);
+    if now.last_chat == conversation_id {
+        return;
+    }
+    let next = ShellSettings {
+        last_chat: conversation_id.to_string(),
+        ..now
+    };
+    if settings::save(&state.config_dir, &next).is_ok() {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
 }
 
 async fn chat_turn(
@@ -317,17 +335,88 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     }
 }
 
-/// New chat: the old conversation's worker ends.
+/// New chat: the old conversation's worker ends. Its saved turns stay, so
+/// History can open it again.
 #[tauri::command]
 fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
+    end_chat(&state, &conversation_id);
+}
+
+fn end_chat(state: &ShellState, conversation_id: &str) {
     let removed = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&conversation_id);
+        .remove(conversation_id);
     if let Some(session) = removed {
         session.cancel();
     }
+    if current(state).last_chat == conversation_id {
+        set_last_chat(state, "");
+    }
+}
+
+/// History: the shell's saved chats, newest first.
+#[tauri::command]
+async fn list_chats(state: State<'_, ShellState>) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::list(&dir)).await
+}
+
+#[tauri::command]
+async fn search_chats(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::search(&dir, &query)).await
+}
+
+/// Opens a saved chat: its newest `limit` lines, and it becomes the chat the
+/// next launch reopens. The next message resumes it (`agent::serve`).
+#[tauri::command]
+async fn load_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    limit: Option<usize>,
+) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    let shown =
+        off_main(move || history::load(&dir, &id, limit.unwrap_or(history::LOAD_CAP))).await??;
+    set_last_chat(&state, &shown.id);
+    Ok(shown)
+}
+
+/// The chat open when the window last closed, if it is still saved.
+#[tauri::command]
+async fn get_last_chat(
+    state: State<'_, ShellState>,
+) -> Result<Option<history::Transcript>, String> {
+    let (dir, id) = (state.config_dir.clone(), current(&state).last_chat);
+    if id.is_empty() {
+        return Ok(None);
+    }
+    off_main(move || history::load(&dir, &id, history::LOAD_CAP).ok()).await
+}
+
+#[tauri::command]
+async fn rename_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::rename(&dir, &id, &title)).await?
+}
+
+/// The page asks "Delete {title}?" first. A reply still running stops.
+#[tauri::command]
+async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    let doomed = id.clone();
+    off_main(move || history::delete(&dir, &doomed)).await??;
+    end_chat(&state, &id);
+    Ok(())
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -1344,6 +1433,12 @@ pub fn run() {
             answer_elicit,
             cancel_chat,
             close_chat,
+            list_chats,
+            search_chats,
+            load_chat,
+            get_last_chat,
+            rename_chat,
+            delete_chat,
             list_automations,
             add_automation,
             set_automation_enabled,

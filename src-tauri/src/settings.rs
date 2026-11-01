@@ -63,6 +63,9 @@ pub struct ShellSettings {
     /// explicit presets, and a stored pick of one speaks in the default voice.
     pub explicit_personalities: bool,
     pub theme: Theme,
+    /// The chat the window had open, reopened at the next launch. Empty after
+    /// New chat.
+    pub last_chat: String,
 }
 
 impl Default for ShellSettings {
@@ -76,6 +79,7 @@ impl Default for ShellSettings {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            last_chat: String::new(),
         }
     }
 }
@@ -152,6 +156,7 @@ mod tests {
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                last_chat: String::new(),
             }
         );
     }
@@ -197,6 +202,7 @@ mod tests {
             personality: "pirate".into(),
             explicit_personalities: true,
             theme: Theme::Dark,
+            last_chat: "shell-abc-123".into(),
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -208,6 +214,7 @@ mod tests {
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
+        assert!(raw.contains("\"lastChat\": \"shell-abc-123\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -230,6 +237,7 @@ mod tests {
                 personality: String::new(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                last_chat: String::new(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -247,6 +255,7 @@ mod tests {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            last_chat: String::new(),
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());

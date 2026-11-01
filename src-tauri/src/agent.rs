@@ -413,7 +413,7 @@ fn serve(
                     let _ = done.send(Err("The chat worker stopped.".into()));
                     return;
                 };
-                none.insert(NativeEngine::new(EngineParts {
+                let engine = none.insert(NativeEngine::new(EngineParts {
                     client: route.client,
                     workspace: route.workspace,
                     model: route.model,
@@ -428,7 +428,13 @@ fn serve(
                     gate,
                     desktop: Some(desktop()),
                     permits: Arc::new(inbox),
-                }))
+                }));
+                // A chat saved earlier (opened from History, or the last chat
+                // after a restart) goes on from its saved turns, as the cabin's does.
+                if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                    engine.resume(info.input(), info.usage);
+                }
+                engine
             }
         };
         // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
