@@ -519,7 +519,7 @@ impl Cabin {
                 ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
-                let cur = self.nav_id();
+                let cur = self.rail_id();
                 for (id, label) in crate::theme::LOADOUT_NAV {
                     let active = cur == *id;
                     let resp =
@@ -527,10 +527,7 @@ impl Cabin {
                     if resp.clicked() {
                         match *id {
                             "home" => self.open_mission_home(),
-                            "profile" => {
-                                self.settings_menu_open = !self.settings_menu_open;
-                                self.settings_menu_ignore = true;
-                            }
+                            "profile" => self.open_profile(),
                             // Chat rail restores the last-used tab. Tabs live under the title bar.
                             "chat" => self.set_nav_id(id),
                             _ => self.set_nav_id(id),
@@ -539,6 +536,24 @@ impl Cabin {
                 }
                 crate::theme::glide_aim(ui, "rail");
             });
+    }
+
+    /// Rail Profile: Settings → Account, where the name, picture and sign-in live.
+    pub(super) fn open_profile(&mut self) {
+        self.settings_menu_open = false;
+        if self.nav != Nav::Settings {
+            self.settings_back = self.nav;
+        }
+        self.settings_sec = SettingsSec::Account;
+        self.nav = Nav::Settings;
+    }
+
+    /// The rail row to light: Profile while Settings shows Account.
+    pub(super) fn rail_id(&self) -> &'static str {
+        if self.nav == Nav::Settings && self.settings_sec == SettingsSec::Account {
+            return "profile";
+        }
+        self.nav_id()
     }
 
     pub(super) fn page_nav(&self) -> Nav {
@@ -634,8 +649,7 @@ impl Cabin {
                 return;
             }
             "profile" => {
-                self.settings_menu_open = !self.settings_menu_open;
-                self.settings_menu_ignore = true;
+                self.open_profile();
                 return;
             }
             "chat" => {
@@ -781,7 +795,13 @@ impl Cabin {
                             if kind == ProjectKind::Folder {
                                 crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
                             }
-                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                            Self::nav_row(
+                                ui,
+                                active,
+                                icon,
+                                grokhub_core::project_display_name(&self.projects[idx].name),
+                                false,
+                            )
                         });
                         let row = painted.inner;
                         if row.double_clicked() {

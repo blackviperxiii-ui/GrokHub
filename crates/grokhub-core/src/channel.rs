@@ -63,20 +63,32 @@ pub struct BuildVersion {
     pub sha: String,
 }
 
-/// `GrokHub 2.10.91-beta.3 (beta @ abc1234)` / `GrokHub 2.10.91 (main @ abc1234)`.
-/// Without git info it is `GrokHub 2.10.91`. `beta_n` is the prerelease number
+/// `Loadout 2.10.91-beta.3 (beta @ abc1234)` / `Loadout 2.10.91 (main @ abc1234)`,
+/// led by the product name from `brand.json`. Without git info it is
+/// `Loadout 2.10.91`. `beta_n` is the prerelease number
 /// on Beta (`-beta.N`); ignored on Stable.
 pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str, beta_n: u64) -> String {
     let version = match channel {
         Channel::Beta => format!("{base}-beta.{beta_n}"),
         Channel::Stable => base.to_string(),
     };
+    let name = crate::brand::product_name();
     match (branch.trim(), sha.trim()) {
-        ("", "") => format!("GrokHub {version}"),
-        ("", sha) => format!("GrokHub {version} ({sha})"),
-        (branch, "") => format!("GrokHub {version} ({branch})"),
-        (branch, sha) => format!("GrokHub {version} ({branch} @ {sha})"),
+        ("", "") => format!("{name} {version}"),
+        ("", sha) => format!("{name} {version} ({sha})"),
+        (branch, "") => format!("{name} {version} ({branch})"),
+        (branch, sha) => format!("{name} {version} ({branch} @ {sha})"),
     }
+}
+
+/// A `--version` line without its leading product name. Takes the current
+/// name and the old `GrokHub ` one, which installs before the rename print.
+pub fn strip_product_prefix(line: &str) -> &str {
+    let line = line.trim_start();
+    [crate::brand::product_name(), crate::brand::INTERNAL_ID]
+        .iter()
+        .find_map(|name| line.strip_prefix(name).and_then(|r| r.strip_prefix(' ')))
+        .unwrap_or(line)
 }
 
 /// Core `X.Y.Z` and channel from a version token (`2.13.0-beta.2`, bare
@@ -94,11 +106,11 @@ fn version_core_channel(version: &str) -> Option<(&str, Channel)> {
     Some((version, Channel::Stable))
 }
 
-/// Reads a `--version` line back. Also takes the old bare `2.10.90` output
-/// and legacy `2.10.91-beta` (no `.N`).
+/// Reads a `--version` line back. Also takes the old `GrokHub ` prefix, the
+/// old bare `2.10.90` output and legacy `2.10.91-beta` (no `.N`).
 pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
     let line = line.trim();
-    let rest = line.strip_prefix("GrokHub ").unwrap_or(line).trim();
+    let rest = strip_product_prefix(line).trim();
     let (version, paren) = match rest.split_once(' ') {
         Some((v, p)) => (v.trim(), p.trim()),
         None => (rest, ""),
@@ -163,30 +175,30 @@ mod tests {
     fn version_lines_name_the_channel_branch_and_sha() {
         assert_eq!(
             version_line("2.10.91", Channel::Beta, "beta", "abc1234", 3),
-            "GrokHub 2.10.91-beta.3 (beta @ abc1234)"
+            "Loadout 2.10.91-beta.3 (beta @ abc1234)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "main", "abc1234", 0),
-            "GrokHub 2.10.91 (main @ abc1234)"
+            "Loadout 2.10.91 (main @ abc1234)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "v2.10.91", "bb7890b", 0),
-            "GrokHub 2.10.91 (v2.10.91 @ bb7890b)"
+            "Loadout 2.10.91 (v2.10.91 @ bb7890b)"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Stable, "", "", 0),
-            "GrokHub 2.10.91"
+            "Loadout 2.10.91"
         );
         assert_eq!(
             version_line("2.10.91", Channel::Beta, "", "abc1234", 0),
-            "GrokHub 2.10.91-beta.0 (abc1234)"
+            "Loadout 2.10.91-beta.0 (abc1234)"
         );
     }
 
     #[test]
     fn version_lines_parse_back() {
         assert_eq!(
-            parse_version_line("GrokHub 2.10.91-beta.3 (beta @ abc1234)\n"),
+            parse_version_line("Loadout 2.10.91-beta.3 (beta @ abc1234)\n"),
             Some(BuildVersion {
                 version: "2.10.91-beta.3".into(),
                 channel: Channel::Beta,
@@ -204,7 +216,7 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_version_line("GrokHub 2.10.91 (main @ 0f1e2d3)"),
+            parse_version_line("Loadout 2.10.91 (main @ 0f1e2d3)"),
             Some(BuildVersion {
                 version: "2.10.91".into(),
                 channel: Channel::Stable,
@@ -229,7 +241,13 @@ mod tests {
             parse_version_line("GrokHub 2.10.91-beta (abc1234)").map(|v| (v.channel, v.sha)),
             Some((Channel::Beta, "abc1234".to_string()))
         );
-        assert_eq!(parse_version_line("GrokHub two (main @ x)"), None);
+        assert_eq!(parse_version_line("Loadout two (main @ x)"), None);
+        assert_eq!(
+            strip_product_prefix("Loadout 3.5.0 (beta @ a)"),
+            "3.5.0 (beta @ a)"
+        );
+        assert_eq!(strip_product_prefix("GrokHub 3.5.0"), "3.5.0");
+        assert_eq!(strip_product_prefix("3.5.0"), "3.5.0");
         assert_eq!(parse_version_line("GrokHub 2.10.91 (main @ abc1234"), None);
         assert_eq!(parse_version_line(""), None);
     }
