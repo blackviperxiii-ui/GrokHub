@@ -1173,7 +1173,7 @@ async function probe(s, label) {
         active: d(document.activeElement),
         vt: 'activeViewTransition' in document ? String(document.activeViewTransition) : 'n/a',
         focus: document.hasFocus(), frames: window.__frames || 0, ua: navigator.userAgent.slice(-60),
-        log: window.__diag.slice(-40),
+        log: window.__diag.slice(-120),
       });`,
     args: [],
   }).catch((e) => `(probe failed: ${e.message})`);
