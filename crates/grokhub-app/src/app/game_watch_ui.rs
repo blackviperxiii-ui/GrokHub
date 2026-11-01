@@ -295,6 +295,7 @@ impl Cabin {
             .into_iter()
             .flatten()
             .collect();
+        let rl = self.rl_line();
         ui.indent("game-watch", |ui| {
             if let Some(elite) = &elite {
                 crate::cards::help_text(ui, elite);
@@ -311,6 +312,13 @@ impl Cabin {
             }
             for line in &games {
                 crate::cards::help_text(ui, line);
+            }
+            if let Some((line, how_to)) = &rl {
+                crate::cards::help_text(ui, line);
+                if *how_to && crate::cards::ghost_pill(ui, "Copy the setting") {
+                    ui.ctx()
+                        .copy_text(grokhub_core::game_watch_rl::INI_LINE.to_string());
+                }
             }
         });
     }

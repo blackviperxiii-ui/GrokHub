@@ -5445,6 +5445,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             ),
             "Stardew Valley",
         ));
+        rows.push((
+            "match_card",
+            crate::game_watch_rl::match_card(&Default::default(), at),
+            "Rocket League",
+        ));
         rows
     }
 

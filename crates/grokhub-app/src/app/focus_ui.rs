@@ -50,6 +50,8 @@ pub(super) struct FocusState {
     pub elite: super::elite_ui::EliteState,
     /// Stardew Valley's farm saves, compared across a play session.
     pub stardew: super::stardew_ui::StardewState,
+    /// Rocket League's Stats API, read while the game runs.
+    pub rl: super::rl_ui::RlUi,
 }
 
 impl Cabin {
@@ -71,6 +73,7 @@ impl Cabin {
         self.poll_screenshot_offer();
         self.tick_elite();
         self.tick_stardew();
+        self.tick_rl();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

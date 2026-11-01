@@ -105,6 +105,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).
     ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1"),
+    ("crates/grokhub-core/src/game_watch_rl.rs", 1, "Rocket League Stats API on 127.0.0.1, read only"),
     ("crates/grokhub-core/src/game_watch_gsi.rs", 1, "game state integration listener's self-wake on 127.0.0.1"),
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),

@@ -1892,6 +1892,11 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ),
         "Stardew Valley",
     ));
+    rows.push((
+        "tick_rl",
+        grokhub_core::game_watch_rl::match_card(&Default::default(), now),
+        "Rocket League",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
