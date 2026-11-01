@@ -455,7 +455,8 @@ The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
 automations, memory, connectors and Pulse (`get_pulse`, `pulse_act`,
 `pulse_discuss`, `pulse_why`, `get_feed_prompt`, `save_feed_prompt`,
-`pulse_image`). Everything else gets `ok: false`: the key, settings changes,
+`pulse_image`) and Nyx's picture (`nyx_look`, gated by the desktop's
+Adults-only setting). Everything else gets `ok: false`: the key, settings changes,
 Local AI and desktop control.
 
 **5b, the desktop side.** Settings → Web access in the shell
