@@ -70,6 +70,16 @@ describe("chatActivity", () => {
     expect(fold([plan])).toMatchObject({ status: "waiting", detail: "Plan ready for your OK" });
   });
 
+  it("a Deny from a notification puts the waiting turn back to running", () => {
+    const ask: ChatEvent = { kind: "permission", id: "p1", title: "write", action: "a", reason: "" };
+    const answered: ChatEvent = { kind: "answered", id: "p1", answer: "deny" };
+    expect(fold([ask, answered])).toMatchObject({ status: "running", detail: "Thinking…" });
+    // Nothing to resume: no row appears, and a finished one stays finished.
+    expect(fold([answered])).toBeUndefined();
+    const done = fold([ask, { kind: "done", stop: "end_turn" }]);
+    expect(fold([answered], done)).toMatchObject({ status: "done", detail: "Reply finished" });
+  });
+
   it("an error fails the turn and new work starts a fresh count", () => {
     const failed = fold([tool("completed"), { kind: "error", message: "The key was rejected." }]);
     expect(failed).toMatchObject({ status: "failed", detail: "The key was rejected.", steps: 1 });

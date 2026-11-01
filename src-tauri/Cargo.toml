@@ -57,8 +57,13 @@ minisign-verify = "0.3"
 # Computer-use runs on the desktop OSes only; phones never build it.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 grokhub-desktop = { path = "../crates/grokhub-desktop" }
-# Halt's system-wide Super+Shift+Esc; best effort (Wayland or the cabin may hold it).
-tauri-plugin-global-shortcut = "2"
+# Desktop basics (os_extras.rs): one running copy, the window's place and size,
+# the summon hotkey, notifications and start at login. All driven from Rust.
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-notification = "2.8.0"
+tauri-plugin-autostart = "2.7.0"
 # The shell updates itself from its channel's GitHub release (LU-06):
 # `latest.json` points at the AppImage or NSIS installer, minisign-signed with
 # the release key the cabin already trusts.

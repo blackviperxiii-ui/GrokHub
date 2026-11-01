@@ -2436,7 +2436,7 @@ impl Cabin {
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Grok wants permission")
+                        RichText::new(grokhub_core::brand::filled("{product} wants permission"))
                             .size(14.0)
                             .color(crate::theme::fg()),
                     );

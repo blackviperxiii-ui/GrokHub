@@ -69,6 +69,11 @@ export function chatActivity(
       return { ...restart, status: "running", detail: "Making a plan…", at: now };
     case "permission":
       return { ...restart, status: "waiting", detail: clip(`Needs your OK: ${event.title}`), at: now };
+    // Answered from a notification: the turn carries on.
+    case "answered":
+      return prev && prev.status === "waiting"
+        ? { ...prev, status: "running", detail: "Thinking…", at: now }
+        : prev;
     case "elicit":
       return {
         ...restart,

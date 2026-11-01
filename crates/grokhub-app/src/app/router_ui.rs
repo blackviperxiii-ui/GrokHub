@@ -401,6 +401,9 @@ impl Cabin {
     /// The live router keeps a pin while it answers; Auto is an empty pin.
     fn sync_router_pin(&mut self) {
         grokhub_agent::route::local::set_enabled(self.cfg.local_model);
+        grokhub_agent::route::local::set_prompt_cleanup(
+            self.cfg.local_model && self.cfg.prompt_cleanup,
+        );
         if self.cfg.local_model {
             super::local_signals::start(crate::config::config_dir());
         }

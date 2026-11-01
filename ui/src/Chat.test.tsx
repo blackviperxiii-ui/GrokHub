@@ -32,6 +32,8 @@ const api = vi.hoisted(() => ({
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   setModel: vi.fn<(id: string) => Promise<Settings>>(),
   listModels: vi.fn(),
+  slashHits: vi.fn(() => Promise.resolve([])),
+  runSlash: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -46,6 +48,8 @@ vi.mock("./api", () => ({
   loadChat: api.loadChat,
   setModel: api.setModel,
   listModels: api.listModels,
+  slashHits: api.slashHits,
+  runSlash: api.runSlash,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -89,6 +93,8 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
 };
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
@@ -415,6 +421,35 @@ describe("Chat", () => {
     expect(screen.getByText("Not run: halted")).toBeInTheDocument();
     expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
     expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
+  it("a Deny from a notification shows on its card", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write both");
+
+    emit(id, { kind: "permission", id: "n1", title: "write", action: "n.txt", reason: "" });
+    emit(id, { kind: "permission", id: "n2", title: "edit", action: "m.txt", reason: "" });
+    emit(id, { kind: "answered", id: "n1", answer: "deny" });
+
+    expect(screen.getByRole("group", { name: "Approve write" })).toHaveTextContent("Denied");
+    const other = screen.getByRole("group", { name: "Approve edit" });
+    expect(other).not.toHaveTextContent("Denied");
+    expect(screen.getAllByRole("button", { name: "Allow once" })).toHaveLength(1);
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("an answer that comes after the turn ended leaves the card ended", () => {
+    const ended: Item[] = [
+      { kind: "permission", id: "a", title: "write", action: "", reason: "", answer: "ended" },
+      { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
+    ];
+    expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
+    expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
+      answer: "deny",
+    });
   });
 
   it("Stop cancels the turn in flight", async () => {

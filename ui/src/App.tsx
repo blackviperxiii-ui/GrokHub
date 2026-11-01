@@ -207,6 +207,7 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
           onOpenAutomations={() => setView("automations")}
+          onOpenView={setView}
           prefill={prefill}
           notice={notice}
           open={open}
