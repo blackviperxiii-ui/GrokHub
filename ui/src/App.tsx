@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities } from "./api";
 import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
@@ -39,6 +39,11 @@ export function App() {
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   const barAway = useHidingBar(palette);
+  // Closing Settings goes back to the screen that was open before it.
+  const before = useRef<View>("chat");
+  useEffect(() => {
+    if (view !== "settings") before.current = view;
+  }, [view]);
   useOverscroll();
   useEffect(() => {
     const idle = window.requestIdleCallback;
@@ -186,7 +191,7 @@ export function App() {
         )}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
-        {view === "settings" && <Settings caps={caps} goTo={goTo} />}
+        {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
       </Suspense>
     </div>
   );
