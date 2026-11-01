@@ -1,0 +1,1 @@
+- Shell: pick the chat model from a list in Settings → General or from a Model chip by the composer, with search, Refresh and Other… for any id; with a saved key the list adds the models your account can use.

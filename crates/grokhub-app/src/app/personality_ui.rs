@@ -980,27 +980,6 @@ impl Cabin {
         }
     }
 
-    /// Titlebar, left of the session menu: the open chat's personality. A click opens
-    /// the centred picker.
-    pub(super) fn paint_personality_switch(&mut self, ui: &mut egui::Ui) {
-        if self.nav != Nav::Chat {
-            return;
-        }
-        let name = self.titlebar_personality_label();
-        let resp = ui.add(
-            egui::Button::new(
-                RichText::new(name.as_str())
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            )
-            .frame(false),
-        );
-        let resp = crate::theme::pointing(resp).on_hover_text("Personality for this chat");
-        if resp.clicked() {
-            self.picker.switch_open = true;
-        }
-    }
-
     /// The Loadout PERSONALITY pill: in a chat it opens the picker for that chat,
     /// anywhere else Settings › Personality.
     pub(super) fn open_personality_pill(&mut self) {

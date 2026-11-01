@@ -1,0 +1,1 @@
+- Speed spans: memory recall records `turn:memory_recall` (LO-46 step 1). Release p50 stayed under 2 ms on realistic notes, so recall is not prepared while you type.

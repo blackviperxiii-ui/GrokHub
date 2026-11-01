@@ -417,6 +417,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: steady effort. The router reads `steadyEffort`
+    /// (`grokhub_agent::route::ladder::EffortSettings`). Off by default.
+    #[serde(default)]
+    pub steady_effort: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -844,6 +848,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            steady_effort: false,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -1682,6 +1687,35 @@ mod tests {
         assert!(!load().composer_autocomplete);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steady_effort() {
+        assert!(!AppConfig::default().steady_effort);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.steady_effort);
+        let _g = hold_test_config();
+        let root = test_config_root("steady-effort");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            steady_effort: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().steady_effort);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"steadyEffort\": true"),
+            "the router reads this key: {text}"
+        );
+        assert!(grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
+        cfg.steady_effort = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().steady_effort);
+        assert!(!grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
         let _ = fs::remove_dir_all(&root);
     }
 
