@@ -213,6 +213,15 @@ pub fn refresh_cabin_oauth(tokens: &XaiOAuthTokens) -> Option<XaiOAuthTokens> {
     None
 }
 
+/// The last cabin sign-in renewal failed, and none has worked since. Settings
+/// → Account then offers Sign in with Grok again.
+pub fn cabin_refresh_failed() -> bool {
+    cabin_oauth_refresh_state()
+        .lock()
+        .map(|held| held.fail_at.is_some())
+        .unwrap_or(false)
+}
+
 /// An expired cabin sign-in, renewed now for a caller that needs the token
 /// this turn. A refresh that failed in the last 30 seconds is not retried, so
 /// an offline machine or a dead refresh token does not stall every turn on
