@@ -1,1 +1,1 @@
-- Dependencies: refreshed the Rust lockfile to the newest semver-compatible releases (tokio 1.54, zip 9.2, uuid 1.29, arboard 3.7 and 44 others). No manifest changes.
+- Dependencies: refreshed the Rust lockfile to the newest semver-compatible releases (tokio 1.54, zip 9.2, uuid 1.29, arboard 3.7, dirs 7 and 43 others). No manifest changes.
