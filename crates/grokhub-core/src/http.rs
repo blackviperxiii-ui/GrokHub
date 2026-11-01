@@ -9,6 +9,10 @@
 //! answer's code, body and `Retry-After`, or what kind of transport failure it
 //! was. Stage 3 adds a body as bytes and an opt-in env proxy
 //! ([`Opts::proxy_from_env`]), which a `public_only` agent never reads.
+//! Stage 4 adds what the agent crate's call sites need: a write timeout, a
+//! resolver of the caller's own, a per-request timeout, a JSON body and
+//! answer, and [`Request::any_status`] for callers that read a 4xx/5xx
+//! answer's headers or whole body themselves.
 //!
 //! This is a factory, not a guard: every caller still runs its own egress
 //! check (or loopback check) before it calls, and the Offline only scans
@@ -18,18 +22,25 @@
 
 use std::fmt;
 use std::io::{self, Read};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 /// Bytes of an error answer's body kept on [`Error::Status`].
 pub const STATUS_BODY_CAP: usize = 64 * 1024;
 
-/// How an agent dials and how long it waits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A resolver: `host:port` in, the addresses to dial out.
+pub type Resolve = fn(&str) -> io::Result<Vec<SocketAddr>>;
+
+/// How an agent dials and how long it waits. Not `PartialEq`: a resolver is a
+/// function pointer, and those don't compare meaningfully.
+#[derive(Clone, Copy, Debug)]
 pub struct Opts {
     /// Time to open the connection.
     pub connect: Duration,
     /// Longest wait for any one read; `None` waits as long as `overall` allows.
     pub read: Option<Duration>,
+    /// Longest wait for any one write; `None` waits as long as `overall` allows.
+    pub write: Option<Duration>,
     /// Whole request, connect to last body byte; `None` has no cap.
     pub overall: Option<Duration>,
     /// Redirects followed; `0` hands the 3xx back as the answer.
@@ -40,6 +51,9 @@ pub struct Opts {
     /// `HTTP_PROXY` (either case, first set wins), read when the agent is
     /// built. Ignored when `public_only` is set: see [`Opts::reads_env_proxy`].
     pub proxy_from_env: bool,
+    /// Dial through this resolver instead of the system's. Ignored when
+    /// `public_only` is set, which dials through its own.
+    pub resolve: Option<Resolve>,
 }
 
 impl Opts {
@@ -52,15 +66,18 @@ impl Opts {
 }
 
 impl Default for Opts {
-    /// ureq 2's own defaults: 30 s connect, no read or overall cap, 5 redirects.
+    /// ureq 2's own defaults: 30 s connect, no read, write or overall cap,
+    /// 5 redirects, the system resolver.
     fn default() -> Self {
         Self {
             connect: Duration::from_secs(30),
             read: None,
+            write: None,
             overall: None,
             redirects: 5,
             public_only: false,
             proxy_from_env: false,
+            resolve: None,
         }
     }
 }
@@ -80,59 +97,104 @@ pub fn agent(opts: Opts) -> Agent {
     if let Some(read) = opts.read {
         b = b.timeout_read(read);
     }
+    if let Some(write) = opts.write {
+        b = b.timeout_write(write);
+    }
     if let Some(overall) = opts.overall {
         b = b.timeout(overall);
     }
     if opts.public_only {
         b = b.resolver(crate::ssrf::public_only_resolve);
+    } else if let Some(resolve) = opts.resolve {
+        b = b.resolver(resolve);
     }
     Agent(b.build())
 }
 
 impl Agent {
     pub fn get(&self, url: &str) -> Request {
-        Request(self.0.get(url))
+        Request::new(self.0.get(url))
     }
 
     pub fn post(&self, url: &str) -> Request {
-        Request(self.0.post(url))
+        Request::new(self.0.post(url))
     }
 }
 
 /// One request, not sent until [`Request::call`].
 #[must_use = "a request does nothing until it is called"]
-pub struct Request(ureq::Request);
+pub struct Request {
+    req: ureq::Request,
+    any_status: bool,
+}
 
 impl Request {
-    pub fn header(self, name: &str, value: &str) -> Self {
-        Request(self.0.set(name, value))
+    fn new(req: ureq::Request) -> Self {
+        Self {
+            req,
+            any_status: false,
+        }
     }
 
-    /// Send it. A 4xx/5xx answer is [`Error::Status`]; a 1xx-3xx is `Ok`.
+    pub fn header(self, name: &str, value: &str) -> Self {
+        Self {
+            req: self.req.set(name, value),
+            ..self
+        }
+    }
+
+    /// Cap this request, connect to last body byte, at `limit`, in place of
+    /// the agent's `overall`.
+    pub fn timeout(self, limit: Duration) -> Self {
+        Self {
+            req: self.req.timeout(limit),
+            ..self
+        }
+    }
+
+    /// Answer a 4xx/5xx as `Ok` too, so the caller reads its status, headers
+    /// and whole body as it would a 2xx. No answer is still [`Error::Transport`].
+    pub fn any_status(self) -> Self {
+        Self {
+            any_status: true,
+            ..self
+        }
+    }
+
+    /// Send it. A 4xx/5xx answer is [`Error::Status`] (unless
+    /// [`Request::any_status`]); a 1xx-3xx is `Ok`.
     pub fn call(self) -> Result<Response, Error> {
-        self.0.call().map(Response).map_err(Error::from_ureq)
+        answer(self.any_status, self.req.call())
     }
 
     /// Send it with `body` as UTF-8 text. Sets no `Content-Type` of its own:
     /// name one with [`Request::header`]. Answers as [`Request::call`] does.
     pub fn send_string(self, body: &str) -> Result<Response, Error> {
-        self.0
-            .send_string(body)
-            .map(Response)
-            .map_err(Error::from_ureq)
+        answer(self.any_status, self.req.send_string(body))
     }
 
     /// Send it with `body` as is. Sets no `Content-Type` of its own: name one
     /// with [`Request::header`]. Answers as [`Request::call`] does.
     pub fn send_bytes(self, body: &[u8]) -> Result<Response, Error> {
-        self.0
-            .send_bytes(body)
-            .map(Response)
-            .map_err(Error::from_ureq)
+        answer(self.any_status, self.req.send_bytes(body))
+    }
+
+    /// Send `body` as compact JSON, with `Content-Type: application/json`
+    /// unless one was named. Answers as [`Request::call`] does.
+    pub fn send_json(self, body: impl serde::Serialize) -> Result<Response, Error> {
+        answer(self.any_status, self.req.send_json(body))
     }
 }
 
-/// A 1xx-3xx answer.
+fn answer(any_status: bool, sent: Result<ureq::Response, ureq::Error>) -> Result<Response, Error> {
+    match sent {
+        Ok(resp) => Ok(Response(resp)),
+        Err(ureq::Error::Status(_, resp)) if any_status => Ok(Response(resp)),
+        Err(err) => Err(Error::from_ureq(err)),
+    }
+}
+
+/// An answer: 1xx-3xx, or any status after [`Request::any_status`].
 pub struct Response(ureq::Response);
 
 impl Response {
@@ -159,6 +221,12 @@ impl Response {
     /// The body as text, refused past 10 MB (ureq 2's `into_string` limit).
     pub fn into_string(self) -> io::Result<String> {
         self.0.into_string()
+    }
+
+    /// The body parsed as JSON, unbounded. A parse failure reads
+    /// `Failed to read JSON: …`; a read that timed out stays `TimedOut`.
+    pub fn into_json<T: serde::de::DeserializeOwned>(self) -> io::Result<T> {
+        self.0.into_json()
     }
 }
 
@@ -296,11 +364,12 @@ mod tests {
     fn defaults_are_ureq2s_own() {
         let o = Opts::default();
         assert_eq!(o.connect, Duration::from_secs(30));
-        assert_eq!((o.read, o.overall), (None, None));
+        assert_eq!((o.read, o.write, o.overall), (None, None, None));
         assert_eq!(o.redirects, 5);
         assert!(!o.public_only);
         assert!(!o.proxy_from_env);
         assert!(!o.reads_env_proxy());
+        assert!(o.resolve.is_none());
     }
 
     #[test]
@@ -682,5 +751,212 @@ mod tests {
             ),
             "{bad:?}"
         );
+    }
+
+    #[test]
+    fn any_status_hands_back_a_4xx_with_its_headers_and_whole_body() {
+        let big = "b".repeat(STATUS_BODY_CAP + 10);
+        let (port, server) = serve(vec![reply(
+            "401 Unauthorized",
+            "WWW-Authenticate: Bearer resource_metadata=\"x\"\r\n",
+            &big,
+        )]);
+        let resp = agent(Opts::default())
+            .post(&format!("http://127.0.0.1:{port}/mcp"))
+            .any_status()
+            .send_string("{}")
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+        assert_eq!(
+            resp.header("www-authenticate"),
+            Some("Bearer resource_metadata=\"x\"")
+        );
+        assert_eq!(resp.into_string().unwrap().len(), STATUS_BODY_CAP + 10);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn any_status_still_errs_with_no_answer() {
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let err = agent(Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .any_status()
+            .call()
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Connect,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn request_timeout_caps_one_request_on_an_uncapped_agent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+        let started = Instant::now();
+        let err = agent(Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .timeout(Duration::from_millis(200))
+            .call()
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Io,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2), "timed out late");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn write_timeout_ends_a_send_nobody_reads() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(sock);
+        });
+        let started = Instant::now();
+        let body = vec![b'x'; 64 * 1024 * 1024];
+        let err = agent(Opts {
+            write: Some(Duration::from_millis(200)),
+            ..Opts::default()
+        })
+        .post(&format!("http://127.0.0.1:{port}/"))
+        .send_bytes(&body)
+        .err()
+        .unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Io,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(3), "timed out late");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn send_json_names_json_and_sends_compact_json() {
+        let (port, server) = serve(vec![
+            reply("200 OK", "Content-Type: application/json\r\n", "{\"n\":2}"),
+            reply("200 OK", "", "not json"),
+        ]);
+        let url = format!("http://127.0.0.1:{port}/v1");
+        let resp = agent(Opts::default())
+            .post(&url)
+            .send_json(serde_json::json!({"a": 1, "b": "é"}))
+            .unwrap();
+        let v: serde_json::Value = resp.into_json().unwrap();
+        assert_eq!(v, serde_json::json!({"n": 2}));
+        let bad = agent(Opts::default())
+            .post(&url)
+            .header("Content-Type", "application/vnd.x+json")
+            .send_json(serde_json::json!([1]))
+            .unwrap()
+            .into_json::<serde_json::Value>()
+            .err()
+            .unwrap();
+        assert_eq!(bad.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            bad.to_string().starts_with("Failed to read JSON: "),
+            "{bad}"
+        );
+        let heads = server.join().unwrap();
+        assert!(
+            heads[0].contains("Content-Type: application/json\r\n"),
+            "{heads:?}"
+        );
+        assert!(
+            heads[0].ends_with("\r\n\r\n{\"a\":1,\"b\":\"é\"}"),
+            "{heads:?}"
+        );
+        assert!(
+            heads[1].contains("Content-Type: application/vnd.x+json\r\n")
+                && !heads[1].contains("application/json"),
+            "{heads:?}"
+        );
+        assert!(heads[1].ends_with("\r\n\r\n[1]"), "{heads:?}");
+    }
+
+    /// Every name dials loopback on the port asked for.
+    fn resolve_test(netloc: &str) -> io::Result<Vec<SocketAddr>> {
+        let (_, port) = netloc.rsplit_once(':').unwrap();
+        Ok(vec![SocketAddr::from((
+            [127, 0, 0, 1],
+            port.parse().unwrap(),
+        ))])
+    }
+
+    #[test]
+    fn resolve_dials_through_the_callers_resolver() {
+        let (port, server) = serve(vec![reply("200 OK", "", "via")]);
+        let resp = agent(Opts {
+            resolve: Some(resolve_test),
+            ..Opts::default()
+        })
+        .get(&format!("http://mcp.example.test:{port}/x"))
+        .call()
+        .unwrap();
+        assert_eq!(resp.into_string().unwrap(), "via");
+        let heads = server.join().unwrap();
+        assert!(
+            heads[0].contains(&format!("Host: mcp.example.test:{port}\r\n")),
+            "{heads:?}"
+        );
+    }
+
+    #[test]
+    fn public_only_wins_over_the_callers_resolver() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let err = agent(Opts {
+            public_only: true,
+            resolve: Some(resolve_test),
+            overall: Some(Duration::from_secs(1)),
+            ..Opts::default()
+        })
+        .get(&format!("http://127.0.0.1:{port}/"))
+        .call()
+        .err()
+        .unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::Transport {
+                    kind: TransportKind::Dns,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(listener.accept().is_err(), "nothing may connect");
     }
 }

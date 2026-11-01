@@ -1,0 +1,1 @@
+- Path of Exile session recaps now say when the gap between your level and an area's level cut your experience, and by how much at worst. Path of Exile 2 works experience out differently, so it gets no such line.

@@ -57,7 +57,7 @@ export function Skills({
       (page) => setRows(page.rows),
       fail,
     );
-  }, []);
+  }, [fail]);
 
   async function openFolder(row: SkillRow) {
     try {

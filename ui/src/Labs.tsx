@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import {
   fetchPluginMarket,
   getPlugins,
@@ -44,15 +44,17 @@ export function Labs() {
   const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
 
+  // Runs each time Labs shows; a market address typed here and not used stays.
+  const refresh = useEffectEvent((loaded: PluginPage) => {
+    if (!page || marketUrl === page.marketUrl) setMarketUrl(loaded.marketUrl);
+    setPage(loaded);
+  });
   useEffect(() => {
     getPlugins().then(
-      (loaded) => {
-        setPage(loaded);
-        setMarketUrl(loaded.marketUrl);
-      },
+      (loaded) => refresh(loaded),
       fail,
     );
-  }, []);
+  }, [fail]);
 
   async function run(work: () => Promise<PluginPage>) {
     setBusy(true);
