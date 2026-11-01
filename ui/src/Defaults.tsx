@@ -4,7 +4,7 @@ import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
 import { ModelPicker } from "./ModelPicker";
 
-/** Settings → Defaults: the model new messages use, where Grok works and
+/** Settings → Defaults: the model new messages use, where the agent works and
  * how chat handles changes. A model pick saves at once, as the composer chip
  * does; the folder and approvals save with the button. `readOnly` is the web
  * app's view. */

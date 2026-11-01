@@ -101,7 +101,7 @@ describe("Settings", () => {
     api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
     render(<Settings caps={DESKTOP} />);
 
-    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
     // The model, folder, approvals and tray moved out of General.
     expect(screen.queryByLabelText("Model")).toBeNull();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
@@ -130,7 +130,7 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
 
     await openSection("General");
-    await userEvent.click(screen.getByLabelText("Let Grok control the desktop"));
+    await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("Settings", () => {
     api.saveSettings.mockResolvedValue(shape({ desktopControl: true }));
     render(<Settings caps={DESKTOP} />);
 
-    const desk = await screen.findByLabelText("Let Grok control the desktop");
+    const desk = await screen.findByLabelText("Let Loadout control the desktop");
     expect(desk).not.toBeChecked();
     expect(screen.queryByText(DESKTOP_NOTE)).not.toBeInTheDocument();
     await userEvent.click(desk);
@@ -149,7 +149,7 @@ describe("Settings", () => {
 
     expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "ask", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Let Grok control the desktop")).toBeChecked();
+    expect(screen.getByLabelText("Let Loadout control the desktop")).toBeChecked();
   });
 
   it("saves a key without echoing it, then removes it", async () => {
@@ -172,6 +172,20 @@ describe("Settings", () => {
     expect(await screen.findByText("No key saved yet.")).toBeInTheDocument();
   });
 
+  it("offers Sign in with Grok above the key where the device has it", async () => {
+    render(<Settings caps={{ ...DESKTOP, grokSignIn: true }} />);
+    await openSection("Account");
+    expect(await screen.findByRole("region", { name: "Sign in with Grok" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Or use an xAI API key" })).toBeInTheDocument();
+  });
+
+  it("Android has no Grok sign-in yet, only the key", async () => {
+    render(<Settings caps={PHONE} />);
+    await openSection("Account");
+    expect(await screen.findByRole("heading", { name: "xAI API key" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Sign in with Grok" })).toBeNull();
+  });
+
   it("start at login starts off and turns on at once", async () => {
     api.setAutostart.mockResolvedValue(true);
     render(<Settings caps={BASICS} />);
@@ -192,10 +206,10 @@ describe("Settings", () => {
     render(<Settings caps={BASICS} />);
 
     // Unsaved: the desktop switch saves with the button.
-    const desk = await screen.findByLabelText("Let Grok control the desktop");
+    const desk = await screen.findByLabelText("Let Loadout control the desktop");
     await userEvent.click(desk);
     const hotkey = screen.getByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
-    const notify = screen.getByLabelText(/Notify me when Grok needs an OK/);
+    const notify = screen.getByLabelText(/Notify me when the agent needs an OK/);
     expect(hotkey).not.toBeChecked();
     expect(notify).toBeChecked();
 
@@ -222,7 +236,7 @@ describe("Settings", () => {
     render(<Settings caps={{ ...BASICS, summonHotkey: false }} />);
     expect(await screen.findByLabelText("Start Loadout when you sign in")).toBeInTheDocument();
     expect(screen.queryByLabelText(/from anywhere with/)).toBeNull();
-    expect(screen.getByLabelText(/Notify me when Grok needs an OK/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Notify me when the agent needs an OK/)).toBeInTheDocument();
   });
 
   it("shows a keychain error instead of hanging", async () => {
@@ -241,7 +255,7 @@ describe("Settings", () => {
 
     expect(await screen.findByText(GENERAL_EMPTY)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
-    expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
+    expect(screen.queryByLabelText("Let Loadout control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
     expect(screen.queryByRole("group", { name: "On this computer" })).toBeNull();
@@ -264,7 +278,7 @@ describe("Settings", () => {
 
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
-    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
@@ -287,12 +301,12 @@ describe("Settings", () => {
 
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
-    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "true");
 
     await openSection("Account");
     expect(screen.getByLabelText("API key")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
+    expect(screen.queryByLabelText("Let Loadout control the desktop")).toBeNull();
     expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
 

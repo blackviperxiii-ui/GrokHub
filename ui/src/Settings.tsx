@@ -16,6 +16,7 @@ import { Appearance } from "./Appearance";
 import { Background } from "./Background";
 import { Behavior } from "./Behavior";
 import { Defaults } from "./Defaults";
+import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
@@ -32,7 +33,7 @@ import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
 
 export const DESKTOP_NOTE =
-  "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
+  `${PRODUCT_NAME} can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.`;
 
 export const GENERAL_EMPTY =
   "Nothing here on this device. The model, work folder and approvals are in Defaults.";
@@ -237,7 +238,7 @@ export function Settings({
       <>
         <form onSubmit={save}>
           <Toggle checked={desktopControl} onChange={setDesktopControl}>
-            Let Grok control the desktop
+            Let {PRODUCT_NAME} control the desktop
           </Toggle>
           {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
           <button type="submit">Save settings</button>
@@ -275,7 +276,7 @@ export function Settings({
             checked={loaded.notifications}
             onChange={(on) => void flip(() => setNotifications(on))}
           >
-            Notify me when Grok needs an OK or finishes while {PRODUCT_NAME} is in the background
+            Notify me when the agent needs an OK or finishes while {PRODUCT_NAME} is in the background
           </Toggle>
         )}
       </div>
@@ -284,26 +285,29 @@ export function Settings({
 
   function account() {
     return (
-      <div className="key">
-        <h2>xAI API key</h2>
-        <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
-        <input
-          type="password"
-          aria-label="API key"
-          placeholder="xai-…"
-          autoComplete="off"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="button" onClick={saveKey} disabled={!key.trim()}>
-          Save key
-        </button>
-        {loaded.hasApiKey && (
-          <button type="button" className="quiet" onClick={removeKey}>
-            Remove key
+      <>
+        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} onChange={show} />}
+        <div className="key">
+          <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
+          <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
+          <input
+            type="password"
+            aria-label="API key"
+            placeholder="xai-…"
+            autoComplete="off"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <button type="button" onClick={saveKey} disabled={!key.trim()}>
+            Save key
           </button>
-        )}
-      </div>
+          {loaded.hasApiKey && (
+            <button type="button" className="quiet" onClick={removeKey}>
+              Remove key
+            </button>
+          )}
+        </div>
+      </>
     );
   }
 }
@@ -337,6 +341,8 @@ function RemoteSettings({ settings }: { settings: Shape }) {
       <dl>
         <dt>xAI API key</dt>
         <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
+        <dt>Grok sign-in</dt>
+        <dd>{settings.signedIn ? "Signed in on your computer." : "Not signed in."}</dd>
       </dl>
       <h2>{SECTION_LABELS.defaults}</h2>
       <Defaults settings={settings} readOnly />
