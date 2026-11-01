@@ -90,6 +90,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/update.rs", 2, "git fetch of the channel tips: offline::refuse"),
     ("crates/grokhub-app/src/app/model_download_ui.rs", 1, "Hugging Face model: egress_ok + model_download::download refuses while on"),
     ("crates/grokhub-app/src/app/local_ai_ui.rs", 1, "engine download: runtime_download_url_ok + download_engine refuse while on"),
+    ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
     ("src-tauri/src/local_engine.rs", 2, "engine and HF downloads: runtime_download_url_ok, download_engine and model_download::download refuse while on"),
     // On-device model (loopback only).
     ("crates/grokhub-agent/src/route/local_http.rs", 2, "llama-server chat and the /props context-window read, both loopback only"),

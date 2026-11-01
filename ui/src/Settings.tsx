@@ -8,10 +8,12 @@ import {
   type Capabilities,
   type Settings as Shape,
 } from "./api";
+import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
+import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
@@ -20,6 +22,7 @@ import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
+import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
@@ -188,10 +191,10 @@ export function Settings({
   function general() {
     return (
       <form onSubmit={save}>
-        <label>
-          Model
-          <input value={model} onChange={(e) => setModel(e.target.value)} />
-        </label>
+        <div className="field">
+          <span id="model-label">Model</span>
+          <ModelPicker value={model} onPick={setModel} labelledBy="model-label" />
+        </div>
         <label>
           Work folder
           <input
@@ -274,6 +277,7 @@ function About({ version }: { version: string }) {
       <p className="note">{TAGLINE}</p>
       <p>Version {version}</p>
       <p className="note">{ABOUT_NOTE}</p>
+      {inShell() && <Updates />}
     </div>
   );
 }
