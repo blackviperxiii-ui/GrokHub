@@ -13,9 +13,8 @@ use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{
-    LocalFree, BOOL, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
-};
+use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::{LocalFree, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,

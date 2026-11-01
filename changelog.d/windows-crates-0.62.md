@@ -1,0 +1,1 @@
+- Dependencies: the Windows bindings move to windows 0.62 and windows-sys 0.61 (core, agent, desktop and app). No behavior change. zbus 6 and x11rb 0.14 wait on upstream crates that still pin zbus 5 and x11rb 0.13.

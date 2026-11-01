@@ -634,8 +634,8 @@ fn win_power() -> Option<PowerInfo> {
 /// A PDH query on `\GPU Engine(*)\Utilization Percentage`.
 #[cfg(windows)]
 struct Pdh {
-    query: isize,
-    counter: isize,
+    query: windows_sys::Win32::System::Performance::PDH_HQUERY,
+    counter: windows_sys::Win32::System::Performance::PDH_HCOUNTER,
 }
 
 #[cfg(windows)]
@@ -649,11 +649,11 @@ impl Pdh {
             .collect();
         // SAFETY: out-pointers to locals; the query is closed on failure or in Drop.
         unsafe {
-            let mut query = 0isize;
+            let mut query = std::ptr::null_mut();
             if PdhOpenQueryW(std::ptr::null(), 0, &mut query) != 0 {
                 return None;
             }
-            let mut counter = 0isize;
+            let mut counter = std::ptr::null_mut();
             if PdhAddEnglishCounterW(query, path.as_ptr(), 0, &mut counter) != 0 {
                 PdhCloseQuery(query);
                 return None;
