@@ -893,6 +893,7 @@ pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("objectives", "Objectives"),
     ("pulse", "Pulse"),
     ("library", "Library"),
+    ("mods", "Mods"),
     ("devices", "Devices"),
     ("profile", "Profile"),
 ];

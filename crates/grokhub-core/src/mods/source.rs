@@ -245,7 +245,7 @@ impl SourceError {
     pub fn line(&self) -> String {
         match self {
             SourceError::Offline => "Offline only is on.".into(),
-            SourceError::NeedsKey(s) => format!("{} needs a key in Settings first.", s.label()),
+            SourceError::NeedsKey(s) => format!("{} needs a key first.", s.label()),
             SourceError::RateLimited(secs) => {
                 format!("Slowing down for the source's limits; try again in {secs} s.")
             }
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(ok_body(r), Err(SourceError::Http(404)));
         assert_eq!(
             SourceError::NeedsKey(Source::CurseForge).line(),
-            "CurseForge needs a key in Settings first."
+            "CurseForge needs a key first."
         );
     }
 

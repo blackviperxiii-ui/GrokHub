@@ -11,7 +11,7 @@ egui_phosphor::subset! {
             ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
             DESKTOP, FILE, FOLDER, GEAR, GITHUB_LOGO, HOUSE, IMAGE, KANBAN, LIGHTNING, LIST,
             BELL, BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PENCIL_SIMPLE, PLUGS,
-            PUSH_PIN, PULSE, QUESTION, SQUARES_FOUR, SUN, TARGET, USER, X,
+            PULSE, PUSH_PIN, PUZZLE_PIECE, QUESTION, SQUARES_FOUR, SUN, TARGET, USER, X,
         };
     }
 }
@@ -67,6 +67,7 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Objectives => ph::regular::TARGET,
         RailIcon::Pulse => ph::regular::PULSE,
         RailIcon::Library => ph::regular::SQUARES_FOUR,
+        RailIcon::Mods => ph::regular::PUZZLE_PIECE,
         RailIcon::Pc => ph::regular::DESKTOP,
         RailIcon::Profile => ph::regular::USER,
         RailIcon::Settings => ph::regular::GEAR,
@@ -138,6 +139,7 @@ pub enum RailIcon {
     Objectives,
     Pulse,
     Library,
+    Mods,
     Pc,
     Profile,
     Settings,
@@ -151,6 +153,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "automations" => RailIcon::Clock,
         "skills" | "connectors" => RailIcon::Grid,
         "library" => RailIcon::Library,
+        "mods" => RailIcon::Mods,
         "objectives" => RailIcon::Objectives,
         "workboard" => RailIcon::Folder,
         "pulse" | "ideas" => RailIcon::Pulse,
@@ -185,6 +188,7 @@ pub fn rail_kick(icon: RailIcon) -> Kick {
         | RailIcon::Objectives
         | RailIcon::Pulse
         | RailIcon::Library
+        | RailIcon::Mods
         | RailIcon::Pc
         | RailIcon::Profile => Kick::Lift,
     }
@@ -1027,6 +1031,7 @@ mod tests {
         assert_ne!(BarIcon::ArrowDown, BarIcon::ArrowUp);
         assert_ne!(BarIcon::Stop, BarIcon::Send);
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
+        assert_eq!(rail_icon_for("mods"), RailIcon::Mods);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
         assert_eq!(rail_icon_for("history"), RailIcon::History);

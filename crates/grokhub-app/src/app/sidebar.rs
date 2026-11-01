@@ -559,6 +559,7 @@ impl Cabin {
             Nav::Settings => "settings",
             Nav::Skills => "skills",
             Nav::Library => "library",
+            Nav::Mods => "mods",
             Nav::Objectives => "objectives",
             Nav::Night => "automations",
             Nav::Command => "command",
@@ -579,6 +580,7 @@ impl Cabin {
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "mods" => Nav::Mods,
             "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "devices" => Nav::Devices,
@@ -607,6 +609,7 @@ impl Cabin {
             }
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "mods" => Nav::Mods,
             "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "command" => Nav::Command,

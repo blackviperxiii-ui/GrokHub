@@ -615,6 +615,9 @@ impl Cabin {
             self.open_fresh_home();
             self.composer = format!("Help me optimize my settings for {}.", game.name);
         }
+        if crate::ui_kit::recipe::button(ui, None, "MODS", false, size, true).clicked() {
+            self.show_in_mods(ui.ctx(), game.app_id);
+        }
         ui.label(
             egui::RichText::new(
                 "Read from Steam on this PC. Cover art missing here comes from Steam's store.",
