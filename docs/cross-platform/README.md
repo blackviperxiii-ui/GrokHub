@@ -327,18 +327,56 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Risky steps (delete, send, money, credentials) wait for an OK in every
   approvals mode, Always included. Ordinary steps follow the approvals
   setting. A halt stamp (the cabin's Halt) stops a running prompt.
+- Halt stops desktop control and every running prompt at once, the way the
+  cabin's tray Halt does (`agent::halt`, `halt_now` in `src-tauri/src/lib.rs`).
+  It's a red button in the top bar while desktop control is on or anything
+  runs, Ctrl+Alt+H in the window, a Halt item in the tray, and Super+Shift+Esc
+  from any app. Super+Shift+Esc is best effort: when another app (the cabin)
+  holds it or the desktop has no system-wide keys, Settings → General says so
+  and the other three still work. Halt writes the halt stamp, lets go of held
+  keys, stops unattended runs, and cancels every chat. A waiting card reads
+  "Not run: halted", and the chat says it stopped. Desktop steps stay off until
+  the app restarts, as in the cabin. A prompt sent after the Halt still runs.
+  Halt only listens and stops; it never types or clicks. Phones and the web
+  app don't get it (`halt_desktop` is not in `remote::WEB_COMMANDS`).
 - The shell is the crate's host: its config folder, its switch, and on Linux
   the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
   (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
-- Not yet: desktop episodes (the cabin's observe, act, verify loop), the
-  Cua driver, and a Halt button in the shell. macOS has no desktop backend
+- Not yet: desktop episodes (the cabin's observe, act, verify loop) and the
+  Cua driver. macOS has no desktop backend
   yet, so desktop calls fail there with the no-display error.
 - Rust tests cover the switch, a refused call while it's off, a typed delete
   that waits in Always and is denied, and an allowed step that runs. The
   smoke test turns the switch on with approvals at Always, has the model
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
+  Halt's Rust tests park a desktop step, halt, and check that the turn ends
+  as halted, the step never runs and the stamp is written; a prompt sent after
+  the Halt still runs. The smoke test has no Halt walk yet.
 
+**3h, chat history.** Chats now survive New chat, a reload and quitting
+(`src-tauri/src/history.rs`, `ui/src/History.tsx`).
+
+- The engine already saved every turn to `sessions/<id>.jsonl` in the config
+  folder. The History page lists the shell's own chats (ids starting
+  `shell-`) under Today, This week and Older, newest first, with a search
+  over titles and words in the chat (250 ms after typing stops, at most 200
+  rows). A row's menu renames it or deletes it; Delete asks first and stops a
+  reply still running in that chat.
+- A click opens the chat in Chat: its newest 200 lines, with Show earlier for
+  the rest. Tool steps come back as one muted "Tools ran" line, not cards.
+  The next message carries the chat on: a new worker resumes the engine from
+  the saved turns, as the cabin does.
+- The chat open at the last close comes back at launch (`lastChat` in
+  `shell.json`); New chat clears it.
+- Cabin threads stay on the cabin's own History page, so no session file has
+  two writers. History is desktop-only: it isn't in `WEB_COMMANDS`, and a
+  browser sees only the chats it started.
+- Rust tests cover listing, the transcript with folded tool steps, a second
+  worker sending the first turn again, search, rename, delete and that cabin
+  sessions stay out. vitest covers the page, its search and delete prompt,
+  and Chat reopening the last chat. Not yet: the smoke test does not walk
+  History.
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on

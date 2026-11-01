@@ -1,0 +1,1 @@
+- CI: the shell smoke test waits for each page to actually show and clicks a personality's Use button only once it stops moving, so the Personality step no longer fails at random.

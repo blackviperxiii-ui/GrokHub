@@ -19,7 +19,23 @@ import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
-export type View = "chat" | "pulse" | "imagine" | "journal" | "automations" | "agents" | "memory" | "skills" | "connectors" | "settings" | "library" | "workboard" | "devices";
+export type View =
+  | "home"
+  | "objectives"
+  | "chat"
+  | "history"
+  | "pulse"
+  | "imagine"
+  | "journal"
+  | "automations"
+  | "agents"
+  | "memory"
+  | "skills"
+  | "connectors"
+  | "settings"
+  | "library"
+  | "workboard"
+  | "devices";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -58,7 +74,10 @@ export interface PaletteExtras {
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
 
 export const VIEW_LABELS: Record<View, string> = {
+  home: "Home",
+  objectives: "Objectives",
   chat: "Chat",
+  history: "History",
   pulse: "Pulse",
   imagine: "Imagine",
   journal: "Journal",
@@ -73,12 +92,15 @@ export const VIEW_LABELS: Record<View, string> = {
   library: "Library",
 };
 
-/** The pages this platform shows, in tab order. The journal is this
- * computer's file, so the web app leaves it on the desktop. Devices is about this computer's Web access, so
- * only a desktop that has it shows it. */
+/** The pages this platform shows, in tab order. History and the journal
+ * are this computer's files, so the web app leaves them on the desktop (a
+ * browser sees only the chats it started); Devices is about this computer's
+ * Web access, so only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
+    "home",
     "chat",
+    ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
     "imagine",
     ...(caps.remote ? [] : (["journal"] as const)),
@@ -94,13 +116,21 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
+/** Every page the palette opens: the tabs, and Objectives right after Home.
+ * Objectives has no tab of its own; Home's objectives tiles open it too. */
+export function pageViews(caps: Capabilities): View[] {
+  const tabs = views(caps);
+  const at = tabs.indexOf("home") + 1;
+  return [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
+}
+
 /** The rows for `query`, in order: pages, commands, slash commands (for a
  * query that starts with `/`), recent chats, Settings sections, then Ask
  * with the typed text, which puts it in the chat box like the cabin's palette. */
 export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
   const slash = q.startsWith("/");
-  const pages: PaletteRow[] = views(caps).map((view) => ({
+  const pages: PaletteRow[] = pageViews(caps).map((view) => ({
     label: VIEW_LABELS[view],
     action: { kind: "view", view },
     ...(view === "settings" ? { keys: SETTINGS_KEYS } : {}),

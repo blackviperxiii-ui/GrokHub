@@ -291,6 +291,61 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** A saved chat on the History page (src-tauri/src/history.rs). */
+export interface ChatRow {
+  id: string;
+  title: string;
+  /** Unix ms the chat started. */
+  created: number;
+  /** Unix ms of its last saved turn. */
+  updated: number;
+  model: string;
+}
+
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
+export type LineRole = "user" | "assistant" | "tools";
+
+export interface TranscriptLine {
+  role: LineRole;
+  text: string;
+}
+
+/** A saved chat as Chat shows it: the newest lines, and how many older ones were left out. */
+export interface Transcript {
+  id: string;
+  title: string;
+  lines: TranscriptLine[];
+  earlier: number;
+}
+
+/** History is this computer's; the web app never calls these. */
+export function listChats(): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("list_chats");
+}
+
+export function searchChats(query: string): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("search_chats", { query });
+}
+
+/** Opens a saved chat; the next message in it carries on from its saved turns. */
+export function loadChat(id: string, limit?: number): Promise<Transcript> {
+  return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
+}
+
+/** The chat open when the app last closed, if it is still saved. */
+export function getLastChat(): Promise<Transcript | null> {
+  return invoke<Transcript | null>("get_last_chat");
+}
+
+export function renameChat(id: string, title: string): Promise<void> {
+  return invoke<void>("rename_chat", { id, title });
+}
+
+/** Deletes the saved chat; a reply still running in it stops. */
+export function deleteChat(id: string): Promise<void> {
+  return invoke<void>("delete_chat", { id });
+}
+
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
@@ -301,6 +356,31 @@ export function openUrl(url: string): Promise<void> {
 
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
+}
+
+/** Sent after every Halt (top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc). */
+export const HALT_EVENT = "halt://done";
+
+/** Halt: stops desktop control and every running prompt at once. Resolves
+ * with the chats it stopped mid-reply. Desktop only; the web app and phones
+ * are refused. */
+export function haltDesktop(): Promise<string[]> {
+  if (!inShell()) return Promise.reject(new Error("Halt runs on the computer itself."));
+  return invoke<string[]>("halt_desktop");
+}
+
+/** The chats a Halt stopped, whichever way it was pressed. */
+export function onHalt(handler: (stopped: string[]) => void): Promise<UnlistenFn> {
+  return subscribe<string[]>(HALT_EVENT, handler);
+}
+
+export interface HaltKeys {
+  /** Super+Shift+Esc works from any app, not only this window. */
+  global: boolean;
+}
+
+export function getHaltKeys(): Promise<HaltKeys> {
+  return invoke<HaltKeys>("get_halt_keys");
 }
 
 /** The web app's stream was down longer than the desktop keeps events for. */
@@ -1040,6 +1120,97 @@ export function setWorkboardTidy(autoDeleteDays: number): Promise<BoardTidy> {
 /** Resume a paused run. A stub until KB-03 fills in the real resume. */
 export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
   return invoke<BoardResume>("workboard_resume", { id, conversationId });
+}
+
+/** Home and Objectives (src-tauri/src/home.rs): the cabin's tiles from
+ * home_layout.json, and the open chat's checklist with level and XP. */
+export type StepStatus = "planned" | "attempted" | "verified" | "unverified" | "cancelled";
+
+export interface MissionStep {
+  id: string;
+  text: string;
+  status: StepStatus;
+}
+
+export interface Mission {
+  conversationId: string;
+  title: string;
+  /** active, needs_approval, paused, blocked or done. */
+  status: string;
+  steps: MissionStep[];
+  done: number;
+  total: number;
+  /** Every step is closed and the result is not accepted yet. */
+  canAccept: boolean;
+  /** The newest outcome is a success, so Undo has something to undo. */
+  accepted: boolean;
+}
+
+export interface Xp {
+  level: number;
+  xp: number;
+  nextLevelXp: number;
+  /** Progress into the level, 0 to 1. */
+  frac: number;
+  today: number;
+  /** The last seven days, today last: true when a task finished. */
+  streak: boolean[];
+}
+
+export interface MissionPage {
+  mission: Mission | null;
+  xp: Xp;
+}
+
+export type HomeTile =
+  | { kind: "objectives"; mission: Mission | null; xp: Xp }
+  | { kind: "streak"; xp: Xp }
+  | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
+  | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
+  | {
+      kind: "pulse";
+      post: { id: string; title: string; summary: string; ago: string } | null;
+      idea: { id: string; title: string; action: string } | null;
+    }
+  | { kind: "personality"; name: string; picture: string | null }
+  | { kind: "upNext"; games: { appId: number; name: string }[] }
+  | { kind: "error"; message: string }
+  /** Only the cabin paints it. */
+  | { kind: "cabin" }
+  /** A paired browser can't read it. */
+  | { kind: "desktop" };
+
+export type SlotSize = "large" | "medium" | "small";
+
+export interface HomeSlot {
+  /** "large", "medium-1" … "small-4". */
+  slot: string;
+  size: SlotSize;
+  module: string;
+  name: string;
+  purpose: string;
+  tile: HomeTile;
+}
+
+export interface HomePage {
+  preset: string;
+  xpBar: boolean;
+  slots: HomeSlot[];
+  xp: Xp;
+  glance: { memories: number | null; proposed: number; connectors: number; connected: number; failing: number };
+}
+
+export function getHome(conversationId?: string): Promise<HomePage> {
+  return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
+}
+
+export function getMission(conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
+}
+
+/** Accept as done (`done`) or Undo. Desktop only. */
+export function setMissionDone(done: boolean, conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */

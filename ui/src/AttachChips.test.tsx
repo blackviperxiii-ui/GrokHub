@@ -13,6 +13,9 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  // No chat saved from an earlier launch.
+  getLastChat: () => Promise.resolve(null),
+  loadChat: vi.fn(),
   sendChat: api.sendChat,
   stageAttachment: api.stageAttachment,
   stageAttachmentPaths: api.stageAttachmentPaths,

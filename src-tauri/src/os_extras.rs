@@ -303,6 +303,11 @@ fn notify(app: &AppHandle, id: i32, title: &str, body: &str, ask: bool) {
 
 /// Chat's notifications: an OK to give, with Deny and Open, and a finished
 /// reply. Runs for every chat event before it reaches the page.
+/// A turn the person stopped (Stop or Halt) gets no "Reply finished" notice.
+pub fn says_finished(stop: &str) -> bool {
+    stop != "cancelled" && stop != crate::agent::HALTED
+}
+
 pub fn on_chat_event(app: &AppHandle, conversation_id: &str, event: &UiEvent) {
     let state = app.state::<ShellState>();
     match event {
@@ -330,7 +335,7 @@ pub fn on_chat_event(app: &AppHandle, conversation_id: &str, event: &UiEvent) {
             if !retired.is_empty() {
                 let _ = app.notification().remove_active(retired);
             }
-            if stop != "cancelled" && wanted(app, conversation_id) {
+            if says_finished(stop) && wanted(app, conversation_id) {
                 notify(
                     app,
                     state.notified.fresh_id(),
@@ -487,6 +492,14 @@ mod tests {
         assert!(should_notify(false, true));
         assert!(!should_notify(false, false));
         assert!(!should_notify(true, false));
+    }
+
+    #[test]
+    fn a_stopped_or_halted_turn_is_not_called_finished() {
+        assert!(says_finished("end_turn"));
+        assert!(says_finished("error"));
+        assert!(!says_finished("cancelled"));
+        assert!(!says_finished("halted"));
     }
 
     #[test]

@@ -752,6 +752,39 @@ mod tests {
         );
     }
 
+    /// KB-04: the sweep, the 30-day archive and the log trim are local jobs.
+    /// Their signatures take cards, times and ids, never a model client; this
+    /// crate cannot reach one (it does not depend on the agent crate), and no
+    /// board job here names a model or a request.
+    #[test]
+    fn board_sweeps_are_local_jobs_with_no_model() {
+        let _: fn(&mut [BoardCard], u64, &[String]) -> SweepReport = sweep;
+        let _: fn(&mut Vec<BoardCard>, u64, u64) -> Vec<String> = delete_archived;
+        let _: fn(&mut [BoardCard], &str, u64) -> bool = archive;
+        let _: fn(&mut BoardCard, u64) -> bool = archive_card;
+        let _: fn(&str) -> Option<String> = trim_work_log;
+        let _: fn(&mut [BoardCard], u64) -> bool = migrate_cards;
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            !manifest
+                .lines()
+                .any(|l| l.trim_start().starts_with("grokhub-agent")),
+            "grokhub-core must not depend on the agent crate"
+        );
+        let src = include_str!("work_item.rs").replace("\r\n", "\n");
+        let jobs = src.split("\n#[cfg(test)]").next().unwrap_or_default();
+        for word in [
+            concat!("Model", "Client"),
+            concat!("Responses", "Request"),
+            concat!("grokhub", "_agent"),
+            concat!("reqwest", "::"),
+            concat!("ureq", "::"),
+        ] {
+            assert!(!jobs.contains(word), "{word} in the board jobs");
+        }
+        assert_eq!(IDLE_ARCHIVE_MS, 30 * DAY_MS);
+    }
+
     #[test]
     fn archive_restore_delete_round_trip() {
         let mut cards = vec![

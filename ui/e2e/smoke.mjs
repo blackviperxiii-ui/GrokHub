@@ -266,6 +266,33 @@ async function tab(s, label) {
     }),
   );
   await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  await onView(s, label);
+}
+
+/** Waits until the top tab `label` is the one pressed. A page stays mounted
+ * once opened, so finding its content proves nothing about what shows. */
+async function onView(s, label) {
+  await waitFor(`the ${label} view`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}'][@aria-pressed='true']`,
+    }),
+  );
+}
+
+/** Scrolls the element into view and is true once it sits still there for
+ * 300 ms, so a click lands on it. */
+async function settled(s, el) {
+  const where = () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "arguments[0].scrollIntoView({ block: 'center' }); const r = arguments[0].getBoundingClientRect(); return [r.x, r.y];",
+      args: [{ [ELEMENT]: el }],
+    });
+  const [x, y] = await where();
+  await sleep(300);
+  const [x2, y2] = await where();
+  return x === x2 && y === y2;
 }
 
 /** A Settings section by its label in the Settings nav. */
@@ -671,7 +698,14 @@ async function palette(s) {
     find(s, "[aria-label='Command palette'] input"),
   );
   await wd("POST", `${s}/element/${again}/value`, { text: "journ\uE007" });
-  await waitFor("the Journal page", () => find(s, "section.journal"));
+  await onView(s, "Journal");
+  await waitFor("the palette to close", async () => {
+    const open = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: "[aria-label='Command palette']",
+    });
+    return open.length === 0;
+  });
   console.log("the Command button opened the Journal");
 }
 
@@ -682,17 +716,22 @@ async function palette(s) {
 async function usePersonality(s, config, name) {
   await tab(s, "Settings");
   await section(s, "Personality");
-  const use = await waitFor(`${name}'s Use button`, async () => {
-    const el = await wd("POST", `${s}/element`, {
-      using: "xpath",
-      value: `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`,
-    });
-    return el[ELEMENT];
-  });
-  await wd("POST", `${s}/element/${use}/click`, {});
+  // The cards' pictures arrive after the list and push the buttons down, so
+  // a click can land where Use was a moment ago. Click Use once it sits
+  // still, and again while it still shows.
+  const useButton = `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`;
+  await waitFor(`${name}'s Use button`, () =>
+    wd("POST", `${s}/element`, { using: "xpath", value: useButton }),
+  );
   await waitFor(`${name} in use`, async () => {
     const t = await textOf(s, `ul[aria-label='Personalities'] li[aria-label='${name}'] .card-status`);
-    return t === "In use" ? t : null;
+    if (t === "In use") return t;
+    const [use] = await wd("POST", `${s}/elements`, { using: "xpath", value: useButton });
+    if (use && (await settled(s, use[ELEMENT]))) {
+      await wd("POST", `${s}/element/${use[ELEMENT]}/click`, {});
+      await sleep(500);
+    }
+    return null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
   const id = name === "Nyx" ? "" : name.toLowerCase();

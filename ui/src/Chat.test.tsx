@@ -1,7 +1,16 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Answer, Approvals, ChatEnvelope, ChatEvent, ElicitAction, SessionMode, Settings } from "./api";
+import type {
+  Answer,
+  Approvals,
+  ChatEnvelope,
+  ChatEvent,
+  ElicitAction,
+  SessionMode,
+  Settings,
+  Transcript,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
@@ -19,6 +28,8 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   setModel: vi.fn<(id: string) => Promise<Settings>>(),
   listModels: vi.fn(),
   slashHits: vi.fn(() => Promise.resolve([])),
@@ -33,6 +44,8 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  getLastChat: api.getLastChat,
+  loadChat: api.loadChat,
   setModel: api.setModel,
   listModels: api.listModels,
   slashHits: api.slashHits,
@@ -55,7 +68,29 @@ vi.mock("./api", () => ({
   removeAttachment: vi.fn(),
 }));
 
-import { applyEvent, Chat, CHAT_EMPTY, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
+import {
+  applyEvent,
+  Chat,
+  CHAT_EMPTY,
+  EARLIER_STEP,
+  EVENTS_LOST,
+  HALTED_LINE,
+  itemsFrom,
+  MISSION_BUSY,
+  OPEN_BUSY,
+  type Item,
+} from "./Chat";
+
+const SAVED: Transcript = {
+  id: "shell-saved",
+  title: "paint colours",
+  lines: [
+    { role: "user", text: "pick a paint colour" },
+    { role: "tools", text: "read_file, web_search" },
+    { role: "assistant", text: "Try **blue**." },
+  ],
+  earlier: 0,
+};
 
 const SETTINGS: Settings = {
   model: "grok-4.7",
@@ -99,9 +134,11 @@ describe("Chat", () => {
       api.closeChat,
       api.answerElicit,
       api.saveSettings,
+      api.loadChat,
     ]) {
       fn.mockReset();
     }
+    api.getLastChat.mockReset().mockResolvedValue(null);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.handler = null;
     api.gap = null;
@@ -352,6 +389,49 @@ describe("Chat", () => {
     expect(api.answerPermission).not.toHaveBeenCalled();
   });
 
+  it("Halt retires every waiting card as halted and says so once", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "d", title: "type", action: "hello", reason: "" });
+    emit(id, {
+      kind: "elicit",
+      id: "ask-h",
+      server: "Question",
+      message: "Which window?",
+      mode: "form",
+      url: "",
+      fieldName: "answer",
+      fieldTitle: "Your answer",
+      secret: false,
+    });
+    emit(id, { kind: "done", stop: "halted" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText("Not answered: halted.")).toBeInTheDocument();
+    expect(screen.getAllByText(HALTED_LINE)).toHaveLength(1);
+    expect(screen.getByText(HALTED_LINE)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a turn that comes back halted settles its cards even if the done event was missed", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "e", title: "type", action: "hi", reason: "" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
   it("a Deny from a notification shows on its card", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -374,6 +454,8 @@ describe("Chat", () => {
       { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
     ];
     expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
     expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
       answer: "deny",
     });
@@ -623,5 +705,107 @@ describe("applyEvent", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+});
+
+describe("Chat history", () => {
+  beforeEach(() => {
+    for (const fn of [api.sendChat, api.closeChat, api.cancelChat, api.loadChat]) fn.mockReset();
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.handler = null;
+  });
+
+  it("turns a saved chat's lines into bubbles and one muted tools line", () => {
+    expect(itemsFrom(SAVED)).toEqual([
+      { kind: "user", text: "pick a paint colour" },
+      { kind: "tools", text: "read_file, web_search" },
+      { kind: "assistant", text: "Try **blue**.", streaming: false },
+    ]);
+  });
+
+  it("reopens the last chat on mount, and the next message carries it on", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    expect(await screen.findByText("pick a paint colour")).toHaveAttribute("data-role", "user");
+    expect(screen.getByText("Tools ran: read_file, web_search")).toHaveAttribute("data-role", "tools");
+    expect(screen.getByText("blue").closest("[data-role]")).toHaveAttribute("data-role", "assistant");
+    await startTurn("and the trim?");
+    expect(api.sendChat).toHaveBeenLastCalledWith("shell-saved", "and the trim?", "chat");
+  });
+
+  it("the web app never asks for the desktop's last chat", async () => {
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(api.getLastChat).not.toHaveBeenCalled();
+  });
+
+  it("a last chat that arrives after the person started typing away stays out", async () => {
+    let arrive: (t: Transcript) => void = () => {};
+    api.getLastChat.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fresh question");
+    await act(async () => arrive(SAVED));
+    expect(screen.queryByText("pick a paint colour")).toBeNull();
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("a chat opened from History replaces the open one, which stays saved", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const first = await startTurn("hello");
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(api.closeChat).toHaveBeenCalledWith(first);
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved");
+    expect(screen.queryByText("hello")).toBeNull();
+
+    // Picking the chat that is already open does nothing.
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 2 }} />);
+    expect(api.loadChat).toHaveBeenCalledTimes(1);
+    expect(api.closeChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("opening a chat waits for a running reply", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.getByText(OPEN_BUSY)).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+    expect(api.closeChat).not.toHaveBeenCalled();
+    finish();
+  });
+
+  it("deleting the open chat in History starts a new one; another chat's delete changes nothing", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-other", n: 1 }} />);
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-saved", n: 2 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Show earlier loads more of a long chat's start", async () => {
+    api.getLastChat.mockResolvedValue({ ...SAVED, earlier: 5 });
+    api.loadChat.mockResolvedValue({
+      ...SAVED,
+      lines: [{ role: "user", text: "the very first ask" }, ...SAVED.lines],
+      earlier: 0,
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Show earlier messages (5)" }));
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved", 3 + EARLIER_STEP);
+    expect(await screen.findByText("the very first ask")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
   });
 });
