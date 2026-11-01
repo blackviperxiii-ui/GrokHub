@@ -741,7 +741,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         let out = handle_desk_line(
             &mut s,
             &rpc("focus_window", json!({ "title": "GrokHub" })),
@@ -749,7 +749,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         assert!(s.backend_mut().opened.is_empty());
         assert_eq!(
             s.backend_mut().windows.active,
@@ -1089,7 +1089,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1124,7 +1124,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click Pay in org.shop Checkout — Shop"
+                "Loadout wants to click Pay in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1140,7 +1140,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert_eq!(
@@ -1229,7 +1229,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click an unlabeled control in org.shop Checkout — Shop"
+                "Loadout wants to click an unlabeled control in org.shop Checkout — Shop"
             )
         );
         assert!(

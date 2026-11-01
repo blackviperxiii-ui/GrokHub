@@ -283,7 +283,12 @@ impl Cabin {
         };
         let row = super::change_undo::ChangeRow {
             kind,
-            label: format!("Grok changed {} {}", kind.as_str(), done.target),
+            label: format!(
+                "{} changed {} {}",
+                grokhub_core::brand::product_name(),
+                kind.as_str(),
+                done.target
+            ),
             id: done.target.clone(),
             keep: false,
         };

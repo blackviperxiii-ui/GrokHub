@@ -183,7 +183,7 @@ fn no_effort_selector_anywhere() {
             "{id}"
         );
     }
-    assert!(super::settings::DEFAULTS_ROWS
+    assert!(super::settings::defaults_rows()
         .iter()
         .all(|r| !r.to_ascii_lowercase().contains("effort")));
     assert!(grokhub_core::SLASH_COMMANDS

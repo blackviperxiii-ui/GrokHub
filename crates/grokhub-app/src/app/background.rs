@@ -339,9 +339,18 @@ impl Cabin {
         if thread_id == self.visible_thread_id() {
             self.status = match (started, refused.len()) {
                 (0, _) => "Background task not started — see the next reply".into(),
-                (1, 0) => "Grok started a background task".into(),
-                (n, 0) => format!("Grok started {n} background tasks"),
-                (n, m) => format!("Grok started {n} background tasks · {m} not started"),
+                (1, 0) => format!(
+                    "{} started a background task",
+                    grokhub_core::brand::product_name()
+                ),
+                (n, 0) => format!(
+                    "{} started {n} background tasks",
+                    grokhub_core::brand::product_name()
+                ),
+                (n, m) => format!(
+                    "{} started {n} background tasks · {m} not started",
+                    grokhub_core::brand::product_name()
+                ),
             };
         }
     }
@@ -811,7 +820,11 @@ impl Cabin {
             if typing {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    meta(ui, "Grok is still working.", crate::theme::muted());
+                    meta(
+                        ui,
+                        grokhub_core::brand::filled("{product} is still working."),
+                        crate::theme::muted(),
+                    );
                     if crate::cards::ghost_pill(ui, "Steer") {
                         act = Some(LiveWorkAct::Steer);
                     }

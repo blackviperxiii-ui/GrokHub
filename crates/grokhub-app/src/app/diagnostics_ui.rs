@@ -38,6 +38,7 @@ impl Cabin {
 
     pub(super) fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
         let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
+        self.mark_stale_auth(&mut lines);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
             self.skill_list.len(),
@@ -445,21 +446,33 @@ impl Cabin {
         }
     }
 
-    fn diagnostics_service_status(&self) -> Vec<String> {
-        let mut lines: Vec<String> = grokhub_core::doctor_lines(
+    /// A sign-in or key on file that can't carry a turn reads as stale, not
+    /// "present", so the status agrees with what the send does.
+    fn mark_stale_auth(&self, lines: &mut [grokhub_core::DoctorLine]) {
+        if self.has_key() && !self.cloud_cred_usable() {
+            if let Some(first) = lines.first_mut() {
+                *first = grokhub_core::xai_auth_stale_line(self.chat_ready());
+            }
+        }
+    }
+
+    pub(super) fn diagnostics_service_status(&self) -> Vec<String> {
+        let mut doctor = grokhub_core::doctor_lines(
             self.has_key(),
             config::config_dir().join("memory").is_dir(),
             HUB_KIND,
-        )
-        .into_iter()
-        .map(|l| {
-            if l.ok {
-                format!("ok — {}", l.text)
-            } else {
-                format!("fail — {}", l.text)
-            }
-        })
-        .collect();
+        );
+        self.mark_stale_auth(&mut doctor);
+        let mut lines: Vec<String> = doctor
+            .into_iter()
+            .map(|l| {
+                if l.ok {
+                    format!("ok — {}", l.text)
+                } else {
+                    format!("fail — {}", l.text)
+                }
+            })
+            .collect();
         for l in grokhub_core::doctor_extras(self.last_receipt_ok, self.skill_list.len()) {
             lines.push(if l.ok {
                 format!("ok — {}", l.text)
