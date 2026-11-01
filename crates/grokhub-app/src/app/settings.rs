@@ -50,6 +50,7 @@ pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
+        SettingsSec::AiModels => "AI models",
         SettingsSec::Privacy => "Privacy & data",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
@@ -391,6 +392,9 @@ pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
 }
 
 const ROW_MODEL: &str = "Default model";
+/// Account keeps your name and picture; the Grok sign-in moved to AI models.
+pub(super) const ACCOUNT_SIGN_IN_MOVED: &str =
+    "Sign in with Grok, OpenRouter and API keys are in Settings → AI models.";
 const ROW_PERMISSION: &str = "Permission";
 fn row_desktop() -> &'static str {
     *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW
@@ -748,6 +752,7 @@ impl Cabin {
         // Every section on one scroll, in nav order; the nav marks the one in view.
         let general = [
             (SettingsSec::Account, "Account"),
+            (SettingsSec::AiModels, "AI models"),
             (SettingsSec::Privacy, "Privacy & data"),
             (SettingsSec::Appearance, "Appearance"),
             (SettingsSec::Personality, "Personality"),
@@ -926,6 +931,10 @@ impl Cabin {
                                                             {
                                                                 clear_picture = true;
                                                             }
+                                                            crate::cards::settings_note(ui, ACCOUNT_SIGN_IN_MOVED);
+                                                        }
+                                                        SettingsSec::AiModels => {
+                                                            crate::ui_kit::section_header(ui, "Sign-ins", None);
                                                             if crate::cards::settings_action(
                                                                 ui,
                                                                 account_auth.title,
@@ -940,6 +949,106 @@ impl Cabin {
                                                             }
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
+                                                            }
+                                                            self.ui_provider_rows(ui);
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Models",
+                                                                None,
+                                                            );
+                                                            let models = self.router_model_choices();
+                                                            let model_labels: Vec<String> =
+                                                                models.iter().map(|(_, label)| label.clone()).collect();
+                                                            let pin = cabin_default_model_id(&self.cfg.model);
+                                                            let model_selected = models
+                                                                .iter()
+                                                                .find(|(id, _)| *id == pin)
+                                                                .map(|(_, label)| label.clone())
+                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
+                                                            if let Some(i) = settings_dropdown(
+                                                                ui,
+                                                                ROW_MODEL,
+                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
+                                                                &model_selected,
+                                                                &model_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = models.get(i) {
+                                                                    let next = cabin_default_model_id(id);
+                                                                    if next != self.cfg.model {
+                                                                        self.cfg.model = next;
+                                                                        self.persist_cfg();
+                                                                        self.status = "Saved".into();
+                                                                    }
+                                                                }
+                                                            }
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Refresh models",
+                                                                "Check xAI's model list and your plan now.",
+                                                                "Refresh",
+                                                            ) {
+                                                                self.refresh_models_now();
+                                                            }
+                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
+                                                            crate::ui_kit::section_header(ui, "Local AI", None);
+                                                            super::privacy_page::paint_offline_row(ui);
+                                                            self.ui_local_model_rows(ui);
+                                                            for line in super::privacy_page::local_notes(
+                                                                self.cfg.local_model,
+                                                                grokhub_agent::route::local::installed(),
+                                                            ) {
+                                                                crate::cards::settings_note(ui, line);
+                                                            }
+                                                            crate::ui_kit::section_header(ui, "Spend & effort", None);
+                                                            self.ui_spend_rows(ui);
+                                                            let mut steady_effort = self.cfg.steady_effort;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Steady effort",
+                                                                "Thinks harder only after two failed tools in a row, keeps chat at High or below, and eases back after a clean step. Spends less; a hard run of errors may get less thought. Off by default.",
+                                                                &mut steady_effort,
+                                                            ) {
+                                                                self.set_steady_effort(steady_effort);
+                                                            }
+                                                            let budgets = grokhub_core::TOKEN_BUDGETS;
+                                                            let budget_labels: Vec<String> = budgets
+                                                                .iter()
+                                                                .map(|b| grokhub_core::token_budget_label(*b))
+                                                                .collect();
+                                                            let budget_hint = format!(
+                                                                "Warns at 80% and when used up, once a day. {}.",
+                                                                grokhub_core::budget_line(
+                                                                    &self.usage,
+                                                                    self.cfg.daily_token_budget,
+                                                                )
+                                                            );
+                                                            if let Some(i) = settings_dropdown(
+                                                                ui,
+                                                                "Daily token budget",
+                                                                &budget_hint,
+                                                                &grokhub_core::token_budget_label(
+                                                                    self.cfg.daily_token_budget,
+                                                                ),
+                                                                &budget_labels,
+                                                            ) {
+                                                                if let Some(b) = budgets.get(i) {
+                                                                    self.cfg.daily_token_budget = *b;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
+                                                            }
+                                                            if self.cfg.daily_token_budget > 0 {
+                                                                let mut pause = self.cfg.budget_pauses_scheduled;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Pause scheduled work over budget",
+                                                                    "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
+                                                                    &mut pause,
+                                                                ) {
+                                                                    self.cfg.budget_pauses_scheduled = pause;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
                                                             }
                                                         }
                                                         SettingsSec::Appearance => {
@@ -1101,55 +1210,6 @@ impl Cabin {
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                             }
-                                                            let mut steady_effort = self.cfg.steady_effort;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Steady effort",
-                                                                "Thinks harder only after two failed tools in a row, keeps chat at High or below, and eases back after a clean step. Spends less; a hard run of errors may get less thought. Off by default.",
-                                                                &mut steady_effort,
-                                                            ) {
-                                                                self.set_steady_effort(steady_effort);
-                                                            }
-                                                            let budgets = grokhub_core::TOKEN_BUDGETS;
-                                                            let budget_labels: Vec<String> = budgets
-                                                                .iter()
-                                                                .map(|b| grokhub_core::token_budget_label(*b))
-                                                                .collect();
-                                                            let budget_hint = format!(
-                                                                "Warns at 80% and when used up, once a day. {}.",
-                                                                grokhub_core::budget_line(
-                                                                    &self.usage,
-                                                                    self.cfg.daily_token_budget,
-                                                                )
-                                                            );
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                "Daily token budget",
-                                                                &budget_hint,
-                                                                &grokhub_core::token_budget_label(
-                                                                    self.cfg.daily_token_budget,
-                                                                ),
-                                                                &budget_labels,
-                                                            ) {
-                                                                if let Some(b) = budgets.get(i) {
-                                                                    self.cfg.daily_token_budget = *b;
-                                                                    self.persist_cfg();
-                                                                    self.status = "Saved".into();
-                                                                }
-                                                            }
-                                                            if self.cfg.daily_token_budget > 0 {
-                                                                let mut pause = self.cfg.budget_pauses_scheduled;
-                                                                if settings_toggle(
-                                                                    ui,
-                                                                    "Pause scheduled work over budget",
-                                                                    "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
-                                                                    &mut pause,
-                                                                ) {
-                                                                    self.cfg.budget_pauses_scheduled = pause;
-                                                                    self.persist_cfg();
-                                                                    self.status = "Saved".into();
-                                                                }
-                                                            }
                                                             ui.add_space(8.0);
                                                             self.ui_home_learned(ui);
                                                         }
@@ -1211,59 +1271,7 @@ impl Cabin {
                                                             self.ui_support_url_field(ui);
                                                         }
                                                         SettingsSec::Defaults => {
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "Models & providers",
-                                                                None,
-                                                            );
-                                                            let models = self.router_model_choices();
-                                                            let model_labels: Vec<String> =
-                                                                models.iter().map(|(_, label)| label.clone()).collect();
-                                                            let pin = cabin_default_model_id(&self.cfg.model);
-                                                            let model_selected = models
-                                                                .iter()
-                                                                .find(|(id, _)| *id == pin)
-                                                                .map(|(_, label)| label.clone())
-                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                ROW_MODEL,
-                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
-                                                                &model_selected,
-                                                                &model_labels,
-                                                            ) {
-                                                                if let Some((id, _)) = models.get(i) {
-                                                                    let next = cabin_default_model_id(id);
-                                                                    if next != self.cfg.model {
-                                                                        self.cfg.model = next;
-                                                                        self.persist_cfg();
-                                                                        self.status = "Saved".into();
-                                                                    }
-                                                                }
-                                                            }
-                                                            if crate::cards::settings_action(
-                                                                ui,
-                                                                "Refresh models",
-                                                                "Check xAI's model list and your plan now.",
-                                                                "Refresh",
-                                                            ) {
-                                                                self.refresh_models_now();
-                                                            }
-                                                            // Proof shot pins Web search above the
-                                                            // long local-model block so the optional
-                                                            // SearXNG / Brave fields stay on screen.
-                                                            if super::loadout_home::web_search_settings_shot()
-                                                            {
-                                                                self.ui_web_search_rows(ui);
-                                                                self.ui_local_model_rows(ui);
-                                                                self.ui_provider_rows(ui);
-                                                            } else {
-                                                                self.ui_local_model_rows(ui);
-                                                                self.ui_provider_rows(ui);
-                                                                self.ui_web_search_rows(ui);
-                                                            }
-                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
-                                                            self.ui_spend_rows(ui);
+                                                            self.ui_web_search_rows(ui);
                                                             crate::ui_kit::section_header(
                                                                 ui,
                                                                 "Permissions & session",

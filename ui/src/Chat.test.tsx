@@ -45,6 +45,12 @@ vi.mock("./api", () => ({
     api.gap = handler;
     return Promise.resolve(() => {});
   },
+  // Attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 import { applyEvent, Chat, CHAT_EMPTY, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";

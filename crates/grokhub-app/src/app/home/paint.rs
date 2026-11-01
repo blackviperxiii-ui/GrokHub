@@ -130,7 +130,7 @@ pub(in crate::app) fn module_kind(id: &str) -> ModuleKind {
         ),
         "local_ai" => link(
             "Open model settings",
-            LinkTarget::Settings(SettingsSec::Defaults),
+            LinkTarget::Settings(SettingsSec::AiModels),
         ),
         _ => ModuleKind::Preview,
     }

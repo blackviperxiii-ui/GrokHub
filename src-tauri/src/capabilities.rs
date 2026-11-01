@@ -28,6 +28,8 @@ pub struct Capabilities {
     pub summon_hotkey: bool,
     /// Settings → General → notifications while the window is in the background.
     pub notifications: bool,
+    /// The Library page: this computer's Steam games and Play.
+    pub library: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -52,6 +54,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         autostart: desktop,
         summon_hotkey: desktop && !(os == "linux" && wayland),
         notifications: desktop,
+        library: desktop,
     }
 }
 
@@ -99,6 +102,7 @@ mod tests {
             autostart: true,
             summon_hotkey: true,
             notifications: true,
+            library: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -118,6 +122,7 @@ mod tests {
             autostart: false,
             summon_hotkey: false,
             notifications: false,
+            library: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -179,6 +184,7 @@ mod tests {
                 "autostart": false,
                 "summonHotkey": false,
                 "notifications": false,
+                "library": false,
             })
         );
     }
