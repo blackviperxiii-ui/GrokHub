@@ -210,7 +210,7 @@ impl Cabin {
         now: u64,
     ) {
         let details = format!(
-            "{}.\n\nApply adds this note to the instructions of every chat; the cabin safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; {} keeps it only if those runs take fewer steps.",
+            "{}.\n\nApply adds this note to the instructions of every chat; the safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; {} keeps it only if those runs take fewer steps.",
             p.numbers,
             p.steps,
             grokhub_core::brand::product_name()
