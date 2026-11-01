@@ -1,0 +1,1 @@
+- Internal: updated the global hotkey library to 0.9. Super+G and Super+Shift+Esc work the same as before.

@@ -119,8 +119,6 @@ use grokhub_core::{
     RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
     TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
-#[cfg(test)]
-use grokhub_core::{chip_suggest_prompt, parse_llm_chips};
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -693,13 +691,8 @@ pub struct Cabin {
     agent_cursor: Option<crate::motion::AgentCursorAnim>,
     /// Workboards page: the open card and what you are typing on each.
     board_view: board_ui::BoardView,
-    llm_chips: Vec<QuickChip>,
     visible_chips: Vec<QuickChip>,
-    chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
-    chip_busy: bool,
-    chip_fp: String,
     chip_paint_key: String,
-    chip_llm_at: u64,
     greeting: String,
     greeting_fp: String,
     greeting_user_at: u64,
@@ -1315,13 +1308,8 @@ impl Cabin {
             pulse_view: Default::default(),
             agent_cursor: None,
             board_view: Default::default(),
-            llm_chips: vec![],
             visible_chips: vec![],
-            chip_rx: None,
-            chip_busy: false,
-            chip_fp: String::new(),
             chip_paint_key: String::new(),
-            chip_llm_at: 0,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -1557,8 +1545,8 @@ impl Cabin {
         let Ok(mgr) = GlobalHotKeyManager::new() else {
             return;
         };
-        let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-        let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+        let hey = HotKey::new(Some(Modifiers::META), Code::KeyG);
+        let halt = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Escape);
         let hey_id = hey.id();
         let halt_id = halt.id();
         if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
@@ -1792,13 +1780,8 @@ impl Cabin {
             pulse_view: Default::default(),
             agent_cursor: None,
             board_view: Default::default(),
-            llm_chips: Vec::new(),
             visible_chips: Vec::new(),
-            chip_rx: None,
-            chip_busy: false,
-            chip_fp: String::new(),
             chip_paint_key: String::new(),
-            chip_llm_at: 0,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -5224,7 +5207,6 @@ impl eframe::App for Cabin {
         self.poll_file_writes();
         self.poll_host_diff();
         self.poll_acp();
-        self.poll_chips();
         self.poll_review();
         self.poll_self_review();
         if let Some(issue) = self.harness.self_review.copy_out.take() {
@@ -5354,8 +5336,7 @@ impl eframe::App for Cabin {
         );
         let live = wants_live_repaint(
             self.running,
-            self.chip_busy
-                || self.goal_busy
+            self.goal_busy
                 || self.oauth_photo_busy
                 || self.review_busy
                 || self.greeting_busy

@@ -1,0 +1,1 @@
+- Memory recall picks the notes that match your ask: the best match is no longer cut off when many notes share a word, short questions like "where are my saves" search their own words, "saves" finds "save", and the pack carries at most five focused chunks.
