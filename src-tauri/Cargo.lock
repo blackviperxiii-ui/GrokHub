@@ -1888,7 +1888,7 @@ name = "grokhub-agent"
 version = "3.5.0"
 dependencies = [
  "apple-native-keyring-store",
- "base64 0.22.1",
+ "base64 0.23.1",
  "globset",
  "grokhub-core",
  "ignore",
@@ -1900,7 +1900,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "windows-sys 0.59.0",
  "zeroize",
 ]
@@ -1911,7 +1911,7 @@ version = "3.5.0"
 dependencies = [
  "dirs 7.0.0",
  "flate2",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "grokhub-proto",
  "hex",
  "minisign-verify",
@@ -1919,7 +1919,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tar",
  "toml 1.1.8+spec-1.1.0",
  "ureq",
@@ -1961,7 +1961,7 @@ dependencies = [
 name = "grokhub-shell"
 version = "3.5.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "grokhub-agent",
  "grokhub-core",
  "grokhub-desktop",
