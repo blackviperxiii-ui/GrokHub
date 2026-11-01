@@ -66,6 +66,13 @@ vi.mock("./Automations", () => ({
   resultLine: (r: { text: string; error: string }) => r.error || r.text,
 }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
+vi.mock("./Agents", () => ({
+  Agents: ({ conversationId, onOpenChat }: { conversationId?: string; onOpenChat: () => void }) => (
+    <button type="button" onClick={onOpenChat}>
+      Agents for {conversationId ?? "no chat"}
+    </button>
+  ),
+}));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Devices", () => ({
   Devices: ({ onOpenWebAccess }: { onOpenWebAccess: () => void }) => (
@@ -117,6 +124,7 @@ describe("App", () => {
       "Imagine",
       "Journal",
       "Automations",
+      "Agents",
       "Memory",
       "Connectors",
       "Workboard",
@@ -165,14 +173,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Imagine", "Journal", "Automations", "Memory", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Journal", "Automations", "Agents", "Memory", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Memory", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Connectors", "Workboard", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -181,6 +189,18 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Agents follows the chat the window last heard from and links back to Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    expect(await screen.findByRole("button", { name: "Agents for no chat" })).toBeVisible();
+    act(() => {
+      for (const handler of chatHandlers) handler({ conversationId: "shell-c7", event: { kind: "text", text: "hi" } });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Agents for shell-c7" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
