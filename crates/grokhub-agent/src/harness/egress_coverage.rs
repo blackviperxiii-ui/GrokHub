@@ -55,6 +55,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/local_ai_ui.rs", 1, "HttpRuntimeFetch::open: runtime_download_url_ok + egress_ok on every hop to GitHub"),
     ("grokhub-app/src/app/destiny_ui.rs", 1, "api_send: egress_ok (no user data; key only in the X-API-Key header) to www.bungie.net, no redirects, public IPs only"),
+    ("grokhub-app/src/app/osrs_ui.rs", 1, "fetch_stats: egress_ok (no user data beyond the public display name) to Jagex's hiscores, no redirects, public IPs only"),
     ("grokhub-app/src/app/gw2_ui.rs", 1, "api_get: egress_ok (no user data; key only in the Authorization header) to api.guildwars2.com, no redirects, public IPs only"),
     ("grokhub-app/src/app/library_ui/game_art.rs", 1, "fetch_art: egress_ok (no user data) to Steam's store CDN and store details, no redirects, public IPs only"),
     ("grokhub-app/src/app/print_alerts_ui.rs", 1, "get_json / post_control: egress_ok (no user data) to the user's LAN printer"),
