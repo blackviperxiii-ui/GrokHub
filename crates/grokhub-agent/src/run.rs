@@ -61,6 +61,24 @@ pub fn clear_job_tool_set(session: &str) {
     }
 }
 
+/// Whether `session` (or an ancestor it inherits from) runs under a job
+/// [`ToolSet`]. Read-only, unlike [`bound_job_tool_set`].
+pub(crate) fn has_job_tool_set(session: &str) -> bool {
+    let Ok(map) = job_tool_sets().lock() else {
+        return false;
+    };
+    let mut rest = session;
+    loop {
+        if map.contains_key(rest) {
+            return true;
+        }
+        match rest.rsplit_once('/') {
+            Some((parent, _)) => rest = parent,
+            None => return false,
+        }
+    }
+}
+
 fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     let Ok(mut map) = job_tool_sets().lock() else {
         return None;

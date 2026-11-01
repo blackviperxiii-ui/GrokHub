@@ -355,7 +355,9 @@ impl Cabin {
             }
         }
         if !self.job_is_idea_talk() {
-            remember_chip_outcome(&mut self.chip_memory, true, now_ms());
+            if let Some(key) = self.chip_turn_key.take() {
+                remember_chip_turn_outcome(&mut self.chip_memory, &key, true, now_ms());
+            }
             record_turn(&mut self.learning);
             self.absorb_turn_learning(&text);
         }

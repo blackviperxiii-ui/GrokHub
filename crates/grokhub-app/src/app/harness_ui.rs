@@ -270,6 +270,9 @@ pub(super) struct HarnessState {
     pub work_rows: Vec<super::change_undo::ChangeRow>,
     /// The rows of the last day were read back from disk.
     pub work_rows_loaded: bool,
+    /// Which chat each Work-tree row belongs to, by [`super::change_undo::work_row_key`].
+    /// A row paints only in its own chat.
+    pub work_row_chat: std::collections::HashMap<String, String>,
     /// Ledger lines another process wrote (`grokhub --mcp-self`, Spike-5c).
     pub ledger_watch: super::change_undo::LedgerWatch,
     /// True only while `send_from_composer` hands the user's own typed line

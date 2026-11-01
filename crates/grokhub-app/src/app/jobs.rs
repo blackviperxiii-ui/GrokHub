@@ -295,7 +295,9 @@ impl Cabin {
                 } else {
                     e.clone()
                 };
-                remember_chip_outcome(&mut self.chip_memory, false, now_ms());
+                if let Some(key) = self.chip_turn_key.take() {
+                    remember_chip_turn_outcome(&mut self.chip_memory, &key, false, now_ms());
+                }
                 self.status = self.apply_job_fail(&fail);
                 self.finish_hub_dispatch(&e, false);
                 self.abandon_turn_card();

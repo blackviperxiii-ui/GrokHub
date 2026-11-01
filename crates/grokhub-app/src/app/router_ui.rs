@@ -76,7 +76,8 @@ pub(super) struct RouterUi {
     pub force_table: bool,
     /// The pin the router last heard.
     pub pin: Option<String>,
-    /// Quiet Work-tree lines: (incident key, text), newest first.
+    /// Open router incidents (key, text), newest first. Each one lands in
+    /// the bell once, until the model answers again and clears it.
     pub rows: Vec<(String, String)>,
     /// Pauses already shown this launch (a model that answers again clears them).
     pub paused: Vec<String>,
@@ -421,10 +422,16 @@ impl Cabin {
         for m in heal.msgs {
             match m.tier {
                 Tier::WorkRow => {
+                    // Tell-only: the bell keeps it, once per incident until
+                    // it clears, instead of a line under every chat.
                     let router = &mut self.harness.router;
+                    let fresh = !router.rows.iter().any(|(k, _)| *k == m.key);
                     router.rows.retain(|(k, _)| *k != m.key);
-                    router.rows.insert(0, (m.key, m.text));
+                    router.rows.insert(0, (m.key, m.text.clone()));
                     router.rows.truncate(ROUTER_ROWS_MAX);
+                    if fresh {
+                        self.notify(super::notices::NoticeKind::Info, m.text, None);
+                    }
                 }
                 Tier::HomeUpdate => {
                     let card = grokhub_core::router_update_card(&m.key, &m.title, &m.text, now);
@@ -582,6 +589,20 @@ mod tests {
         assert_eq!(
             app.harness.router.rows,
             vec![("unhealthy:grok-4.6".to_string(), row.to_string())]
+        );
+        assert_eq!(
+            app.notices.items.iter().filter(|n| n.text == row).count(),
+            1,
+            "the router's quiet line goes to the bell"
+        );
+        app.deliver_heal(HealOut {
+            msgs: vec![msg(Tier::WorkRow, "unhealthy:grok-4.6", row)],
+            cleared: Vec::new(),
+        });
+        assert_eq!(
+            app.notices.items.iter().filter(|n| n.text == row).count(),
+            1,
+            "the same open incident lands once"
         );
         assert_eq!(app.status, "Paused: grok-4.7 isn't answering");
         let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();

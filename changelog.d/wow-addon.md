@@ -1,0 +1,2 @@
+- Library: the World of Warcraft card can install Loadout's own read-only WoW addon into each installed flavor (Retail, Classic and the rest) with one click, keep it updated, or remove it. The addon ships in the repo under `addons/wow/Loadout` for manual installs too.
+- Library: the WoW card shows the characters and recent boss kills, level-ups and achievements the addon saved, read from WoW's own SavedVariables file as data (no Lua is run). WoW saves it on `/reload` or logout.

@@ -1,0 +1,1 @@
+- Quick chips learn what kind of ask you use and when (a game fix at 9pm, storage on Sundays), from chips you tap and asks you type, without saving your words. How a turn went now counts only for the chip that started it, so typed turns no longer skew chip scores.

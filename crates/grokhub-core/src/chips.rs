@@ -180,6 +180,25 @@ pub struct ChipMemory {
     pub total_events: u32,
     #[serde(default)]
     pub updated_at: u64,
+    /// Habits by what a chip or typed ask is for ([`chip_intent`]), never
+    /// by its text, so chat-built chips and typed asks teach too (#1057).
+    #[serde(default)]
+    pub intents: BTreeMap<String, IntentHit>,
+}
+
+/// How often one intent was used, by local hour and weekday.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentHit {
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default)]
+    pub hour_hits: Vec<u32>,
+    /// 0 = Sunday.
+    #[serde(default)]
+    pub day_hits: Vec<u32>,
+    #[serde(default)]
+    pub last_used_at: u64,
 }
 
 /// Serde default when `version` is missing: treat as legacy v1 so load scrubs.
@@ -198,8 +217,113 @@ impl Default for ChipMemory {
             last_surface: None,
             total_events: 0,
             updated_at: 0,
+            intents: BTreeMap::new(),
         }
     }
+}
+
+/// What a chip or typed ask is for, from a fixed catalog, first match wins.
+/// Game and rig words come before code words, so "Fix stutter in …" is a
+/// game ask, not a code fix.
+const INTENT_CATALOG: &[(&str, &[&str])] = &[
+    (
+        "game.perf",
+        &[
+            "stutter",
+            "fps",
+            "frame rate",
+            "framerate",
+            "lag",
+            "ping",
+            "hitch",
+        ],
+    ),
+    (
+        "game.squad",
+        &["duo", "squad", "teammate", "lfg", "party up"],
+    ),
+    ("game.build", &["roast my build", "my build", "loadout"]),
+    (
+        "game.session",
+        &["how'd", "match go", "ranked", "just finished playing"],
+    ),
+    (
+        "rig.storage",
+        &["storage", "disk", "drive space", "free up"],
+    ),
+    ("rig.update", &["update", "driver"]),
+    ("day.plan", &["plan my", "weekend", "my week", "schedule"]),
+    ("create.image", &["imagine", "image", "draw", "logo"]),
+    (
+        "code.fix",
+        &["fix", "error", "bug", "crash", "failing", "root cause"],
+    ),
+    (
+        "code.ship",
+        &["implement", "ship", "deploy", "release", "merge"],
+    ),
+    ("code.review", &["review", "refactor", "tests"]),
+    ("explain", &["explain", "what does", "how does"]),
+];
+
+/// The catalog intent of a chip or typed ask, or none.
+pub fn chip_intent(label: &str, value: &str) -> Option<&'static str> {
+    let hay = format!(" {} {} ", label, value).to_ascii_lowercase();
+    // A word must start the match: "fix" is not in "prefix", "lag" not in "flag".
+    let starts_word = |w: &str| {
+        hay.match_indices(w).any(|(i, _)| {
+            !hay[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric())
+        })
+    };
+    INTENT_CATALOG
+        .iter()
+        .find(|(_, words)| words.iter().any(|w| starts_word(w)))
+        .map(|(key, _)| *key)
+}
+
+/// Count one use of what `label`/`value` is for at this hour and weekday.
+/// Only the catalog key is kept; neither text reaches chips.json.
+pub fn remember_intent(
+    memory: &mut ChipMemory,
+    label: &str,
+    value: &str,
+    now_ms: u64,
+    hour: u8,
+    weekday: u8,
+) {
+    let Some(key) = chip_intent(label, value) else {
+        return;
+    };
+    let hit = memory.intents.entry(key.to_string()).or_default();
+    hit.uses = hit.uses.saturating_add(1);
+    hit.hour_hits = bump_hour(&hit.hour_hits, hour);
+    let mut days = if hit.day_hits.len() == 7 {
+        hit.day_hits.clone()
+    } else {
+        vec![0; 7]
+    };
+    let d = (weekday as usize).min(6);
+    days[d] = days[d].saturating_add(1);
+    hit.day_hits = days;
+    hit.last_used_at = now_ms;
+    memory.updated_at = now_ms;
+}
+
+/// Lift for a chip whose intent you use at this hour (or the next) and on
+/// this weekday. A habit at 9pm does nothing at 2pm.
+fn intent_boost(memory: &ChipMemory, chip: &QuickChip, hour: u8, weekday: u8) -> f32 {
+    let Some(hit) = chip_intent(&chip.label, &chip.value).and_then(|k| memory.intents.get(k))
+    else {
+        return 0.0;
+    };
+    let at = |hours: &[u32], i: usize| hours.get(i).copied().unwrap_or(0);
+    let h = (hour as usize).min(23);
+    let near = at(&hit.hour_hits, h) * 2 + at(&hit.hour_hits, (h + 1) % 24);
+    let day = at(&hit.day_hits, (weekday as usize).min(6));
+    (near as f32 * 3.0).min(24.0) + (day as f32 * 2.0).min(8.0)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2051,6 +2175,12 @@ pub fn remember_chip_outcome(memory: &mut ChipMemory, success: bool, now_ms: u64
     let Some(key) = memory.last_chip_key.clone() else {
         return;
     };
+    remember_chip_turn_outcome(memory, &key, success, now_ms);
+}
+
+/// Credit how a turn went to the chip that started it, by its memory key.
+/// A typed turn has no chip and credits nothing.
+pub fn remember_chip_turn_outcome(memory: &mut ChipMemory, key: &str, success: bool, now_ms: u64) {
     if let Some(h) = memory.hits.iter_mut().find(|h| h.key == key) {
         if success {
             h.successes = h.successes.saturating_add(1);
@@ -2834,6 +2964,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
+        c.score += intent_boost(input.memory, c, input.hour, input.signals.weekday);
         if let Some(hit) = input
             .memory
             .hits
@@ -5244,5 +5375,71 @@ mod tests {
             signal_chips(&i)[0].score
         };
         assert!(base(&chat) < base(&[]));
+    }
+
+    #[test]
+    fn intents_come_from_the_catalog_and_whole_words() {
+        assert_eq!(chip_intent("Fix stutter in Hades", ""), Some("game.perf"));
+        assert_eq!(
+            chip_intent("Fix my stutter", "Fix my stutter"),
+            Some("game.perf")
+        );
+        assert_eq!(chip_intent("Free up storage", ""), Some("rig.storage"));
+        assert_eq!(chip_intent("Find a duo tonight", ""), Some("game.squad"));
+        assert_eq!(chip_intent("Plan my weekend", ""), Some("day.plan"));
+        assert_eq!(chip_intent("", "the build is failing"), Some("code.fix"));
+        assert_eq!(
+            chip_intent("", "add a prefix to the flag while typing"),
+            None
+        );
+        assert_eq!(chip_intent("hi", "how are you"), None);
+    }
+
+    fn stutter_chips(mem: &ChipMemory, hour: u8) -> f32 {
+        let mut i = input(&[], "", mem, &[], &[]);
+        i.usage_messages = 20;
+        i.hour = hour;
+        i.max = CHIP_HARD_MAX;
+        i.signals = ChipSignals {
+            game: Some("Hades"),
+            weekday: 3,
+            ..Default::default()
+        };
+        build_quick_chips(i)
+            .into_iter()
+            .find(|c| c.id == "sig-game-stutter")
+            .map(|c| c.score)
+            .expect("stutter chip")
+    }
+
+    #[test]
+    fn a_game_chip_used_at_nine_three_nights_lifts_at_nine_only() {
+        let mut mem = ChipMemory::default();
+        let fresh_9pm = stutter_chips(&mem, 21);
+        // Three nights at 9pm, through the composer chip or by typing.
+        remember_intent(&mut mem, "Fix stutter in Hades", "", 1_000, 21, 1);
+        remember_intent(&mut mem, "", "my game stutters again", 2_000, 21, 2);
+        remember_intent(&mut mem, "Fix my stutter", "Fix my stutter", 3_000, 21, 3);
+        assert!(stutter_chips(&mem, 21) > fresh_9pm + 10.0);
+        assert!(
+            stutter_chips(&mem, 14) < stutter_chips(&mem, 21),
+            "a 9pm habit does little at 2pm"
+        );
+        // Only catalog keys reach chips.json, never the typed words.
+        let json = serde_json::to_string(&mem).unwrap();
+        assert!(json.contains("game.perf"));
+        assert!(!json.contains("stutters again") && !json.contains("Hades"));
+    }
+
+    #[test]
+    fn a_turn_credits_only_the_chip_that_started_it() {
+        let mut mem = ChipMemory::default();
+        let fix = chip("ctx-fix", "Fix it", "Fix it", ChipKind::Chat, 50.0, "");
+        remember_chip_click(&mut mem, &fix, None, 1_000, 10);
+        let key = chip_memory_key(&fix);
+        remember_chip_turn_outcome(&mut mem, &key, true, 2_000);
+        remember_chip_turn_outcome(&mut mem, "chat:v1:0000000000000000", false, 3_000);
+        let hit = mem.hits.iter().find(|h| h.key == key).unwrap();
+        assert_eq!((hit.successes, hit.failures), (1, 0));
     }
 }
