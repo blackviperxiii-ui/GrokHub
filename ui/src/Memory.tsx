@@ -12,6 +12,7 @@ import {
   type MemoryHit,
   type MemoryNotes,
 } from "./api";
+import { Toggle } from "./Toggle";
 
 type Scope = "workspace" | "global";
 const SCOPES: Scope[] = ["workspace", "global"];
@@ -147,22 +148,17 @@ export function Memory() {
           The cabin keeps memory in its AMR store, so chat recall does not read these files.
         </p>
       )}
-      <label className="check">
-        <input
-          type="checkbox"
-          aria-label="Remember new lines"
-          checked={notes.writesOn}
-          onChange={(e) =>
-            void apply(
-              setMemoryWrites(e.target.checked),
-              e.target.checked
-                ? "Memory is on."
-                : "Memory is off. Nothing new is written.",
-            )
-          }
-        />
+      <Toggle
+        checked={notes.writesOn}
+        onChange={(on) =>
+          void apply(
+            setMemoryWrites(on),
+            on ? "Memory is on." : "Memory is off. Nothing new is written.",
+          )
+        }
+      >
         Remember new lines
-      </label>
+      </Toggle>
       {notes.rows.length > 0 && (
         <ul className="rows" aria-label="Learned lines">
           {notes.rows.map((row) => (
@@ -236,14 +232,9 @@ export function Memory() {
           value={line}
           onChange={(e) => setLine(e.target.value)}
         />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={lineGlobal}
-            onChange={(e) => setLineGlobal(e.target.checked)}
-          />
+        <Toggle checked={lineGlobal} onChange={setLineGlobal}>
           Global
-        </label>
+        </Toggle>
         <button type="submit" disabled={!line.trim()}>
           Remember
         </button>
