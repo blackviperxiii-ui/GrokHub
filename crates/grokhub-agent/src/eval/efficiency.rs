@@ -58,6 +58,8 @@ pub struct BenchRow {
     pub recall_ok: bool,
     pub wall_ms: u128,
     pub peak_rss_kb: u64,
+    /// The reasoning effort each request sent (`-` for none), in order.
+    pub efforts: Vec<String>,
 }
 
 struct Recorder {
@@ -187,6 +189,14 @@ fn peak_rss_kb() -> u64 {
         .unwrap_or(0)
 }
 
+/// The reasoning effort a request body sent, or `-` when it sent none.
+fn sent_effort(body: &Value) -> String {
+    body.pointer("/reasoning/effort")
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
 fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u128) -> BenchRow {
     let first = bodies.first().cloned().unwrap_or(Value::Null);
     let (first_system_bytes, first_history_bytes) = split_input(&first);
@@ -221,6 +231,7 @@ fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u
         recall_ok: facts.iter().all(|f| last.contains(f)),
         wall_ms,
         peak_rss_kb: peak_rss_kb(),
+        efforts: bodies.iter().map(sent_effort).collect(),
     }
 }
 
@@ -305,6 +316,8 @@ struct Scenario {
     context_tokens: Option<u64>,
     /// Write `history_trim.toml` with `enabled = false` (the control row).
     trim_off: bool,
+    /// Turn Steady effort on (`steadyEffort` in `app.json`).
+    steady: bool,
 }
 
 /// A log read three times with the same arguments, one turn each (a third
@@ -331,6 +344,29 @@ fn re_reads(name: &'static str, trim_off: bool) -> Scenario {
         facts: vec![FACT_NOTE, FACT_LOG],
         context_tokens: Some(LOCAL_CONTEXT_TOKENS),
         trim_off,
+        steady: false,
+    }
+}
+
+/// LO-37: three tool calls that fail (missing files), then one that works.
+/// Off, effort climbs on every failed step; Steady climbs after two in a row.
+fn tool_errors(name: &'static str, steady: bool) -> Scenario {
+    Scenario {
+        name,
+        prompts: vec!["Find my crash notes and read them to me."],
+        script: vec![
+            read("e1", "crash.txt"),
+            read("e2", "logs/crash.txt"),
+            read("e3", "dumps/crash.txt"),
+            read("e4", "notes.txt"),
+            text_turn("No crash notes, but your notes name the save folder."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![FACT_NOTE],
+        context_tokens: None,
+        trim_off: false,
+        steady,
     }
 }
 
@@ -347,6 +383,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         Scenario {
             name: "tools",
@@ -362,6 +399,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         Scenario {
             name: "diagnostics",
@@ -377,6 +415,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         Scenario {
             name: "long-chat",
@@ -387,6 +426,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_HISTORY],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         Scenario {
             name: "three-turns",
@@ -406,6 +446,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         Scenario {
             // LO-45: a chat that opens as small talk, then asks for a file.
@@ -421,9 +462,12 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
         re_reads("re-reads", false),
         re_reads("re-reads (trim off)", true),
+        tool_errors("tool-errors", false),
+        tool_errors("tool-errors (steady)", true),
         // LO-43: a plain read-only ask runs its tool with no model request.
         Scenario {
             name: "instant",
@@ -434,6 +478,7 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![],
             context_tokens: None,
             trim_off: false,
+            steady: false,
         },
     ]
 }
@@ -486,6 +531,13 @@ pub fn run_bench() -> Vec<BenchRow> {
                 "enabled = false\n",
             );
         }
+        if sc.steady {
+            let _ = std::fs::create_dir_all(dir.join("cfg"));
+            let _ = std::fs::write(
+                dir.join("cfg").join("app.json"),
+                "{\"steadyEffort\": true}\n",
+            );
+        }
         let rec = Arc::new(Recorder::new(sc.script, sc.finish));
         let shared: Arc<dyn ModelClient + Send + Sync> = rec.clone();
         let mut engine = bench_engine(&ws, sc.name, shared);
@@ -523,12 +575,12 @@ pub fn run_bench() -> Vec<BenchRow> {
 /// Markdown table of [`run_bench`] rows.
 pub fn render_bench(rows: &[BenchRow]) -> String {
     let mut out = String::from(
-        "| scenario | requests | 1st sys B | 1st tools B | 1st history B | 1st total B | all requests B | est tokens | stable prefix % | recall | wall ms | peak RSS so far KB |\n\
-         |---|---|---|---|---|---|---|---|---|---|---|---|\n",
+        "| scenario | requests | 1st sys B | 1st tools B | 1st history B | 1st total B | all requests B | est tokens | stable prefix % | recall | wall ms | peak RSS so far KB | effort per request |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for r in rows {
         out.push_str(&format!(
-            "| {} | {}{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {}{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             r.scenario,
             r.requests,
             if r.capped { " (hit cap)" } else { "" },
@@ -541,7 +593,8 @@ pub fn render_bench(rows: &[BenchRow]) -> String {
             r.stable_prefix_pct,
             if r.recall_ok { "ok" } else { "LOST" },
             r.wall_ms,
-            r.peak_rss_kb
+            r.peak_rss_kb,
+            r.efforts.join(" ")
         ));
     }
     out
@@ -566,6 +619,8 @@ mod tests {
                 "chat-then-code",
                 "re-reads",
                 "re-reads (trim off)",
+                "tool-errors",
+                "tool-errors (steady)",
                 "instant"
             ]
         );
@@ -597,8 +652,26 @@ mod tests {
             trimmed.total_bytes < control.total_bytes,
             "{trimmed:?} vs {control:?}"
         );
+        // LO-37: off, each failed read lifts effort; Steady holds chat at high.
+        let climbs = row("tool-errors");
+        let steady = row("tool-errors (steady)");
+        assert_eq!(climbs.requests, steady.requests);
+        assert_eq!(
+            climbs.efforts[..5],
+            ["high", "xhigh", "xhigh", "xhigh", "xhigh"],
+            "{climbs:?}"
+        );
+        assert_eq!(
+            steady.efforts[..5],
+            ["high", "high", "high", "high", "high"],
+            "{steady:?}"
+        );
         let table = render_bench(rows);
         assert!(table.contains("| diagnostics |"), "{table}");
+        assert!(
+            table.contains("| high xhigh xhigh xhigh xhigh "),
+            "effort per request: {table}"
+        );
         assert!(
             render_bench(std::slice::from_ref(instant)).contains("| instant | 0 |"),
             "{table}"

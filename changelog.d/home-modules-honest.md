@@ -1,0 +1,1 @@
+- Home modules no longer show a READY badge over an empty card. Modules whose data lives on another page (Journal, Automations, Library, Personality, Playbooks, Local AI) open that page; modules that aren't built yet are labelled Preview, on the tile and in the Edit Home picker. Objectives and Streak are no longer listed as not built.
