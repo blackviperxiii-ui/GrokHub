@@ -690,6 +690,12 @@ pub use windshield::{
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
     WindshieldFrame, ATSPI_PY,
 };
+pub use work_item::{
+    archive as archive_work_card, clean_card as clean_work_card, delete as delete_work_card,
+    delete_archived as delete_archived_work_cards, mark_touched, merge_cards, migrate_cards,
+    restore as restore_work_card, stamp_changes, sweep as sweep_work_cards, BoardBase, Checkpoint,
+    StepStatus, SweepReport, WorkKind, WorkLogEvent, WorkOrigin, WorkStep,
+};
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,
     automation_needs_follow_up, card_notes_hash, card_work_prompt, clean_card_notes,
@@ -697,12 +703,6 @@ pub use workboard::{
     idea_todo_title, inflight_card_title, parse_work_pin, parse_work_update, release_inflight_card,
     settle_inflight_card, take_card_notes_block, todo_task_line, upsert_inflight_card, BoardCard,
     BoardStatus, KanbanColumn, CARD_NOTES_MAX, FOLLOW_UP_REPORT_MAX,
-};
-pub use work_item::{
-    archive as archive_work_card, clean_card as clean_work_card, delete as delete_work_card,
-    delete_archived as delete_archived_work_cards, mark_touched, merge_cards,
-    migrate_cards, restore as restore_work_card, stamp_changes, sweep as sweep_work_cards,
-    BoardBase, Checkpoint, StepStatus, SweepReport, WorkKind, WorkLogEvent, WorkOrigin, WorkStep,
 };
 pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 
