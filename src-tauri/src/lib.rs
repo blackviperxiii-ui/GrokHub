@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod connectors;
 pub mod credential;
 pub mod history;
+pub mod home;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
@@ -940,6 +941,93 @@ async fn run_automation_now(
 
 fn workspace(state: &ShellState) -> PathBuf {
     agent::workspace_for(&current(state).workspace)
+}
+
+/// What a Home or Objectives read takes from the window or a browser.
+struct HomeArgs {
+    config_dir: PathBuf,
+    workspace: PathBuf,
+    settings: ShellSettings,
+    clock: grokhub_core::LocalClock,
+    conversation_id: Option<String>,
+    /// A paired browser, which sees only the chats it started.
+    web: Option<Arc<remote::WebAccess>>,
+}
+
+fn home_args(
+    state: &ShellState,
+    clock: automations::Clock,
+    conversation_id: Option<String>,
+    web: Option<Arc<remote::WebAccess>>,
+) -> HomeArgs {
+    HomeArgs {
+        config_dir: state.config_dir.clone(),
+        workspace: workspace(state),
+        settings: current(state),
+        clock: now_clock(clock),
+        conversation_id,
+        web,
+    }
+}
+
+/// Runs `read` off the main thread with the sources `args` names.
+async fn home_read<T: Send + 'static>(
+    args: HomeArgs,
+    read: impl FnOnce(&home::Sources<'_>) -> T + Send + 'static,
+) -> Result<T, String> {
+    off_main(move || {
+        let owns = |id: &str| args.web.as_ref().is_some_and(|web| web.owns(id));
+        read(&home::Sources {
+            config_dir: &args.config_dir,
+            workspace: &args.workspace,
+            settings: &args.settings,
+            caps: capabilities::current(),
+            clock: args.clock,
+            viewer: match args.web {
+                Some(_) => home::Viewer::Web(&owns),
+                None => home::Viewer::Desktop,
+            },
+            conversation_id: args.conversation_id.clone(),
+        })
+    })
+    .await
+}
+
+/// Home: the cabin's tiles from `home_layout.json`, filled where the shell
+/// can. Read only; Edit Home stays in the cabin.
+#[tauri::command]
+async fn get_home(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    conversation_id: Option<String>,
+) -> Result<home::Page, String> {
+    home_read(home_args(&state, clock, conversation_id, None), home::page).await
+}
+
+/// Objectives: the open chat's checklist, level, XP and weekly streak.
+#[tauri::command]
+async fn get_mission(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    conversation_id: Option<String>,
+) -> Result<home::MissionPage, String> {
+    let args = home_args(&state, clock, conversation_id, None);
+    home_read(args, |src| home::mission_for(src, src.clock.now_ms)).await
+}
+
+/// Objectives → Accept as done, or Undo. Not a web command.
+#[tauri::command]
+async fn set_mission_done(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    conversation_id: Option<String>,
+    done: bool,
+) -> Result<home::MissionPage, String> {
+    let args = home_args(&state, clock, conversation_id, None);
+    home_read(args, move |src| {
+        home::toggle_for(src, done, src.clock.now_ms)
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -2023,6 +2111,21 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "mood")?,
             arg(args, "tool")?,
         )),
+        "get_home" | "get_mission" => {
+            let args = home_args(
+                &state,
+                arg(args, "clock")?,
+                arg(args, "conversationId")?,
+                Some(Arc::clone(&web)),
+            );
+            if command == "get_home" {
+                out(block_on(home_read(args, home::page))?)
+            } else {
+                out(block_on(home_read(args, |src| {
+                    home::mission_for(src, src.clock.now_ms)
+                }))?)
+            }
+        }
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -2605,6 +2708,9 @@ pub fn run() {
             set_offline_only,
             open_data_folder,
             get_background,
+            get_home,
+            get_mission,
+            set_mission_done,
             get_library,
             library_cover,
             library_play,

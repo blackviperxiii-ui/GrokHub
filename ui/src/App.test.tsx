@@ -116,6 +116,23 @@ vi.mock("./Skills", () => ({
     </button>
   ),
 }));
+vi.mock("./Home", () => ({
+  Home: ({ onOpen, conversationId }: { onOpen: (view: string) => void; conversationId?: string }) => (
+    <div>
+      <p>Home page for {conversationId ?? "the last chat"}</p>
+      <button type="button" onClick={() => onOpen("objectives")}>
+        Objectives tile
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./Objectives", () => ({
+  Objectives: ({ onHome }: { onHome: () => void }) => (
+    <button type="button" onClick={onHome}>
+      Objectives page
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
@@ -155,6 +172,7 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
     expect(tabs()).toEqual([
+      "Home",
       "Chat",
       "History",
       "Pulse",
@@ -174,6 +192,23 @@ describe("App", () => {
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
+  });
+
+  it("opens on Chat with Home as the first tab, and Home's tile opens Objectives", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    expect(tabs()[0]).toBe("Home");
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/Home page/)).toBeNull();
+    // Objectives has no tab; Home and the palette open it.
+    expect(tabs()).not.toContain("Objectives");
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+    expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Objectives tile" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Objectives page" }));
+    expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("opens Devices, whose Web access link goes to that Settings section", async () => {
@@ -211,14 +246,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal and History off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {

@@ -74,13 +74,15 @@ fn shell_id(id: &str) -> Result<&str, String> {
 }
 
 /// When the chat's file last changed, or its start time if that can't be read.
+/// Never before the start: the file system's coarse clock can stamp a file
+/// written in the same millisecond a few ms behind `now_ms`.
 fn updated_ms(info: &SessionInfo) -> u64 {
     grokhub_agent::session_file(&info.id)
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok())
         .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-        .map_or(info.created, |at| at.as_millis() as u64)
+        .map_or(info.created, |at| (at.as_millis() as u64).max(info.created))
 }
 
 fn row(info: &SessionInfo) -> ChatRow {
