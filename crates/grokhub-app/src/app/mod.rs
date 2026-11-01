@@ -742,6 +742,10 @@ pub struct Cabin {
     geom_dirty: bool,
     geom_applied: bool,
     geom_apply_frames: u8,
+    /// Windows: fill the work area natively on the next frame, once eframe has
+    /// applied this frame's `Maximized(false)` (viewport commands run at the
+    /// end of the frame, so a native maximize in the same frame is undone).
+    native_maximize_due: bool,
     imagine_want_focus: bool,
     composer_want_focus: bool,
     settings_sec: SettingsSec,
@@ -1362,6 +1366,7 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
@@ -1837,6 +1842,7 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
@@ -1994,27 +2000,18 @@ impl Cabin {
         let g = crate::window::clamp_geom(self.cfg.window);
         #[cfg(windows)]
         if g.maximized && self.window_visible {
-            if let Some((x, y, w, h)) = crate::win_native::work_area() {
-                let ppp = ctx.pixels_per_point().max(0.5);
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                    w as f32 / ppp,
-                    h as f32 / ppp,
-                )));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    x as f32 / ppp,
-                    y as f32 / ppp,
-                )));
+            if crate::win_native::work_area().is_some() {
+                // Clear winit's own maximized flag (the launch asked for it) this
+                // frame; eframe applies viewport commands at the end of the
+                // frame, so the native fill of the work area waits for the next
+                // one or winit's restore would shrink the window back.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
-                let _ = crate::win_native::show_cabin(x, y, w, h, true);
-                let dark = grokhub_core::resolve_dark(
-                    grokhub_core::parse_theme(&self.cfg.theme),
-                    crate::theme::desktop_prefers_dark(),
-                );
-                crate::win_native::polish_hwnd(dark);
+                self.native_maximize_due = true;
                 self.win_max = true;
                 self.cfg.window.maximized = true;
                 self.geom_applied = true;
                 self.geom_apply_frames = 0;
+                ctx.request_repaint();
                 return;
             }
             self.win_max = true;
@@ -2036,6 +2033,13 @@ impl Cabin {
         }
         if !self.geom_applied {
             self.apply_saved_geom(ctx);
+            return;
+        }
+        #[cfg(windows)]
+        if self.native_maximize_due {
+            self.native_maximize_due = false;
+            self.native_maximize();
+            self.geom_apply_frames = 0;
             return;
         }
         self.geom_apply_frames = self
@@ -2071,6 +2075,21 @@ impl Cabin {
                 self.geom_dirty = true;
             }
             self.win_max = g.maximized;
+        }
+    }
+
+    /// Undecorated egui windows ignore SW_MAXIMIZE: fill the monitor work area
+    /// natively and re-apply the frame polish.
+    #[cfg(windows)]
+    fn native_maximize(&mut self) {
+        if let Some((x, y, w, h)) = crate::win_native::work_area() {
+            let _ = crate::win_native::show_cabin(x, y, w, h, true);
+            let dark = grokhub_core::resolve_dark(
+                grokhub_core::parse_theme(&self.cfg.theme),
+                crate::theme::desktop_prefers_dark(),
+            );
+            crate::win_native::polish_hwnd(dark);
+            self.win_max = true;
         }
     }
 
