@@ -216,6 +216,12 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
     report
 }
 
+/// Whether the user has granted `system_state`, so diagnose would run its
+/// probes instead of answering with [`SCOPE_ASK`].
+pub fn system_state_allowed(config_dir: &Path) -> bool {
+    decide_scope(&ConsentLedger::load(config_dir)).is_allow()
+}
+
 /// The scope check every diagnose run starts with.
 fn decide_scope(ledger: &ConsentLedger) -> GateOutcome {
     harness::decide(Step::Scope {

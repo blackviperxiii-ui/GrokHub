@@ -186,7 +186,7 @@ fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u
         first_system_bytes,
         first_tools_bytes,
         first_history_bytes,
-        first_total_bytes: json_len(&first),
+        first_total_bytes: bodies.first().map(json_len).unwrap_or(0),
         total_bytes,
         est_tokens_total: crate::tokens::estimate_token_bytes(total_bytes as u64),
         stable_prefix_pct,
@@ -381,6 +381,17 @@ fn scenarios() -> Vec<Scenario> {
         },
         re_reads("re-reads", false),
         re_reads("re-reads (trim off)", true),
+        // LO-43: a plain read-only ask runs its tool with no model request.
+        Scenario {
+            name: "instant",
+            prompts: vec!["list my skills"],
+            script: vec![],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![],
+            context_tokens: None,
+            trim_off: false,
+        },
     ]
 }
 
@@ -510,10 +521,15 @@ mod tests {
                 "long-chat",
                 "three-turns",
                 "re-reads",
-                "re-reads (trim off)"
+                "re-reads (trim off)",
+                "instant"
             ]
         );
-        for r in &rows {
+        let (instant, rows) = rows.split_last().expect("rows");
+        assert_eq!(instant.requests, 0, "{instant:?}");
+        assert_eq!(instant.total_bytes, 0, "{instant:?}");
+        assert_eq!(instant.first_total_bytes, 0, "{instant:?}");
+        for r in rows {
             assert!(r.requests >= 1, "{r:?}");
             assert!(r.first_tools_bytes > 0 && r.first_system_bytes > 0, "{r:?}");
             assert!(r.recall_ok, "a planted fact fell out: {r:?}");
@@ -526,8 +542,12 @@ mod tests {
             trimmed.total_bytes < control.total_bytes,
             "{trimmed:?} vs {control:?}"
         );
-        let table = render_bench(&rows);
+        let table = render_bench(rows);
         assert!(table.contains("| diagnostics |"), "{table}");
+        assert!(
+            render_bench(std::slice::from_ref(instant)).contains("| instant | 0 |"),
+            "{table}"
+        );
     }
 
     #[test]

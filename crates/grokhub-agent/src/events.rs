@@ -184,11 +184,20 @@ impl NativeEngine {
         self.halt = halt;
     }
 
+    /// A scheduled, proactive, self-manage or `/bg` run: nobody is waiting on it.
+    fn is_background(&self) -> bool {
+        use crate::harness::Origin;
+        !self.reopen_tasks
+            || matches!(
+                self.origin,
+                Origin::Automation | Origin::Proactive | Origin::SelfManage
+            )
+    }
+
     /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
     /// The Brief changes nothing about the run or its reply. It is returned so
     /// the turn's router can read its intent, care, domain and confidence.
     fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
-        use crate::harness::Origin;
         let recent: Vec<String> = self
             .history
             .iter()
@@ -203,11 +212,7 @@ impl NativeEngine {
             .into_iter()
             .rev()
             .collect();
-        let background = !self.reopen_tasks
-            || matches!(
-                self.origin,
-                Origin::Automation | Origin::Proactive | Origin::SelfManage
-            );
+        let background = self.is_background();
         let input = crate::brain::BriefInput {
             text,
             files: usize::from(has_image),
@@ -357,7 +362,21 @@ impl Engine for NativeEngine {
             });
             return Ok(());
         }
-        self.write_brief(text, image.is_some());
+        let brief = self.write_brief(text, image.is_some());
+        // LO-43: a plain read-only ask ("list my skills") runs its one tool
+        // and answers from a template, with no model call.
+        let turn = crate::brain::instant::Turn {
+            image: image.is_some(),
+            background: self.is_background(),
+            episode: self.episode_seed.is_some(),
+        };
+        if let Some(pick) =
+            crate::brain::instant::route(text, &brief, turn, crate::repair::Os::current())
+        {
+            if self.answer_instantly(text, pick, emit) {
+                return Ok(());
+            }
+        }
         if let Some(seed) = self
             .episode_seed
             .clone()
@@ -606,6 +625,162 @@ impl NativeEngine {
         ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
+    }
+
+    /// LO-43: make the instant answer's one call and reply without a model.
+    /// `false` means nothing was shown or stored and the model takes the turn:
+    /// a turn hook, a gate or PreToolUse answer other than a plain Run,
+    /// diagnose without System state, a failed tool, or a cancel.
+    fn answer_instantly(
+        &mut self,
+        text: &str,
+        pick: crate::brain::instant::Pick,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> bool {
+        use crate::gate::{decide_with, Decision, PermMode};
+        let session = self.conversation_id.clone();
+        if crate::hooks::has_turn_hooks(&session) {
+            return false;
+        }
+        let config_dir = crate::perm::config_dir();
+        // A chat's first turn starts with the system prompt. Only the prefix
+        // cache's stable one can be written without the model loop.
+        let first = self.history.is_empty();
+        if first && !crate::prefix_cache::enabled(&config_dir) {
+            return false;
+        }
+        if pick.tool == crate::repair::DIAGNOSE_TOOL
+            && !crate::repair::system_state_allowed(&config_dir)
+        {
+            return false;
+        }
+        let call = crate::FunctionCall {
+            // Letters, digits and `_` only: strict providers check tool ids.
+            call_id: format!("instant_{}_{}", grokhub_core::now_ms(), pick.tool),
+            name: pick.tool.to_string(),
+            arguments: pick.args.to_string(),
+        };
+        let mut gate = self.gate;
+        if crate::session_tools::plan_on(&session) {
+            gate.readonly_session = true;
+        }
+        let policy = crate::perm::Policy::load(&self.workspace);
+        let base = decide_with(
+            &gate,
+            &call.name,
+            &call.arguments,
+            gate.mode == PermMode::Always,
+            None,
+            &self.workspace,
+            Some(&policy),
+        );
+        if base != Decision::Run {
+            return false;
+        }
+        let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
+            session: &session,
+            workspace: &self.workspace,
+            attended: gate.attended,
+            decision: base,
+            ask_reason: String::new(),
+            name: &call.name,
+            arguments: &call.arguments,
+            tool_use_id: &call.call_id,
+        });
+        // Hook context is written for the model, so a call that gets some goes there.
+        if constrained.decision != Decision::Run || !constrained.context.is_empty() {
+            return false;
+        }
+        let output = {
+            let _origin = crate::harness::OriginScope::enter(self.origin);
+            let cancel = self.cancel.clone();
+            let stop = move || cancel.is_cancelled();
+            let ctx = crate::tools::ToolCtx {
+                workspace: &self.workspace,
+                desktop: None,
+                stop: &stop,
+                tasks: None,
+                owner: None,
+                session: Some(&session),
+            };
+            crate::tools::dispatch(&ctx, &call.name, &call.arguments)
+        };
+        if output.failed
+            || output.text.trim() == crate::repair::SCOPE_ASK
+            || self.cancel.is_cancelled()
+        {
+            return false;
+        }
+        let (kind, limit) = (self.auth_kind, self.context_length);
+        let reply = pick.reply(&crate::tools::fence::display_text(&output.text));
+        {
+            let mut on_event = |ev: LoopEvent| {
+                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                    emit(acp);
+                }
+            };
+            let id = call.call_id.clone();
+            crate::run::emit_tool(
+                &mut on_event,
+                &id,
+                &call,
+                "in_progress",
+                &call.arguments,
+                None,
+            );
+            crate::run::emit_tool(
+                &mut on_event,
+                &id,
+                &call,
+                "completed",
+                &output.text,
+                output.image_data_url.clone(),
+            );
+        }
+        emit(AcpEvent::Text(reply.clone()));
+        // The next model turn sees the ask, the call, its output and the reply,
+        // paired by call id like any tool turn.
+        let before = self.history.len();
+        if first {
+            crate::prefix_cache::push_stable_system(&mut self.history, &self.system);
+        }
+        self.history.push(InputItem::Message {
+            role: "user".into(),
+            content: vec![crate::ContentPart::InputText(text.to_string())],
+        });
+        self.history.push(InputItem::FunctionCall {
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+        });
+        crate::run::push_output(&mut self.history, &session, &call, output);
+        self.history.push(InputItem::Message {
+            role: "assistant".into(),
+            content: vec![crate::ContentPart::InputText(reply)],
+        });
+        let fresh = self.history.get(before..).unwrap_or(&[]).to_vec();
+        let cwd = self.workspace.display().to_string();
+        let _ = crate::session::record_turn(
+            &session,
+            &cwd,
+            &self.model,
+            &fresh,
+            &Usage::default(),
+            kind.meter(),
+            text,
+        );
+        let used = crate::compact::estimate_input_tokens(&self.history);
+        emit(turn_usage_event(
+            &self.usage,
+            &Usage::default(),
+            kind,
+            used,
+            limit,
+        ));
+        emit(AcpEvent::Done {
+            stop_reason: "end_turn".into(),
+        });
+        true
     }
 
     /// Manual `/compact`. The command is not stored as a user turn.
