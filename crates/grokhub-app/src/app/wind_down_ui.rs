@@ -65,7 +65,7 @@ fn sleep_pc() -> Result<(), String> {
     {
         use windows_sys::Win32::System::Power::SetSuspendState;
         // SAFETY: plain flags, no pointers.
-        if unsafe { SetSuspendState(0, 0, 0) } == 0 {
+        if !unsafe { SetSuspendState(false, false, false) } {
             return Err("Windows didn't sleep. Another app may be keeping it awake.".into());
         }
         Ok(())

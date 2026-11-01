@@ -638,7 +638,8 @@ mod win {
     use std::path::PathBuf;
 
     use grokhub_core::desktop_mcp::{DesktopWindows, WindowGeom};
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
     use windows_sys::Win32::System::Registry::{
         RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD,
     };

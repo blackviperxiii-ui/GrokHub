@@ -200,7 +200,7 @@ fn enable_with(
         },
     };
     let mut ids = EVENT_FILTER_EVENT_ID {
-        FilterIn: 1,
+        FilterIn: true,
         Reserved: 0,
         Count: 1,
         Events: [id],
