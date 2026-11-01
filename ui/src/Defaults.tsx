@@ -20,6 +20,15 @@ export function Defaults({
   const [workspace, setWorkspace] = useState(settings.workspace);
   const [approvals, setApprovals] = useState<Approvals>(settings.approvals);
   const [note, setNote] = useState<string | null>(null);
+  // Settings stays mounted while hidden and reads the settings again each time
+  // it shows. A field edited here and not saved keeps the edit; an untouched
+  // one takes the fresh value (Chat's chips save approvals too).
+  const [seen, setSeen] = useState(settings);
+  if (settings !== seen) {
+    setSeen(settings);
+    if (workspace === seen.workspace) setWorkspace(settings.workspace);
+    if (approvals === seen.approvals) setApprovals(settings.approvals);
+  }
 
   if (readOnly) {
     return (
