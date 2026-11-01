@@ -3293,10 +3293,12 @@ mod tests {
             approve_x < left + 40.0 && approve_x < deny_x,
             "buttons start on the left: {approve_x} {deny_x}"
         );
-        let (_, count_x, _, _) = x_of("1 thing needs a decision. Everything else is on track.");
+        // Activity in the titlebar counts this park, so the chat prints no
+        // second "1 thing needs a decision" line (LO-21).
+        assert!(cabin.inbox_counted_by_activity());
         assert!(
-            (count_x - column.left()).abs() < 1.0,
-            "the count line is left-aligned too: {count_x}"
+            !texts.iter().any(|t| t.0.contains("needs a decision")),
+            "no duplicate count line: {texts:?}"
         );
         let _ = std::fs::remove_dir_all(root);
     }
