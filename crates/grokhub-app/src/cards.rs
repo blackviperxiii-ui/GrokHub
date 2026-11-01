@@ -75,7 +75,7 @@ pub const SUGGESTED_AUTOS: &[SuggestedAuto] = &[
     SuggestedAuto {
         icon: TileIcon::Host,
         title: "Replay last desktop run",
-        body: "Every 1d — ask Grok to repeat the last desktop task.",
+        body: "Every 1d — repeat the last desktop task.",
         seed: "/loop 1d replay the last desktop task",
     },
 ];
@@ -778,11 +778,15 @@ pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         "chat" => Some((
             "Chat",
-            "Normal chat. Grok can edit files and use tools in the bound project. Everyday work.",
+            grokhub_core::brand::filled(
+                "Normal chat. {product} can edit files and use tools in the bound project. Everyday work.",
+            ),
         )),
         "plan" => Some((
             "Plan",
-            "Grok writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
+            grokhub_core::brand::filled(
+                "{product} writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
+            ),
         )),
         "ask" => Some((grokhub_core::BTW_TIP_TITLE, grokhub_core::BTW_TIP_BODY)),
         _ => None,
@@ -2862,7 +2866,7 @@ mod tests {
     fn settings_toggle_hint_wraps_before_the_switch() {
         assert_eq!(settings_toggle_text_width(600.0), 544.0);
         assert_eq!(settings_toggle_text_width(30.0), 0.0);
-        let hint = "Grok can see the screen and use the mouse and keyboard through Loadout. Ask still asks first. Deletes, sends, money and credentials always ask.";
+        let hint = "Loadout can see the screen and use the mouse and keyboard. Ask still asks first. Deletes, sends, money and credentials always ask.";
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
@@ -2879,7 +2883,7 @@ mod tests {
                 let mut on = true;
                 assert!(!settings_toggle(
                     ui,
-                    "Let Grok control the desktop",
+                    "Let Loadout control the desktop",
                     hint,
                     &mut on
                 ));
@@ -2888,7 +2892,7 @@ mod tests {
         let mut hint_right = None;
         for clipped in &out.shapes {
             if let egui::Shape::Text(t) = &clipped.shape {
-                if t.galley.text().starts_with("Grok can see") {
+                if t.galley.text().starts_with("Loadout can see") {
                     hint_right = Some(t.pos.x + t.galley.rect.right());
                 }
             }

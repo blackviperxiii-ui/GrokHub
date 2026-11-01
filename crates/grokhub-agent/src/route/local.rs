@@ -169,7 +169,9 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
     };
     let takes = match gov {
         Level::Unload => "nothing until the machine frees up",
-        Level::Throttle => "offline work and cloud outages only; background work goes to Grok",
+        Level::Throttle => {
+            "offline work and cloud outages only; background work goes to the cloud model"
+        }
         Level::Normal => {
             "background work, offline work and cloud outages; heavy steps wait for idle time"
         }

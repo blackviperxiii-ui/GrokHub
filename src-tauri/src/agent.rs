@@ -1135,7 +1135,7 @@ mod tests {
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
         assert_eq!(
             client.tool_output().as_deref(),
-            Some(grokhub_core::desktop_mcp::OFF_MSG)
+            Some(*grokhub_core::desktop_mcp::OFF_MSG)
         );
         assert!(!desk_ran("type hello from off"));
     }

@@ -454,7 +454,7 @@ impl Cabin {
         match reply {
             Some(Ok(text)) => {
                 if ps::apply_summaries(&mut picks, &text) == 0 {
-                    summary_note = " Grok's summaries didn't come back usable, so they show the sources' own text.".into();
+                    summary_note = " The model's summaries didn't come back usable, so they show the sources' own text.".into();
                 }
             }
             Some(Err(err)) if err == BUDGET_USED => {
