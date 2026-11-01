@@ -270,3 +270,62 @@ fn counts_sizes_and_files_read_short() {
     assert_eq!(drawer::file_line(&f), "1.2 · 4.2 MB · download on the site");
     assert!(open_link("file:///etc/passwd").is_err());
 }
+
+#[test]
+fn each_file_offers_one_way_to_get_it() {
+    use drawer::{offer, Offer};
+    use grokhub_core::mods::install::{Manifest, State};
+    let file = |version: &str, download: Download| ModFile {
+        id: "1".into(),
+        name: "Main".into(),
+        file_name: "main.zip".into(),
+        version: version.into(),
+        size: 1,
+        hash: None,
+        download,
+        game_versions: vec![],
+        deps: vec![],
+        primary: true,
+        uploaded: 0,
+    };
+    let direct = Download::Direct("https://cdn.modrinth.com/a.jar".into());
+    let had = |version: &str| Manifest {
+        game: "minecraft".into(),
+        mod_key: "modrinth:abc".into(),
+        name: "Sodium".into(),
+        version: version.into(),
+        state: State::Installed,
+        root: PathBuf::from("/x"),
+        files: vec![],
+        dirs: vec![],
+        build: None,
+        at: 0,
+    };
+    let key = "modrinth:abc";
+    assert_eq!(
+        offer(&file("1.2", direct.clone()), key, &[], None),
+        Offer::Install
+    );
+    assert_eq!(
+        offer(&file("1.2", direct.clone()), key, &[had("1.2")], None),
+        Offer::Installed
+    );
+    assert_eq!(
+        offer(&file("1.3", direct.clone()), key, &[had("1.2")], None),
+        Offer::Update("1.2".into())
+    );
+    let page = "https://www.nexusmods.com/skyrimspecialedition/mods/1?tab=files";
+    assert_eq!(
+        offer(&file("1", Download::Browser(page.into())), key, &[], None),
+        Offer::Browser(page.into())
+    );
+    assert_eq!(
+        offer(&file("1", direct), key, &[], Some("Vortex looks after it")),
+        Offer::Blocked("Vortex looks after it".into()),
+        "a managed game offers no Install"
+    );
+    assert_eq!(
+        offer(&file("1", Download::Steam(818773962)), key, &[], Some("x")),
+        Offer::Steam("steam://url/CommunityFilePage/818773962".into())
+    );
+}
