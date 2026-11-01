@@ -2828,13 +2828,22 @@ label.toggle-row {
 }
 
 /* Narrow windows: the tabs fold to their icons so they stay on one row. The
-   label stays for screen readers and the tooltip. */
+   label stays for screen readers and the tooltip. A full row of icons, the
+   brand, the Activity dock and Command outgrow the 900px default window, so
+   the row scrolls in place instead of widening the page: a page that scrolls
+   sideways puts a scrollbar along the bottom edge, over the composer. The
+   padding keeps focus rings inside the scroll box. */
 @media (max-width: 900px) {
   .tabs {
     flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    padding: 4px;
+    margin: -4px;
   }
 
   .tabs button {
+    flex: none;
     padding-inline: 10px;
   }
 

@@ -979,6 +979,7 @@ thread_local! {
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
         crate::desktop_mcp::process_started_ms();
+        mods_ui::agent::register();
         let mut steps = crate::startup::Steps::new();
         let mut cfg = config::load();
         if cfg.device_name.trim().is_empty() {

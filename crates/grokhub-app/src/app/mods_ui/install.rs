@@ -58,6 +58,30 @@ struct Work {
     /// Bumped whenever what is installed changes.
     generation: u64,
     recovered: bool,
+    /// The mod the chat asked to set up, waiting on the Mods page.
+    requested: Option<Requested>,
+}
+
+/// A mod the chat put in front of the user: one file, nothing fetched yet.
+#[derive(Clone)]
+pub(super) struct Requested {
+    pub game: ModGame,
+    pub source: Source,
+    pub m: ModSummary,
+    pub f: ModFile,
+}
+
+/// Show an Install card for this mod; a newer one replaces it.
+pub(super) fn request(r: Requested) {
+    work().requested = Some(r);
+}
+
+pub(super) fn requested() -> Option<Requested> {
+    work().requested.clone()
+}
+
+pub(super) fn drop_request() {
+    work().requested = None;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +254,18 @@ fn app_data() -> (Option<PathBuf>, Option<PathBuf>) {
     (roaming, local)
 }
 
+/// The game's own folder on this PC.
+pub(super) fn game_dir(game: &ModGame, steam_root: Option<&Path>) -> Option<PathBuf> {
+    let entry = game.entry;
+    match (entry.steam_app_id, steam_root) {
+        (Some(id), Some(root)) => grokhub_core::steam::install_dir(root, id),
+        _ if entry.id == "wow" => wow_dir(game),
+        _ if entry.id == "minecraft" => super::minecraft_dir(),
+        _ => None,
+    }
+    .filter(|d| d.is_dir())
+}
+
 /// Where this game's mods go, or why Loadout won't install here.
 pub(super) fn target(game: &ModGame) -> Result<Target, String> {
     let entry = game.entry;
@@ -244,14 +280,8 @@ pub(super) fn target(game: &ModGame) -> Result<Target, String> {
         .steam_app_id
         .and_then(|_| grokhub_core::steam::detect_root());
     let wow = entry.id == "wow";
-    let game_dir = match (entry.steam_app_id, steam_root.as_deref()) {
-        (Some(id), Some(root)) => grokhub_core::steam::install_dir(root, id),
-        _ if wow => wow_dir(game),
-        _ if entry.id == "minecraft" => super::minecraft_dir(),
-        _ => None,
-    }
-    .filter(|d| d.is_dir())
-    .ok_or_else(|| format!("Loadout couldn't find {}'s folder on this PC.", entry.name))?;
+    let game_dir = game_dir(game, steam_root.as_deref())
+        .ok_or_else(|| format!("Loadout couldn't find {}'s folder on this PC.", entry.name))?;
     let (roaming, local) = app_data();
     let places = managers::Places {
         game_dir: Some(&game_dir),
@@ -395,6 +425,16 @@ pub(super) fn start(
 ) {
     if busy() {
         return;
+    }
+    {
+        let mut w = work();
+        let key = mod_key(source, &m.id);
+        if w.requested
+            .as_ref()
+            .is_some_and(|r| mod_key(r.source, &r.m.id) == key)
+        {
+            w.requested = None;
+        }
     }
     set(
         ctx,

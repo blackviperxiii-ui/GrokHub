@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, read_file,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, mods, read_file,
     search_replace, shell, show_panel, web_fetch, web_search, write,
 };
 
@@ -34,6 +34,15 @@ fn desktop_on(gate: &Gate) -> bool {
     gate.desktop
 }
 
+/// Mod tools only where the app hosts them, so other hosts' lists stay as they were.
+fn mods_on(_gate: &Gate) -> bool {
+    mods::available()
+}
+
+fn mods_action_on(gate: &Gate) -> bool {
+    not_readonly(gate) && mods::available()
+}
+
 fn generative_ui_on(_gate: &Gate) -> bool {
     show_panel::enabled(&crate::perm::config_dir())
 }
@@ -48,7 +57,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 9] = [
+    static DEFS: [ToolDef; 12] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -112,6 +121,27 @@ pub fn read_defs() -> &'static [ToolDef] {
             schema: local_ai::status_schema,
             visible: always,
         },
+        ToolDef {
+            name: mods::SEARCH,
+            blurb: "Search mods for a game on its sanctioned sources",
+            defer: true,
+            schema: mods::search_schema,
+            visible: mods_on,
+        },
+        ToolDef {
+            name: mods::DETAIL,
+            blurb: "Read one mod's description, files and requirements",
+            defer: true,
+            schema: mods::detail_schema,
+            visible: mods_on,
+        },
+        ToolDef {
+            name: mods::INSTALLED,
+            blurb: "List the mods installed for a game",
+            defer: true,
+            schema: mods::installed_schema,
+            visible: mods_on,
+        },
     ];
     &DEFS
 }
@@ -119,7 +149,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 21] = [
+    static DEFS: [ToolDef; 22] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -240,6 +270,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: local_ai::selftest_schema,
             visible: not_readonly,
+        },
+        ToolDef {
+            name: mods::PREPARE,
+            blurb: "Put an Install card for a mod on the Mods page",
+            defer: true,
+            schema: mods::prepare_schema,
+            visible: mods_action_on,
         },
         ToolDef {
             name: show_panel::SHOW_PANEL,

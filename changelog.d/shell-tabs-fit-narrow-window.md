@@ -1,0 +1,1 @@
+- At the shell's default 900px width the tab row now scrolls inside the top bar instead of pushing the whole window sideways, so no scrollbar sits along the bottom over Send.
