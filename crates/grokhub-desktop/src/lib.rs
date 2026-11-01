@@ -417,7 +417,7 @@ static TEST_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
 pub fn request_desktop_test(enabled: bool) -> String {
     if !enabled {
         set_desktop_enabled(false);
-        return grokhub_core::desktop_mcp::OFF_MSG.to_string();
+        return (*grokhub_core::desktop_mcp::OFF_MSG).to_string();
     }
     let halted = read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()));
     match desktop_test_hold(halted, game_guard::current) {

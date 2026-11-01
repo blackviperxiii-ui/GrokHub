@@ -340,6 +340,11 @@ pub struct AppConfig {
     /// It routes nothing until a local runtime is installed.
     #[serde(default)]
     pub local_model: bool,
+    /// LO-48 (`promptCleanup`): the on-device model fixes typos in a chat ask
+    /// before the model reads it. Off by default: it can change wording and
+    /// adds up to 300 ms. Works only while `local_model` is on.
+    #[serde(default)]
+    pub prompt_cleanup: bool,
     /// `app.json` only (`briefModelFallback`). Off by default: an ask that
     /// neither the Brief rules nor the local scorer can sort gets the default
     /// Brief. On, it costs one fast-model call instead.
@@ -417,6 +422,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: steady effort. The router reads `steadyEffort`
+    /// (`grokhub_agent::route::ladder::EffortSettings`). Off by default.
+    #[serde(default)]
+    pub steady_effort: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -820,6 +829,7 @@ impl Default for AppConfig {
             mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
+            prompt_cleanup: false,
             brief_model_fallback: false,
             provider_model: String::new(),
             session_mode: default_session_mode(),
@@ -844,6 +854,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            steady_effort: false,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -1686,6 +1697,35 @@ mod tests {
     }
 
     #[test]
+    fn steady_effort() {
+        assert!(!AppConfig::default().steady_effort);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.steady_effort);
+        let _g = hold_test_config();
+        let root = test_config_root("steady-effort");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            steady_effort: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().steady_effort);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"steadyEffort\": true"),
+            "the router reads this key: {text}"
+        );
+        assert!(grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
+        cfg.steady_effort = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().steady_effort);
+        assert!(!grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn diagnostics_mode_defaults_off() {
         assert!(!AppConfig::default().diagnostics_mode);
         assert!(!AppConfig::default().diagnostics_include_logs);
@@ -1802,6 +1842,12 @@ mod tests {
         );
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        // LO-48: the typo tidy is opt-in; `promptCleanup` turns it on.
+        assert!(!loaded.prompt_cleanup && !old.prompt_cleanup);
+        assert!(body.contains("\"promptCleanup\": false"), "{body}");
+        let tidy: AppConfig =
+            serde_json::from_str(r#"{"promptCleanup":true}"#).expect("promptCleanup on");
+        assert!(tidy.prompt_cleanup);
         // Brain 1: the Brief's model fallback is opt-in; `briefModelFallback` turns it on.
         assert!(!loaded.brief_model_fallback && !old.brief_model_fallback);
         let fallback: AppConfig =

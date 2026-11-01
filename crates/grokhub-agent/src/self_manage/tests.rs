@@ -428,9 +428,9 @@ fn skill_disable_and_enable_move_the_folder_and_log_each_move() {
     assert_eq!(
         ops,
         vec![
-            ("create", "created by Grok"),
+            ("create", "created by Loadout"),
             ("delete", "noisy"),
-            ("create", "turned back on by Grok")
+            ("create", "turned back on by Loadout")
         ]
     );
     let _ = std::fs::remove_dir_all(root);

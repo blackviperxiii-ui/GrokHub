@@ -249,7 +249,8 @@ pub(super) fn privacy_report(
         out.push(format!("- Off: {}", off.join(" · ")));
     }
     out.push(format!(
-        "- Screen: \"Let Grok control the desktop\" in Settings → Defaults ({})",
+        "- Screen: \"{}\" in Settings → Defaults ({})",
+        *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW,
         if desktop_control { "on" } else { "off" }
     ));
     if ledger.unreadable() > 0 {
@@ -886,7 +887,7 @@ mod tests {
                 "",
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
-                "- Screen: \"Let Grok control the desktop\" in Settings → Defaults (off)",
+                "- Screen: \"Let Loadout control the desktop\" in Settings → Defaults (off)",
                 "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
                 "",
                 "Sent in the last 7 days (no content stored)",
@@ -917,7 +918,9 @@ mod tests {
         assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(
-            got.contains("- Screen: \"Let Grok control the desktop\" in Settings → Defaults (on)"),
+            got.contains(
+                "- Screen: \"Let Loadout control the desktop\" in Settings → Defaults (on)"
+            ),
             "{got}"
         );
         assert!(

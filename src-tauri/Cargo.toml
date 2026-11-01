@@ -48,12 +48,29 @@ base64 = "0.22"
 # Composer attachments read picture sizes from the header (the same build the
 # agent crate uses).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Compares a release's version with this build's (shell_update.rs).
+semver = "1"
+
+[dev-dependencies]
+# Proves the updater's signature check on a throwaway key (shell_update.rs).
+minisign-verify = "0.3"
 
 # Computer-use runs on the desktop OSes only; phones never build it.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 grokhub-desktop = { path = "../crates/grokhub-desktop" }
 # The composer's + button opens the system file picker (open only).
 tauri-plugin-dialog = "2.8.4"
+# Desktop basics (os_extras.rs): one running copy, the window's place and size,
+# the summon hotkey, notifications and start at login. All driven from Rust.
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-notification = "2.8.0"
+tauri-plugin-autostart = "2.7.0"
+# The shell updates itself from its channel's GitHub release (LU-06):
+# `latest.json` points at the AppImage or NSIS installer, minisign-signed with
+# the release key the cabin already trusts.
+tauri-plugin-updater = "=2.14.1"
 
 [profile.release]
 lto = "thin"

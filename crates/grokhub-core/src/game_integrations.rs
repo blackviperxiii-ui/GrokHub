@@ -115,6 +115,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "elite",
+        name: "Elite Dangerous",
+        steam_app_id: Some(359320),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own Player Journal: jumps, dockings, earnings and deaths, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -135,6 +145,36 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "poe",
+        name: "Path of Exile",
+        steam_app_id: Some(238960),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own Client.txt log: areas, level-ups and deaths, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
+        id: "poe2",
+        name: "Path of Exile 2",
+        steam_app_id: Some(2694490),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own Client.txt log: areas, level-ups and deaths, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
+        id: "minecraft",
+        name: "Minecraft: Java Edition",
+        steam_app_id: None,
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own logs/latest.log, vanilla launcher and Prism or MultiMC instances: deaths and advancements, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "eso",
         name: "The Elder Scrolls Online",
         steam_app_id: Some(306130),
@@ -142,22 +182,6 @@ pub const ALL: &[Integration] = &[
         channels: &[Channel::OfficialAddon(
             "a Loadout addon through ZeniMax's Lua addon API and saved variables",
         )],
-        status: Status::Planned,
-    },
-    Integration {
-        id: "poe",
-        name: "Path of Exile",
-        steam_app_id: Some(238960),
-        protection: Protection::None,
-        channels: &[Channel::GameFile("the game's own Client.txt log")],
-        status: Status::Planned,
-    },
-    Integration {
-        id: "minecraft",
-        name: "Minecraft: Java Edition",
-        steam_app_id: None,
-        protection: Protection::None,
-        channels: &[Channel::GameFile("the game's own logs/latest.log")],
         status: Status::Planned,
     },
 ];
@@ -209,7 +233,9 @@ mod tests {
             by_id("league").unwrap().how(),
             "Riot's Live Client Data API on this computer. Has Riot Vanguard, so Loadout adds nothing to the game"
         );
-        assert!(by_id("poe").unwrap().how().ends_with(". Planned"));
+        assert!(by_id("eso").unwrap().how().ends_with(". Planned"));
+        assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
+        assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
     }
 }

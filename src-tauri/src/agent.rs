@@ -123,6 +123,12 @@ pub enum UiEvent {
         action: String,
         reason: String,
     },
+    /// A permission card answered away from the page, such as Deny on its
+    /// notification. `answer` is a word `parse_answer` reads.
+    Answered {
+        id: String,
+        answer: String,
+    },
     Error {
         message: String,
     },
@@ -213,6 +219,17 @@ pub fn parse_answer(answer: &str) -> Result<PermAnswer, String> {
         "always" => Ok(PermAnswer::Always),
         "deny" => Ok(PermAnswer::Deny),
         other => Err(format!("unknown answer: {other}")),
+    }
+}
+
+/// The word [`parse_answer`] reads for `answer`; a cancel reads as deny,
+/// since the step did not run. Notifications are desktop only.
+#[cfg(desktop)]
+pub fn answer_word(answer: PermAnswer) -> &'static str {
+    match answer {
+        PermAnswer::Allow => "allow",
+        PermAnswer::Always => "always",
+        PermAnswer::Deny | PermAnswer::Cancel => "deny",
     }
 }
 
@@ -1152,7 +1169,7 @@ mod tests {
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
         assert_eq!(
             client.tool_output().as_deref(),
-            Some(grokhub_core::desktop_mcp::OFF_MSG)
+            Some(*grokhub_core::desktop_mcp::OFF_MSG)
         );
         assert!(!desk_ran("type hello from off"));
     }

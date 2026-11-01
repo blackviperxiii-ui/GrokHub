@@ -75,6 +75,8 @@ pub const WEB_COMMANDS: &[&str] = &[
     "add_memory",
     "search_memory",
     "edit_memory_row",
+    "slash_hits",
+    "run_slash",
     "forget_memory_row",
     "approve_memory_row",
     "reject_memory_row",
@@ -721,6 +723,18 @@ mod tests {
     }
 
     #[test]
+    fn a_browser_never_checks_installs_or_switches_shell_updates() {
+        for name in [
+            "get_update_status",
+            "set_update_channel",
+            "check_shell_update",
+            "install_shell_update",
+        ] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
+    }
+
+    #[test]
     fn only_the_exact_code_pairs() {
         let code = "0123456789abcdef";
         assert!(authorized(Some("Bearer 0123456789abcdef"), code));
@@ -854,6 +868,10 @@ mod tests {
             "phone_smoke_report",
             "stage_attachment_paths",
             "pick_attachments",
+            "get_autostart",
+            "set_autostart",
+            "set_summon_hotkey",
+            "set_notifications",
         ] {
             assert!(!web_command(name), "{name}");
         }
