@@ -443,9 +443,9 @@ pub fn file_row(path: &Path, bytes: u64, source: &'static str, seen: &[String]) 
     let abliterated = ABLITERATED.iter().any(|w| lower.contains(w));
     let shown = path.display().to_string();
     FileRow {
-        // A catalog file is abliterated too, but it is no stranger: only a file
-        // from outside the catalog asks first.
-        needs_notice: third_party && !seen.contains(&shown),
+        // Every catalog build is abliterated, so a first-time pick of one sees
+        // the safety notice once, like any file from outside the catalog.
+        needs_notice: (third_party || abliterated) && !seen.contains(&shown),
         path: shown,
         name,
         size: ls::size_label(bytes / (1_024 * 1_024)),
