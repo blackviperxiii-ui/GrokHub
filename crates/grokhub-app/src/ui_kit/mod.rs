@@ -75,7 +75,6 @@ pub fn paint_kit_gallery(ui: &mut Ui) {
     section_header(ui, "Appearance", Some("Shared primitives"));
     for variant in [
         CardVariant::Default,
-        CardVariant::Subtle,
         CardVariant::Outlined,
         CardVariant::Interactive,
     ] {

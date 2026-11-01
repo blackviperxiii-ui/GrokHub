@@ -3,7 +3,6 @@
 use super::*;
 
 pub(super) const RAIL_FOOTER_H: f32 = 40.0;
-use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
 fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
     ui.label(
@@ -665,8 +664,10 @@ impl Cabin {
         }
     }
 
-    pub(super) fn ui_projects_and_history(&mut self, ui: &mut egui::Ui, rail_w: f32) {
-        let _ = rail_w;
+    /// The Projects tree on the History page. The page lists every chat
+    /// itself (with one search over chats and memory), so this no longer
+    /// paints a second filtered chat list under it.
+    pub(super) fn ui_projects_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             rail_section_caption(ui, RichText::new("Projects"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -836,62 +837,6 @@ impl Cabin {
             self.proj_menu_pos = pos;
             self.apply_project_menu(id, act);
         }
-        ui.add_space(crate::theme::SPACING_8);
-        ui.horizontal(|ui| {
-            rail_section_caption(ui, RichText::new("History"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if chip(ui, "See all", true, true).clicked() {
-                    self.nav = Nav::History;
-                }
-            });
-        });
-        card_frame(ui, CardVariant::Subtle, true, |ui| {
-            crate::cards::search_bar(
-                ui,
-                &mut self.sidebar_q,
-                "Filter chats…",
-                (ui.available_width() - crate::theme::SPACING_8).max(80.0),
-            );
-            ui.add_space(crate::theme::SPACING_4);
-            let hist_h = 180.0_f32;
-            egui::ScrollArea::vertical()
-                .id_salt("rail-history")
-                .auto_shrink([false, true])
-                .max_height(hist_h)
-                .show(ui, |ui| {
-                    let q = self.sidebar_q.to_ascii_lowercase();
-                    let live_empty = self.messages.is_empty();
-                    let listed = threads::chat_section_indices(
-                        &self.threads,
-                        Some(self.thread_idx),
-                        live_empty,
-                    );
-                    let listed: Vec<usize> = listed
-                        .into_iter()
-                        .filter(|&i| {
-                            q.is_empty()
-                                || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
-                        })
-                        .collect();
-                    if listed.is_empty() {
-                        let filtered = !q.is_empty();
-                        if filtered {
-                            if empty_state(ui, "No matches", "Try another filter.", Some("Clear")) {
-                                self.sidebar_q.clear();
-                            }
-                        } else {
-                            let _ = empty_state(
-                                ui,
-                                "No chats yet",
-                                "Start a new chat from the rail.",
-                                None,
-                            );
-                        }
-                    } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
-                        self.apply_tab_act(act);
-                    }
-                });
-        });
     }
 
     /// A rail row is `NAV_ROW_H` plus the item spacing a real `horizontal` leaves

@@ -14,6 +14,25 @@ const NATIVE_SIGNIN_NOTE: &str =
 pub(super) const LOCAL_ONLY_NOTE: &str =
     "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
 
+/// A todo's state in words for the Queue tile. The agent stores raw keys
+/// (`in_progress`); the tile showed them as-is, with the row id after them.
+pub(super) fn todo_status_label(status: &str) -> String {
+    match status {
+        "pending" => "To do".into(),
+        "in_progress" => "In progress".into(),
+        "completed" => "Done".into(),
+        "cancelled" => "Cancelled".into(),
+        other => {
+            let words = other.replace('_', " ");
+            let mut c = words.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => "To do".into(),
+            }
+        }
+    }
+}
+
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
 pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
@@ -346,7 +365,7 @@ impl Cabin {
                             ui,
                             crate::icons::TileIcon::List,
                             &todo.content,
-                            &format!("{} · {}", todo.status, todo.id),
+                            &todo_status_label(&todo.status),
                             None,
                             done,
                         );
@@ -797,8 +816,9 @@ impl Cabin {
             .show(ui, |ui| {
             self.history_header(ui);
             ui.add_space(8.0);
-            // Projects + History list (moved off the Chat rail drawer).
-            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            // Projects (moved off the Chat rail drawer). The chat list below
+            // is the page's only one.
+            self.ui_projects_section(ui);
             ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {

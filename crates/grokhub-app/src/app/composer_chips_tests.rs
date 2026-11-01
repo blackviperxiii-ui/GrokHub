@@ -712,6 +712,17 @@ fn long_wrapped_draft_grows_the_pill_then_caps_it() {
 
 // Landed from PR #89.
 #[test]
+fn queue_todos_read_as_words_not_raw_state_keys() {
+    use super::pages::todo_status_label;
+    assert_eq!(todo_status_label("in_progress"), "In progress");
+    assert_eq!(todo_status_label("pending"), "To do");
+    assert_eq!(todo_status_label("completed"), "Done");
+    assert_eq!(todo_status_label("cancelled"), "Cancelled");
+    assert_eq!(todo_status_label("on_hold"), "On hold");
+    assert_eq!(todo_status_label(""), "To do");
+}
+
+#[test]
 fn queue_rows_label_done_failed_and_running() {
     let rows = [
         ("job-done", "Flash the pi", true),

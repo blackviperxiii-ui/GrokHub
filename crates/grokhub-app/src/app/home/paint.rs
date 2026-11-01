@@ -500,14 +500,14 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                     ui.add_space(8.0);
                     let btn = egui::vec2(140.0, 40.0);
                     ui.horizontal(|ui| {
-                        if crate::ui_kit::recipe::button(ui, None, "TUNE-UP", true, btn, true)
+                        if crate::ui_kit::recipe::button(ui, None, "Tune-up", true, btn, true)
                             .clicked()
                         {
                             actions.push(ModuleAction::OpenChat(
                                 "Check this PC and suggest a tune-up.".into(),
                             ));
                         }
-                        if crate::ui_kit::recipe::button(ui, None, "DETAILS", false, btn, true)
+                        if crate::ui_kit::recipe::button(ui, None, "Details", false, btn, true)
                             .clicked()
                         {
                             super::pc_sheet::open_pc_sheet(ui.ctx());
