@@ -135,13 +135,62 @@ export function clearApiKey(): Promise<Settings> {
   return invoke<Settings>("clear_api_key");
 }
 
-/** Runs one prompt through the agent loop; resolves with the stop reason. */
+/** Runs one prompt through the agent loop; resolves with the stop reason.
+ * `attachments`: paths from `stageAttachment`, in the chips' order. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode: SessionMode = "chat",
+  attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+}
+
+/** A file waiting on the composer (src-tauri/src/attach.rs). */
+export interface Staged {
+  /** The copy in the chat's folder; send it back with the message. */
+  path: string;
+  name: string;
+  kind: "image" | "text" | "document";
+  /** "Picture shot.png", "File notes.md". */
+  label: string;
+  /** The note when the chat's model can't read it; it won't send. */
+  status: string | null;
+}
+
+/** One picked or dropped file: staged, or why not. */
+export interface StageOutcome {
+  staged: Staged | null;
+  error: string | null;
+}
+
+/** A pasted or dropped file's bytes, as base64. */
+export function stageAttachment(conversationId: string, name: string, data: string): Promise<Staged> {
+  return invoke<Staged>("stage_attachment", { conversationId, name, data });
+}
+
+/** Files dropped on the window, by path (the desktop window only). */
+export function stageAttachmentPaths(conversationId: string, paths: string[]): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("stage_attachment_paths", { conversationId, paths });
+}
+
+/** The + button: the system file picker, then each pick is staged. */
+export function pickAttachments(conversationId: string): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("pick_attachments", { conversationId });
+}
+
+export function removeAttachment(conversationId: string, path: string): Promise<void> {
+  return invoke<void>("remove_attachment", { conversationId, path });
+}
+
+/** Files dropped on the desktop window arrive as paths. Outside the shell
+ * this never fires; the page's own drop event has the files. */
+export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  if (!inShell()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
+  });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */

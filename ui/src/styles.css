@@ -565,6 +565,46 @@ select:focus-visible {
   resize: none;
 }
 
+/* Files waiting on the composer; they wrap on a phone. */
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip.attach {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.chip.attach > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip.attach.warn {
+  border-color: var(--danger-text);
+}
+
+.attach-status {
+  color: var(--danger-text);
+}
+
+.attach-chips .note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.composer .attach-plus {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.2em;
+}
+
 /* The sections stay put on the left; each page scrolls inside its own pane. */
 .settings-page {
   display: flex;

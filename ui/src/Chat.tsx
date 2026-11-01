@@ -17,6 +17,7 @@ import {
   type Settings,
   type Suggestion,
 } from "./api";
+import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
@@ -276,6 +277,7 @@ export function Chat({
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const attach = useAttachments(conversationId, { remote, active });
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -356,15 +358,26 @@ export function Chat({
   async function send(event?: FormEvent, picked?: string) {
     event?.preventDefault();
     const text = (picked ?? draft).trim();
-    if (!text || busy) return;
+    const files = picked === undefined ? attach.files : [];
+    if ((!text && files.length === 0) || busy) return;
+    const unread = files.find((f) => f.status);
+    if (unread) {
+      setError(`${unread.name}: ${unread.status}`);
+      return;
+    }
+    const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
     // Suggestions belong to the reply they followed.
-    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
-    if (picked === undefined) setDraft("");
+    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text: said }]);
+    if (picked === undefined) {
+      setDraft("");
+      attach.clear();
+    }
     setError(null);
     busyRef.current = true;
     setBusy(true);
     try {
-      await sendChat(conversationId, text, mode);
+      const paths = files.map((f) => f.path);
+      await (paths.length ? sendChat(conversationId, text, mode, paths) : sendChat(conversationId, text, mode));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -423,7 +436,7 @@ export function Chat({
     !(last?.kind === "elicit" && last.answer === null);
 
   return (
-    <section className="chat" aria-label="Chat">
+    <section className="chat" aria-label="Chat" onDragOver={attach.onDragOver} onDrop={attach.onDrop}>
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
@@ -524,7 +537,11 @@ export function Chat({
         busy={busy}
         remote={remote}
       />
+      <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer" onSubmit={send}>
+        {!remote && (
+          <AttachButton onPick={() => void attach.pick()} busy={busy} full={attach.files.length >= ATTACH_MAX} />
+        )}
         <textarea
           aria-label="Message"
           placeholder={PLACEHOLDERS[mode]}
@@ -532,13 +549,14 @@ export function Chat({
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={attach.onPaste}
         />
         {busy ? (
           <button type="button" onClick={() => void cancelChat(conversationId)}>
             Stop
           </button>
         ) : (
-          <button type="submit" disabled={!draft.trim()}>
+          <button type="submit" disabled={!draft.trim() && attach.files.length === 0}>
             Send
           </button>
         )}

@@ -62,6 +62,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "answer_elicit",
     "cancel_chat",
     "close_chat",
+    // Pasted or dropped files only; the picker and paths stay on the computer.
+    "stage_attachment",
+    "remove_attachment",
     "list_automations",
     "add_automation",
     "set_automation_enabled",
@@ -803,6 +806,8 @@ mod tests {
             "get_feed_prompt",
             "save_feed_prompt",
             "pulse_image",
+            "stage_attachment",
+            "remove_attachment",
         ] {
             assert!(web_command(name), "{name}");
         }
@@ -847,6 +852,8 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "stage_attachment_paths",
+            "pick_attachments",
         ] {
             assert!(!web_command(name), "{name}");
         }
