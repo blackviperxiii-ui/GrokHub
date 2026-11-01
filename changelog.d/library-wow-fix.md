@@ -1,0 +1,3 @@
+- The Library is a cover grid again with the detail panel on the right; Battle.net games are tiles in it, and World of Warcraft shows once with Retail and PTR under it, however many Wine prefixes reach the same install.
+- The WoW addon (1.1.0) now says hello in chat, sits in the minimap's addon menu and answers `/loadout`, no longer saves 0 gold or item level 0 at logout, and records spec, gear, professions, currencies, renown, Mythic+ rating and keystone, Great Vault, lockouts, achievement points, mounts, pets, quests and played time, which the WoW detail panel shows.
+- Installing the addon under Wine uses the game's existing AddOns folder whatever its case, so the game finds it.

@@ -6,21 +6,32 @@ import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
 
+export interface SignedIn {
+  name: string | null;
+  email: string | null;
+}
+
 export interface Settings {
   model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
+  /** Signed in with Grok: who, when xAI said. */
+  signedIn?: SignedIn | null;
   /** The folder picked in Settings, empty for the default. */
   workspace: string;
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
-  /** Settings → Let Grok control the desktop. */
+  /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
   theme: Theme;
   /** Settings → About. */
   version: string;
+  /** Settings → General → the summon hotkey. */
+  summonHotkey: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications: boolean;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -33,6 +44,14 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** Settings → Account → Sign in with Grok (desktop and iOS). */
+  grokSignIn?: boolean;
+  /** Settings → General → start at login. */
+  autostart?: boolean;
+  /** Settings → General → the summon hotkey; off on Wayland. */
+  summonHotkey?: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -62,6 +81,8 @@ export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  /** A permission card answered away from the page, such as Deny on its notification. */
+  | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
@@ -70,7 +91,7 @@ export type ChatEvent =
   | {
       kind: "elicit";
       id: string;
-      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      /** "Plan" for a plan to approve, "Question" for the agent's question, or the connector. */
       server: string;
       message: string;
       mode: "form" | "url";
@@ -78,7 +99,7 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
-      /** Answers to tap for Grok's question, the recommended one first. */
+      /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
     };
 
@@ -125,6 +146,24 @@ export function saveSettings(
     approvals,
     desktopControl,
   });
+}
+
+/** Whether the OS starts the app at login. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Resolves with what the OS has after the change. */
+export function setAutostart(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { on });
+}
+
+export function setSummonHotkey(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_summon_hotkey", { on });
+}
+
+export function setNotifications(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_notifications", { on });
 }
 
 /** Where a model in the picker came from. */
@@ -311,6 +350,57 @@ export function saveMemory(
   base: string,
 ): Promise<{ notes: MemoryNotes; redacted: boolean }> {
   return invoke("save_memory", { global, text, base });
+}
+
+/** Sign in with Grok, step one: the code to type at xAI's page. */
+export interface GrokSignInStart {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  interval: number;
+  expiresIn: number;
+}
+
+export type GrokSignInPoll =
+  | { status: "pending"; interval: number }
+  | { status: "ready"; signedIn: SignedIn }
+  | { status: "failed"; error: string };
+
+export function startGrokSignIn(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("start_grok_sign_in");
+}
+
+export function pollGrokSignIn(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("poll_grok_sign_in");
+}
+
+export function grokSignOut(): Promise<Settings> {
+  return invoke<Settings>("grok_sign_out");
+}
+
+/** A row of the composer's command list. `disabled` says why it can't run. */
+export interface SlashHit {
+  cmd: string;
+  hint: string;
+  insert: string;
+  runOnPick: boolean;
+  disabled: string | null;
+}
+
+/** What a slash line asked the chat to do. Slash lines never reach the model. */
+export type SlashEffect =
+  | { kind: "newChat" }
+  | { kind: "mode"; mode: SessionMode; text: string | null }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
+  | { kind: "modelSet"; id: string; text: string }
+  | { kind: "notice"; text: string };
+
+export function slashHits(draft: string): Promise<SlashHit[]> {
+  return invoke<SlashHit[]>("slash_hits", { draft });
+}
+
+export function runSlash(line: string): Promise<SlashEffect> {
+  return invoke<SlashEffect>("run_slash", { line });
 }
 
 export function addMemory(

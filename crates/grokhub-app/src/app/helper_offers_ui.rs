@@ -95,20 +95,34 @@ impl Cabin {
         for offer in self.helper_offers() {
             let mut answer = None;
             ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(offer.ask())
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::fg()),
-                )
-                .on_hover_text(offer.hint());
-                if crate::cards::ghost_pill(ui, "Turn on") {
-                    answer = Some(true);
-                }
-                if crate::cards::ghost_pill(ui, "Not now") {
-                    answer = Some(false);
-                }
-            });
+            // A row of its own: the question on the left, its two buttons
+            // pinned right with room between, not jammed against the text.
+            egui::Frame::NONE
+                .fill(crate::theme::elevated())
+                .corner_radius(10.0)
+                .stroke(egui::Stroke::new(1.0, crate::theme::border()))
+                .inner_margin(egui::Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(offer.ask())
+                                .size(crate::theme::FONT_BODY)
+                                .color(crate::theme::fg()),
+                        )
+                        .on_hover_text(offer.hint());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            // Right to left: Not now paints first, so Turn on reads first.
+                            if crate::cards::ghost_pill(ui, "Not now") {
+                                answer = Some(false);
+                            }
+                            if crate::cards::ghost_pill(ui, "Turn on") {
+                                answer = Some(true);
+                            }
+                        });
+                    });
+                });
             if let Some(turn_on) = answer {
                 self.answer_helper_offer(offer, turn_on);
             }

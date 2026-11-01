@@ -51,6 +51,9 @@ const KEY_PAGE_ROW: &str = "Get a key";
 const OPENROUTER_ROW: &str = "Sign in with OpenRouter";
 const OPENROUTER_HINT: &str =
     "Opens OpenRouter in your browser and brings a new key back. You approve saving it.";
+const OPENROUTER_WAIT: &str = "Waiting for OpenRouter. Finish signing in in your browser.";
+/// A page the browser didn't open, with Copy.
+pub(super) const BY_HAND_ROW: &str = "Open this link in your browser";
 /// What a credentials card is for (its span tool).
 pub(super) const KEY_TOOL: &str = "model.provider_key";
 /// The credentials card under its action line.
@@ -71,12 +74,51 @@ pub(super) struct ProviderUi {
     pub sent: Option<String>,
     /// A key waiting on its credentials card.
     pub pending: Option<PendingKey>,
-    /// "Sign in with OpenRouter", running: the key it brings back.
-    pub signin_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// "Sign in with OpenRouter", running: what its thread sends back.
+    pub signin_rx: Option<std::sync::mpsc::Receiver<SignInMsg>>,
+    /// A page the browser didn't open. Settings shows it with Copy.
+    pub by_hand: Option<ByHand>,
+    /// How the last OpenRouter sign-in ended, when it ended without a key.
+    pub signin_note: Option<String>,
     /// Cached `providers.json` list. Paint reads this; writers clear it.
     pub list: Option<Vec<providers::Provider>>,
     /// Cached "Use for your chats" model ids. Cleared with the list / grants.
     pub model_choices: Option<Vec<String>>,
+}
+
+/// What the "Sign in with OpenRouter" thread sends the cabin.
+#[derive(Debug)]
+pub(super) enum SignInMsg {
+    /// The browser didn't open. The sign-in still waits for its callback,
+    /// so opening this page by hand finishes it.
+    OpenByHand(ByHand),
+    /// The key, or why there is none.
+    Done(Result<String, String>),
+}
+
+/// A page to open by hand, and why the browser didn't open it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ByHand {
+    pub url: String,
+    pub why: String,
+}
+
+/// Pages Settings opens for a provider: a known provider's key page, or
+/// OpenRouter's sign-in page. Not the xAI gate: that one only lets x.ai
+/// through, which is why "Sign in" on OpenRouter used to open nothing.
+pub(super) fn provider_page_ok(url: &str) -> bool {
+    providers::key_page(url) == Some(url)
+        || url
+            .strip_prefix("https://openrouter.ai/auth?")
+            .is_some_and(|q| !q.is_empty())
+}
+
+/// Open a provider page in the system browser (ShellExecuteW on Windows).
+pub(super) fn open_provider_page(url: &str) -> Result<(), String> {
+    if !provider_page_ok(url) {
+        return Err("refusing to open this page".into());
+    }
+    crate::desktop::open_url(url)
 }
 
 /// A key you entered or a sign-in brought back, held until its card is answered.
@@ -271,19 +313,37 @@ impl Cabin {
 
     /// "Sign in with OpenRouter": its browser flow off the UI thread.
     pub(super) fn start_openrouter_sign_in(&mut self) {
+        self.start_openrouter_sign_in_with(open_provider_page);
+    }
+
+    /// The flow with `open` as the browser. When `open` fails, the page goes
+    /// back to Settings to open by hand and the flow keeps waiting for its
+    /// callback, so the sign-in can still finish.
+    pub(super) fn start_openrouter_sign_in_with(
+        &mut self,
+        open: impl Fn(&str) -> Result<(), String> + Send + 'static,
+    ) {
         if self.harness.router.providers.signin_rx.is_some() {
             return;
         }
         let dir = crate::config::config_dir();
         let (tx, rx) = std::sync::mpsc::channel();
         self.harness.router.providers.signin_rx = Some(rx);
+        self.harness.router.providers.by_hand = None;
+        self.harness.router.providers.signin_note = None;
         std::thread::spawn(move || {
-            let got = providers::openrouter_key(
-                &dir,
-                &|url| crate::oauth::open_browser(url),
-                Duration::from_secs(300),
-            );
-            let _ = tx.send(got.map(|k| k.as_str().to_string()));
+            let by_hand = tx.clone();
+            let launch = move |url: &str| {
+                if let Err(why) = open(url) {
+                    let _ = by_hand.send(SignInMsg::OpenByHand(ByHand {
+                        url: url.to_string(),
+                        why,
+                    }));
+                }
+                Ok(())
+            };
+            let got = providers::openrouter_key(&dir, &launch, Duration::from_secs(300));
+            let _ = tx.send(SignInMsg::Done(got.map(|k| k.as_str().to_string())));
         });
         self.status = "Finish signing in to OpenRouter in your browser.".into();
     }
@@ -293,13 +353,31 @@ impl Cabin {
         let Some(rx) = self.harness.router.providers.signin_rx.take() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(Ok(key)) => self.hold_provider_key(providers::OPENROUTER_BASE.into(), None, key),
-            Ok(Err(e)) => self.status = e,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                self.harness.router.providers.signin_rx = Some(rx)
+        loop {
+            match rx.try_recv() {
+                Ok(SignInMsg::OpenByHand(link)) => {
+                    self.status = format!("Your browser didn't open: {}", link.why);
+                    self.harness.router.providers.by_hand = Some(link);
+                }
+                Ok(SignInMsg::Done(got)) => {
+                    self.harness.router.providers.by_hand = None;
+                    match got {
+                        Ok(key) => {
+                            self.hold_provider_key(providers::OPENROUTER_BASE.into(), None, key)
+                        }
+                        Err(e) => {
+                            self.harness.router.providers.signin_note = Some(e.clone());
+                            self.status = e;
+                        }
+                    }
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.harness.router.providers.signin_rx = Some(rx);
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -494,8 +572,12 @@ impl Cabin {
                 grokhub_agent::harness::egress_dest(&self.harness.router.providers.url)
             );
             if crate::cards::settings_action(ui, KEY_PAGE_ROW, &hint, "Open") {
-                if let Err(e) = crate::oauth::open_browser(page) {
-                    self.status = e;
+                if let Err(why) = open_provider_page(page) {
+                    self.status = format!("Your browser didn't open: {why}");
+                    self.harness.router.providers.by_hand = Some(ByHand {
+                        url: page.to_string(),
+                        why,
+                    });
                 }
             }
         }
@@ -511,6 +593,27 @@ impl Cabin {
         }
         if crate::cards::settings_action(ui, OPENROUTER_ROW, OPENROUTER_HINT, "Sign in") {
             self.start_openrouter_sign_in();
+        }
+        if self.harness.router.providers.signin_rx.is_some() {
+            crate::cards::settings_note(ui, OPENROUTER_WAIT);
+        }
+        if let Some(link) = self.harness.router.providers.by_hand.clone() {
+            crate::cards::settings_note(
+                ui,
+                &format!(
+                    "Your browser didn't open ({}). Copy this link into your browser to go on.",
+                    link.why
+                ),
+            );
+            let id = ui.id().with("provider-by-hand-copy");
+            let label = crate::theme::copy_flash_label(ui.ctx(), id);
+            if crate::cards::settings_action(ui, BY_HAND_ROW, &link.url, label) {
+                ui.ctx().copy_text(link.url.clone());
+                crate::theme::mark_copy_clicked(ui.ctx(), id);
+            }
+        }
+        if let Some(note) = &self.harness.router.providers.signin_note {
+            crate::cards::settings_note(ui, note);
         }
     }
 
@@ -784,7 +887,7 @@ mod tests {
             app.harness.router.providers.signin_rx.is_some(),
             "still waiting on the browser"
         );
-        tx.send(Ok(KEY.to_string())).unwrap();
+        tx.send(SignInMsg::Done(Ok(KEY.to_string()))).unwrap();
         app.poll_openrouter_sign_in();
         assert!(app.harness.router.providers.signin_rx.is_none());
         let card = app.harness.park.clone().expect("a hard credentials card");
@@ -807,9 +910,209 @@ mod tests {
         assert!(providers::has_key(&root, "openrouter"));
         let (tx, rx) = std::sync::mpsc::channel();
         app.harness.router.providers.signin_rx = Some(rx);
-        tx.send(Err("OpenRouter sign-in timed out".into())).unwrap();
+        tx.send(SignInMsg::Done(Err("OpenRouter sign-in timed out".into())))
+            .unwrap();
         app.poll_openrouter_sign_in();
         assert_eq!(app.status, "OpenRouter sign-in timed out");
+        assert_eq!(
+            app.harness.router.providers.signin_note.as_deref(),
+            Some("OpenRouter sign-in timed out")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// OpenRouter's key exchange, faked: `good-code` buys [`KEY`].
+    #[derive(Default)]
+    struct KeyExchange(std::sync::Mutex<Vec<String>>);
+
+    impl providers::ProviderTransport for KeyExchange {
+        fn get(&self, url: &str, _: &[(String, String)]) -> Result<providers::HttpReply, String> {
+            Err(format!("no GET expected: {url}"))
+        }
+        fn post(
+            &self,
+            url: &str,
+            _: &[(String, String)],
+            body: &str,
+        ) -> Result<providers::HttpReply, String> {
+            self.0.lock().unwrap().push(url.to_string());
+            let ok = body.contains(r#""code":"good-code""#);
+            Ok(providers::HttpReply {
+                status: if ok { 200 } else { 403 },
+                body: if ok {
+                    format!(r#"{{"key":"{KEY}"}}"#)
+                } else {
+                    "{}".into()
+                },
+            })
+        }
+    }
+
+    fn texts_of(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn openrouter_pages_open_in_the_system_browser_not_behind_the_xai_gate() {
+        let auth = providers::openrouter_auth_url("http://127.0.0.1:51423/callback", "abc_-123");
+        assert_eq!(
+            auth,
+            "https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A51423%2Fcallback&code_challenge=abc_-123&code_challenge_method=S256"
+        );
+        // The old opener only let x.ai through, so this page never opened.
+        assert!(grokhub_core::trusted_xai_url(&auth).is_err());
+        assert!(provider_page_ok(&auth));
+        // Its `&`s are fine: the URL goes to ShellExecuteW / xdg-open as one argument, never cmd.
+        assert!(crate::desktop::url_safe_to_open(&auth));
+        for page in [
+            "https://openrouter.ai/settings/keys",
+            "https://platform.openai.com/api-keys",
+            "https://console.anthropic.com/settings/keys",
+        ] {
+            assert!(provider_page_ok(page), "{page}");
+        }
+        for bad in [
+            "https://openrouter.ai/auth?",
+            "http://openrouter.ai/auth?callback_url=x",
+            "https://openrouter.ai.evil.com/auth?x=1",
+            "https://evil.com/settings/keys",
+            "https://openrouter.ai/settings/keys/../../x",
+        ] {
+            assert!(!provider_page_ok(bad), "{bad}");
+            assert!(open_provider_page(bad).is_err(), "{bad}");
+        }
+        // Sign in and Get a key both go through the provider opener.
+        let src = include_str!("provider_ui.rs");
+        let xai_gate = ["oauth::", "open_browser("].concat();
+        assert!(
+            !src.contains(&xai_gate),
+            "provider pages must not use the xAI-only opener"
+        );
+        let start = src
+            .split("pub(super) fn start_openrouter_sign_in(&mut self)")
+            .nth(1)
+            .and_then(|s| s.split("pub(super) fn ").next())
+            .expect("start_openrouter_sign_in");
+        assert!(start.contains("open_provider_page"), "{start}");
+    }
+
+    #[test]
+    fn a_browser_that_does_not_open_shows_the_link_with_copy_and_the_sign_in_still_finishes() {
+        let _paint = crate::theme::hold_paint_test();
+        let (_pin, root) = pinned("r3b-openrouter-by-hand");
+        let wire = Arc::new(KeyExchange::default());
+        providers::use_transport_for(&root, wire.clone());
+        let mut app = Cabin::quiet_for_test();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = asked.clone();
+        app.start_openrouter_sign_in_with(move |url| {
+            seen.lock().unwrap().push(url.to_string());
+            Err("no browser here".into())
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.harness.router.providers.by_hand.is_none() {
+            assert!(std::time::Instant::now() < deadline, "no link came back");
+            app.poll_openrouter_sign_in();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let link = app.harness.router.providers.by_hand.clone().unwrap();
+        assert_eq!(*asked.lock().unwrap(), vec![link.url.clone()]);
+        assert_eq!(link.why, "no browser here");
+        assert!(
+            link.url
+                .starts_with("https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A")
+                && link.url.contains("%2Fcallback&code_challenge=")
+                && link.url.ends_with("&code_challenge_method=S256"),
+            "{}",
+            link.url
+        );
+        assert!(
+            app.harness.router.providers.signin_rx.is_some(),
+            "the sign-in keeps waiting for its callback"
+        );
+
+        // Settings shows the link with Copy under the Sign in row.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+            app.ui_provider_rows(ui);
+        });
+        let texts = texts_of(&out.shapes);
+        for want in [
+            OPENROUTER_ROW,
+            OPENROUTER_WAIT,
+            BY_HAND_ROW,
+            link.url.as_str(),
+            "Copy",
+        ] {
+            assert!(
+                texts.iter().any(|t| t == want),
+                "missing {want:?} in {texts:?}"
+            );
+        }
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Your browser didn't open (no browser here)")),
+            "{texts:?}"
+        );
+
+        // Opening the copied link by hand: OpenRouter calls the loopback back.
+        let callback = link
+            .url
+            .split("callback_url=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .unwrap()
+            .replace("%3A", ":")
+            .replace("%2F", "/");
+        let host = callback
+            .trim_start_matches("http://")
+            .trim_end_matches("/callback")
+            .to_string();
+        {
+            use std::io::{Read, Write};
+            let mut sock = std::net::TcpStream::connect(&host).unwrap();
+            write!(
+                sock,
+                "GET /callback?code=good-code HTTP/1.1\r\nHost: {host}\r\n\r\n"
+            )
+            .unwrap();
+            let mut page = String::new();
+            let _ = sock.read_to_string(&mut page);
+            assert!(page.starts_with("HTTP/1.1 200 OK"), "{page}");
+        }
+        while app.harness.router.providers.signin_rx.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sign-in never finished"
+            );
+            app.poll_openrouter_sign_in();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            wire.0.lock().unwrap().as_slice(),
+            ["https://openrouter.ai/api/v1/auth/keys".to_string()]
+        );
+        assert!(app.harness.router.providers.by_hand.is_none());
+        let card = app.harness.park.clone().expect("the credentials card");
+        assert_eq!(
+            (card.class, card.action.as_str()),
+            (
+                HardClass::Credentials,
+                "Save your key for openrouter.ai to your keyring"
+            )
+        );
+        assert!(
+            !providers::has_key(&root, "openrouter"),
+            "nothing saved before Approve"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

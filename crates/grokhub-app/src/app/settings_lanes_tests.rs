@@ -274,13 +274,13 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
         cabin.account_oauth_present(),
         "disk oauth must load into Account"
     );
-    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref());
+    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref(), 2, false);
     assert!(chrome.connected);
     assert_eq!(chrome.action, "Sign out");
     assert_eq!(chrome.title, "Connected");
     assert_eq!(chrome.hint, "GrokHub QA · grokhub-qa@agentmail.to");
     // Signed-out chrome stays for the empty case.
-    let signed_out = account_connect_chrome(None);
+    let signed_out = account_connect_chrome(None, 2, false);
     assert_eq!(signed_out.action, "Sign in with Grok");
     let settings = include_str!("settings.rs");
     let account = settings
@@ -419,8 +419,8 @@ fn clear_oauth_photo_drops_cached_avatar_state() {
 fn avatar_chrome_returns_menu_fields() {
     let cabin = Cabin::quiet_for_test();
     let chrome = cabin.avatar_chrome();
-    // Quiet cabin: empty display_name, no OAuth name, empty USER.md → fallback "Grok".
-    assert_eq!(chrome.name, "Grok");
+    // Quiet cabin: empty display_name, no OAuth name, empty USER.md → fallback "You".
+    assert_eq!(chrome.name, "You");
     assert!(chrome.picture_path.is_empty());
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
@@ -439,10 +439,10 @@ fn cabin_default_model_id_empty_and_known() {
 
 // Folded from PR #416.
 #[test]
-fn fallback_cabin_name_defaults_to_grok() {
+fn fallback_cabin_name_defaults_to_you() {
     let blank = super::fallback_cabin_name("");
     assert!(!blank.is_empty());
-    assert_eq!(blank, "Grok");
+    assert_eq!(blank, "You");
 
     let from_md = super::fallback_cabin_name("Name: Tester\n");
     assert!(!from_md.is_empty());
@@ -534,7 +534,7 @@ fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
     let oauth = include_str!("oauth.rs");
     assert!(
-        settings.contains("account_connect_chrome")
+        settings.contains("account_chrome_now")
             && settings.contains("pull_account_oauth_from_disk")
             && oauth.contains("Sign in with Grok")
             && oauth.contains("Sign out"),
