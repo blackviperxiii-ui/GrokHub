@@ -1,0 +1,1 @@
+- Shell: a Halt button stops desktop control and every running reply at once. It shows in the top bar while desktop control is on or something runs, and Ctrl+Alt+H, the tray's Halt and Super+Shift+Esc (when the system allows it) do the same. Cards that were waiting read "Not run: halted", and desktop steps stay off until the app restarts, as in the cabin.

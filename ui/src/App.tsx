@@ -1,17 +1,21 @@
-import { Activity, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
   getSettings,
+  getWorkboard,
+  haltDesktop,
   onAutomationRan,
   onChatEvent,
+  onHalt,
   shareSchedulerClock,
   type Capabilities,
 } from "./api";
-import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
+import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
+import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
@@ -21,6 +25,7 @@ import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
+import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -31,22 +36,26 @@ const loaders = {
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
+  home: () => import("./Home").then((m) => ({ default: m.Home })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
-  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
 const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
 const History = lazy(loaders.history);
+const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
+const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
 const Settings = lazy(loaders.settings);
@@ -81,7 +90,19 @@ export function App() {
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [open, setOpen] = useState<{ id: string; n: number }>();
   const [deleted, setDeleted] = useState<{ id: string; n: number }>();
+  /** The Chat tab's right-click menu, at the pointer; then its confirm; then the clear. */
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
+  const [askClear, setAskClear] = useState(false);
+  const [clear, setClear] = useState<{ n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // Which work card each chat works, from the Workboard's last load.
+  const [cardChats, setCardChats] = useState<Record<string, string>>({});
+  const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
+  const [desktopOn, setDesktopOn] = useState(false);
+  const [haltNote, setHaltNote] = useState<string>();
+  // Halt is the computer's own: phones and the web app have no desktop control.
+  const canHalt = caps.desktopControl && !caps.remote;
+  const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
   // The open chat for the Agents page: the conversation the window last heard from.
   const [openChat, setOpenChat] = useState<string>();
   // The pages opened so far. Each mounts the first time it opens, not before.
@@ -111,7 +132,35 @@ export function App() {
       (s) => applyTheme(s.theme),
       () => {},
     );
+    // A local read, so a chat's dock item can open its work card.
+    getWorkboard().then(
+      (board) => setCardChats(cardsByChat(board)),
+      () => {},
+    );
   }, []);
+  // Settings may have turned desktop control on or off; read it again when
+  // the view changes (leaving Settings included).
+  useEffect(() => {
+    if (!canHalt) return;
+    getSettings().then(
+      (s) => setDesktopOn(s.desktopControl),
+      () => {},
+    );
+  }, [canHalt, view]);
+  // The tray's Halt and Super+Shift+Esc land here too.
+  useEffect(() => {
+    if (!canHalt) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onHalt(() => setHaltNote(HALT_DONE)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [canHalt]);
   // The palette's Sign in row follows the key and the Grok sign-in, which
   // Settings may have added.
   useEffect(() => {
@@ -140,6 +189,12 @@ export function App() {
       dropped = true;
       stop?.();
     };
+  }, []);
+  const halt = useCallback(() => {
+    haltDesktop().then(
+      () => setHaltNote(HALT_DONE),
+      (err) => setHaltNote(`${HALT_FAILED} ${String(err)}`),
+    );
   }, []);
   // The shell's scheduler fires jobs at local times, so it needs this
   // window's clock; again every few minutes for daylight saving.
@@ -174,6 +229,11 @@ export function App() {
   }, []);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (canHalt && isHaltKey(event)) {
+        event.preventDefault();
+        halt();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === "k") {
@@ -189,7 +249,7 @@ export function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [canHalt, halt]);
 
   function ask(text: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
@@ -205,9 +265,18 @@ export function App() {
   // The palette's commands this shell can run; the others have no row yet.
   const runners: CommandRunners = {
     "new-chat": newChat,
+    halt,
     "sign-in": () => run({ kind: "settings", section: "account" }),
     shortcuts: () => setSheet(true),
   };
+
+  /** A saved chat, opened in Chat as History opens one. The web app has no
+   * History, so there it switches to the browser's own chat. */
+  function openSaved(id: string) {
+    if (caps.remote) setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: id }));
+    else setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+    setView("chat");
+  }
 
   function run(action: PaletteAction) {
     if (action.kind === "view") setView(action.view);
@@ -229,6 +298,9 @@ export function App() {
           <span>{PRODUCT_NAME}</span>
         </div>
         <nav className="tabs" aria-label="Views">
+          {tabMenu && (
+            <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />
+          )}
           {views(caps).map((name) => (
             <button
               key={name}
@@ -236,16 +308,30 @@ export function App() {
               aria-pressed={view === name}
               title={VIEW_LABELS[name]}
               onClick={() => setView(name)}
+              onContextMenu={
+                name === "chat" && !caps.remote
+                  ? (event) => {
+                      event.preventDefault();
+                      setTabMenu({ x: event.clientX, y: event.clientY });
+                    }
+                  : undefined
+              }
             >
               <TabIcon view={name} />
               <span className="tab-label">{VIEW_LABELS[name]}</span>
             </button>
           ))}
         </nav>
+        {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
           items={Object.values(activity)}
           onOpenChat={() => setView("chat")}
           onOpenAutomations={() => setView("automations")}
+          cardFor={(chat) => cardChats[chat]}
+          onOpenCard={(id) => {
+            setOpenCard((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+            setView("workboard");
+          }}
         />
         <button
           type="button"
@@ -256,6 +342,7 @@ export function App() {
           Command
         </button>
       </header>
+      {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
       {palette && (
         <Palette
           caps={caps}
@@ -267,6 +354,16 @@ export function App() {
       {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}
+      {askClear && (
+        <ClearChatDialog
+          onConfirm={() => {
+            setAskClear(false);
+            setView("chat");
+            setClear((now) => ({ n: (now?.n ?? 0) + 1 }));
+          }}
+          onClose={() => setAskClear(false)}
+        />
+      )}
       <div hidden={view !== "chat"}>
         <Chat
           onOpenSettings={() => setView("settings")}
@@ -277,6 +374,7 @@ export function App() {
           notice={notice}
           open={open}
           deleted={deleted}
+          clear={clear}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
           grokSignIn={Boolean(caps.grokSignIn)}
@@ -306,9 +404,45 @@ export function App() {
       </div>
       {/* Chat and Automations are not in <Activity>: hidden there, their
           listeners would stop and a reply landing meanwhile would be lost. */}
+      {opened.has("home") && (
+        <Page shown={view === "home"}>
+          <Home
+            conversationId={openChat}
+            remote={Boolean(caps.remote)}
+            onOpen={setView}
+            onOpenChat={openSaved}
+            onAsk={ask}
+            onSettings={(section) => run({ kind: "settings", section })}
+          />
+        </Page>
+      )}
+      {opened.has("objectives") && (
+        <Page shown={view === "objectives"}>
+          <Objectives
+            conversationId={openChat}
+            remote={Boolean(caps.remote)}
+            onOpenChat={openSaved}
+            onHome={() => setView("home")}
+          />
+        </Page>
+      )}
       {opened.has("pulse") && caps.pulse && (
         <Page shown={view === "pulse"}>
           <Pulse onRun={ask} />
+        </Page>
+      )}
+      {opened.has("workboard") && (
+        <Page shown={view === "workboard"}>
+          <Workboard
+            onWork={ask}
+            resumable={!caps.remote}
+            openCard={openCard}
+            onCards={setCardChats}
+            onResume={({ prompt, conversationId }) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
         </Page>
       )}
       {opened.has("journal") && !caps.remote && (
@@ -324,10 +458,7 @@ export function App() {
       {opened.has("history") && !caps.remote && (
         <Page shown={view === "history"}>
           <History
-            onOpen={(id) => {
-              setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
-              setView("chat");
-            }}
+            onOpen={openSaved}
             onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
           />
         </Page>
@@ -355,11 +486,6 @@ export function App() {
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
-        </Page>
-      )}
-      {opened.has("workboard") && (
-        <Page shown={view === "workboard"}>
-          <Workboard onWork={ask} />
         </Page>
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (

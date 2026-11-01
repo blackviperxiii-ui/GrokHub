@@ -1,5 +1,6 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { DELETE_ASK_QUESTION, DELETE_MESSAGE_LABEL, DELETE_REPLY_QUESTION, MESSAGE_MENU_LABEL } from "./DeleteMessage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Answer,
@@ -28,6 +29,9 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  deleteChat: vi.fn<(id: string) => Promise<void>>(),
+  forgetMessage:
+    vi.fn<(id: string, cut: { reply: boolean; text: string | null; later: number }) => Promise<boolean>>(),
   getLastChat: vi.fn<() => Promise<Transcript | null>>(),
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   setModel: vi.fn<(id: string) => Promise<Settings>>(),
@@ -44,6 +48,8 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  deleteChat: api.deleteChat,
+  forgetMessage: api.forgetMessage,
   getLastChat: api.getLastChat,
   loadChat: api.loadChat,
   setModel: api.setModel,
@@ -74,6 +80,7 @@ import {
   CHAT_EMPTY,
   EARLIER_STEP,
   EVENTS_LOST,
+  HALTED_LINE,
   itemsFrom,
   MISSION_BUSY,
   OPEN_BUSY,
@@ -388,6 +395,49 @@ describe("Chat", () => {
     expect(api.answerPermission).not.toHaveBeenCalled();
   });
 
+  it("Halt retires every waiting card as halted and says so once", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "d", title: "type", action: "hello", reason: "" });
+    emit(id, {
+      kind: "elicit",
+      id: "ask-h",
+      server: "Question",
+      message: "Which window?",
+      mode: "form",
+      url: "",
+      fieldName: "answer",
+      fieldTitle: "Your answer",
+      secret: false,
+    });
+    emit(id, { kind: "done", stop: "halted" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText("Not answered: halted.")).toBeInTheDocument();
+    expect(screen.getAllByText(HALTED_LINE)).toHaveLength(1);
+    expect(screen.getByText(HALTED_LINE)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a turn that comes back halted settles its cards even if the done event was missed", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "e", title: "type", action: "hi", reason: "" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
   it("a Deny from a notification shows on its card", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -410,6 +460,8 @@ describe("Chat", () => {
       { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
     ];
     expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
     expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
       answer: "deny",
     });
@@ -747,6 +799,94 @@ describe("Chat history", () => {
     await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
     const id = await startTurn("new start");
     expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat deletes the open chat's saved history and starts a new one", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockResolvedValue();
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    expect(api.deleteChat).toHaveBeenCalledWith("shell-saved");
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat keeps the chat on screen when the delete fails", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockRejectedValue("disk is read-only");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    expect(await screen.findByText(/disk is read-only/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a bubble's ··· deletes that message after asking, and a reply goes with its tools", async () => {
+    api.getLastChat.mockResolvedValue({
+      ...SAVED,
+      lines: [...SAVED.lines, { role: "user", text: "and the trim?" }, { role: "assistant", text: "White." }],
+    });
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    render(<Chat onOpenSettings={() => {}} />);
+    const ask = await screen.findByText("and the trim?");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    const dialog = screen.getByRole("alertdialog", { name: DELETE_ASK_QUESTION });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep" }));
+    expect(api.forgetMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("and the trim?")).toBeVisible();
+
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenCalledWith("shell-saved", {
+      from: 3,
+      to: 4,
+      reply: false,
+      text: "and the trim?",
+      later: 0,
+    });
+    await waitFor(() => expect(screen.queryByText("and the trim?")).toBeNull());
+
+    // The ··· adds nothing to a bubble's text, so copying or reading it
+    // gives the message alone.
+    expect(screen.getByText("White.").closest(".bubble")?.textContent).toBe("White.");
+
+    // Right-click on a reply: the whole reply to "pick a paint colour" goes,
+    // its tools line included, now that "White." answers it too.
+    fireEvent.contextMenu(screen.getByText("White."));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    expect(screen.getByRole("alertdialog", { name: DELETE_REPLY_QUESTION })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenLastCalledWith(
+      "shell-saved",
+      expect.objectContaining({ reply: true, text: "pick a paint colour", later: 0 }),
+    );
+    await waitFor(() => expect(screen.queryByText("White.")).toBeNull());
+    expect(screen.queryByText("Tools ran: read_file, web_search")).toBeNull();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a delete the saved chat refuses keeps the message and says why", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.forgetMessage.mockReset().mockRejectedValue("Wait for the reply to finish, then delete the message.");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText("pick a paint colour"));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/Wait for the reply to finish/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("the web app offers no message menu", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await startTurn("hello from the phone");
+    expect(screen.queryByRole("button", { name: MESSAGE_MENU_LABEL })).toBeNull();
   });
 
   it("Show earlier loads more of a long chat's start", async () => {

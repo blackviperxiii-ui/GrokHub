@@ -1108,6 +1108,7 @@ impl Cabin {
                                                             );
                                                             self.ui_wind_down_row(ui);
                                                             self.ui_downloads_tidy_row(ui);
+                                                            self.ui_workboard_tidy_row(ui);
                                                             crate::ui_kit::section_header(
                                                                 ui,
                                                                 "Tray & wall",

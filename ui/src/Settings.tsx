@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
+  getHaltKeys,
   getAutostart,
   getSettings,
   saveSettings,
@@ -29,6 +30,7 @@ import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
+import { WorkboardTidy } from "./WorkboardTidy";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
 
@@ -38,6 +40,10 @@ export const DESKTOP_NOTE =
 export const GENERAL_EMPTY =
   "Nothing here on this device. The model, work folder and approvals are in Defaults.";
 
+export const HALT_KEYS_NOTE =
+  "Halt stops desktop control and every reply: the Halt button, Ctrl+Alt+H in this window, the tray's Halt, or Super+Shift+Esc from any app.";
+export const HALT_KEYS_LOCAL =
+  "Super+Shift+Esc isn't available here (another app holds it, or this desktop has no system-wide keys). Ctrl+Alt+H, the button and the tray still halt.";
 /** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
 export const SUMMON_KEYS =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
@@ -57,6 +63,8 @@ export function Settings({
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
+  /** Super+Shift+Esc registered system-wide; null until read. */
+  const [globalHalt, setGlobalHalt] = useState<boolean | null>(null);
   /** As the OS has it; null until read. */
   const [autostart, setAutostartShown] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
@@ -96,6 +104,14 @@ export function Settings({
       fail,
     );
   }, [fail]);
+
+  useEffect(() => {
+    if (!caps.desktopControl || caps.remote) return;
+    getHaltKeys().then(
+      (keys) => setGlobalHalt(keys.global),
+      () => setGlobalHalt(false),
+    );
+  }, [caps.desktopControl, caps.remote]);
 
   useEffect(() => {
     if (!caps.autostart || caps.remote) return;
@@ -226,6 +242,7 @@ export function Settings({
             onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
           />
         )}
+        {section === "behavior" && <WorkboardTidy />}
         {section === "appearance" && (
           <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
         )}
@@ -254,6 +271,7 @@ export function Settings({
             Let {PRODUCT_NAME} control the desktop
           </Toggle>
           {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+          {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
           <button type="submit">Save settings</button>
         </form>
         {onThisComputer}

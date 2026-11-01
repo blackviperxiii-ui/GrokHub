@@ -74,13 +74,15 @@ fn shell_id(id: &str) -> Result<&str, String> {
 }
 
 /// When the chat's file last changed, or its start time if that can't be read.
+/// Never before the start: the file system's coarse clock can stamp a file
+/// written in the same millisecond a few ms behind `now_ms`.
 fn updated_ms(info: &SessionInfo) -> u64 {
     grokhub_agent::session_file(&info.id)
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok())
         .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-        .map_or(info.created, |at| at.as_millis() as u64)
+        .map_or(info.created, |at| (at.as_millis() as u64).max(info.created))
 }
 
 fn row(info: &SessionInfo) -> ChatRow {
@@ -203,12 +205,41 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
     grokhub_agent::rename_session(id, title)
 }
 
-/// Deletes the chat's file; a turn still running is not written back.
+/// Deletes the chat's file and its files; a turn still running is not
+/// written back. `/bg` and scheduled forks of it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
     let _config = ConfigGuard::set(config_dir);
-    grokhub_agent::delete_session(id)
+    grokhub_agent::delete_session(id)?;
+    grokhub_agent::delete_forks_of(&[id.to_string()]);
+    Ok(())
 }
+
+/// Takes one message out of a saved shell chat, so the model never reads it
+/// again: the ask `text` (`later` counts the same ask sent after it), or with
+/// `reply` the reply to that ask (no `text`: the reply before any ask).
+/// False when the saved chat had no copy of it. A running reply refuses.
+pub fn forget(
+    config_dir: &Path,
+    id: &str,
+    reply: bool,
+    text: Option<&str>,
+    later: usize,
+) -> Result<bool, String> {
+    let id = shell_id(id)?;
+    let _config = ConfigGuard::set(config_dir);
+    let what = match (reply, text) {
+        (true, ask) => grokhub_agent::Forget::Reply {
+            ask: ask.map(|text| (text, later)),
+        },
+        (false, Some(text)) => grokhub_agent::Forget::Ask { text, later },
+        (false, None) => return Err(NO_MESSAGE.into()),
+    };
+    Ok(grokhub_agent::forget_message(id, what)? == grokhub_agent::Forgotten::Removed)
+}
+
+/// Delete message… with no message named.
+pub const NO_MESSAGE: &str = "Pick the message to delete.";
 
 #[cfg(test)]
 mod tests {
@@ -474,6 +505,49 @@ mod tests {
     }
 
     #[test]
+    fn forgetting_a_message_keeps_it_from_the_next_turn() {
+        let (config, workspace) = (temp_dir("forget-cfg"), temp_dir("forget-ws"));
+        let id = "shell-history-forget";
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Hi.", false),
+            "keep this",
+        );
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Noted the fruit.", false),
+            "the code is kumquat",
+        );
+        assert_eq!(forget(&config, id, false, None, 0), Err(NO_MESSAGE.into()));
+        assert_eq!(
+            forget(&config, "native-cabin-1", false, Some("x"), 0),
+            Err(NOT_SHELL.into())
+        );
+        assert_eq!(
+            forget(&config, id, false, Some("the code is kumquat"), 0),
+            Ok(true)
+        );
+        // The reply to "keep this" goes whole; the later reply now follows it.
+        assert_eq!(forget(&config, id, true, Some("keep this"), 0), Ok(true));
+        assert_eq!(forget(&config, id, false, Some("never said"), 0), Ok(false));
+        let shown = load(&config, id, LOAD_CAP).expect("load");
+        assert_eq!(shown.lines, vec![line(Role::User, "keep this")]);
+
+        let next = Model::new("Ok.", false);
+        turn(id, &config, &workspace, Arc::clone(&next), "what now");
+        let sent = format!("{:?}", next.messages(0));
+        assert!(
+            !sent.contains("kumquat") && !sent.contains("fruit"),
+            "{sent}"
+        );
+        assert!(sent.contains("keep this"), "{sent}");
+    }
+
+    #[test]
     fn rename_and_delete_change_only_the_shell_chat() {
         let (config, workspace) = (temp_dir("edit-cfg"), temp_dir("edit-ws"));
         let id = "shell-history-edit";
@@ -514,8 +588,18 @@ mod tests {
 
         let file = config.join("sessions").join(format!("{id}.jsonl"));
         assert!(file.exists());
+        let fork = {
+            let _config = ConfigGuard::set(&config);
+            grokhub_agent::fork_session(id).expect("fork")
+        };
+        let fork_file = config.join("sessions").join(format!("{}.jsonl", fork.id));
+        assert!(fork_file.exists());
         delete(&config, id).expect("delete");
         assert!(!file.exists());
+        assert!(
+            !fork_file.exists(),
+            "a /bg fork holds a copy of the chat, so it goes too"
+        );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert!(load(&config, id, LOAD_CAP).is_err());
     }

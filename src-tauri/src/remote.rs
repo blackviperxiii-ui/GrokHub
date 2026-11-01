@@ -55,6 +55,7 @@ pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
 /// The web app's commands: chat with approvals, automations, memory,
 /// connectors, Pulse, Imagine, the Agents page and the workboard, reading the settings and the skills list, and which Nyx picture shows.
+/// Home and Objectives are read only, with only the browser's own chats.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
@@ -102,13 +103,24 @@ pub const WEB_COMMANDS: &[&str] = &[
     "nyx_look",
     "get_queue",
     "stop_task",
+    // The Workboard: every change goes through the shared board lock and merge.
+    // Resume stays in the desktop shell.
     "get_workboard",
+    "workboard_stamp",
+    "workboard_log",
     "workboard_add",
     "workboard_act",
     "workboard_work",
+    "workboard_recur",
+    "workboard_delete_archived",
+    "workboard_sweep_undo",
+    "workboard_sweep_dismiss",
     "get_behavior",
     "get_privacy",
     "get_background",
+    // Read only; Accept as done (`set_mission_done`) stays on the computer.
+    "get_home",
+    "get_mission",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -833,6 +845,13 @@ mod tests {
     }
 
     #[test]
+    fn a_browser_never_halts_the_computer() {
+        for name in ["halt_desktop", "get_halt_keys"] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
+    }
+
+    #[test]
     fn a_browser_never_checks_installs_or_switches_shell_updates() {
         for name in [
             "get_update_status",
@@ -1000,9 +1019,33 @@ mod tests {
             "get_library",
             "library_cover",
             "library_play",
+            "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_web_has_the_workboard_but_not_resume() {
+        for name in [
+            "get_workboard",
+            "workboard_stamp",
+            "workboard_log",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
+            "workboard_recur",
+            "workboard_delete_archived",
+            "workboard_sweep_undo",
+            "workboard_sweep_dismiss",
+        ] {
+            assert!(web_command(name), "{name}");
+        }
+        assert!(!web_command("workboard_resume"));
+        // Playbooks live on the computer, so starting one stays there too.
+        assert!(!web_command("workboard_playbook"));
+        // The tidy setting stays on the computer, like the rest of Settings.
+        assert!(!web_command("set_workboard_tidy"));
     }
 
     #[test]
@@ -1018,6 +1061,14 @@ mod tests {
         ] {
             assert!(!web_command(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_web_reads_home_and_objectives_but_never_accepts_a_mission() {
+        for name in ["get_home", "get_mission"] {
+            assert!(web_command(name), "{name}");
+        }
+        assert!(!web_command("set_mission_done"));
     }
 
     #[test]

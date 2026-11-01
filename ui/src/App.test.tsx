@@ -6,19 +6,34 @@ import type { Capabilities } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
+// The tray's Halt and Super+Shift+Esc reach the window through this.
+const haltHandlers = vi.hoisted(() => [] as ((stopped: string[]) => void)[]);
 const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
-  getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
+  getSettings: vi.fn(() => Promise.resolve({ theme: "light", desktopControl: false })),
+  haltDesktop: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),
   slashHits: vi.fn(async (draft: string) =>
     [
       { cmd: "/plan", hint: "Plan first", insert: "/plan ", runOnPick: false, disabled: null },
       { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
     ].filter((hit) => hit.cmd.startsWith(draft)),
   ),
+  // One card, worked by chat "shell-c1", so its dock item can open it.
+  getWorkboard: vi.fn(() =>
+    Promise.resolve({
+      columns: [{ lane: "blocked", label: "Blocked", cards: [{ id: "w1", chat: "shell-c1" }] }],
+      archived: [],
+      stamp: 1,
+    }),
+  ),
   onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
     chatHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
+  onHalt: vi.fn((handler: (stopped: string[]) => void) => {
+    haltHandlers.push(handler);
     return Promise.resolve(() => {});
   }),
   onAutomationRan: vi.fn((handler: (run: unknown) => void) => {
@@ -36,17 +51,20 @@ vi.mock("./Chat", () => ({
     prefill,
     open,
     deleted,
+    clear,
     onSignIn,
   }: {
     prefill?: { text: string; n: number; conversationId?: string };
     open?: { id: string; n: number };
     deleted?: { id: string; n: number };
+    clear?: { n: number };
     onSignIn: () => void;
   }) => (
     <div>
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
+      {clear && <p>Cleared {clear.n}</p>}
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -73,10 +91,29 @@ vi.mock("./History", () => ({
   ),
 }));
 vi.mock("./Workboard", () => ({
-  Workboard: ({ onWork }: { onWork: (prompt: string) => void }) => (
-    <button type="button" onClick={() => onWork("Work on this workboard card: Ship it")}>
-      Work
-    </button>
+  Workboard: ({
+    onWork,
+    resumable = true,
+    openCard,
+    onResume,
+  }: {
+    onWork: (prompt: string) => void;
+    resumable?: boolean;
+    openCard?: { id: string };
+    onResume?: (r: { conversationId: string; prompt: string }) => void;
+  }) => (
+    <div>
+      <p>
+        Workboard page{resumable ? "" : " without Resume"}
+        {openCard && ` at ${openCard.id}`}
+      </p>
+      <button type="button" onClick={() => onWork("Work on this workboard card: Ship it")}>
+        Work
+      </button>
+      <button type="button" onClick={() => onResume?.({ conversationId: "chat-w1", prompt: "Resume the work card" })}>
+        Resume
+      </button>
+    </div>
   ),
 }));
 vi.mock("./Automations", () => ({
@@ -106,6 +143,23 @@ vi.mock("./Skills", () => ({
     </button>
   ),
 }));
+vi.mock("./Home", () => ({
+  Home: ({ onOpen, conversationId }: { onOpen: (view: string) => void; conversationId?: string }) => (
+    <div>
+      <p>Home page for {conversationId ?? "the last chat"}</p>
+      <button type="button" onClick={() => onOpen("objectives")}>
+        Objectives tile
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./Objectives", () => ({
+  Objectives: ({ onHome }: { onHome: () => void }) => (
+    <button type="button" onClick={onHome}>
+      Objectives page
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
@@ -119,6 +173,7 @@ vi.mock("./Settings", () => ({
 }));
 
 import { App } from "./App";
+import { HALT_DONE } from "./Halt";
 
 const DESKTOP: Capabilities = {
   desktopControl: true,
@@ -144,6 +199,7 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
     expect(tabs()).toEqual([
+      "Home",
       "Chat",
       "History",
       "Pulse",
@@ -163,6 +219,23 @@ describe("App", () => {
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
+  });
+
+  it("opens on Chat with Home as the first tab, and Home's tile opens Objectives", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    expect(tabs()[0]).toBe("Home");
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/Home page/)).toBeNull();
+    // Objectives has no tab; Home and the palette open it.
+    expect(tabs()).not.toContain("Objectives");
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+    expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Objectives tile" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Objectives page" }));
+    expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("opens Devices, whose Web access link goes to that Settings section", async () => {
@@ -200,14 +273,25 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
-  it("leaves the Journal and History off the web app", async () => {
+  it("leaves the Journal and History off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
+    expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
+  });
+
+  it("Resume on the Workboard puts the draft in the card's chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    expect(screen.getByText("Chat page: Resume the work card in chat-w1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -228,6 +312,33 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open old chat" }));
     expect(screen.getByText("Opened shell-old")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("right-clicking the Chat tab offers Clear chat, which asks first and says it's permanent", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    const tab = await screen.findByRole("button", { name: "Chat" });
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear chat…" }));
+    const ask = screen.getByRole("alertdialog", { name: "Clear this chat?" });
+    expect(within(ask).getByText(/This is permanent/)).toBeVisible();
+    await userEvent.click(within(ask).getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByText(/Cleared/)).toBeNull();
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear chat…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Clear chat" }));
+    expect(screen.getByText("Cleared 1")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("the web app's Chat tab has no Clear chat", async () => {
+    api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
+    render(<App />);
+    const tab = await screen.findByRole("button", { name: "Chat" });
+    await userEvent.pointer({ keys: "[MouseRight]", target: tab });
+    expect(screen.queryByRole("menuitem", { name: "Clear chat…" })).toBeNull();
   });
 
   it("Agents follows the chat the window last heard from and links back to Chat", async () => {
@@ -320,7 +431,8 @@ describe("App", () => {
     await userEvent.keyboard("{Control>}/{/Control}");
     const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
     expect(within(sheet).getByRole("row", { name: "Ctrl+N New chat" })).toBeInTheDocument();
-    expect(within(sheet).queryByText("Halt")).toBeNull();
+    // Desktop control is in this shell, so Halt has its keys.
+    expect(within(sheet).getByRole("row", { name: "Ctrl+Alt+H Halt" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -330,8 +442,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Command" }));
-    // No halt command in this shell yet, so no Halt row even with desktop control.
-    expect(screen.queryByRole("option", { name: "Halt" })).toBeNull();
+    // Desktop control is in this shell, so the palette offers Halt.
+    expect(screen.getByRole("option", { name: "Halt" })).toBeInTheDocument();
     await userEvent.keyboard("sign");
     await userEvent.click(await screen.findByRole("option", { name: "Sign in" }));
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
@@ -363,11 +475,12 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Command" }));
-    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    // The theme, Halt's desktop-control check, then the palette's sign-in check.
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(3));
     await userEvent.keyboard("sign");
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ask Loadout: sign"]);
     api.getSettings.mockReset();
-    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light" }));
+    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light", desktopControl: false }));
   });
 
   it("the Sign in row goes once the key is in", async () => {
@@ -376,11 +489,12 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Command" }));
-    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    // The theme, Halt's desktop-control check, then the palette's sign-in check.
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(3));
     await userEvent.keyboard("sign");
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ask Loadout: sign"]);
     api.getSettings.mockReset();
-    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light" }));
+    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light", desktopControl: false }));
   });
 
   it("the Activity Dock shows an approval waiting from any page and opens the chat", async () => {
@@ -401,8 +515,108 @@ describe("App", () => {
     expect(within(dock).getByRole("listitem", { name: "Chat reply" })).toHaveTextContent(
       "Needs your OK: Run npm test",
     );
+    expect(within(dock).queryByRole("button", { name: "Open card" })).toBeNull();
     await userEvent.click(within(dock).getByRole("button", { name: "Review" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a dock item whose chat works a card opens that card on the Workboard", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(chatHandlers.length).toBe(1));
+    await waitFor(() => expect(api.getWorkboard).toHaveBeenCalled());
+    act(() => {
+      chatHandlers[0]({ conversationId: "shell-c1", event: { kind: "text", text: "On it" } });
+    });
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
+    await userEvent.click(within(dock).getByRole("button", { name: "Open card" }));
+    expect(await screen.findByText("Workboard page at w1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Workboard" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  describe("Halt", () => {
+    beforeEach(() => {
+      api.haltDesktop.mockClear();
+      api.getSettings.mockResolvedValue({ theme: "light", desktopControl: false });
+      chatHandlers.length = 0;
+      haltHandlers.length = 0;
+    });
+
+    it("stays out of the top bar while desktop control is off and nothing runs", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      render(<App />);
+      await screen.findByRole("button", { name: "Pulse" });
+      await waitFor(() => expect(chatHandlers.length).toBe(1));
+      expect(screen.queryByRole("button", { name: "Halt" })).toBeNull();
+    });
+
+    it("shows while a reply runs, and a press halts and says so", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      api.haltDesktop.mockResolvedValue(["shell-1"]);
+      render(<App />);
+      await waitFor(() => expect(chatHandlers.length).toBe(1));
+      act(() => chatHandlers[0]({ conversationId: "shell-1", event: { kind: "text", text: "Typing" } }));
+
+      await userEvent.click(await screen.findByRole("button", { name: "Halt" }));
+      expect(api.haltDesktop).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole("status")).toHaveTextContent(HALT_DONE);
+      act(() => chatHandlers[0]({ conversationId: "shell-1", event: { kind: "done", stop: "halted" } }));
+      expect(screen.queryByRole("button", { name: "Halt" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByText(HALT_DONE)).toBeNull();
+    });
+
+    it("shows whenever desktop control is on", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      api.getSettings.mockResolvedValue({ theme: "light", desktopControl: true });
+      render(<App />);
+      expect(await screen.findByRole("button", { name: "Halt" })).toHaveClass("halt");
+    });
+
+    it("Ctrl+Alt+H halts from any page, button shown or not", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      render(<App />);
+      await userEvent.click(await screen.findByRole("button", { name: "Memory" }));
+      await userEvent.keyboard("{Control>}{Alt>}h{/Alt}{/Control}");
+      expect(api.haltDesktop).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText(HALT_DONE)).toBeInTheDocument();
+      await userEvent.keyboard("{Control>}h{/Control}");
+      expect(api.haltDesktop).toHaveBeenCalledTimes(1);
+    });
+
+    it("a Halt from the tray or Super+Shift+Esc shows the same note", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      render(<App />);
+      await waitFor(() => expect(haltHandlers.length).toBe(1));
+      act(() => haltHandlers[0]([]));
+      expect(screen.getByRole("status")).toHaveTextContent(HALT_DONE);
+      expect(api.haltDesktop).not.toHaveBeenCalled();
+    });
+
+    it("a failed Halt says so", async () => {
+      api.getCapabilities.mockResolvedValue(DESKTOP);
+      api.haltDesktop.mockRejectedValueOnce("The window is closing.");
+      api.getSettings.mockResolvedValue({ theme: "light", desktopControl: true });
+      render(<App />);
+      await userEvent.click(await screen.findByRole("button", { name: "Halt" }));
+      expect(await screen.findByRole("status")).toHaveTextContent("Halt didn't go through: The window is closing.");
+    });
+
+    it("the web app and phones get no Halt, and the keys do nothing", async () => {
+      for (const caps of [{ ...api.CORE_ONLY, remote: true }, { ...DESKTOP, remote: true }, api.CORE_ONLY]) {
+        api.getCapabilities.mockResolvedValue(caps);
+        api.getSettings.mockResolvedValue({ theme: "light", desktopControl: true });
+        const { unmount } = render(<App />);
+        await screen.findByRole("button", { name: "Settings" });
+        await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
+        await userEvent.keyboard("{Control>}{Alt>}h{/Alt}{/Control}");
+        expect(screen.queryByRole("button", { name: "Halt" })).toBeNull();
+        unmount();
+      }
+      expect(api.haltDesktop).not.toHaveBeenCalled();
+    });
   });
 
   it("shares the clock with the scheduler and shows a scheduled run in the dock", async () => {

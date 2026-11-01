@@ -417,6 +417,43 @@ pub(super) enum ChatBlockAct {
     Edit(String),
     /// Labs Diagnostics mode: save this turn's redacted debug bundle.
     SaveDiagnostics(u32),
+    /// The bubble's ··· or right-click menu: Delete message…. The row it
+    /// came from names which messages go.
+    Delete,
+}
+
+/// The quiet "more" button at the end of a bubble's actions. The UI font
+/// has no "⋯" glyph.
+pub(super) const MSG_MORE_LABEL: &str = "···";
+/// The one item in a bubble's ··· and right-click menus.
+pub(super) const DELETE_MSG_LABEL: &str = "Delete message…";
+
+/// The bubble menu's items. True when Delete message… was picked.
+fn msg_menu_items(ui: &mut egui::Ui) -> bool {
+    ui.set_min_width(140.0);
+    let picked = ui.button(DELETE_MSG_LABEL).clicked();
+    if picked {
+        ui.close();
+    }
+    picked
+}
+
+/// Right-click anywhere on a bubble opens its menu at the pointer. The
+/// bubble only hovers, so its text stays selectable and its links clickable.
+fn msg_context_menu(ui: &egui::Ui, bubble: &egui::Response) -> bool {
+    let open = bubble.contains_pointer() && ui.input(|i| i.pointer.secondary_clicked());
+    egui::Popup::new(
+        bubble.id.with("msg-menu"),
+        ui.ctx().clone(),
+        bubble.rect,
+        ui.layer_id(),
+    )
+    .kind(egui::PopupKind::Menu)
+    .layout(egui::Layout::top_down_justified(egui::Align::Min))
+    .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+    .at_pointer_fixed()
+    .show(msg_menu_items)
+    .is_some_and(|r| r.inner)
 }
 
 pub(super) struct ChatBlockPaint {
@@ -675,15 +712,15 @@ fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
 /// Message actions. Diagnostics mode adds Save diagnostics on assistant rows.
 pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     if user {
-        &["Copy", "Edit", "Reply"]
+        &["Copy", "Edit", "Reply", MSG_MORE_LABEL]
     } else {
-        &["Copy", "Reply"]
+        &["Copy", "Reply", MSG_MORE_LABEL]
     }
 }
 
 pub(super) fn msg_act_labels_for(user: bool, diagnostics: bool) -> &'static [&'static str] {
     if !user && diagnostics {
-        &["Copy", "Reply", "Save diagnostics"]
+        &["Copy", "Reply", "Save diagnostics", MSG_MORE_LABEL]
     } else {
         msg_act_labels(user)
     }
@@ -762,7 +799,14 @@ pub(super) fn paint_msg_acts_for(
             } else {
                 resp
             };
-            if resp.clicked() {
+            if label == MSG_MORE_LABEL {
+                let picked = egui::Popup::menu(&resp)
+                    .show(msg_menu_items)
+                    .is_some_and(|r| r.inner);
+                if picked {
+                    act = ChatBlockAct::Delete;
+                }
+            } else if resp.clicked() {
                 if label == "Copy" {
                     crate::theme::mark_copy_clicked(ui.ctx(), resp.id);
                 }
@@ -1242,17 +1286,20 @@ pub(super) fn paint_chat_block_with(
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
+            let menu = msg_context_menu(ui, &resp);
             // User rows never show Save diagnostics; keep paint_msg_acts on the
             // hot path so the thin wrapper stays live for tests and callers.
             let _ = (diagnostics, diag_turn);
+            let act = paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act;
             ChatBlockPaint {
-                act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act,
+                act: if menu { ChatBlockAct::Delete } else { act },
                 drawn: true,
                 thought_fold,
             }
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
+            let menu = msg_context_menu(ui, &resp);
             let act = if reply_acts {
                 paint_msg_acts_for(
                     ui,
@@ -1267,6 +1314,7 @@ pub(super) fn paint_chat_block_with(
             } else {
                 ChatBlockAct::None
             };
+            let act = if menu { ChatBlockAct::Delete } else { act };
             ChatBlockPaint {
                 act,
                 drawn: true,
@@ -1277,6 +1325,7 @@ pub(super) fn paint_chat_block_with(
             // GL-05: a slash or system result keeps this one bubble as it ages.
             // It never takes the thought frame, its slanted text, or its label.
             let resp = paint_result_bubble(ui, &block.body);
+            let menu = msg_context_menu(ui, &resp);
             let act = if reply_acts {
                 paint_msg_acts_for(
                     ui,
@@ -1291,6 +1340,7 @@ pub(super) fn paint_chat_block_with(
             } else {
                 ChatBlockAct::None
             };
+            let act = if menu { ChatBlockAct::Delete } else { act };
             ChatBlockPaint {
                 act,
                 drawn: true,
@@ -1500,6 +1550,8 @@ impl Cabin {
                     let thinking = self.thinking_here();
                     let live = thinking && !self.live_blocks.is_empty();
                     let mut act = ChatBlockAct::None;
+                    // The stored row whose menu picked Delete message….
+                    let mut delete_view: Option<usize> = None;
                     let jump_you = self.jump_last_you;
                     let mut jumped_you = false;
                     let no_turn_row;
@@ -1757,6 +1809,7 @@ impl Cabin {
                             }
                             match painted.act {
                                 ChatBlockAct::None => {}
+                                ChatBlockAct::Delete => delete_view = Some(i),
                                 other => act = other,
                             }
                             if painted.drawn {
@@ -1849,7 +1902,14 @@ impl Cabin {
                         ChatBlockAct::SaveDiagnostics(turn) => {
                             self.save_chat_diagnostics(Some(turn.max(1)));
                         }
+                        // The reply still streaming has no stored row yet.
+                        ChatBlockAct::Delete => {
+                            self.status = grokhub_agent::FORGET_BUSY.into();
+                        }
                         ChatBlockAct::None => {}
+                    }
+                    if let Some(view) = delete_view {
+                        self.ask_delete_bubble(view);
                     }
                     if self.chrome_here() {
                         self.paint_approval_stack(ui);

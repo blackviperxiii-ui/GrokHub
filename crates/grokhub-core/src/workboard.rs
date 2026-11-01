@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::uid;
 use crate::work_item::{Checkpoint, WorkKind, WorkOrigin, WorkStep};
 use crate::work_resume::{interrupt_card, InterruptCause, RunState};
+use crate::work_triage::CardFlow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -169,6 +170,17 @@ pub struct BoardCard {
     /// KB-03: who runs it, in which mode, and how its last run was interrupted.
     #[serde(default, skip_serializing_if = "RunState::is_empty")]
     pub run_state: RunState,
+    /// When you queued it for the agent; 0 when it is not queued. The oldest
+    /// queued card starts first, once nothing else is running.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub queued_ms: u64,
+    /// The playbook, recipe or automation you started on this card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<CardFlow>,
+    /// You edited the steps, so the plan is yours: the agent may only move a
+    /// step forward, never rename, drop or undo one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub user_steps: bool,
     /// How this hook put the card in Doing. Cleared on settle. Not persisted.
     #[serde(skip)]
     undo: Option<InflightUndo>,
@@ -453,6 +465,9 @@ impl BoardCard {
             archived_ms: 0,
             rev: 0,
             run_state: RunState::default(),
+            queued_ms: 0,
+            flow: None,
+            user_steps: false,
             undo: None,
         }
     }

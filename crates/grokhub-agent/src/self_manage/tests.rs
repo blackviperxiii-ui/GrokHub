@@ -816,6 +816,33 @@ fn work_tools_respect_caps_and_ownership_and_have_no_delete() {
     );
     assert!(bad_step.failed && bad_step.text.contains("no step 99"));
 
+    // You edit the plan on the board: your version wins over the agent's update
+    // on the same step, and it may still move a step forward.
+    wr::edit_board_file(&wr::board_path(&root), 1, |cards| {
+        let c = cards.iter_mut().find(|c| c.id == big).unwrap();
+        grokhub_core::work_triage::edit_steps(c, "[x] Read the logs\n[-] Patch it\nTest it", 1)
+    })
+    .unwrap();
+    let lost = run_with(
+        &ctx,
+        "work_update",
+        &json!({ "id": big, "step": 2, "status": "doing" }),
+    );
+    assert!(!lost.failed, "{}", lost.text);
+    assert!(lost.text.contains("the user's plan"), "{}", lost.text);
+    let forward = run_with(
+        &ctx,
+        "work_update",
+        &json!({ "id": big, "step": 3, "status": "done" }),
+    );
+    assert!(!forward.failed, "{}", forward.text);
+    let cards = wr::read_board_file(&wr::board_path(&root)).unwrap();
+    let c = cards.iter().find(|c| c.id == big).unwrap();
+    let texts: Vec<&str> = c.steps.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(texts, ["Read the logs", "Patch it", "Test it"]);
+    assert_eq!(c.steps[1].status, grokhub_core::StepStatus::Skipped);
+    assert_eq!(c.steps[2].status, grokhub_core::StepStatus::Done);
+
     let added = run_with(
         &ctx,
         "work_add",
@@ -828,6 +855,7 @@ fn work_tools_respect_caps_and_ownership_and_have_no_delete() {
     assert_eq!(new.status, grokhub_core::BoardStatus::Todo);
     assert_eq!(new.origin, Some(grokhub_core::WorkOrigin::Agent));
     assert_eq!(new.checkpoint.as_ref().unwrap().next, "Open the share");
+    let fresh = new.id.clone();
 
     let keep = run_with(&ctx, "work_archive", &json!({ "id": touched }));
     assert!(
@@ -837,11 +865,14 @@ fn work_tools_respect_caps_and_ownership_and_have_no_delete() {
     );
     let keep = run_with(&ctx, "work_archive", &json!({ "id": user }));
     assert!(keep.failed);
-    let gone = run_with(&ctx, "work_archive", &json!({ "id": big }));
+    // Your step edit made the agent's card yours to keep.
+    let keep = run_with(&ctx, "work_archive", &json!({ "id": big }));
+    assert!(keep.failed && keep.text.contains("user touched"));
+    let gone = run_with(&ctx, "work_archive", &json!({ "id": fresh }));
     assert!(!gone.failed, "{}", gone.text);
     let cards = wr::read_board_file(&wr::board_path(&root)).unwrap();
     assert_eq!(
-        cards.iter().find(|c| c.id == big).unwrap().status,
+        cards.iter().find(|c| c.id == fresh).unwrap().status,
         grokhub_core::BoardStatus::Dismissed,
         "archived, never deleted"
     );

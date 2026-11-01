@@ -346,6 +346,16 @@ export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
 }
 
+/** Takes one message out of a saved chat after the page asked: the ask
+ * `text`, or with `reply` the reply to it (no `text`: the reply before any
+ * ask). False when the saved chat had no copy. A running reply refuses. */
+export function forgetMessage(
+  id: string,
+  cut: { reply: boolean; text: string | null; later: number },
+): Promise<boolean> {
+  return invoke<boolean>("forget_message", { id, reply: cut.reply, text: cut.text, later: cut.later });
+}
+
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
@@ -356,6 +366,31 @@ export function openUrl(url: string): Promise<void> {
 
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
+}
+
+/** Sent after every Halt (top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc). */
+export const HALT_EVENT = "halt://done";
+
+/** Halt: stops desktop control and every running prompt at once. Resolves
+ * with the chats it stopped mid-reply. Desktop only; the web app and phones
+ * are refused. */
+export function haltDesktop(): Promise<string[]> {
+  if (!inShell()) return Promise.reject(new Error("Halt runs on the computer itself."));
+  return invoke<string[]>("halt_desktop");
+}
+
+/** The chats a Halt stopped, whichever way it was pressed. */
+export function onHalt(handler: (stopped: string[]) => void): Promise<UnlistenFn> {
+  return subscribe<string[]>(HALT_EVENT, handler);
+}
+
+export interface HaltKeys {
+  /** Super+Shift+Esc works from any app, not only this window. */
+  global: boolean;
+}
+
+export function getHaltKeys(): Promise<HaltKeys> {
+  return invoke<HaltKeys>("get_halt_keys");
 }
 
 /** The web app's stream was down longer than the desktop keeps events for. */
@@ -918,6 +953,11 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
 export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
 
+export interface WorkStepView {
+  text: string;
+  status: "planned" | "doing" | "done" | "skipped" | "failed";
+}
+
 export interface BoardCard {
   id: string;
   title: string;
@@ -929,6 +969,31 @@ export interface BoardCard {
   fresh: boolean;
   /** A Follow up card's latest report. */
   report: string;
+  /** Who owns it, as the cabin's badge reads. */
+  owner: "Agent" | "You";
+  /** Automation, Background, Episode or Flow; a plain task has none. */
+  kind: string | null;
+  /** Where the work left off. */
+  leftOff: string | null;
+  steps: WorkStepView[];
+  checkpoint: { goal: string; next: string; blocker: string; refs: string[] } | null;
+  /** Steps done and in all. */
+  progress: [number, number];
+  /** A paused or interrupted run: Resume and Hand back apply. */
+  canResume: boolean;
+  /** The cabin chat that works it. */
+  chat: string | null;
+  updatedMs: number;
+  /** When it was archived; 0 for a card on the board. */
+  archivedMs: number;
+  /** "Queued", "Queued · 2nd": waiting for the agent; null when not queued. */
+  queued: string | null;
+  /** The flow started on it: "Playbook · Linux repair". */
+  flow: string | null;
+  /** You edited the steps, so the agent works from your version. */
+  userSteps: boolean;
+  /** The steps as the editor shows them, one a line with its mark. */
+  stepsText: string;
 }
 
 export interface BoardColumn {
@@ -941,15 +1006,54 @@ export interface BoardPage {
   /** Follow up, then Todo, Doing, Blocked, Done. */
   columns: BoardColumn[];
   archived: BoardCard[];
+  /** The file's mtime, for the change check. */
+  stamp: number;
+  /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
+  swept: BoardSwept | null;
+  /** Cards wait in the queue and the cabin, which starts them, is closed. */
+  queueNote: string | null;
+}
+
+export interface BoardSwept {
+  text: string;
+  ids: string[];
+  at: number;
+}
+
+/** Settings → Workboard tidy. */
+export interface BoardTidy {
+  /** Days with no activity before a card is archived. */
+  autoArchiveDays: number;
+  /** 0 is off (the default); else 30 or 90. */
+  autoDeleteDays: number;
 }
 
 export type BoardAct =
   | { kind: "edit"; title: string; detail: string }
   | { kind: "notes"; notes: string }
   | { kind: "move"; to: BoardLane }
+  | { kind: "rank"; up: boolean }
+  | { kind: "handBack" }
   | { kind: "archive" }
   | { kind: "restore" }
-  | { kind: "delete" };
+  | { kind: "delete" }
+  | { kind: "queue" }
+  | { kind: "unqueue" }
+  | { kind: "priority"; priority: "high" | "normal" | "low" }
+  | { kind: "block"; reason: string }
+  | { kind: "unblock" }
+  | { kind: "steps"; text: string }
+  | { kind: "place"; to: BoardLane; before: string | null };
+
+/** Make it recurring: the schedules offered, in the order the shell's
+ * `work_triage::RECUR_CHOICES` keeps them. */
+export const RECUR_CHOICES = ["Every day at 9 AM", "Every weekday at 9 AM", "Every day at 6 PM"] as const;
+
+export interface WorkLogLine {
+  at: number;
+  kind: string;
+  text: string;
+}
 
 /** What Work puts in the chat box, and the board after the card moved. */
 export interface BoardWork {
@@ -957,8 +1061,25 @@ export interface BoardWork {
   page: BoardPage;
 }
 
+/** What Resume puts in the chat box, and the chat it goes to. */
+export interface BoardResume {
+  conversationId: string;
+  prompt: string;
+  page: BoardPage;
+}
+
 export function getWorkboard(): Promise<BoardPage> {
   return invoke<BoardPage>("get_workboard");
+}
+
+/** The board file's mtime; cheap enough to poll. */
+export function workboardStamp(): Promise<number> {
+  return invoke<number>("workboard_stamp");
+}
+
+/** A card's progress log tail. Read only when you open its log. */
+export function workboardLog(id: string): Promise<WorkLogLine[]> {
+  return invoke<WorkLogLine[]>("workboard_log", { id });
 }
 
 export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
@@ -971,6 +1092,135 @@ export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
 
 export function workboardWork(id: string): Promise<BoardWork> {
   return invoke<BoardWork>("workboard_work", { id });
+}
+
+/** Start a playbook on a card: it links the playbook, then starts as Work. */
+export function workboardPlaybook(id: string, playbook: string, name: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_playbook", { id, playbook, name });
+}
+
+/** Make it recurring: an automation from the card, `choice` in RECUR_CHOICES. */
+export function workboardRecur(id: string, choice: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_recur", { id, choice, clock: wallClock() });
+}
+
+/** Delete archived cards archived `days` ago or more (0: all of them), with
+ * their logs. Cards on the board are never touched. */
+export function workboardDeleteArchived(days: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_delete_archived", { days });
+}
+
+/** Undo on the sweep notice: its cards go back to Todo. */
+export function workboardSweepUndo(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_undo");
+}
+
+export function workboardSweepDismiss(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_dismiss");
+}
+
+export function getWorkboardTidy(): Promise<BoardTidy> {
+  return invoke<BoardTidy>("get_workboard_tidy");
+}
+
+export function setWorkboardTidy(autoDeleteDays: number): Promise<BoardTidy> {
+  return invoke<BoardTidy>("set_workboard_tidy", { autoDeleteDays });
+}
+
+/** Resume a paused run. A stub until KB-03 fills in the real resume. */
+export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
+  return invoke<BoardResume>("workboard_resume", { id, conversationId });
+}
+
+/** Home and Objectives (src-tauri/src/home.rs): the cabin's tiles from
+ * home_layout.json, and the open chat's checklist with level and XP. */
+export type StepStatus = "planned" | "attempted" | "verified" | "unverified" | "cancelled";
+
+export interface MissionStep {
+  id: string;
+  text: string;
+  status: StepStatus;
+}
+
+export interface Mission {
+  conversationId: string;
+  title: string;
+  /** active, needs_approval, paused, blocked or done. */
+  status: string;
+  steps: MissionStep[];
+  done: number;
+  total: number;
+  /** Every step is closed and the result is not accepted yet. */
+  canAccept: boolean;
+  /** The newest outcome is a success, so Undo has something to undo. */
+  accepted: boolean;
+}
+
+export interface Xp {
+  level: number;
+  xp: number;
+  nextLevelXp: number;
+  /** Progress into the level, 0 to 1. */
+  frac: number;
+  today: number;
+  /** The last seven days, today last: true when a task finished. */
+  streak: boolean[];
+}
+
+export interface MissionPage {
+  mission: Mission | null;
+  xp: Xp;
+}
+
+export type HomeTile =
+  | { kind: "objectives"; mission: Mission | null; xp: Xp }
+  | { kind: "streak"; xp: Xp }
+  | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
+  | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
+  | {
+      kind: "pulse";
+      post: { id: string; title: string; summary: string; ago: string } | null;
+      idea: { id: string; title: string; action: string } | null;
+    }
+  | { kind: "personality"; name: string; picture: string | null }
+  | { kind: "upNext"; games: { appId: number; name: string }[] }
+  | { kind: "error"; message: string }
+  /** Only the cabin paints it. */
+  | { kind: "cabin" }
+  /** A paired browser can't read it. */
+  | { kind: "desktop" };
+
+export type SlotSize = "large" | "medium" | "small";
+
+export interface HomeSlot {
+  /** "large", "medium-1" … "small-4". */
+  slot: string;
+  size: SlotSize;
+  module: string;
+  name: string;
+  purpose: string;
+  tile: HomeTile;
+}
+
+export interface HomePage {
+  preset: string;
+  xpBar: boolean;
+  slots: HomeSlot[];
+  xp: Xp;
+  glance: { memories: number | null; proposed: number; connectors: number; connected: number; failing: number };
+}
+
+export function getHome(conversationId?: string): Promise<HomePage> {
+  return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
+}
+
+export function getMission(conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
+}
+
+/** Accept as done (`done`) or Undo. Desktop only. */
+export function setMissionDone(done: boolean, conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */

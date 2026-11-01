@@ -82,6 +82,9 @@ pub(super) enum BoardAct {
     Restore(String),
     /// Remove the card for good. Its chat stays in History.
     Delete(String),
+    /// Delete every archived card archived at least this many days ago (0: all
+    /// of them), with their logs. Cards on the board stay.
+    DeleteArchived(u32),
     Link(String),
     Unlink(String),
     Open(String),
@@ -110,6 +113,47 @@ pub(super) enum BoardAct {
     HandBack(String),
     /// Open or close a card's log drawer.
     ToggleLog(String),
+    /// Agent: do this, now (Work on it) or on the queue.
+    Assign {
+        id: String,
+        queue: bool,
+    },
+    Unqueue(String),
+    /// A drop on a card: into its column, just above it.
+    Place {
+        id: String,
+        column: KanbanColumn,
+        before: Option<String>,
+    },
+    Priority {
+        id: String,
+        priority: &'static str,
+    },
+    /// Open the reason field under the card.
+    AskBlock(String),
+    Block {
+        id: String,
+        reason: String,
+    },
+    Unblock(String),
+    /// Open the steps editor under the card.
+    EditSteps(String),
+    SaveSteps {
+        id: String,
+        text: String,
+    },
+    /// Close the block or steps editor.
+    CancelTriage,
+    /// Start a recipe or playbook on the card.
+    Flow {
+        id: String,
+        flow: grokhub_core::CardFlow,
+    },
+    /// Make it recurring with one of `work_triage::RECUR_CHOICES`.
+    Recur {
+        id: String,
+        choice: usize,
+    },
 }
 
 /// Drag payload for a workboard card: its id.
@@ -1207,12 +1251,11 @@ page_body(ui, "history", |ui| {
                                 let col_w = ui.available_width();
                                 crate::cards::section_label(ui, col.label());
                                 ui.add_space(6.0);
-                                let ids: Vec<String> = self
-                                    .board
-                                    .iter()
-                                    .filter(|c| c.status.column() == Some(*col))
-                                    .map(|c| c.id.clone())
-                                    .collect();
+                                let ids: Vec<String> =
+                                    grokhub_core::work_triage::in_column(&self.board, *col)
+                                        .into_iter()
+                                        .map(|i| self.board[i].id.clone())
+                                        .collect();
                                 if ids.is_empty() {
                                     ui.label(
                                         RichText::new("—")
@@ -1248,8 +1291,11 @@ page_body(ui, "history", |ui| {
                                     }
                                 }
                                 if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
-                                    if let Some(status) =
-                                        from(&self.board, &drag).and_then(|st| board_drop_move(st, *col))
+                                    // A drop on a card already placed it above that card.
+                                    let placed = matches!(act, Some(BoardAct::Place { .. }));
+                                    if let Some(status) = from(&self.board, &drag)
+                                        .and_then(|st| board_drop_move(st, *col))
+                                        .filter(|_| !placed)
                                     {
                                         act = Some(BoardAct::Move {
                                             id: drag.0.clone(),
@@ -1260,50 +1306,7 @@ page_body(ui, "history", |ui| {
                             }
                         });
                         }
-                        let archived: Vec<(String, String)> = self
-                            .board
-                            .iter()
-                            .filter(|c| c.status == BoardStatus::Dismissed)
-                            .map(|c| (c.id.clone(), c.title.clone()))
-                            .collect();
-                        if !archived.is_empty() {
-                            ui.add_space(12.0);
-                            crate::cards::section_label(ui, "Archived");
-                            for (id, title) in archived {
-                                let width = ui.available_width().max(1.0);
-                                let cache_id = egui::Id::new((
-                                    "cabin-board-arch-h",
-                                    id.as_str(),
-                                    super::chat_ui::pane_width_bucket(width),
-                                ));
-                                let cached =
-                                    ui.ctx().data(|d| d.get_temp::<f32>(cache_id)).unwrap_or(0.0);
-                                // One `horizontal`: one parent auto-id. The cached
-                                // height already includes the spacing under the row.
-                                if super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
-                                    ui.skip_ahead_auto_ids(1);
-                                    continue;
-                                }
-                                let y0 = ui.cursor().min.y;
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(title)
-                                            .size(crate::theme::FONT_TIP)
-                                            .color(crate::theme::muted()),
-                                    );
-                                    if crate::cards::ghost_pill(ui, "Restore") {
-                                        act = Some(BoardAct::Restore(id.clone()));
-                                    }
-                                    if crate::cards::ghost_pill(ui, "Delete") {
-                                        act = Some(BoardAct::Delete(id));
-                                    }
-                                });
-                                let h = (ui.cursor().min.y - y0).max(0.0);
-                                if h > 0.0 {
-                                    ui.ctx().data_mut(|d| d.insert_temp(cache_id, h));
-                                }
-                            }
-                        }
+                        self.ui_board_archived(ui, &mut act);
                     });
         });
         // Only a click opens a card; hover does nothing. A drag folds it at once.
@@ -1333,7 +1336,10 @@ page_body(ui, "history", |ui| {
         | BoardAct::Work(id)
         | BoardAct::Say { id, .. }
         | BoardAct::Resume(id)
-        | BoardAct::HandBack(id) = &act
+        | BoardAct::HandBack(id)
+        | BoardAct::Place { id, .. }
+        | BoardAct::Priority { id, .. }
+        | BoardAct::Unblock(id) = &act
         {
             grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
         }
@@ -1370,12 +1376,62 @@ page_body(ui, "history", |ui| {
                 self.board_link = false;
                 true
             }
-            BoardAct::Move { id, status } => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = status;
-                }
-                true
+            BoardAct::Move { id, status } => match status.column() {
+                // To the end of the column, numbered so the shell shows the same order.
+                Some(column) => grokhub_core::work_triage::place_card(
+                    &mut self.board,
+                    &id,
+                    column,
+                    None,
+                    grokhub_core::now_ms(),
+                ),
+                None => false,
+            },
+            BoardAct::Place { id, column, before } => grokhub_core::work_triage::place_card(
+                &mut self.board,
+                &id,
+                column,
+                before.as_deref(),
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::Assign { id, queue } => self.assign_card(&id, queue),
+            BoardAct::Unqueue(id) => grokhub_core::work_triage::unqueue_card(&mut self.board, &id),
+            BoardAct::Priority { id, priority } => {
+                grokhub_core::work_triage::set_priority(&mut self.board, &id, priority)
+                    .unwrap_or(false)
             }
+            BoardAct::AskBlock(id) => {
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.steps = None;
+                self.board_view.triage.blocking = Some((id, String::new()));
+                false
+            }
+            BoardAct::Block { id, reason } => self.block_board_card(&id, &reason),
+            BoardAct::Unblock(id) => grokhub_core::work_triage::unblock_card(
+                &mut self.board,
+                &id,
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::EditSteps(id) => {
+                let text = self
+                    .board
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(grokhub_core::work_triage::steps_text)
+                    .unwrap_or_default();
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = Some((id, text));
+                false
+            }
+            BoardAct::SaveSteps { id, text } => self.save_board_steps(&id, &text),
+            BoardAct::CancelTriage => {
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = None;
+                false
+            }
+            BoardAct::Flow { id, flow } => self.start_card_flow(&id, flow),
+            BoardAct::Recur { id, choice } => self.make_card_recurring(&id, choice),
             BoardAct::Archive(id) => {
                 grokhub_core::archive_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
@@ -1408,6 +1464,39 @@ page_body(ui, "history", |ui| {
                     "Card deleted".into()
                 };
                 true
+            }
+            BoardAct::DeleteArchived(days) => {
+                self.board_view.confirm = None;
+                let now = grokhub_core::now_ms();
+                let threads: Vec<(String, Option<String>)> = self
+                    .board
+                    .iter()
+                    .filter(|c| c.status == BoardStatus::Dismissed)
+                    .map(|c| (c.id.clone(), c.thread_id.clone()))
+                    .collect();
+                let gone = crate::work_store::delete_archived(
+                    &mut self.board,
+                    u64::from(days) * grokhub_core::work_item::DAY_MS,
+                    now,
+                );
+                let mut unparked = false;
+                for id in &gone {
+                    self.forget_board_card_view(id);
+                    let thread = threads
+                        .iter()
+                        .find(|(t, _)| t == id)
+                        .and_then(|(_, t)| t.clone());
+                    unparked |= self.unpark_follow_up_chat(thread.as_deref());
+                }
+                if unparked {
+                    self.persist();
+                }
+                let n = gone.len();
+                self.status = format!(
+                    "Deleted {n} archived {}",
+                    if n == 1 { "card" } else { "cards" }
+                );
+                n > 0
             }
             BoardAct::Link(id) => {
                 let thread = self.visible_thread_id();

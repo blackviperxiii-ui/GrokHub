@@ -14,6 +14,8 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
+  deleteChat,
+  forgetMessage,
   getLastChat,
   getSettings,
   loadChat,
@@ -35,6 +37,15 @@ import {
   type Transcript,
 } from "./api";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
+import {
+  type Cut,
+  cutFor,
+  DELETE_NEEDS_EARLIER,
+  DeleteMessageDialog,
+  MESSAGE_MENU_LABEL,
+  MessageMenu,
+  withoutCut,
+} from "./DeleteMessage";
 import type { RunNotice } from "./Automations";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -58,16 +69,25 @@ export type Item =
       title: string;
       action: string;
       reason: string;
-      /** "ended": the turn stopped before anyone answered, so nothing ran. */
-      answer: Answer | "ended" | null;
+      /** "ended": the turn stopped before anyone answered, so nothing ran;
+       * "halted": Halt stopped it. */
+      answer: Answer | Ended | null;
     }
   | { kind: "suggest"; items: Suggestion[] }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
   | ({ kind: "notice" } & RunNotice)
+  /** Halt stopped this reply. */
+  | { kind: "halted" }
   /** What a slash command did. It stays in the log and never reaches the model. */
   | { kind: "slash"; command: string; text: string }
   | ElicitItem;
+
+type Ended = "ended" | "halted";
+
+/** The stop reason of a turn Halt ended (`agent::HALTED`). */
+export const HALTED_STOP = "halted";
+export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
 
 /** How much of a run's reply its notice shows; Automations has the rest. */
 export const NOTICE_CHARS = 280;
@@ -193,10 +213,10 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     }
     case "permission":
       return [...items, { ...event, answer: null }];
-    // Deny on a notification: the card shows what ran, unless the turn already ended.
+    // Deny on a notification: the card shows what ran, unless the turn already ended or was halted.
     case "answered":
       return items.map((item) =>
-        item.kind === "permission" && item.id === event.id && item.answer !== "ended"
+        item.kind === "permission" && item.id === event.id && item.answer !== "ended" && item.answer !== "halted"
           ? { ...item, answer: event.answer }
           : item,
       );
@@ -212,29 +232,66 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. */
-function settle(items: Item[]): Item[] {
+function settle(items: Item[], how: Ended = "ended"): Item[] {
   return items.map((item) => {
     if (item.kind === "assistant" && item.streaming) return { ...item, streaming: false };
-    if (item.kind === "permission" && item.answer === null) return { ...item, answer: "ended" };
-    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: "ended" };
+    if (item.kind === "permission" && item.answer === null) return { ...item, answer: how };
+    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: how };
     return item;
   });
 }
 
-const ANSWERED: Record<Answer | "ended", string> = {
+/** Halt ended the turn: its cards read halted, and one line says so. */
+function settleHalted(items: Item[]): Item[] {
+  const settled = settle(items, "halted");
+  return settled.at(-1)?.kind === "halted" ? settled : [...settled, { kind: "halted" }];
+}
+
+const ANSWERED: Record<Answer | Ended, string> = {
   allow: "Allowed once",
   always: "Always allowed",
   deny: "Denied",
   ended: "Not run: the turn ended",
+  halted: "Not run: halted",
 };
 
 // Typing in the composer re-renders Chat, and a reply streaming in re-renders it
 // on every chunk. These take plain values and are memoized, so only the message
 // that changed repaints and a long conversation stays cheap to type under.
-const UserBubble = memo(function UserBubble({ text }: { text: string }) {
+/** Opens a bubble's menu at a point on the page. */
+type MenuAt = (x: number, y: number) => void;
+
+/** Right-click opens the bubble's menu where the pointer is. */
+function contextMenuAt(onMenu?: MenuAt) {
+  if (!onMenu) return undefined;
+  return (event: React.MouseEvent) => {
+    event.preventDefault();
+    onMenu(event.clientX, event.clientY);
+  };
+}
+
+/** The quiet ··· on a bubble; its menu opens under it. The dots come from
+ *  CSS so the bubble's text stays the message alone (copy, smoke checks). */
+function MoreButton({ onMenu }: { onMenu: MenuAt }) {
   return (
-    <div className="bubble user" data-role="user">
+    <button
+      type="button"
+      className="msg-more"
+      aria-label={MESSAGE_MENU_LABEL}
+      title={MESSAGE_MENU_LABEL}
+      onClick={(event) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        onMenu(box.left, box.bottom);
+      }}
+    />
+  );
+}
+
+const UserBubble = memo(function UserBubble({ text, onMenu }: { text: string; onMenu?: MenuAt }) {
+  return (
+    <div className="bubble user" data-role="user" onContextMenu={contextMenuAt(onMenu)}>
       {text}
+      {onMenu && <MoreButton onMenu={onMenu} />}
     </div>
   );
 });
@@ -242,14 +299,21 @@ const UserBubble = memo(function UserBubble({ text }: { text: string }) {
 const AssistantBubble = memo(function AssistantBubble({
   text,
   streaming,
+  onMenu,
 }: {
   text: string;
   streaming: boolean;
+  onMenu?: MenuAt;
 }) {
   // Capped like the cabin's bubble, so a runaway stream can't stall the page.
   return (
-    <div className={`bubble assistant${streaming ? " streaming" : ""}`} data-role="assistant">
+    <div
+      className={`bubble assistant${streaming ? " streaming" : ""}`}
+      data-role="assistant"
+      onContextMenu={contextMenuAt(onMenu)}
+    >
       <Markdown text={displayText(text)} />
+      {onMenu && <MoreButton onMenu={onMenu} />}
     </div>
   );
 });
@@ -312,6 +376,7 @@ function PermissionCard({
 function LogItem({
   item,
   busy,
+  onMenu,
   onAnswer,
   onAnswerCard,
   onPick,
@@ -321,6 +386,8 @@ function LogItem({
 }: {
   item: Item;
   busy: boolean;
+  /** The bubble's Delete message… menu; absent where it can't be offered. */
+  onMenu?: MenuAt;
   /** Nyx's face beside each reply, when Nyx is on. */
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
@@ -332,16 +399,18 @@ function LogItem({
   "use memo";
   switch (item.kind) {
     case "user":
-      return <UserBubble text={item.text} />;
-    case "assistant":
+      return <UserBubble text={item.text} onMenu={busy ? undefined : onMenu} />;
+    case "assistant": {
+      const menu = busy || item.streaming ? undefined : onMenu;
       if (nyxUrl)
         return (
           <div className="nyx-row">
             <NyxFace url={nyxUrl} size={32} />
-            <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />
+            <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />
           </div>
         );
-      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />;
+      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
+    }
     case "tool":
       return (
         <ViewTransition>
@@ -403,6 +472,12 @@ function LogItem({
           <p className="card-detail-line plain">{item.text}</p>
         </div>
       );
+    case "halted":
+      return (
+        <p className="halted-line" role="status">
+          {HALTED_LINE}
+        </p>
+      );
     case "tools":
       return (
         <p className="tools-ran" data-role="tools">
@@ -422,7 +497,9 @@ function LogItem({
  * where the approvals stay the computer's. `notice`: an automation run that
  * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
- * History deleted; if it is the open one, a new chat starts. On the desktop
+ * History deleted; if it is the open one, a new chat starts. `clear`: the
+ * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
+ * saved history for good and starts a new one. On the desktop
  * the chat open at the last close comes back on mount. */
 export function Chat({
   onOpenSettings,
@@ -433,6 +510,7 @@ export function Chat({
   notice,
   open,
   deleted,
+  clear,
   active = true,
   remote = false,
   grokSignIn = false,
@@ -447,6 +525,7 @@ export function Chat({
   notice?: RunNotice & { n: number };
   open?: { id: string; n: number };
   deleted?: { id: string; n: number };
+  clear?: { n: number };
   active?: boolean;
   remote?: boolean;
   /** Settings → Account offers Sign in with Grok here. */
@@ -500,6 +579,27 @@ export function Chat({
           settings.desktopControl,
         ),
       );
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  /** A bubble's open menu, and the delete waiting on its confirm. */
+  const [msgMenu, setMsgMenu] = useState<{ i: number; at: { x: number; y: number } } | null>(null);
+  const [askDelete, setAskDelete] = useState<Cut | null>(null);
+
+  function pickDelete(i: number) {
+    const cut = cutFor(items, i, earlier);
+    if (cut) setAskDelete(cut);
+    else setError(DELETE_NEEDS_EARLIER);
+  }
+
+  /** The saved chat first: if it refuses, the log keeps the message. */
+  async function deleteMessage(cut: Cut) {
+    setAskDelete(null);
+    try {
+      await forgetMessage(conversationId, cut);
+      setItems((now) => withoutCut(now, cut));
     } catch (err) {
       setError(String(err));
     }
@@ -564,6 +664,17 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [deleted]);
 
+  // Clear chat: stop any reply, delete the open chat's saved history, start over.
+  const clearOpen = useEffectEvent(() => {
+    const id = conversationId;
+    touched.current = true;
+    deleteChat(id).then(startFresh, (err) => setError(String(err)));
+  });
+
+  useEffect(() => {
+    if (clear) clearOpen();
+  }, [clear]);
+
   /** Reloads the saved chat with more of its start. The log has at least as
    * many items as the saved lines it shows, so nothing shown drops off. */
   async function showEarlier() {
@@ -614,7 +725,7 @@ export function Chat({
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
-      else if (event.kind === "done") setItems(settle);
+      else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
       // A card is a transition, so the webview can fade it in; text streams as is.
       else startTransition(() => setItems((now) => applyEvent(now, event)));
@@ -670,16 +781,17 @@ export function Chat({
     setError(null);
     busyRef.current = true;
     setBusy(true);
+    let stop = "";
     try {
       const paths = files.map((f) => f.path);
-      await (paths.length ? sendChat(conversationId, text, as ?? mode, paths) : sendChat(conversationId, text, as ?? mode));
+      stop = await (paths.length ? sendChat(conversationId, text, as ?? mode, paths) : sendChat(conversationId, text, as ?? mode));
     } catch (err) {
       setError(String(err));
     }
     // After the catch rather than in a finally, which React Compiler can't compile yet.
     busyRef.current = false;
     setBusy(false);
-    setItems(settle);
+    setItems(stop === HALTED_STOP ? settleHalted : settle);
   }
 
   async function answer(id: string, choice: Answer) {
@@ -850,6 +962,7 @@ export function Chat({
             key={i}
             item={item}
             busy={busy}
+            onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
@@ -865,6 +978,16 @@ export function Chat({
         )}
         <div ref={endRef} />
       </div>
+      {msgMenu && (
+        <MessageMenu at={msgMenu.at} onDelete={() => pickDelete(msgMenu.i)} onClose={() => setMsgMenu(null)} />
+      )}
+      {askDelete && (
+        <DeleteMessageDialog
+          reply={askDelete.reply}
+          onConfirm={() => void deleteMessage(askDelete)}
+          onClose={() => setAskDelete(null)}
+        />
+      )}
       {error && (
         <div className="error" role="alert">
           <span>{error}</span>

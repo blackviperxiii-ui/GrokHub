@@ -345,7 +345,6 @@ fn react(config_dir: &Path, card: &UpdateCard, outcome: Outcome, shift: Option<b
 }
 
 fn page(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Page {
-    let ledger = ledger();
     let mut learned = reactions::load(&reactions_path(config_dir));
     let before = learned.clone();
     learned.sweep_ignored(cards, now_ms);
@@ -354,10 +353,28 @@ fn page(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Page {
             eprintln!("pulse: {e}");
         }
     }
+    build(config_dir, cards, now_ms, &learned)
+}
+
+/// Home's Pulse tile: the page as it stands. Unlike opening Pulse, it counts
+/// no visit, expires nothing and notes no card as ignored.
+pub fn peek(config_dir: &Path, now_ms: u64) -> Result<Page, String> {
+    let cards = cards(config_dir)?;
+    let learned = reactions::load(&reactions_path(config_dir));
+    Ok(build(config_dir, &cards, now_ms, &learned))
+}
+
+fn build(
+    config_dir: &Path,
+    cards: &[UpdateCard],
+    now_ms: u64,
+    learned: &reactions::Reactions,
+) -> Page {
+    let ledger = ledger();
     let inputs = pc::PulseInputs {
         ledger: &ledger,
         now_ms,
-        reactions: Some(&learned),
+        reactions: Some(learned),
         ..Default::default()
     };
     let by_id = |id: &str| cards.iter().find(|c| c.id == id);

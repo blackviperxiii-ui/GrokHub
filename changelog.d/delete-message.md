@@ -1,0 +1,2 @@
+- Delete one message from a chat: every bubble's ··· menu and right-click offer Delete message…, which asks first. A reply goes whole, with the tools it ran, and the assistant never reads it back.
+- The shell's Chat has the same ··· and right-click Delete message… on its bubbles.

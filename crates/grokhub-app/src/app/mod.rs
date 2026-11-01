@@ -146,6 +146,7 @@ mod audio_check_ui;
 mod background;
 mod background_ui;
 mod backup_ui;
+mod board_triage;
 mod board_ui;
 mod budget_ui;
 mod canary_ui;
@@ -388,6 +389,8 @@ pub(super) enum TabAct {
     CommitRename(usize),
     CancelRename,
     Delete(usize),
+    /// Main's right-click Clear chat: asks first, see `ConfirmKind::ClearMainChat`.
+    ClearMain,
 }
 
 enum JobOut {
