@@ -228,6 +228,11 @@ jobs:
           workspaces: ". -> target"
       - name: Guard fail-closed tests
         run: bash scripts/test-ci-guards.sh
+      - name: Shell update manifest test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          bash scripts/test-shell-update-manifest.sh
       - name: Repo friction guards
         env:
           # Live label fetch for the Cargo.lock escape hatch (gh / API).
