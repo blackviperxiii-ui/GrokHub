@@ -533,7 +533,7 @@ impl Cabin {
                         self.start_hub();
                     }
                     ui.add_space(16.0);
-                    crate::cards::section_label(ui, "Send a task");
+                    crate::cards::section_label(ui, "Run a task on this PC");
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())
                         .corner_radius(12.0)
@@ -553,7 +553,7 @@ impl Cabin {
                         });
                     ui.add_space(8.0);
                     if self.has_key() {
-                        if crate::cards::white_pill(ui, "Send a task home") {
+                        if crate::cards::white_pill(ui, "Run it here") {
                             let t = std::mem::take(&mut self.task_prompt);
                             self.nav = Nav::Chat;
                             self.send_chat(t);
@@ -663,18 +663,18 @@ impl Cabin {
                             .id_salt("memory_editor")
                             .max_height(editor_h)
                             .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut self.mem_body)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.mem_body)
                                         .desired_rows(rows)
-                                        .desired_width(f32::INFINITY)
+                                .desired_width(f32::INFINITY)
                                         .frame(egui::Frame::NONE.inner_margin(
                                             egui::Margin::symmetric(4, 2),
                                         ))
-                                        .font(egui::TextStyle::Monospace),
-                                );
-                            });
+                                .font(egui::TextStyle::Monospace),
+                        );
                     });
+            });
                 });
             });
     }

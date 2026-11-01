@@ -1,0 +1,1 @@
+- The rail's Profile opens Settings → Account instead of dropping a menu over the page, the PC rail item is named Devices (it opens the pairing page), Devices' local task box says it runs on this PC, and the palette now lists Home, Library, Objectives, Journal and Command, with one Connectors row.

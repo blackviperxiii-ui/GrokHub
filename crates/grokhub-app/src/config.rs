@@ -309,10 +309,6 @@ pub struct AppConfig {
     pub model: String,
     #[serde(default)]
     pub imagine_model: String,
-    #[serde(default)]
-    pub voice_model: String,
-    #[serde(default)]
-    pub cabin_eyes: bool,
     /// Git clone used by Settings → Update / `grokhub --update`.
     #[serde(default)]
     pub source_dir: String,
@@ -328,8 +324,6 @@ pub struct AppConfig {
     /// Home's empty draft must not overwrite this (`open_fresh_home` keeps it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub last_chat_tab: String,
-    #[serde(default)]
-    pub connector_hosts: Vec<String>,
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     /// First close-to-tray toast has been shown. Quiet hours do not set this.
@@ -405,11 +399,11 @@ pub struct AppConfig {
     #[serde(default = "default_price_ceiling")]
     pub price_ceiling_usd_per_m: u32,
     /// Spike-6a: an OS notification for a proactive card due in under an hour.
-    /// Off unless you opt in (`app.json` only).
+    /// Off unless you opt in (Settings → Behavior).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub proactive_reminders: bool,
-    /// `app.json` only for now. A donation page for Settings → About's quiet
-    /// "Support the developer" link. Empty (the default) hides the link.
+    /// A donation page for Settings → About's quiet "Support the developer"
+    /// link, set in About. Empty (the default) hides the link.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub support_url: String,
     #[serde(default)]
@@ -815,15 +809,12 @@ impl Default for AppConfig {
             yolo: default_yolo(),
             model: String::new(),
             imagine_model: String::new(),
-            voice_model: String::new(),
-            cabin_eyes: false,
             source_dir: String::new(),
             project_dir: String::new(),
             host_on: default_host_on(),
             host_hour_cap: default_host_cap(),
             current_thread: String::new(),
             last_chat_tab: String::new(),
-            connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
             mode: String::new(),
@@ -2207,6 +2198,32 @@ mod tests {
         );
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert_eq!(back.support_url, "https://donate.example/my-app");
+    }
+
+    #[test]
+    fn old_app_json_with_retired_keys_still_loads() {
+        let old = r#"{"model":"grok-4","voiceModel":"grok-voice","cabinEyes":true,
+            "connectorHosts":["a.example"],"proactiveReminders":true}"#;
+        let cfg: AppConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(cfg.model, "grok-4");
+        assert!(cfg.proactive_reminders);
+        let text = serde_json::to_string(&cfg).unwrap();
+        for gone in ["voiceModel", "cabinEyes", "connectorHosts"] {
+            assert!(!text.contains(gone), "{gone} is dropped on save: {text}");
+        }
+    }
+
+    #[test]
+    fn proactive_reminders_round_trip() {
+        let off = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!off.contains("proactiveReminders"), "{off}");
+        let cfg = AppConfig {
+            proactive_reminders: true,
+            ..AppConfig::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert!(back.proactive_reminders);
     }
 
     #[test]

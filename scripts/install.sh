@@ -194,7 +194,7 @@ try_pkgs() {
     echo "pkgs: skipped (you declined earlier). Run: sudo $*"
     return 0
   fi
-  echo "GrokHub needs packages: $*"
+  echo "Loadout needs packages: $*"
   echo -n "Install with sudo now? [y/N] "
   local ans=
   read -r ans || ans=

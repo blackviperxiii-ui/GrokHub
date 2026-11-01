@@ -92,7 +92,7 @@ pub fn build_version_label() -> String {
     }
 }
 
-/// `grokhub --version`: `GrokHub 2.13.1-beta.3 (beta @ abc1234)` on beta.
+/// `grokhub --version`: `Loadout 2.13.1-beta.3 (beta @ abc1234)` on beta.
 pub fn build_version_line() -> String {
     let beta_n: u64 = env!("GROKHUB_BUILD_BETA_N").parse().unwrap_or(0);
     grokhub_core::version_line(
@@ -668,7 +668,7 @@ mod tests {
             line,
             format!(
                 "Build {}",
-                build_version_line().trim_start_matches("GrokHub ")
+                grokhub_core::strip_product_prefix(&build_version_line())
             )
         );
         assert!(
@@ -685,7 +685,11 @@ mod tests {
         assert_eq!(parsed.channel, build_channel());
         assert_eq!(parsed.version, build_version_label());
         assert!(
-            line.starts_with(&format!("GrokHub {}", build_version_label())),
+            line.starts_with(&format!(
+                "{} {}",
+                grokhub_core::brand::product_name(),
+                build_version_label()
+            )),
             "{line}"
         );
         assert_eq!(parsed.branch, env!("GROKHUB_BUILD_BRANCH"));
