@@ -2302,6 +2302,15 @@ label.toggle-row {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
 }
 
+/* Chat's cards sit in <ViewTransition>: one that arrives, changes or goes
+   eases over 150ms. A webview without view transitions just shows the change. */
+::view-transition-group(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 150ms;
+  animation-timing-function: var(--ease-out);
+}
+
 /* People who ask for less motion get none: state changes still happen, instantly. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2312,6 +2321,13 @@ label.toggle-row {
     transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+
+  /* `*` does not reach the view transition's pseudo-elements. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 

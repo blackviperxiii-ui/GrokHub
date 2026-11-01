@@ -1,7 +1,7 @@
 // Composer attachments (LO-17i): the + button, a paste or a drop stages a
 // file on the desktop (src-tauri/src/attach.rs); chips above the composer show
 // what goes with the next message. Nothing is sent until the person sends.
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import { useEffect, useEffectEvent, useState, type ClipboardEvent, type DragEvent } from "react";
 import {
   onFileDrop,
   pickAttachments,
@@ -84,13 +84,13 @@ export function useAttachments(
 ): Attachments {
   const [files, setFiles] = useState<Staged[]>([]);
   const [note, setNote] = useState<string | null>(null);
-  const held = useRef(0);
-  held.current = files.length;
-
-  useEffect(() => {
+  // A new conversation starts with no files waiting.
+  const [forId, setForId] = useState(conversationId);
+  if (forId !== conversationId) {
+    setForId(conversationId);
     setFiles([]);
     setNote(null);
-  }, [conversationId]);
+  }
 
   function take(outcomes: StageOutcome[]) {
     const staged = outcomes.flatMap((o) => (o.staged ? [o.staged] : []));
@@ -101,7 +101,7 @@ export function useAttachments(
 
   async function add(list: File[]) {
     const outcomes: StageOutcome[] = [];
-    let room = ATTACH_MAX - held.current;
+    let room = ATTACH_MAX - files.length;
     for (const file of list) {
       const name = fileName(file);
       if (room <= 0) {
@@ -137,19 +137,18 @@ export function useAttachments(
   }
 
   // The desktop window hands drops over as paths.
-  const live = useRef({ active, addPaths });
-  live.current = { active, addPaths };
+  const dropped = useEffectEvent((paths: string[]) => {
+    if (active) void addPaths(paths);
+  });
   useEffect(() => {
     let stop: (() => void) | undefined;
-    let dropped = false;
-    void onFileDrop((paths) => {
-      if (live.current.active) void live.current.addPaths(paths);
-    }).then((unlisten) => {
-      if (dropped) unlisten();
+    let gone = false;
+    void onFileDrop((paths) => dropped(paths)).then((unlisten) => {
+      if (gone) unlisten();
       else stop = unlisten;
     });
     return () => {
-      dropped = true;
+      gone = true;
       stop?.();
     };
   }, []);

@@ -1293,6 +1293,15 @@ page_body(ui, "history", |ui| {
         let Some(act) = act else {
             return false;
         };
+        // Your edit hands the card to you: the sweep no longer tidies it.
+        if let BoardAct::Move { id, .. }
+        | BoardAct::Link(id)
+        | BoardAct::Unlink(id)
+        | BoardAct::Save(id)
+        | BoardAct::SaveNotes { id, .. } = &act
+        {
+            grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
+        }
         match act {
             BoardAct::Add => {
                 let mut card = BoardCard::new(
@@ -1333,16 +1342,10 @@ page_body(ui, "history", |ui| {
                 true
             }
             BoardAct::Archive(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Dismissed;
-                }
-                true
+                grokhub_core::archive_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Restore(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Todo;
-                }
-                true
+                grokhub_core::restore_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Delete(id) => {
                 let Some(thread) = self
@@ -1357,7 +1360,7 @@ page_body(ui, "history", |ui| {
                     self.board_view.note = Some((id, "Stop the card's chat first".into()));
                     return false;
                 }
-                self.board.retain(|c| c.id != id);
+                crate::work_store::delete_card(&mut self.board, &id);
                 self.forget_board_card_view(&id);
                 // A Follow up chat was hidden because its card was the way in.
                 // With the card gone it goes back to History, as the status says.
