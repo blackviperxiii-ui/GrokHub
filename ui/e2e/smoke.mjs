@@ -278,6 +278,14 @@ async function tab(s, label) {
           tabs: [...nav.querySelectorAll(':scope > button')].map((x) => (x.title || '?') + ':' + hitAt(x)[2][0]),
           icon: b.querySelector('svg') ? hitAt(b.querySelector('svg')) : null, self: hitAt(b) };
         nav.style.overflowX = 'visible'; out.visibleOverflow = hitAt(b); nav.style.overflowX = '';
+        const labels = [...nav.querySelectorAll('.tab-label')]; const btns = [...nav.querySelectorAll(':scope > button')];
+        const tryV = (name, on, off) => { on(); void nav.offsetWidth; out['v_' + name] = hitAt(b)[2][0]; off(); void nav.offsetWidth; };
+        tryV('navRelative', () => (nav.style.position = 'relative'), () => (nav.style.position = ''));
+        tryV('btnRelative', () => btns.forEach((x) => (x.style.position = 'relative')), () => btns.forEach((x) => (x.style.position = '')));
+        tryV('labelsNone', () => labels.forEach((x) => (x.style.display = 'none')), () => labels.forEach((x) => (x.style.display = '')));
+        tryV('labelsNoClip', () => labels.forEach((x) => (x.style.clipPath = 'none')), () => labels.forEach((x) => (x.style.clipPath = '')));
+        tryV('navNoMargin', () => (nav.style.margin = '0'), () => (nav.style.margin = ''));
+        tryV('again', () => {}, () => {});
         return JSON.stringify(out);`,
       args: [el],
     });
