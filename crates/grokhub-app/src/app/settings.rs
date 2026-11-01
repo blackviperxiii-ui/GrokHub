@@ -993,6 +993,7 @@ impl Cabin {
                                                             crate::ui_kit::section_header(ui, "Local AI", None);
                                                             super::privacy_page::paint_offline_row(ui);
                                                             self.ui_local_model_rows(ui);
+                                                            self.ui_local_tuning_rows(ui);
                                                             for line in super::privacy_page::local_notes(
                                                                 self.cfg.local_model,
                                                                 grokhub_agent::route::local::installed(),

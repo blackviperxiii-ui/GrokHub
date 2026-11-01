@@ -39,27 +39,60 @@ const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the mod
 pub(super) const PICK_ROW: &str = "Use for your chats";
 const PICK_HINT: &str = "A model from a provider you allowed. Auto never picks one on its own, and never to save money.";
 pub(super) const PICK_OFF: &str = "Off (Auto: xAI or Local AI)";
-/// The dropdown label of a provider model: free tiers are marked.
+const ROUTE_ROW: &str = "OpenRouter routing";
+const ROUTE_HINT: &str = "How OpenRouter picks the endpoint for the model you chose. Sent with every call to openrouter.ai only.";
+const ROUTE_LABELS: [(&str, &str); 4] = [
+    ("OpenRouter's default", ""),
+    ("Cheapest endpoint first", "price"),
+    ("Fastest endpoint first", "throughput"),
+    ("Lowest latency first", "latency"),
+];
+const FALLBACK_ROW: &str = "Fall back to OpenRouter's router";
+const FALLBACK_HINT: &str = "When the model you picked has no endpoint left, OpenRouter goes on to its free router (for a free model) or Auto instead of failing.";
+const DATA_ROW: &str = "OpenRouter data policy";
+const DATA_HINT: &str = "Zero data retention keeps your prompts off providers that store them; Allow also reaches providers that may train on prompts. Your account settings at openrouter.ai/settings/privacy still win.";
+const DATA_LABELS: [(&str, &str); 3] = [
+    ("Your account's default", ""),
+    ("Zero data retention only", "zdr"),
+    ("Allow providers that may store prompts", "allow"),
+];
+
+/// The dropdown label of a provider model: OpenRouter's routers and free
+/// tiers are marked.
 pub(super) fn pick_label(id: &str) -> String {
-    if is_free_model(id) {
-        format!("{id}  · free")
-    } else {
-        id.to_string()
+    match pick_rank(id) {
+        0 => format!("{id}  · Auto: free models"),
+        1 => format!("{id}  · Auto: OpenRouter picks"),
+        2 => format!("{id}  · OpenRouter router"),
+        3 => format!("{id}  · free"),
+        _ => id.to_string(),
     }
 }
 
-/// OpenRouter's free tier: a `:free` variant or its `free` auto-router.
+/// OpenRouter's free tier: a `:free` variant or its `free` router.
 pub(super) fn is_free_model(id: &str) -> bool {
-    id.ends_with(":free") || id.ends_with("/free")
+    providers::is_free_model(id)
 }
 
-/// Free tiers first, then the rest, each group alphabetical.
+/// Dropdown order: the free router, Auto, other routers, free tiers, the rest.
+fn pick_rank(id: &str) -> u8 {
+    let id = id.trim();
+    if id.ends_with("/openrouter/free") {
+        0
+    } else if id.ends_with("/openrouter/auto") {
+        1
+    } else if providers::is_openrouter_router(id) {
+        2
+    } else if is_free_model(id) {
+        3
+    } else {
+        4
+    }
+}
+
+/// Routers first, then free tiers, then the rest, each group alphabetical.
 pub(super) fn sort_picks(ids: &mut [String]) {
-    ids.sort_by(|a, b| {
-        is_free_model(b)
-            .cmp(&is_free_model(a))
-            .then_with(|| a.cmp(b))
-    });
+    ids.sort_by(|a, b| pick_rank(a).cmp(&pick_rank(b)).then_with(|| a.cmp(b)));
 }
 const KIND_ROW: &str = "Provider type";
 const KIND_HINT: &str =
@@ -106,6 +139,8 @@ pub(super) struct ProviderUi {
     pub list: Option<Vec<providers::Provider>>,
     /// Cached "Use for your chats" model ids. Cleared with the list / grants.
     pub model_choices: Option<Vec<String>>,
+    /// The OpenRouter routing the router last heard.
+    pub sent_routing: Option<providers::Routing>,
 }
 
 /// What the "Sign in with OpenRouter" thread sends the cabin.
@@ -256,6 +291,10 @@ impl Cabin {
         if self.harness.router.providers.sent.as_deref() != Some(pick.as_str()) {
             grokhub_agent::route::live::set_provider_pick(&pick);
             self.harness.router.providers.sent = Some(pick);
+        }
+        if self.harness.router.providers.sent_routing.as_ref() != Some(&self.cfg.provider_routing) {
+            providers::set_routing(self.cfg.provider_routing.clone());
+            self.harness.router.providers.sent_routing = Some(self.cfg.provider_routing.clone());
         }
     }
 
@@ -579,6 +618,12 @@ impl Cabin {
                 }
             }
         }
+        if providers_list
+            .iter()
+            .any(|p| providers::is_openrouter_host(&p.dest()))
+        {
+            self.ui_openrouter_routing_rows(ui);
+        }
         crate::cards::settings_field(
             ui,
             URL_ROW,
@@ -640,6 +685,41 @@ impl Cabin {
         }
         if let Some(note) = &self.harness.router.providers.signin_note {
             crate::cards::settings_note(ui, note);
+        }
+    }
+
+    /// OpenRouter's routing knobs, under the pick once openrouter.ai is added.
+    fn ui_openrouter_routing_rows(&mut self, ui: &mut egui::Ui) {
+        let before = self.cfg.provider_routing.clone();
+        let mut r = before.clone();
+        let labels: Vec<String> = ROUTE_LABELS.iter().map(|(l, _)| l.to_string()).collect();
+        let picked = ROUTE_LABELS
+            .iter()
+            .find(|(_, v)| *v == r.sort)
+            .map_or(labels[0].clone(), |(l, _)| l.to_string());
+        if let Some(i) =
+            crate::cards::settings_dropdown(ui, ROUTE_ROW, ROUTE_HINT, &picked, &labels)
+        {
+            r.sort = ROUTE_LABELS.get(i).map_or("", |(_, v)| *v).to_string();
+        }
+        let mut fallback = r.fallback;
+        if crate::cards::settings_toggle(ui, FALLBACK_ROW, FALLBACK_HINT, &mut fallback) {
+            r.fallback = fallback;
+        }
+        let labels: Vec<String> = DATA_LABELS.iter().map(|(l, _)| l.to_string()).collect();
+        let picked = DATA_LABELS
+            .iter()
+            .find(|(_, v)| *v == r.data)
+            .map_or(labels[0].clone(), |(l, _)| l.to_string());
+        if let Some(i) = crate::cards::settings_dropdown(ui, DATA_ROW, DATA_HINT, &picked, &labels)
+        {
+            r.data = DATA_LABELS.get(i).map_or("", |(_, v)| *v).to_string();
+        }
+        if r != before {
+            self.cfg.provider_routing = r;
+            self.persist_cfg();
+            self.sync_provider_pick();
+            self.status = "Saved".into();
         }
     }
 
@@ -1287,11 +1367,13 @@ mod tests {
     }
 
     #[test]
-    fn provider_picks_put_free_tiers_first_and_label_them() {
+    fn provider_picks_put_routers_and_free_tiers_first_and_label_them() {
         let mut ids: Vec<String> = [
             "openrouter/zeta/big",
             "openrouter/google/gemma-4-31b-it:free",
             "openrouter/alpha/small",
+            "openrouter/openrouter/fusion",
+            "openrouter/openrouter/auto",
             "openrouter/openrouter/free",
         ]
         .iter()
@@ -1301,11 +1383,25 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "openrouter/google/gemma-4-31b-it:free".to_string(),
                 "openrouter/openrouter/free".to_string(),
+                "openrouter/openrouter/auto".to_string(),
+                "openrouter/openrouter/fusion".to_string(),
+                "openrouter/google/gemma-4-31b-it:free".to_string(),
                 "openrouter/alpha/small".to_string(),
                 "openrouter/zeta/big".to_string(),
             ]
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/free"),
+            "openrouter/openrouter/free  · Auto: free models"
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/auto"),
+            "openrouter/openrouter/auto  · Auto: OpenRouter picks"
+        );
+        assert_eq!(
+            pick_label("openrouter/openrouter/fusion"),
+            "openrouter/openrouter/fusion  · OpenRouter router"
         );
         assert_eq!(
             pick_label("openrouter/google/gemma-4-31b-it:free"),

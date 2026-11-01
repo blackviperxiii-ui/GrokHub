@@ -77,12 +77,29 @@ fn scheduled_turns_settle_on_every_turn_end() {
     assert!(page.contains("automation_health_line"), "{page}");
 }
 
+thread_local! {
+    /// `GROKHUB_CONFIG` as it was before [`pin_auto_config`] set it.
+    static PREV_CONFIG_ENV: std::cell::RefCell<Option<Option<std::ffi::OsString>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn pin_auto_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
     let root = crate::config::test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
+    PREV_CONFIG_ENV.with(|p| *p.borrow_mut() = Some(std::env::var_os("GROKHUB_CONFIG")));
     std::env::set_var("GROKHUB_CONFIG", &root);
     (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
+/// Put the process-wide variable back as it was. Unsetting it would send
+/// every later test in this process (plain `cargo test`) to the real config.
+fn restore_config_env() {
+    match PREV_CONFIG_ENV.with(|p| p.borrow_mut().take()) {
+        Some(Some(v)) => std::env::set_var("GROKHUB_CONFIG", v),
+        Some(None) => std::env::remove_var("GROKHUB_CONFIG"),
+        None => {}
+    }
 }
 
 fn failing_price_job() -> grokhub_core::Automation {
@@ -289,7 +306,7 @@ fn failed_scheduled_row_primary_label_is_Retry() {
         "{texts:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -317,7 +334,7 @@ fn healthy_scheduled_row_still_says_Run() {
     );
     assert_eq!(count_label(&texts, "···"), 1, "{texts:?}");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -358,7 +375,7 @@ fn failing_row_paints_View_last_run_and_opens_output() {
         "the click landed on the link"
     );
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -394,7 +411,7 @@ fn View_last_run_opens_background_history_when_there_is_no_card() {
     );
     assert!(cabin.board_view.open.is_none());
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -423,7 +440,7 @@ fn View_last_run_sheet_shows_the_stored_error() {
     );
     assert!(texts.iter().any(|t| t.contains("Last run")), "{texts:?}");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -514,7 +531,7 @@ fn automations_rows_keep_Remove_behind_the_dots_menu() {
     assert_eq!(cabin.automations.len(), 1, "the menu only asks");
     assert_eq!(cabin.grok_loops.len(), 1);
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -700,7 +717,7 @@ fn automations_page_paints_plain_intro_and_Suggested_from_recent_work() {
         "{blob}"
     );
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }
 
 #[test]
@@ -764,5 +781,5 @@ fn remove_job_confirm_names_the_title_and_confirming_removes() {
     assert!(cabin.grok_loops.is_empty(), "confirming removes the loop");
     assert_eq!(cabin.status, "Loop removed");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    restore_config_env();
 }

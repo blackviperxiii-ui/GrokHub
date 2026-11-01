@@ -93,6 +93,83 @@ pub fn set_enabled(on: bool) {
 
 static PROMPT_CLEANUP: AtomicBool = AtomicBool::new(false);
 
+/// Settings → Local AI → "Local AI for chats": when the on-device model takes
+/// a step while online and a cloud model could answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LocalFirst {
+    /// Only when no cloud model can answer (offline, signed out, cloud down).
+    #[default]
+    Fallback,
+    /// Your chats go to the device first; background work keeps its cloud route.
+    Chat,
+    /// Every step the device can run ([`OFFLINE_CLASSES`]) goes to it.
+    All,
+}
+
+impl LocalFirst {
+    /// The `app.json` value (`""`, `"chat"`, `"all"`).
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "chat" => Self::Chat,
+            "all" => Self::All,
+            _ => Self::Fallback,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fallback => "",
+            Self::Chat => "chat",
+            Self::All => "all",
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Chat,
+            2 => Self::All,
+            _ => Self::Fallback,
+        }
+    }
+}
+
+static LOCAL_FIRST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The cabin sets this from `app.json` next to [`set_enabled`].
+pub fn set_first(mode: LocalFirst) {
+    LOCAL_FIRST.store(mode as u8, Ordering::SeqCst);
+}
+
+/// "Local AI for chats", as last set.
+pub fn first() -> LocalFirst {
+    LocalFirst::from_u8(LOCAL_FIRST.load(Ordering::SeqCst))
+}
+
+/// A user-facing chat class (`chat:quick`, `chat:default`).
+fn is_chat_class(class: &str) -> bool {
+    class_row(class)
+        .map(|r| r.class)
+        .unwrap_or(class.trim())
+        .starts_with("chat:")
+}
+
+/// "Local AI for chats" sends this step to the device although a cloud model
+/// could take it: the switch is on, the mode covers the class, and the step
+/// fits the device as it would offline (never a cloud-only, hard-tool or
+/// `prepare:hard` step, and never one over the context cap).
+pub fn first_takes(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
+    let covers = match gate.first {
+        LocalFirst::Fallback => false,
+        LocalFirst::Chat => is_chat_class(class),
+        LocalFirst::All => true,
+    };
+    let as_offline = LocalGate {
+        offline: true,
+        ..gate.clone()
+    };
+    covers && gate.enabled && !gate.capacity.paused() && eligible(&as_offline, class, ctx_tokens)
+}
+
 /// LO-48: the cabin sets this from `app.json` `promptCleanup` (default
 /// `false`) next to [`set_enabled`]. [`super::cleanup::tidy`] runs only while
 /// it is on.
@@ -409,7 +486,9 @@ pub fn fallback_active() -> bool {
 /// model answering. Online with the cloud up, it loads on demand only.
 pub fn warm_wanted() -> bool {
     super::connectivity::sync_from_core();
-    super::connectivity::state().prefer_local() || fallback_active()
+    super::connectivity::state().prefer_local()
+        || fallback_active()
+        || (switched_on() && first() != LocalFirst::Fallback)
 }
 
 /// What a route may do with the local model for one call.
@@ -432,6 +511,8 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
+    /// Settings → Local AI → "Local AI for chats".
+    pub first: LocalFirst,
 }
 
 impl LocalGate {
@@ -448,6 +529,7 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
+            first: first(),
         }
     }
 }
@@ -460,8 +542,17 @@ fn allowed_classes(gate: &LocalGate) -> &'static [&'static str] {
     }
 }
 
+/// A chat the device answers from a request fitted to its window
+/// ([`super::local_fit::fit`] drops tools, guidance and the oldest turns),
+/// so the thread's length is no bar. Background steps send their text whole.
+pub fn fits_by_trimming(class: &str) -> bool {
+    let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    matches!(class, "chat:quick" | "chat:default" | "desktop:soft")
+}
+
 /// The local route may take this step: the flag is on, the class is allowed
-/// for this connectivity, the step fits the context cap, and it is not hard.
+/// for this connectivity, the step fits the context cap (or is a chat, which
+/// is trimmed to fit on the way), and it is not hard.
 pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
     if super::connectivity::is_cloud_only(class) {
@@ -471,7 +562,7 @@ pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
         && !gate.hard_tool
         && class != PREPARE_HARD
         && allowed_classes(gate).contains(&class)
-        && ctx_tokens <= ctx_cap()
+        && (fits_by_trimming(class) || ctx_tokens <= ctx_cap())
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -516,7 +607,7 @@ pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
     class == PREPARE_HARD
         || class.starts_with("repair:")
         || d > 0.7
-        || ctx_tokens > ctx_cap().saturating_mul(3) / 4
+        || (!fits_by_trimming(class) && ctx_tokens > ctx_cap().saturating_mul(3) / 4)
 }
 
 /// Quiet note when escalating from local to cloud (names both models).
@@ -803,10 +894,9 @@ pub fn serve_request(
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
-    if req.tools.is_empty() {
-        return serve_within_at(class, &text, req.effort.as_deref(), HEAVY_WAIT, cancel);
-    }
-    // The device window is often 4k to 16k: send only what fits, with room to answer.
+    // The device window is often 4k to 16k: send only what fits, with room to
+    // answer. With or without tools, so a long chat is trimmed on the way
+    // (the oldest turns first) instead of being refused for its length.
     let n_ctx = rt
         .context_tokens()
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);

@@ -1114,6 +1114,89 @@ pub fn policy_refusal(status: u16, message: &str) -> bool {
             .any(|w| message.contains(w))
 }
 
+/// OpenRouter's own routers: the free pool and Auto. Pickable like any model.
+pub const OPENROUTER_FREE_ROUTER: &str = "openrouter/free";
+pub const OPENROUTER_AUTO_ROUTER: &str = "openrouter/auto";
+
+/// A free tier on OpenRouter: a `:free` variant or its free router. Takes the
+/// wire model (`google/x:free`) or the registry id (`openrouter/google/x:free`).
+pub fn is_free_model(id: &str) -> bool {
+    let id = id.trim();
+    id.ends_with(":free") || id == OPENROUTER_FREE_ROUTER || id.ends_with("/openrouter/free")
+}
+
+/// One of OpenRouter's routers (`openrouter/free`, `openrouter/auto`, ...)
+/// rather than a single model. Wire model or registry id.
+pub fn is_openrouter_router(id: &str) -> bool {
+    let id = id.trim();
+    (id.starts_with("openrouter/") && id.matches('/').count() == 1)
+        || id.starts_with("openrouter/openrouter/")
+}
+
+/// Settings → AI models → OpenRouter routing: how OpenRouter picks the
+/// endpoint for the model you chose. Sent only to openrouter.ai, as its
+/// `provider` and `models` request fields; a plain OpenAI-compatible host
+/// never sees them. All off is OpenRouter's own default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Routing {
+    /// `provider.sort`: "" (OpenRouter's default), "price", "throughput" or "latency".
+    pub sort: String,
+    /// `models`: when the model you picked has no endpoint left, OpenRouter
+    /// goes on to its free router (for a free pick) or Auto instead of failing.
+    pub fallback: bool,
+    /// "" (your account's default), "zdr" (`provider.zdr`: zero-data-retention
+    /// endpoints only) or "allow" (`provider.data_collection: allow`).
+    pub data: String,
+}
+
+impl Routing {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+static ROUTING: Mutex<Option<Routing>> = Mutex::new(None);
+
+/// The cabin sets this on start and whenever Settings changes it.
+pub fn set_routing(r: Routing) {
+    *ROUTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+}
+
+fn routing() -> Routing {
+    ROUTING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
+/// Add OpenRouter's routing fields to an OpenAI-compatible body. `wire_model`
+/// is the model as OpenRouter names it (`google/gemma-4-31b-it:free`).
+pub fn apply_openrouter_routing(body: &mut Value, wire_model: &str, r: &Routing) {
+    if matches!(r.sort.as_str(), "price" | "throughput" | "latency") {
+        body["provider"]["sort"] = json!(r.sort);
+    }
+    match r.data.as_str() {
+        "zdr" => body["provider"]["zdr"] = json!(true),
+        "allow" => body["provider"]["data_collection"] = json!("allow"),
+        _ => {}
+    }
+    if r.fallback && !is_openrouter_router(wire_model) {
+        let next = if is_free_model(wire_model) {
+            OPENROUTER_FREE_ROUTER
+        } else {
+            OPENROUTER_AUTO_ROUTER
+        };
+        body["models"] = json!([wire_model, next]);
+    }
+}
+
+/// `host` is openrouter.ai or one of its subdomains.
+pub fn is_openrouter_host(host: &str) -> bool {
+    host_is(host, "openrouter.ai")
+}
+
 fn error_of(status: u16, body: &str) -> ClientError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let msg = v["error"]["message"]
@@ -1186,7 +1269,11 @@ pub fn call_model(
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
-    let body = request_body(p.kind, wire_model, effort, &req, max_output).to_string();
+    let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
+    if p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest()) {
+        apply_openrouter_routing(&mut body, wire_model, &routing());
+    }
+    let body = body.to_string();
     let r = transport_for(config_dir)
         .post_within(&url, &p.headers(&key), &body, req.call_timeout)
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;

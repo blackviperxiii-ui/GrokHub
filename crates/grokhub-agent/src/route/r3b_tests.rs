@@ -1772,3 +1772,63 @@ fn an_openrouter_privacy_refusal_reads_as_what_to_do_not_a_raw_404() {
     assert!(providers::POLICY_REFUSED.contains("Use for your chats"));
     assert!(providers::POLICY_REFUSED.contains("https://openrouter.ai/settings/privacy"));
 }
+
+#[test]
+fn openrouter_routing_prefs_go_out_as_provider_and_models_fields_only_when_set() {
+    use super::providers::{apply_openrouter_routing, is_openrouter_router, Routing};
+    let base = json!({"model": "google/gemma-4-31b-it:free", "stream": false, "messages": []});
+
+    // All off: the body is untouched (the golden bodies stay byte-identical).
+    let mut b = base.clone();
+    apply_openrouter_routing(&mut b, "google/gemma-4-31b-it:free", &Routing::default());
+    assert_eq!(b, base);
+
+    // Sort, data policy and the free-router fallback for a free pick.
+    let mut b = base.clone();
+    let r = Routing {
+        sort: "price".into(),
+        fallback: true,
+        data: "zdr".into(),
+    };
+    apply_openrouter_routing(&mut b, "google/gemma-4-31b-it:free", &r);
+    assert_eq!(b["provider"]["sort"], json!("price"));
+    assert_eq!(b["provider"]["zdr"], json!(true));
+    assert_eq!(
+        b["models"],
+        json!(["google/gemma-4-31b-it:free", "openrouter/free"])
+    );
+
+    // A paid pick falls back to Auto; "allow" is data_collection.
+    let mut b = json!({"model": "anthropic/claude-fable-5"});
+    let r = Routing {
+        sort: "throughput".into(),
+        fallback: true,
+        data: "allow".into(),
+    };
+    apply_openrouter_routing(&mut b, "anthropic/claude-fable-5", &r);
+    assert_eq!(b["provider"]["sort"], json!("throughput"));
+    assert_eq!(b["provider"]["data_collection"], json!("allow"));
+    assert_eq!(
+        b["models"],
+        json!(["anthropic/claude-fable-5", "openrouter/auto"])
+    );
+
+    // A router pick never gets a fallback list, and an unknown sort is dropped.
+    let mut b = json!({"model": "openrouter/free"});
+    let r = Routing {
+        sort: "bogus".into(),
+        fallback: true,
+        data: String::new(),
+    };
+    apply_openrouter_routing(&mut b, "openrouter/free", &r);
+    assert_eq!(b, json!({"model": "openrouter/free"}));
+    assert!(is_openrouter_router("openrouter/auto"));
+    assert!(is_openrouter_router("openrouter/openrouter/free"));
+    assert!(!is_openrouter_router(
+        "openrouter/google/gemma-4-31b-it:free"
+    ));
+    assert!(!is_openrouter_router("google/gemma-4-31b-it:free"));
+    assert!(providers::is_free_model("openrouter/openrouter/free"));
+    assert!(providers::is_free_model("google/gemma-4-31b-it:free"));
+    assert!(!providers::is_free_model("openrouter/openrouter/auto"));
+}

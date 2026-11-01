@@ -1230,7 +1230,20 @@ pub fn stream_routed(
     let out = if on_device {
         // Pass the full request so cabin web_search / web_fetch tool calls round-trip
         // through the agent loop (OpenAI-compatible tools on the local sidecar).
-        super::local::serve_request(class, &sent, cancel)
+        let out = super::local::serve_request(class, &sent, cancel);
+        // The chat shows streamed text only, so the device's answer goes out
+        // as one delta, like a provider's; without this the reply is saved to
+        // the session but never reaches the screen.
+        if let Ok(turn) = &out {
+            if !turn.text.is_empty() {
+                super::adult::guard(
+                    &mut reply,
+                    &mut *sink,
+                    StreamEvent::TextDelta(turn.text.clone()),
+                );
+            }
+        }
+        out
     } else if on_provider {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);

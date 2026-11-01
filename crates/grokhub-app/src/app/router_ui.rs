@@ -408,6 +408,7 @@ impl Cabin {
             super::local_signals::start(crate::config::config_dir());
         }
         self.sync_provider_pick();
+        self.sync_local_tuning();
         let pin = self.cfg.model.trim();
         if self.harness.router.pin.as_deref() != Some(pin) {
             grokhub_agent::route::live::set_pin(pin);

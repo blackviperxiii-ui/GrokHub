@@ -755,6 +755,18 @@ impl Router {
         // A local route only while the flag is on, for an eligible class, on the live tier.
         // Pins and a Settings pick may still name any fitting model; Auto's quality pool
         // drops non-reasoning ones in [`Self::pick_model`].
+        // A chat the device answers is trimmed to its window on the way, so
+        // the local tier's context length is no bar for it.
+        let fit_for = |id: &str| {
+            if local::is_local(id) && local::fits_by_trimming(input.class) {
+                policy::Fit {
+                    ctx_tokens: 0,
+                    ..fit
+                }
+            } else {
+                fit
+            }
+        };
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -762,8 +774,11 @@ impl Router {
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
+                    // "Local AI for chats": the live tier is a candidate online too.
+                    || (id.trim() == input.local.tier
+                        && local::first_takes(&input.local, input.class, input.ctx_tokens))
             })
-            .filter(|id| policy::fits(reg, profiles, id, fit, &input.spend, now_ms))
+            .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
         let row = policy::class_row(input.class);
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
@@ -851,8 +866,16 @@ impl Router {
         let no_keys_ok = any_elig;
         let local_id = reg.models.keys().map(String::as_str).find(|id| {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
-                && policy::fits(reg, profiles, id, fit, &input.spend, now_ms)
+                && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
+        // "Local AI for chats": the device takes the step although the cloud could.
+        let first_local = local::first_takes(&input.local, input.class, input.ctx_tokens)
+            .then(|| {
+                ids.iter()
+                    .find(|id| local::is_local(id))
+                    .map(|id| id.to_string())
+            })
+            .flatten();
         let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
             // Sensitive data stays on the device, and the device is paused.
             local_paused(&mut rules)
@@ -917,6 +940,13 @@ impl Router {
                         replaced: None,
                     }
                 }
+            }
+        } else if let Some(id) = first_local {
+            rules.push("local:first".into());
+            ModelPick {
+                model: id,
+                no_route: false,
+                replaced: None,
             }
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.

@@ -50,7 +50,11 @@ fn reason(s: &Signals, rules: &Rules) -> (Level, &'static str) {
 fn windows_nvidia_game_throttles_after_5_and_returns_after_the_cooldown() {
     let r = Rules::default();
     let mut g = Governor::new();
-    let game = desk(|s| s.fullscreen = Some(quns_fullscreen(3)));
+    // The model is needed (offline / Local AI first): a game throttles it.
+    let game = desk(|s| {
+        s.fullscreen = Some(quns_fullscreen(3));
+        s.needed = true;
+    });
     assert_eq!(
         reason(&game, &r),
         (Level::Throttle, "a fullscreen app is in front")
@@ -265,10 +269,17 @@ fn linux_cuda_own_sidecar_load_is_not_a_game() {
 }
 
 #[test]
-fn linux_rocm_x11_fullscreen_throttles() {
+fn linux_rocm_x11_fullscreen_unloads_the_model_nobody_needs() {
     let r = Rules::default();
     let mut g = Governor::new();
     let s = desk(|s| s.fullscreen = Some(true));
+    assert_eq!(feed(&mut g, &s, &r, 7, 0, 2_000), vec![(5, Level::Unload)]);
+    // Needed (offline or Local AI first): the same screen only throttles.
+    let mut g = Governor::new();
+    let s = desk(|s| {
+        s.fullscreen = Some(true);
+        s.needed = true;
+    });
     assert_eq!(
         feed(&mut g, &s, &r, 7, 0, 2_000),
         vec![(5, Level::Throttle)]
@@ -298,7 +309,7 @@ fn linux_wayland_without_fullscreen_falls_back_to_games_then_gpu() {
     ]));
     let game = desk(|s| s.game = Some(gamemode_active("gamemode is active\n")));
     assert_eq!(game.fullscreen, None);
-    assert_eq!(reason(&game, &r), (Level::Throttle, "a game is running"));
+    assert_eq!(reason(&game, &r), (Level::Unload, "a game is running"));
     // Only a busy GPU: a 4-sample spike, one calm sample, another spike, then
     // a sustained run that throttles on its 5th sample.
     let mut g = Governor::new();
@@ -435,6 +446,7 @@ fn allow_and_deny_lists_win_over_the_screen() {
             deny: vec!["blender".into()],
             throttle_on_battery: false,
             pause_for_games: true,
+            unload_for_games: true,
             use_idle_time: true,
         }
     );
@@ -449,7 +461,7 @@ fn allow_and_deny_lists_win_over_the_screen() {
     });
     assert_eq!(
         reason(&blender, &r),
-        (Level::Throttle, "an app on your deny list is in front")
+        (Level::Unload, "an app on your deny list is in front")
     );
     assert_eq!(Rules::from_json("{broken"), Rules::default());
     assert!(Rules::default().throttle_on_battery);
@@ -472,10 +484,10 @@ fn games_and_idle_time_follow_the_users_two_switches() {
     });
     assert_eq!(
         reason(&game, &Rules::default()),
-        (Level::Throttle, "a game is running")
+        (Level::Unload, "a game is running")
     );
     assert_eq!(reason(&game, &off), (Level::Normal, "normal use"));
-    // The deny list still throttles with games switched off.
+    // The deny list still counts with games switched off.
     let deny = Rules {
         deny: vec!["blender".into()],
         ..off.clone()
@@ -483,7 +495,7 @@ fn games_and_idle_time_follow_the_users_two_switches() {
     let blender = desk(|s| s.foreground = Some("blender".into()));
     assert_eq!(
         reason(&blender, &deny),
-        (Level::Throttle, "an app on your deny list is in front")
+        (Level::Unload, "an app on your deny list is in front")
     );
     let idle = desk(|s| s.idle_secs = Some(IDLE_RAMP_SECS));
     assert_eq!(
@@ -575,4 +587,35 @@ fn the_apps_own_window_in_front_is_never_a_fullscreen_app() {
     );
     assert_eq!(foreground_fullscreen(None, None, false), None);
     assert_eq!(foreground_fullscreen(None, Some(false), false), Some(false));
+}
+
+#[test]
+fn a_game_unloads_the_model_unless_it_is_needed_or_unload_is_off() {
+    let r = Rules::default();
+    assert!(r.unload_for_games);
+    let game = desk(|s| s.game = Some(true));
+    // Nothing needs the model: it unloads, and the game gets the GPU and RAM.
+    assert_eq!(reason(&game, &r), (Level::Unload, "a game is running"));
+    // Offline, cloud down or Local AI first: it only slows down.
+    let needed = desk(|s| {
+        s.game = Some(true);
+        s.needed = true;
+    });
+    assert_eq!(reason(&needed, &r), (Level::Throttle, "a game is running"));
+    // "Slow the model down" in Settings.
+    let slow = Rules::from_json(r#"{"unloadForGames":false}"#);
+    assert!(!slow.unload_for_games && slow.pause_for_games);
+    assert_eq!(reason(&game, &slow), (Level::Throttle, "a game is running"));
+    // A busy GPU alone never unloads: another app may just be rendering.
+    let gpu = desk(|s| s.external_gpu_pct = Some(GPU_BUSY_PCT + 1));
+    assert_eq!(reason(&gpu, &r).0, Level::Throttle);
+    assert!(game_reason("a fullscreen app is in front"));
+    assert!(!game_reason("another app is using the GPU"));
+    // The governor takes 5 samples (10 s) to unload and 30 to come back, so a
+    // loading screen or an alt-tab doesn't bounce the model.
+    let mut g = Governor::new();
+    assert_eq!(
+        feed(&mut g, &game, &r, 10, 0, 2_000),
+        vec![(5, Level::Unload)]
+    );
 }

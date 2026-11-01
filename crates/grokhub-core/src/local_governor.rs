@@ -76,6 +76,10 @@ pub struct Signals {
     pub os_pressure: Option<bool>,
     /// Executable or app name of the foreground window, lowercase.
     pub foreground: Option<String>,
+    /// The on-device model is the only thing that can answer right now
+    /// (offline, the cloud down, or "Local AI for chats" on): a game then
+    /// throttles it instead of unloading it.
+    pub needed: bool,
 }
 
 impl Signals {
@@ -103,6 +107,10 @@ pub struct Rules {
     pub throttle_on_battery: bool,
     /// A game or a fullscreen app throttles local AI. The deny list still does when off.
     pub pause_for_games: bool,
+    /// A game, a fullscreen app or a deny-list app unloads the model (the
+    /// GPU and RAM go to the game) unless [`Signals::needed`]; off, it only
+    /// throttles.
+    pub unload_for_games: bool,
     /// Idle time on AC ramps local AI up.
     pub use_idle_time: bool,
 }
@@ -114,6 +122,7 @@ impl Default for Rules {
             deny: Vec::new(),
             throttle_on_battery: true,
             pause_for_games: true,
+            unload_for_games: true,
             use_idle_time: true,
         }
     }
@@ -139,6 +148,17 @@ pub struct Want {
 
 fn want(level: Level, reason: &'static str) -> Option<Want> {
     Some(Want { level, reason })
+}
+
+/// A [`busy`] reason that is a game (or a window treated as one), not just a
+/// busy GPU.
+pub fn game_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "a game is running"
+            | "a fullscreen app is in front"
+            | "an app on your deny list is in front"
+    )
 }
 
 /// Another app is using the machine hard: a game, a fullscreen app, or a busy GPU.
@@ -187,6 +207,12 @@ pub fn target(s: &Signals, rules: &Rules) -> Option<Want> {
         }
     }
     if let Some(reason) = busy(s, rules) {
+        // A game gets the whole machine: the model unloads, and loads again on
+        // the next ask once the game is gone. When it is the only model that
+        // can answer, it slows down instead.
+        if rules.unload_for_games && !s.needed && game_reason(reason) {
+            return want(Level::Unload, reason);
+        }
         return want(Level::Throttle, reason);
     }
     if pressure(s) {

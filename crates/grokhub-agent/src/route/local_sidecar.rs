@@ -838,6 +838,16 @@ pub fn touch_global() {
     }
 }
 
+/// Settings → Local AI → "Keep the model loaded": the running sidecar takes
+/// the new idle timeout at once; the next start reads it from `local_perf`.
+pub fn set_idle_unload_secs(secs: u64) {
+    if let Ok(mut slot) = global_slot().lock() {
+        if let Some(side) = slot.as_mut() {
+            side.idle_unload_secs = secs;
+        }
+    }
+}
+
 /// Stop the sidecar when it has been idle longer than its unload timeout.
 ///
 /// Idle means no request in flight and none started or finished within the

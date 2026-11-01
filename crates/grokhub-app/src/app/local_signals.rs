@@ -56,6 +56,13 @@ pub(super) fn start(config_dir: PathBuf) {
                 config_dir.join("local"),
             );
             local_gov::set_log_dir(config_dir.join("local"));
+            // Every launch plans against the memory free right now.
+            grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
+                grokhub_agent::route::local_autoconfig::FreeNow {
+                    vram_free_mb: super::local_probe::nvidia_free_vram_now(),
+                    ram_free_mb: local_probe::free_ram_now(),
+                }
+            }));
             sample_loop(&config_dir)
         });
 }
@@ -81,6 +88,14 @@ fn sample_loop(config_dir: &Path) {
             reader.rules = std::fs::read_to_string(&rules_path)
                 .map(|t| Rules::from_json(&t))
                 .unwrap_or_default();
+            // Sharing the GPU with a game: when the game takes much more VRAM
+            // than the running launch planned for, relaunch into what is left
+            // (between requests, like a level change).
+            if local_gov::level() == Level::Throttle
+                && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
+            {
+                local_gov::request_restart();
+            }
         }
         let s = reader.sample(local_sidecar::global_pid());
         let want = g::target(&s, &reader.rules);
@@ -167,6 +182,7 @@ impl Reader {
             memory,
             os_pressure: self.slow.os_pressure,
             foreground: fast.foreground,
+            needed: local::warm_wanted(),
         }
     }
 }

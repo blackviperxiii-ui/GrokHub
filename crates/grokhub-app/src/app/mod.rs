@@ -199,6 +199,7 @@ mod local_models_ui;
 mod local_pick_ui;
 mod local_probe;
 mod local_signals;
+mod local_tuning_ui;
 mod marketplace_ui;
 mod memory_tidy;
 mod minecraft_ui;
@@ -5465,7 +5466,8 @@ impl eframe::App for Cabin {
             self.tray_saw_unfocused =
                 crate::tray::remember_hidden_unfocus(focused, self.tray_saw_unfocused);
             let since_ms = self.tray_hid_at.elapsed().as_millis() as u64;
-            let tick = if crate::tray::hidden_raise_ready(since_ms) {
+            let tick = if crate::tray::raise_on_focus() && crate::tray::hidden_raise_ready(since_ms)
+            {
                 crate::tray::hidden_window_tick(true, focused, just_hid, self.tray_saw_unfocused)
             } else {
                 crate::tray::HiddenTick::StayHidden
@@ -5473,7 +5475,7 @@ impl eframe::App for Cabin {
             match tick {
                 crate::tray::HiddenTick::Raise => self.show_from_tray(ctx),
                 crate::tray::HiddenTick::StayHidden => {
-                    if crate::tray::reapply_unmap(true, focused) {
+                    if crate::tray::reapply_unmap(true, focused, since_ms) {
                         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
                         #[cfg(windows)]
                         crate::win_native::hide_cabin();

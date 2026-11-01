@@ -51,6 +51,24 @@ pub fn set_defaults(d: RuntimeDefaults) {
     *stored().lock().expect("local_perf defaults") = d;
 }
 
+/// Settings → Local AI → "Keep the model loaded": `None` restores the
+/// default idle unload, `Some(secs)` the given one (`u64::MAX` never unloads).
+/// A hardware probe after this keeps the choice.
+pub fn set_idle_unload_secs(secs: Option<u64>) {
+    let mut d = stored().lock().expect("local_perf defaults");
+    d.idle_unload_secs = secs.unwrap_or(IDLE_UNLOAD_SECS);
+    IDLE_OVERRIDE.store(secs.unwrap_or(0), std::sync::atomic::Ordering::SeqCst);
+}
+
+static IDLE_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn idle_override() -> Option<u64> {
+    match IDLE_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        s => Some(s),
+    }
+}
+
 /// Current stored defaults (CPU-safe floor until a probe runs).
 pub fn current_defaults() -> RuntimeDefaults {
     stored().lock().expect("local_perf defaults").clone()
@@ -175,7 +193,10 @@ pub fn idle_unload_due(last_used_secs: u64, now_secs: u64, idle_unload_secs: u64
 
 /// Apply probed hardware: store defaults and raise the local context cap.
 pub fn apply_hardware(hw: &Hardware) {
-    let d = defaults_for_with_cores(hw, physical_cores());
+    let mut d = defaults_for_with_cores(hw, physical_cores());
+    if let Some(secs) = idle_override() {
+        d.idle_unload_secs = secs;
+    }
     super::local::set_ctx_cap(d.ctx);
     set_defaults(d);
 }
