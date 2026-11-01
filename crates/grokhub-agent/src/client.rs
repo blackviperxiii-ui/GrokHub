@@ -560,7 +560,7 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
 }
 
 pub struct XaiClient {
-    agent: ureq::Agent,
+    agent: grokhub_core::http::Agent,
     bearer: String,
     auth_kind: AuthKind,
     url: String,
@@ -584,10 +584,11 @@ fn loopback_http(url: &str) -> bool {
 
 impl XaiClient {
     pub fn new(bearer: impl Into<String>, auth_kind: AuthKind, idle: Duration) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(20))
-            .timeout_read(idle)
-            .build();
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: Duration::from_secs(20),
+            read: Some(idle),
+            ..Default::default()
+        });
         Self {
             agent,
             bearer: bearer.into(),
@@ -624,7 +625,7 @@ impl XaiClient {
         accept: &str,
         call_timeout: Option<Duration>,
         body: Value,
-    ) -> Result<ureq::Response, ClientError> {
+    ) -> Result<grokhub_core::http::Response, ClientError> {
         // Only the listed xAI endpoints, or a loopback test server.
         if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) {
             return Err(ClientError::Protocol(format!(
@@ -641,13 +642,14 @@ impl XaiClient {
         let mut call = self
             .agent
             .post(url)
-            .set("Authorization", &{
+            .header("Authorization", &{
                 let bearer = &self.bearer;
                 format!("Bearer {bearer}")
             })
-            .set("User-Agent", USER_AGENT)
-            .set("x-grok-conv-id", conversation_id)
-            .set("Accept", accept);
+            .header("User-Agent", USER_AGENT)
+            .header("x-grok-conv-id", conversation_id)
+            .header("Accept", accept)
+            .any_status();
         if let Some(limit) = call_timeout {
             call = call.timeout(limit);
         }
@@ -655,11 +657,12 @@ impl XaiClient {
         let response = call.send_json(body);
         drop(sent);
         match response {
-            Ok(resp) => {
+            Ok(resp) if resp.status() < 400 => {
                 grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
                 Ok(resp)
             }
-            Err(ureq::Error::Status(status, resp)) => {
+            Ok(resp) => {
+                let status = resp.status();
                 grokhub_core::connectivity::note_global_transport_hint(
                     grokhub_core::connectivity::classify_http_status(status),
                     grokhub_core::now_ms(),
@@ -673,9 +676,9 @@ impl XaiClient {
                     self.auth_kind,
                 ))
             }
-            Err(ureq::Error::Transport(err)) => {
-                let client_err = classify_transport(&err);
-                crate::route::connectivity::note_ureq_transport(&ureq::Error::Transport(err));
+            Err(err) => {
+                let client_err = classify_transport(err.to_string());
+                crate::route::connectivity::note_http_transport(&err);
                 Err(client_err)
             }
         }
@@ -825,13 +828,13 @@ fn sleep_cancellable(total: Duration, cancel: &CancelToken) -> bool {
     !cancel.is_cancelled()
 }
 
-fn retry_after_header(resp: &ureq::Response) -> Option<u64> {
+fn retry_after_header(resp: &grokhub_core::http::Response) -> Option<u64> {
     resp.header("retry-after")
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
 }
 
-fn read_error_body(resp: ureq::Response) -> String {
+fn read_error_body(resp: grokhub_core::http::Response) -> String {
     let mut buf = String::new();
     let _ = resp.into_reader().take(4096).read_to_string(&mut buf);
     let trimmed = buf.trim();
@@ -847,8 +850,7 @@ fn read_error_body(resp: ureq::Response) -> String {
     trimmed.chars().take(500).collect()
 }
 
-fn classify_transport(err: &ureq::Transport) -> ClientError {
-    let msg = err.to_string();
+fn classify_transport(msg: String) -> ClientError {
     let lower = msg.to_ascii_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
         if lower.contains("connect") || lower.contains("dns") {

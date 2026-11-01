@@ -5462,6 +5462,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::game_watch_rl::match_card(&Default::default(), at),
             "Rocket League",
         ));
+        rows.push((
+            "session_card",
+            crate::factorio_state::session_card(
+                &crate::factorio_state::FactorioSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "Factorio",
+        ));
         rows
     }
 

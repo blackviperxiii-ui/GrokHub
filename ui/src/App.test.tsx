@@ -6,6 +6,7 @@ import type { Capabilities } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
+const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
@@ -20,6 +21,11 @@ const api = vi.hoisted(() => ({
     chatHandlers.push(handler);
     return Promise.resolve(() => {});
   }),
+  onAutomationRan: vi.fn((handler: (run: unknown) => void) => {
+    ranHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
+  shareSchedulerClock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("./api", () => api);
@@ -48,9 +54,19 @@ vi.mock("./Journal", () => ({
     </button>
   ),
 }));
-vi.mock("./Automations", () => ({ Automations: () => null }));
+vi.mock("./Automations", () => ({
+  Automations: () => null,
+  resultLine: (r: { text: string; error: string }) => r.error || r.text,
+}));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
+vi.mock("./Devices", () => ({
+  Devices: ({ onOpenWebAccess }: { onOpenWebAccess: () => void }) => (
+    <button type="button" onClick={onOpenWebAccess}>
+      Devices page
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
@@ -94,6 +110,7 @@ describe("App", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Devices",
       "Library",
       "Settings",
     ]);
@@ -101,6 +118,14 @@ describe("App", () => {
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
+  });
+
+  it("opens Devices, whose Web access link goes to that Settings section", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Devices page" }));
+    expect(await screen.findByText("Settings for a desktop at webAccess")).toBeInTheDocument();
   });
 
   it("puts the saved theme on the page at startup", async () => {
@@ -292,5 +317,26 @@ describe("App", () => {
     );
     await userEvent.click(within(dock).getByRole("button", { name: "Review" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shares the clock with the scheduler and shows a scheduled run in the dock", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    ranHandlers.length = 0;
+    api.shareSchedulerClock.mockClear();
+    render(<App />);
+    expect(api.shareSchedulerClock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(ranHandlers.length).toBe(1));
+    act(() => {
+      ranHandlers[0]({
+        id: "auto-1",
+        name: "summarize my inbox",
+        result: { text: "3 new mails.", error: "", stop: "end_turn" },
+      });
+    });
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
+    expect(within(dock).getByRole("listitem", { name: "summarize my inbox" })).toHaveTextContent(
+      "3 new mails.",
+    );
   });
 });

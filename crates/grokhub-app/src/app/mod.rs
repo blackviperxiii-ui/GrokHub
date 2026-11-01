@@ -169,6 +169,7 @@ mod elite_ui;
 mod episode_ui;
 mod eso_ui;
 mod evidence_ui;
+mod factorio_ui;
 mod feed_ui;
 mod file_writes;
 mod findings_ui;
@@ -3634,6 +3635,17 @@ impl Cabin {
         self.last_heartbeat = Instant::now();
         // Halt holds every organ that starts work; local upkeep still runs.
         let now = now_ms();
+        // While this beat is fresh the shell fires no automations. Not from
+        // tests, whose config folder can be the real one.
+        #[cfg(not(test))]
+        {
+            static LEASE_BEAT: AtomicU64 = AtomicU64::new(0);
+            grokhub_core::scheduler_lease::beat_cabin_lease(
+                &config::config_dir(),
+                now,
+                &LEASE_BEAT,
+            );
+        }
         let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {

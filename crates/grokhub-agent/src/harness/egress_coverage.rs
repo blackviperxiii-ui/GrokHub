@@ -51,7 +51,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ),
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
-    ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before ureq AgentBuilder; DDG/SearXNG go through PageFetch"),
+    ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before its http::agent; DDG/SearXNG go through PageFetch"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/local_ai_ui.rs", 1, "HttpRuntimeFetch::open: runtime_download_url_ok + egress_ok on every hop to GitHub"),
     ("grokhub-app/src/app/gw2_ui.rs", 1, "api_get: egress_ok (no user data; key only in the Authorization header) to api.guildwars2.com, no redirects, public IPs only"),

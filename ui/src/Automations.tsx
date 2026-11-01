@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   addAutomation,
+  editAutomation,
   listAutomations,
+  onAutomationRan,
   removeAutomation,
   runAutomation,
   setAutomationEnabled,
@@ -11,7 +13,7 @@ import {
 import { PRODUCT_NAME } from "./brand";
 import { ConfirmRow } from "./ui";
 
-function resultLine(result: RunResult): string {
+export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
   return result.text.trim() || "Finished with no reply.";
 }
@@ -40,11 +42,42 @@ export function Automations({
   const [note, setNote] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
 
   useEffect(() => {
     if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
   }, [active]);
+
+  // A scheduled run the shell fired: show its reply and the row's new count.
+  useEffect(() => {
+    if (!active) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onAutomationRan(({ id, result }) => {
+      setResults((now) => ({ ...now, [id]: resultLine(result) }));
+      listAutomations().then(setRows, (err) => setNote(String(err)));
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [active]);
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing) return;
+    try {
+      setRows(await editAutomation(editing.id, editing.text.trim()));
+      setEditing(null);
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
 
   async function act(step: () => Promise<AutomationRow[]>) {
     try {
@@ -99,8 +132,8 @@ export function Automations({
         </button>
       </form>
       <p className="note">
-        The {PRODUCT_NAME} cabin runs these on schedule. Run now works here: it can read, and anything
-        that would need your OK is skipped.
+        {PRODUCT_NAME} runs these on schedule, from the tray too. While the {PRODUCT_NAME} cabin is open,
+        the cabin runs them. A run can read, and anything that would need your OK is skipped.
       </p>
       {note && (
         <p className="error" role="alert">
@@ -113,9 +146,32 @@ export function Automations({
         {rows?.map((row) => (
           <li key={row.id} className="card automation" aria-label={row.name}>
             <div className="card-title">{row.name}</div>
-            <div className="card-status">{row.summary}</div>
+            <div className="card-status">
+              {row.summary}
+              {row.cabinOnly && (
+                <>
+                  {" "}
+                  <span className="badge">Runs in the cabin</span>
+                </>
+              )}
+            </div>
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
+            {editing?.id === row.id && (
+              <form className="add" onSubmit={saveEdit}>
+                <input
+                  aria-label={`Edit ${row.name}`}
+                  value={editing.text}
+                  onChange={(e) => setEditing({ id: row.id, text: e.target.value })}
+                />
+                <button type="submit" disabled={!editing.text.trim()}>
+                  Save
+                </button>
+                <button type="button" className="quiet" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </form>
+            )}
             {asking === row.id ? (
               <ConfirmRow
                 question={`Remove ${row.name}?`}
@@ -143,6 +199,16 @@ export function Automations({
               >
                 {row.enabled ? "Pause" : "Resume"}
               </button>
+              {row.describe !== null && (
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={editing?.id === row.id}
+                  onClick={() => setEditing({ id: row.id, text: row.describe ?? "" })}
+                >
+                  Edit
+                </button>
+              )}
               <button
                 type="button"
                 className="quiet danger"

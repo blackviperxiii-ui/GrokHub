@@ -4,20 +4,26 @@ import {
   disconnectConnector,
   listConnectors,
   restartConnector,
+  setConnectorEnabled,
+  signInConnector,
   signOutConnector,
   type ConnectorRow,
   type ConnectorsChanged,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { ConnectorAdd } from "./ConnectorAdd";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
 
 export const DISCONNECT_DETAIL =
   "Its entry leaves your connections, and its sign-in and saved token are deleted.";
 
-export const CONNECTORS_EMPTY =
-  `No connectors yet. Connectors you add in the ${PRODUCT_NAME} cabin show up here.`;
+export const CONNECTORS_EMPTY = "No connectors yet. Add one from the catalog or paste a config.";
 
-export const SIGN_IN_NOTE = `Needs a sign-in. Sign in from the ${PRODUCT_NAME} cabin for now.`;
+export const REMOTE_EMPTY = `No connectors yet. Add them in ${PRODUCT_NAME} on your computer.`;
+
+export const SIGN_IN_NOTE = "Needs a sign-in.";
+
+export const REMOTE_NOTE = `Add, sign in and switch connectors in ${PRODUCT_NAME} on your computer.`;
 
 export function statusLine(row: ConnectorRow): string {
   switch (row.status) {
@@ -34,12 +40,15 @@ export function statusLine(row: ConnectorRow): string {
   }
 }
 
-/** The MCP servers in `mcp.json`, shared with the cabin and chat. */
-export function Connectors() {
+/** The MCP servers in `mcp.json`, shared with the cabin and chat. The web
+ * remote lists and checks them; adding, signing in and the switch stay on
+ * the computer. */
+export function Connectors({ remote = false }: { remote?: boolean }) {
   const [rows, setRows] = useState<ConnectorRow[] | null>(null);
   const { note, ok, fail, clear } = useNote();
   const [busy, setBusy] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     listConnectors().then(setRows, fail);
@@ -77,18 +86,51 @@ export function Connectors() {
         <button type="button" disabled={busy !== null || !rows?.length} onClick={() => void check()}>
           {busy === "*" ? "Checking…" : "Check all"}
         </button>
+        {!remote && (
+          <button
+            type="button"
+            className="quiet"
+            aria-expanded={adding}
+            onClick={() => setAdding((open) => !open)}
+          >
+            Add…
+          </button>
+        )}
       </div>
       <p className="note">
-        These are the MCP servers in mcp.json, the same ones the cabin and chat use. Add new
-        ones from the cabin's Connectors page.
+        These are the MCP servers in mcp.json, the same ones the cabin and chat use.
+        {remote ? ` ${REMOTE_NOTE}` : ""}
       </p>
+      {adding && !remote && (
+        <ConnectorAdd
+          onChanged={(changed) => setRows(changed.rows)}
+          onClose={() => setAdding(false)}
+        />
+      )}
       <StatusLine note={note} />
       {rows === null && !note && <p className="empty">Loading connectors…</p>}
-      {rows?.length === 0 && <p className="empty">{CONNECTORS_EMPTY}</p>}
+      {rows?.length === 0 && <p className="empty">{remote ? REMOTE_EMPTY : CONNECTORS_EMPTY}</p>}
       <ul className="rows">
         {rows?.map((row) => (
           <li key={row.name} className="card connector" aria-label={row.name}>
-            <div className="card-title">{row.name}</div>
+            <div className="card-title">
+              {row.name}
+              {!remote && row.canDisconnect && (
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={`${row.name} on`}
+                    checked={row.enabled}
+                    disabled={busy !== null}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      void act(row.name, () => setConnectorEnabled(row.name, on));
+                    }}
+                  />
+                </label>
+              )}
+            </div>
             <div className="card-status">{statusLine(row)}</div>
             <div className="card-detail-line">{row.detail}</div>
             {row.account && <div className="card-status">{row.account}</div>}
@@ -112,6 +154,15 @@ export function Connectors() {
                     onClick={() => void act(row.name, () => restartConnector(row.name))}
                   >
                     {busy === row.name ? "Reconnecting…" : "Reconnect"}
+                  </button>
+                )}
+                {!remote && row.needsSignIn && row.enabled && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void act(row.name, () => signInConnector(row.name))}
+                  >
+                    {busy === row.name ? "Waiting for the browser…" : "Sign in"}
                   </button>
                 )}
                 {row.account && (

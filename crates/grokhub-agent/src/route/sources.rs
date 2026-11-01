@@ -32,14 +32,15 @@ pub const PROBE_CLASS: &str = "background:probe";
 /// A listing body larger than this is refused.
 const BODY_CAP: u64 = 4 * 1024 * 1024;
 
-fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
-        .timeout(timeout)
-        .build()
+fn agent(timeout: Duration) -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(15),
+        overall: Some(timeout),
+        ..Default::default()
+    })
 }
 
-fn read_capped(resp: ureq::Response) -> Result<String, String> {
+fn read_capped(resp: grokhub_core::http::Response) -> Result<String, String> {
     let mut buf = String::new();
     resp.into_reader()
         .take(BODY_CAP)
@@ -67,13 +68,14 @@ impl XaiApiSource {
         guard(&self.config_dir, url)?;
         let resp = agent(Duration::from_secs(30))
             .get(url)
-            .set("Authorization", &format!("Bearer {}", self.bearer))
-            .set("User-Agent", USER_AGENT)
+            .header("Authorization", &format!("Bearer {}", self.bearer))
+            .header("User-Agent", USER_AGENT)
+            .any_status()
             .call()
-            .map_err(|e| match e {
-                ureq::Error::Status(code, _) => format!("HTTP {code}"),
-                ureq::Error::Transport(t) => t.to_string(),
-            })?;
+            .map_err(|e| e.to_string())?;
+        if resp.status() >= 400 {
+            return Err(format!("HTTP {}", resp.status()));
+        }
         read_capped(resp)
     }
 }
@@ -141,20 +143,21 @@ impl ProbeTransport for XaiProbeTransport {
         let started = Instant::now();
         let resp = agent(Duration::from_secs(call.timeout_secs))
             .post(RESPONSES_URL)
-            .set("Authorization", &format!("Bearer {}", self.bearer))
-            .set("User-Agent", USER_AGENT)
+            .header("Authorization", &format!("Bearer {}", self.bearer))
+            .header("User-Agent", USER_AGENT)
+            .any_status()
             .send_json(call.body.clone());
         let latency_ms = started.elapsed().as_millis() as u64;
         let resp = match resp {
-            Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => {
+            Ok(r) if r.status() >= 400 => {
                 return Ok(ProbeReply {
-                    status: code,
+                    status: r.status(),
                     latency_ms,
                     ..ProbeReply::default()
                 })
             }
-            Err(ureq::Error::Transport(t)) => {
+            Ok(r) => r,
+            Err(t) => {
                 let timed_out = t.to_string().to_ascii_lowercase().contains("timed out");
                 return Ok(ProbeReply {
                     timed_out,

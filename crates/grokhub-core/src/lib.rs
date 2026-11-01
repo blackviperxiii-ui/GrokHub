@@ -42,6 +42,8 @@ pub mod doctor;
 pub mod downloads_tidy;
 pub mod eso_addon;
 pub mod export;
+pub mod factorio_mod;
+pub mod factorio_state;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;
@@ -146,6 +148,7 @@ pub mod rewind;
 pub mod rhythm;
 pub mod run_metrics;
 pub mod runtime_download;
+pub mod scheduler_lease;
 pub mod screen_record;
 pub mod screenshot_offer;
 pub mod sddl;
@@ -215,13 +218,14 @@ pub use attach::{
 };
 pub use automation::{
     automation_blocked_by_policy, automation_health_line, automation_schedule_label,
-    automation_summary_line, chat_may_save_automation, compute_next_run, due_automations,
-    ensure_automation_schedule, mark_automation_failed, mark_automation_ok, mark_automation_ran,
-    mark_automation_skipped, mark_automation_stopped, night_check_command, night_check_exit_code,
-    night_check_may_fire, night_check_stdout, night_counts_run, parse_clock_token,
-    parse_nl_automation, replay_automation_target, route_schedule, skip_automation,
-    skip_night_check_receipt, teach_routine, teachable_steps, user_asked_to_schedule,
-    watch_once_keeps_running, AutoHealth, AutoOutcome, Automation, ScheduleRoute,
+    automation_summary_line, chat_may_save_automation, compute_next_run, describe_automation,
+    due_automations, ensure_automation_schedule, mark_automation_failed, mark_automation_ok,
+    mark_automation_ran, mark_automation_skipped, mark_automation_stopped, night_check_command,
+    night_check_exit_code, night_check_may_fire, night_check_stdout, night_counts_run,
+    parse_clock_token, parse_nl_automation, replay_automation_target, route_schedule,
+    skip_automation, skip_night_check_receipt, teach_routine, teachable_steps,
+    user_asked_to_schedule, watch_once_keeps_running, AutoHealth, AutoOutcome, Automation,
+    ScheduleRoute,
 };
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
