@@ -19,6 +19,13 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// Settings → General → start at login (the OS's login items).
+    pub autostart: bool,
+    /// Settings → General → the summon hotkey. Wayland gives an app no global
+    /// hotkey, so it is off there.
+    pub summon_hotkey: bool,
+    /// Settings → General → notifications while the window is in the background.
+    pub notifications: bool,
     /// The composer's push-to-talk mic (xAI speech to text). Desktops and
     /// phones; the web app never gets it.
     pub voice: bool,
@@ -28,6 +35,12 @@ pub struct Capabilities {
 /// Windows and macOS get everything; phones get chat, memory, automations,
 /// connectors and voice; any other OS gets no voice either.
 pub fn for_os(os: &str) -> Capabilities {
+    for_env(os, false)
+}
+
+/// [`for_os`] in a session that is (`wayland`) or isn't a Wayland one, which
+/// drops the summon hotkey.
+pub fn for_env(os: &str, wayland: bool) -> Capabilities {
     let desktop = matches!(os, "linux" | "windows" | "macos");
     let phone = matches!(os, "android" | "ios");
     Capabilities {
@@ -37,13 +50,28 @@ pub fn for_os(os: &str) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        autostart: desktop,
+        summon_hotkey: desktop && !(os == "linux" && wayland),
+        notifications: desktop,
         voice: desktop || phone,
     }
 }
 
+/// Whether this Linux session is a Wayland one, from the variables the
+/// session sets.
+pub fn wayland_session(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
+    session_type.is_some_and(|kind| kind.eq_ignore_ascii_case("wayland"))
+        || wayland_display.is_some_and(|display| !display.is_empty())
+}
+
 /// The report for the OS this build runs on.
 pub fn current() -> Capabilities {
-    for_os(std::env::consts::OS)
+    let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+    for_env(
+        std::env::consts::OS,
+        wayland_session(session_type.as_deref(), wayland_display.as_deref()),
+    )
 }
 
 /// `Err` with a plain note when this platform lacks the feature, for the
@@ -69,6 +97,9 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            autostart: true,
+            summon_hotkey: true,
+            notifications: true,
             voice: true,
         };
         assert_eq!(for_os("linux"), all);
@@ -85,10 +116,38 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            autostart: false,
+            summon_hotkey: false,
+            notifications: false,
             voice: true,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(for_os("ios"), none);
+        assert_eq!(for_env("android", true), none);
+    }
+
+    #[test]
+    fn wayland_drops_only_the_summon_hotkey() {
+        let x11 = for_env("linux", false);
+        let wayland = for_env("linux", true);
+        assert_eq!((x11.summon_hotkey, wayland.summon_hotkey), (true, false));
+        assert_eq!(
+            (wayland.autostart, wayland.notifications, wayland.tray),
+            (true, true, true)
+        );
+        // The variables only mean something on Linux.
+        assert!(for_env("windows", true).summon_hotkey);
+        assert!(for_env("macos", true).summon_hotkey);
+    }
+
+    #[test]
+    fn a_wayland_session_is_told_by_its_variables() {
+        assert!(wayland_session(Some("wayland"), None));
+        assert!(wayland_session(Some("Wayland"), Some("")));
+        assert!(wayland_session(Some("x11"), Some("wayland-0")));
+        assert!(!wayland_session(Some("x11"), None));
+        assert!(!wayland_session(Some("tty"), Some("")));
+        assert!(!wayland_session(None, None));
     }
 
     #[test]
@@ -117,6 +176,9 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "autostart": false,
+                "summonHotkey": false,
+                "notifications": false,
                 "voice": true,
             })
         );
