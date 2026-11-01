@@ -506,28 +506,47 @@ export function Chat({
     setError(null);
   }
 
-  useEffect(() => {
-    if (remote) return;
-    getLastChat().then((last) => {
-      if (last && !touched.current) show(last);
-    }, () => {});
-  }, []);
+  // The saved chat shows only if nothing was typed or picked meanwhile.
+  const restoreLast = useEffectEvent((last: Transcript | null) => {
+    if (last && !touched.current) show(last);
+  });
 
   useEffect(() => {
-    if (!open) return;
-    if (open.id === conversationId) return;
+    if (remote) return;
+    getLastChat().then(
+      (last) => restoreLast(last),
+      () => {},
+    );
+  }, [remote]);
+
+  // Only a new pick acts; the conversation it leaves is the latest, not a
+  // dependency.
+  const openPicked = useEffectEvent((id: string) => {
+    if (id === conversationId) return;
     if (busyRef.current) {
       setError(OPEN_BUSY);
       return;
     }
     touched.current = true;
     void closeChat(conversationId);
-    loadChat(open.id).then(show, (err) => setError(String(err)));
-    // Only a new pick acts.
-  }, [open]);
+    loadChat(id).then(show, (err) => setError(String(err)));
+  });
 
   useEffect(() => {
-    if (deleted && deleted.id === conversationId) startFresh();
+    if (open) openPicked(open.id);
+  }, [open]);
+
+  // Deleting the chat on screen starts a new one; deleting another leaves it.
+  const dropDeleted = useEffectEvent((id: string) => {
+    if (id === conversationId) startFresh();
+  });
+
+  useEffect(() => {
+    if (!deleted) return;
+    const id = deleted.id;
+    // After this render, so the reset is one render of its own.
+    const timer = window.setTimeout(() => dropDeleted(id), 0);
+    return () => window.clearTimeout(timer);
   }, [deleted]);
 
   /** Reloads the saved chat with more of its start. The log has at least as

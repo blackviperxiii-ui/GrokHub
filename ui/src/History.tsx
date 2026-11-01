@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { deleteChat, listChats, renameChat, searchChats, type ChatRow } from "./api";
 import { ConfirmRow, StatusLine, useDismiss, useNote } from "./ui";
 
@@ -122,12 +122,15 @@ export function History({
     );
   }
 
+  // Only a new query searches; refresh itself is not a dependency.
+  const search = useEffectEvent((q: string) => refresh(q));
+
   useEffect(() => {
     if (!query.trim()) {
-      refresh("");
+      search("");
       return;
     }
-    const timer = window.setTimeout(() => refresh(query), SEARCH_DELAY_MS);
+    const timer = window.setTimeout(() => search(query), SEARCH_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
 
