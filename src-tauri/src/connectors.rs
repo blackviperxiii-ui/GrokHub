@@ -204,7 +204,10 @@ mod tests {
 
         assert_eq!(
             disconnect(&d.workspace, "gone"),
-            Err("gone isn't one of this cabin's connections".to_string())
+            Err(format!(
+                "gone isn't one of {}'s connections",
+                grokhub_core::brand::product_name()
+            ))
         );
     }
 
