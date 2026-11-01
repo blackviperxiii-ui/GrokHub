@@ -191,6 +191,7 @@ impl LocalAiConfig {
             throttle_on_battery: self.throttle_on_battery,
             pause_for_games: self.pause_for_games,
             use_idle_time: self.use_idle_time,
+            ..Rules::default()
         }
     }
 
@@ -250,8 +251,14 @@ pub fn apply_draft_pref(config: &LocalAiConfig) {
 pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     write(&path(config_dir), &raw)?;
-    let rules = serde_json::to_string_pretty(&config.rules()).map_err(|e| e.to_string())?;
-    write(&config_dir.join("local").join("governor.json"), &rules)?;
+    let gov = config_dir.join("local").join("governor.json");
+    let mut rules = config.rules();
+    // The shell has no Unload row; keep the cabin's choice from the file.
+    if let Ok(text) = std::fs::read_to_string(&gov) {
+        rules.unload_for_games = Rules::from_json(&text).unload_for_games;
+    }
+    let rules = serde_json::to_string_pretty(&rules).map_err(|e| e.to_string())?;
+    write(&gov, &rules)?;
     local_autoconfig::set_overrides(config.overrides());
     apply_draft_pref(config);
     Ok(())
