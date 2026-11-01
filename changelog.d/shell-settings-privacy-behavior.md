@@ -1,0 +1,1 @@
+- Shell Settings: new Defaults, Behavior, Privacy & data and Background sections. Offline only uses the same offline.toml as the cabin, Privacy shows what left this computer this week, Behavior saves sentence autocomplete, quiet hours and a daily token budget (all off by default), and the web app shows all four read-only.
