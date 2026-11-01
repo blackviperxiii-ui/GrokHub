@@ -12,6 +12,7 @@ pub mod attention;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
+pub mod cleanup;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
@@ -1247,6 +1248,9 @@ mod r3b_tests;
 
 #[cfg(test)]
 mod goal_tests;
+
+#[cfg(test)]
+mod ladder_steady_tests;
 
 #[cfg(test)]
 mod speed_bench_tests;

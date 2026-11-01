@@ -712,6 +712,29 @@ fn long_wrapped_draft_grows_the_pill_then_caps_it() {
 
 // Landed from PR #89.
 #[test]
+fn memory_editor_fills_its_height_and_scrolls_past_it() {
+    use super::pages::memory_editor_rows;
+    // A 720 px window leaves the editor about 500 points: it shows ~35 rows of
+    // 14 pt text however short the file is, and a longer file scrolls inside.
+    assert_eq!(memory_editor_rows(500.0, 14.0), 34);
+    // Tiny windows keep a usable editor; a bogus height falls back to 24 rows.
+    assert_eq!(memory_editor_rows(40.0, 14.0), 8);
+    assert_eq!(memory_editor_rows(f32::INFINITY, 14.0), 24);
+    assert_eq!(memory_editor_rows(500.0, 0.0), 24);
+}
+
+#[test]
+fn queue_todos_read_as_words_not_raw_state_keys() {
+    use super::pages::todo_status_label;
+    assert_eq!(todo_status_label("in_progress"), "In progress");
+    assert_eq!(todo_status_label("pending"), "To do");
+    assert_eq!(todo_status_label("completed"), "Done");
+    assert_eq!(todo_status_label("cancelled"), "Cancelled");
+    assert_eq!(todo_status_label("on_hold"), "On hold");
+    assert_eq!(todo_status_label(""), "To do");
+}
+
+#[test]
 fn queue_rows_label_done_failed_and_running() {
     let rows = [
         ("job-done", "Flash the pi", true),
