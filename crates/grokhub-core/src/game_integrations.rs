@@ -115,6 +115,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "elite",
+        name: "Elite Dangerous",
+        steam_app_id: Some(359320),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own Player Journal: jumps, dockings, earnings and deaths, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -226,5 +236,6 @@ mod tests {
         assert!(by_id("eso").unwrap().how().ends_with(". Planned"));
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
+        assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
     }
 }

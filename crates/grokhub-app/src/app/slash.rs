@@ -471,7 +471,10 @@ impl Cabin {
                     t.grok_session = None;
                 }
                 self.persist_idle_key = self.persist_idle_now();
-                self.status = "Plan mode — Grok will plan first".into();
+                self.status = format!(
+                    "Plan mode — {} will plan first",
+                    grokhub_core::brand::product_name()
+                );
             }
             Slash::AlwaysApprove => {
                 if self.permission_mode == PermissionMode::AlwaysApprove {

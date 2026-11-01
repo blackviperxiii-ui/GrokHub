@@ -165,6 +165,7 @@ mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
+mod elite_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;

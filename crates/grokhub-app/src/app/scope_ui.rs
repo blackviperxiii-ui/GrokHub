@@ -17,7 +17,9 @@ use grokhub_agent::harness as hx;
 pub(super) static SCOPES_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| format!("What {} can read", grokhub_core::brand::product_name()));
 /// SB-09: the screen's setting is named in quotes, with where it lives.
-pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let Grok control the desktop\" in Settings → Defaults.";
+pub(super) static SCOPES_NOTE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let {product} control the desktop\" in Settings → Defaults.")
+});
 /// Browsers the history row offers: (scope id, name the user reads).
 pub(super) const BROWSERS: &[(&str, &str)] = &[
     ("firefox", "Firefox"),
@@ -195,7 +197,7 @@ impl Cabin {
     /// Settings → Permissions, after "Leaving this computer".
     pub(super) fn ui_scope_rows(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_heading(ui, SCOPES_HEAD.as_str());
-        crate::cards::settings_note(ui, SCOPES_NOTE);
+        crate::cards::settings_note(ui, *SCOPES_NOTE);
         let ledger = self.consent().clone();
         // A refused click says why right here (the status line is behind the
         // modal). A lock is already said once at the top of the page, and
@@ -502,7 +504,7 @@ mod tests {
     #[test]
     fn the_screen_setting_is_quoted_with_its_place() {
         assert!(SCOPES_NOTE.ends_with(
-            "Screen access is \"Let Grok control the desktop\" in Settings → Defaults."
+            "Screen access is \"Let Loadout control the desktop\" in Settings → Defaults."
         ));
         let settings = include_str!("settings.rs");
         assert!(settings.contains("SettingsSec::Defaults => \"Defaults\""));
@@ -511,8 +513,12 @@ mod tests {
             .nth(1)
             .expect("Defaults section");
         assert!(
-            defaults.contains("\"Let Grok control the desktop\""),
+            defaults.contains("row_desktop(),"),
             "the switch lives in Defaults"
+        );
+        assert_eq!(
+            *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW,
+            "Let Loadout control the desktop"
         );
     }
 }

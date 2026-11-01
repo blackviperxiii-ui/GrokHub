@@ -309,7 +309,7 @@ fn changes_from_the_self_server_process_show_as_work_rows() {
         .collect();
     assert_eq!(labels.len(), 2, "{labels:?}");
     assert!(
-        labels.contains(&"Grok added skill inbox-zero"),
+        labels.contains(&"Loadout added skill inbox-zero"),
         "{labels:?}"
     );
     let ids: Vec<&str> = cabin.automations.iter().map(|a| a.id.as_str()).collect();
@@ -374,7 +374,7 @@ fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
     let row = cabin.harness.work_rows[0].clone();
     assert_eq!(
         row.label,
-        format!("Grok added automation {}", cabin.automations[0].name)
+        format!("Loadout added automation {}", cabin.automations[0].name)
     );
     let card = cabin
         .updates
@@ -466,7 +466,7 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
         .collect();
     assert_eq!(
         labels,
-        vec!["Grok added connection wiki"],
+        vec!["Loadout added connection wiki"],
         "no Undo/Keep row for router changes"
     );
     let notes: Vec<(&str, Option<&str>)> = cabin
@@ -523,7 +523,7 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
         .iter()
         .map(|r| r.label.as_str())
         .collect();
-    assert_eq!(labels, vec!["Grok added connection wiki"]);
+    assert_eq!(labels, vec!["Loadout added connection wiki"]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
