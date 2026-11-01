@@ -1,0 +1,1 @@
+Screens ease in when you switch tabs, new chat messages and cards rise in, the command palette fades and pops open, and the on/off switch has a springy thumb. Everything shares one easing curve, and people who prefer reduced motion get instant changes.
