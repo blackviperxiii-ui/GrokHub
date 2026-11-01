@@ -5457,6 +5457,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             ),
             "The Elder Scrolls Online",
         ));
+        rows.push((
+            "match_card",
+            crate::game_watch_rl::match_card(&Default::default(), at),
+            "Rocket League",
+        ));
         rows
     }
 

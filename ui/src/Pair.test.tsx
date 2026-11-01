@@ -39,6 +39,19 @@ describe("Pair", () => {
     expect(transport.pair).toHaveBeenCalledWith("pair-xyz");
   });
 
+  it("a pairing link shows it is connecting until the pairing is done", async () => {
+    let done: () => void = () => {};
+    transport.pair.mockImplementation(() => new Promise<void>((resolve) => (done = resolve)));
+    const onPaired = vi.fn();
+    window.history.replaceState(null, "", "/#code=pair-xyz");
+    render(<Pair onPaired={onPaired} />);
+    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+    expect(transport.pair).toHaveBeenCalledWith("pair-xyz");
+    done();
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(onPaired).toHaveBeenCalledTimes(1);
+  });
+
   it("shows why a typed code didn't pair", async () => {
     transport.pair.mockRejectedValue(new Error("GrokHub on your computer refused that pairing code."));
     const onPaired = vi.fn();
