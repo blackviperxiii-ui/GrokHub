@@ -18,6 +18,7 @@ use std::time::Instant;
 /// CRTCs counted. amdgpu has at most 6, i915 4.
 pub const MAX_CRTCS: u32 = 6;
 
+#[cfg(target_os = "linux")]
 const TRACEPOINT_IDS: [&str; 2] = [
     "/sys/kernel/tracing/events/drm/drm_vblank_event_delivered/id",
     "/sys/kernel/debug/tracing/events/drm/drm_vblank_event_delivered/id",
