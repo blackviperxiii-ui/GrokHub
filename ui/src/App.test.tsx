@@ -153,13 +153,13 @@ describe("App", () => {
     expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
   });
 
-  it("the Command button opens it too, and Ask Grok fills the chat box", async () => {
+  it("the Command button opens it too, and Ask Loadout fills the chat box", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     await userEvent.click(screen.getByRole("button", { name: "Command" }));
     await userEvent.keyboard("tidy the board");
-    await userEvent.click(screen.getByRole("option", { name: "Ask Grok: tidy the board" }));
+    await userEvent.click(screen.getByRole("option", { name: "Ask Loadout: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });

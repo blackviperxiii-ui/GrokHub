@@ -412,7 +412,7 @@ async function connectors(s, config) {
 // For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete takes the first post away. After the post
+// opens in the lightbox. Delete… and its confirm take the first post away. After the post
 // the idea writer adds one idea; its menu holds Let's do it, More like this
 // and Not interested, and More like this is kept for the next run. A click on
 // the seeded idea's row puts its action in the chat box, unsent.
@@ -504,11 +504,20 @@ async function pulse(s, config) {
     value: `${post}//button[@aria-label='More']`,
   });
   await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
+  // The menu's Delete… asks first; the confirm row's Delete takes it away.
   const del = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//button[normalize-space()='Delete']`,
+    value: `${post}//button[@role='menuitem'][normalize-space()='Delete…']`,
   });
   await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
+  const sure = await waitFor("the delete confirm", async () => {
+    const el = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: `${post}//div[contains(@class,'confirm-row')]//button[normalize-space()='Delete']`,
+    });
+    return el.length === 1 ? el[0][ELEMENT] : null;
+  });
+  await wd("POST", `${s}/element/${sure}/click`, {});
   await waitFor("the deleted post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
@@ -685,11 +694,11 @@ async function usePersonality(s, config, name) {
 
 async function plan(s, workspace) {
   await tab(s, "Chat");
-  await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
+  await click(s, "[aria-label='Session mode'] button[title^='Loadout writes a plan']");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
-  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
+  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"The plan\"]"));
   const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
@@ -1255,7 +1264,7 @@ async function desktop(s, config) {
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//label[contains(., 'Let Grok control the desktop')]//button[@role='switch']",
+      value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});

@@ -1,0 +1,1 @@
+- A Grok sign-in that has expired, can't be renewed, or that xAI turns away no longer fails every chat with "Sign in with Grok or add an API key." When Local AI is ready, the chat answers on it and says the sign-in needs renewing, and the service status says the same instead of "xAI auth present". Diagnostics now name the app Loadout.
