@@ -19,6 +19,21 @@ const MANIFEST_JSON: &str = include_str!("../data/runtime_engine.json");
 struct ManifestFile {
     version: String,
     platforms: std::collections::BTreeMap<String, PlatformAsset>,
+    /// Faster, larger builds offered on top of the standard one (`cuda`).
+    #[serde(default)]
+    variants: std::collections::BTreeMap<String, VariantFile>,
+}
+
+/// One optional build for one platform: a main archive with `llama-server`,
+/// then runtime archives installed beside it (the CUDA runtime).
+#[derive(Debug, Clone, Deserialize)]
+struct VariantFile {
+    platform: String,
+    backend: String,
+    /// Lowest NVIDIA driver (major version) the build runs on.
+    #[serde(default)]
+    min_driver: u32,
+    assets: Vec<PlatformAsset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -32,8 +47,25 @@ pub struct PlatformAsset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub version: String,
+    /// The archive that carries `llama-server`.
     pub asset: PlatformAsset,
     pub platform_key: String,
+    /// More archives whose libraries go next to the server (CUDA runtime).
+    pub extras: Vec<PlatformAsset>,
+    /// `None` for the standard build, `Some("cuda")` for a faster one.
+    pub variant: Option<String>,
+}
+
+impl Manifest {
+    /// Every archive, the server's first.
+    pub fn assets(&self) -> impl Iterator<Item = &PlatformAsset> {
+        std::iter::once(&self.asset).chain(self.extras.iter())
+    }
+
+    /// Bytes for the whole install.
+    pub fn total_size(&self) -> u64 {
+        self.assets().map(|a| a.size).sum()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,19 +131,102 @@ pub fn manifest_for_key(key: &str) -> Option<Manifest> {
         version: file.version,
         asset,
         platform_key: key.to_string(),
+        extras: Vec::new(),
+        variant: None,
     })
+}
+
+/// The faster `backend` build (`cuda`) for platform `key`, with the lowest
+/// driver it runs on.
+pub fn variant_for_key(key: &str, backend: &str) -> Option<(Manifest, u32)> {
+    let file = parse_manifest().ok()?;
+    let v = file
+        .variants
+        .values()
+        .find(|v| v.platform == key && v.backend == backend)?;
+    for a in &v.assets {
+        a.archive_format()?;
+        runtime_download_url_ok(&a.url).ok()?;
+    }
+    let (asset, extras) = v.assets.split_first()?;
+    Some((
+        Manifest {
+            version: file.version,
+            asset: asset.clone(),
+            platform_key: key.to_string(),
+            extras: extras.to_vec(),
+            variant: Some(v.backend.clone()),
+        },
+        v.min_driver,
+    ))
+}
+
+/// The CUDA build for this machine when it has an NVIDIA GPU whose driver
+/// is new enough. Never chosen by itself: Settings offers it.
+pub fn faster_engine_for(key: &str, gpus: &[crate::local_profile::Gpu]) -> Option<Manifest> {
+    use crate::local_profile::GpuVendor;
+    let (m, min_driver) = variant_for_key(key, "cuda")?;
+    gpus.iter()
+        .any(|g| g.vendor == GpuVendor::Nvidia && driver_major(&g.driver) >= Some(min_driver))
+        .then_some(m)
+}
+
+pub fn faster_engine_for_host(gpus: &[crate::local_profile::Gpu]) -> Option<Manifest> {
+    faster_engine_for(platform_key()?, gpus)
+}
+
+/// `560.94` → 560. `None` when the driver version is unknown.
+fn driver_major(v: &str) -> Option<u32> {
+    v.trim().split('.').next()?.parse().ok()
+}
+
+const ENGINE_MARK: &str = "engine.json";
+
+#[derive(serde::Serialize, Deserialize)]
+struct EngineMark {
+    version: String,
+    #[serde(default)]
+    variant: Option<String>,
+}
+
+/// Which build sits in `{config}/bin`: `Some("cuda")` for the faster one,
+/// `None` for the standard build or an install from before this was kept.
+pub fn installed_variant(config_dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(bin_dir(config_dir).join(ENGINE_MARK)).ok()?;
+    serde_json::from_str::<EngineMark>(&text).ok()?.variant
+}
+
+/// Bytes already downloaded toward `manifest`, over all its archives.
+pub fn partial_total(bin: &Path, manifest: &Manifest) -> Option<u64> {
+    let n: u64 = manifest
+        .assets()
+        .filter_map(|a| partial_bytes(bin, a))
+        .sum();
+    (n > 0).then_some(n)
 }
 
 /// Every platform entry must be HTTPS and on the GitHub allowlist.
 pub fn validate_manifest_urls() -> Result<(), String> {
     let file = parse_manifest()?;
-    for (key, asset) in &file.platforms {
+    let variants = file
+        .variants
+        .iter()
+        .flat_map(|(key, v)| v.assets.iter().map(move |a| (key, a)));
+    for (key, asset) in file.platforms.iter().chain(variants) {
         runtime_download_url_ok(&asset.url).map_err(|e| format!("{key}: {e}"))?;
         if asset.sha256.len() != 64 || !asset.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("{key}: sha256 must be 64 hex digits"));
         }
         if asset.archive_format().is_none() {
             return Err(format!("{key}: unknown archive format {}", asset.format));
+        }
+    }
+    for (key, v) in &file.variants {
+        if !file.platforms.contains_key(&v.platform) {
+            return Err(format!("{key}: no standard build for {}", v.platform));
+        }
+        if v.assets.is_empty() {
+            return Err(format!("{key}: no archives"));
         }
     }
     Ok(())
@@ -159,7 +274,7 @@ pub fn engine_binary_available(config_dir: &Path) -> bool {
 
 /// Bytes source for [`download_engine`].
 pub trait Fetch {
-    fn open(&self, offset: u64) -> Result<model_download::Opened, String>;
+    fn open(&self, url: &str, offset: u64) -> Result<model_download::Opened, String>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,7 +288,9 @@ pub enum Outcome {
 
 const CHUNK: usize = 256 * 1024;
 
-/// Download the pinned archive, verify, extract `llama-server` (+ libs) into `config_dir/bin`.
+/// Download every pinned archive, verify each, extract `llama-server` (+ libs)
+/// into `config_dir/bin`. The libraries already there are replaced, so a
+/// switch between the standard and the CUDA build leaves no stale backend.
 pub fn download_engine(
     config_dir: &Path,
     manifest: &Manifest,
@@ -188,91 +305,67 @@ pub fn download_engine(
     if let Err(e) = fs::create_dir_all(&bin) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", bin.display()));
     }
-    let want = manifest.asset.sha256.to_ascii_lowercase();
-    let part = part_path_for_asset(&bin, &manifest.asset);
-    let have = partial_bytes(&bin, &manifest.asset).unwrap_or(0);
-    let (mut body, start, total) = match fetch.open(have) {
-        Ok(x) => x,
-        Err(e) => return Outcome::Failed(format!("Couldn't download the engine: {e}")),
-    };
-    let mut out = match if start == 0 {
-        File::create(&part)
-    } else {
-        OpenOptions::new().append(true).open(&part)
-    } {
-        Ok(f) => f,
-        Err(e) => return Outcome::Failed(format!("Couldn't write {}: {e}", part.display())),
-    };
-    let mut done = start;
-    on(Progress::Bytes { done, total });
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        if ctl.paused() {
-            return Outcome::Paused { done };
-        }
-        if ctl.cancelled() {
-            drop(out);
-            let _ = fs::remove_file(&part);
-            return Outcome::Cancelled;
-        }
-        let n = match body.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => return Outcome::Failed(format!("The engine download stopped: {e}")),
+    let total = manifest.total_size();
+    let mut base = 0u64;
+    let mut parts = Vec::new();
+    for asset in manifest.assets() {
+        let mut each = |p: Progress| {
+            on(match p {
+                Progress::Bytes { done, .. } => Progress::Bytes {
+                    done: base + done,
+                    total: Some(total),
+                },
+                other => other,
+            })
         };
-        if let Err(e) = out.write_all(&buf[..n]) {
-            return Outcome::Failed(format!("Couldn't write {}: {e}", part.display()));
+        match fetch_asset(&bin, asset, fetch, ctl, &mut each) {
+            Ok(part) => parts.push(part),
+            Err(Outcome::Paused { done }) => return Outcome::Paused { done: base + done },
+            Err(out) => return out,
         }
-        done += n as u64;
-        on(Progress::Bytes { done, total });
+        base += asset.size;
     }
-    if let Err(e) = out.flush() {
-        return Outcome::Failed(format!("Couldn't write {}: {e}", part.display()));
-    }
-    drop(out);
-    if total.is_some_and(|t| done < t) {
-        return Outcome::Failed(format!(
-            "The engine download ended early ({done} of {} bytes).",
-            total.unwrap_or(0)
-        ));
-    }
-    on(Progress::Verifying);
-    match sha256_file(&part) {
-        Ok(got) if got == want => {}
-        Ok(_) => {
-            let _ = fs::remove_file(&part);
-            return Outcome::BadChecksum;
+    let remove_parts = |parts: &[PathBuf]| {
+        for p in parts {
+            let _ = fs::remove_file(p);
         }
-        Err(e) => return Outcome::Failed(format!("Couldn't check {}: {e}", part.display())),
-    }
-    let fmt = match manifest.asset.archive_format() {
-        Some(f) => f,
-        None => return Outcome::Failed("unknown engine archive format".into()),
     };
     let staging = bin.join(format!(".engine-extract-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
-    if let Err(e) = extract_archive(&part, fmt, &staging) {
-        let _ = fs::remove_file(&part);
-        let _ = fs::remove_dir_all(&staging);
-        return Outcome::Failed(e);
-    }
-    let server_src = find_server_in_tree(&staging, server_binary_name())
-        .ok_or_else(|| "The engine archive did not contain llama-server.".to_string());
-    let server_src = match server_src {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = fs::remove_file(&part);
-            let _ = fs::remove_dir_all(&staging);
-            return Outcome::Failed(e);
+    let fail = |e: String, staging: &Path, parts: &[PathBuf]| {
+        remove_parts(parts);
+        let _ = fs::remove_dir_all(staging);
+        Outcome::Failed(e)
+    };
+    let mut trees = Vec::new();
+    for (i, (asset, part)) in manifest.assets().zip(&parts).enumerate() {
+        let Some(fmt) = asset.archive_format() else {
+            return fail("unknown engine archive format".into(), &staging, &parts);
+        };
+        let tree = staging.join(i.to_string());
+        if let Err(e) = extract_archive(part, fmt, &tree) {
+            return fail(e, &staging, &parts);
         }
+        trees.push(tree);
+    }
+    let Some(server_src) = find_server_in_tree(&trees[0], server_binary_name()) else {
+        return fail(
+            "The engine archive did not contain llama-server.".into(),
+            &staging,
+            &parts,
+        );
     };
     let dest = server_path(config_dir);
     let dest_new = bin.join(format!("{}.new", server_binary_name()));
-    if let Err(e) = install_server_and_libs(&server_src, &dest_new) {
-        let _ = fs::remove_file(&part);
-        let _ = fs::remove_dir_all(&staging);
+    clear_runtime_libs(&bin);
+    let installed = install_server_and_libs(&server_src, &dest_new).and_then(|()| {
+        trees[1..]
+            .iter()
+            .try_for_each(|tree| install_libs_from_tree(tree, &bin))
+    });
+    if let Err(e) = installed {
         let _ = fs::remove_file(&dest_new);
-        return Outcome::Failed(e);
+        return fail(e, &staging, &parts);
     }
     #[cfg(unix)]
     {
@@ -284,16 +377,138 @@ pub fn download_engine(
     }
     if let Err(e) = fs::rename(&dest_new, &dest) {
         let _ = fs::remove_file(&dest_new);
-        let _ = fs::remove_file(&part);
-        let _ = fs::remove_dir_all(&staging);
-        return Outcome::Failed(format!("Couldn't install {}: {e}", dest.display()));
+        return fail(
+            format!("Couldn't install {}: {e}", dest.display()),
+            &staging,
+            &parts,
+        );
     }
-    let _ = fs::remove_file(&part);
+    let mark = EngineMark {
+        version: manifest.version.clone(),
+        variant: manifest.variant.clone(),
+    };
+    if let Ok(text) = serde_json::to_string(&mark) {
+        let _ = fs::write(bin.join(ENGINE_MARK), text);
+    }
+    remove_parts(&parts);
     let _ = fs::remove_dir_all(&staging);
     Outcome::Done {
-        bytes: done,
+        bytes: total,
         server: dest,
     }
+}
+
+/// Download one archive into its `.part` file and check its SHA-256. A part
+/// that is already whole is only checked, never asked for again.
+fn fetch_asset(
+    bin: &Path,
+    asset: &PlatformAsset,
+    fetch: &dyn Fetch,
+    ctl: &Control,
+    on: &mut dyn FnMut(Progress),
+) -> Result<PathBuf, Outcome> {
+    let want = asset.sha256.to_ascii_lowercase();
+    let part = part_path_for_asset(bin, asset);
+    let have = partial_bytes(bin, asset).unwrap_or(0);
+    if asset.size > 0 && have >= asset.size {
+        on(Progress::Bytes {
+            done: have,
+            total: Some(asset.size),
+        });
+    } else {
+        stream_asset(asset, &part, have, fetch, ctl, on)?;
+    }
+    on(Progress::Verifying);
+    match sha256_file(&part) {
+        Ok(got) if got == want => Ok(part),
+        Ok(_) => {
+            let _ = fs::remove_file(&part);
+            Err(Outcome::BadChecksum)
+        }
+        Err(e) => Err(Outcome::Failed(format!(
+            "Couldn't check {}: {e}",
+            part.display()
+        ))),
+    }
+}
+
+fn stream_asset(
+    asset: &PlatformAsset,
+    part: &Path,
+    have: u64,
+    fetch: &dyn Fetch,
+    ctl: &Control,
+    on: &mut dyn FnMut(Progress),
+) -> Result<u64, Outcome> {
+    let (mut body, start, total) = fetch
+        .open(&asset.url, have)
+        .map_err(|e| Outcome::Failed(format!("Couldn't download the engine: {e}")))?;
+    let mut out = if start == 0 {
+        File::create(part)
+    } else {
+        OpenOptions::new().append(true).open(part)
+    }
+    .map_err(|e| Outcome::Failed(format!("Couldn't write {}: {e}", part.display())))?;
+    let mut done = start;
+    on(Progress::Bytes { done, total });
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        if ctl.paused() {
+            return Err(Outcome::Paused { done });
+        }
+        if ctl.cancelled() {
+            drop(out);
+            let _ = fs::remove_file(part);
+            return Err(Outcome::Cancelled);
+        }
+        let n = match body.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => return Err(Outcome::Failed(format!("The engine download stopped: {e}"))),
+        };
+        out.write_all(&buf[..n])
+            .map_err(|e| Outcome::Failed(format!("Couldn't write {}: {e}", part.display())))?;
+        done += n as u64;
+        on(Progress::Bytes { done, total });
+    }
+    out.flush()
+        .map_err(|e| Outcome::Failed(format!("Couldn't write {}: {e}", part.display())))?;
+    if total.is_some_and(|t| done < t) {
+        return Err(Outcome::Failed(format!(
+            "The engine download ended early ({done} of {} bytes).",
+            total.unwrap_or(0)
+        )));
+    }
+    Ok(done)
+}
+
+/// Remove the engine libraries in `bin` before a new build goes in.
+fn clear_runtime_libs(bin: &Path) {
+    for entry in fs::read_dir(bin).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_file() && is_runtime_lib(&path) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// Copy every runtime library anywhere under `tree` into `bin` (a runtime
+/// archive may keep them in a top folder of its own).
+fn install_libs_from_tree(tree: &Path, bin: &Path) -> Result<(), String> {
+    let mut stack = vec![tree.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() && is_runtime_lib(&path) {
+                let name = entry.file_name();
+                fs::copy(&path, bin.join(&name))
+                    .map_err(|e| format!("copy {}: {e}", name.to_string_lossy()))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn install_server_and_libs(server_src: &Path, dest_new: &Path) -> Result<(), String> {
@@ -556,27 +771,39 @@ mod tests {
 
     struct FakeServer {
         body: Vec<u8>,
+        /// Other archives by URL; anything else gets `body`.
+        more: Vec<(String, Vec<u8>)>,
         ranges: bool,
         opens: Mutex<Vec<u64>>,
+        urls: Mutex<Vec<String>>,
     }
 
     impl FakeServer {
         fn new(body: &[u8]) -> Self {
             Self {
                 body: body.to_vec(),
+                more: Vec::new(),
                 ranges: true,
                 opens: Mutex::new(Vec::new()),
+                urls: Mutex::new(Vec::new()),
             }
         }
     }
 
     impl Fetch for FakeServer {
-        fn open(&self, offset: u64) -> Result<model_download::Opened, String> {
+        fn open(&self, url: &str, offset: u64) -> Result<model_download::Opened, String> {
             self.opens.lock().unwrap().push(offset);
+            self.urls.lock().unwrap().push(url.to_string());
+            let body = self
+                .more
+                .iter()
+                .find(|(u, _)| u == url)
+                .map(|(_, b)| b)
+                .unwrap_or(&self.body);
             let start = if self.ranges { offset as usize } else { 0 };
-            let total = Some(self.body.len() as u64);
+            let total = Some(body.len() as u64);
             Ok((
-                Box::new(Cursor::new(self.body[start..].to_vec())),
+                Box::new(Cursor::new(body[start..].to_vec())),
                 start as u64,
                 total,
             ))
@@ -721,6 +948,187 @@ mod tests {
                 sha256: model_download::sha256_hex(body),
                 format: format.into(),
             },
+            extras: Vec::new(),
+            variant: None,
+        }
+    }
+
+    /// A tar.gz of `(path, bytes)` files.
+    fn tgz(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut inner = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut inner);
+            for (name, data) in files {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(data.len() as u64);
+                h.set_mode(0o755);
+                h.set_cksum();
+                builder.append_data(&mut h, name, *data).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let mut enc = Vec::new();
+        {
+            use std::io::Write;
+            let mut gz = flate2::write::GzEncoder::new(&mut enc, flate2::Compression::default());
+            gz.write_all(&inner).unwrap();
+            gz.finish().unwrap();
+        }
+        enc
+    }
+
+    fn lib(stem: &str) -> String {
+        if cfg!(windows) {
+            format!("{stem}.dll")
+        } else if cfg!(target_os = "macos") {
+            format!("lib{stem}.dylib")
+        } else {
+            format!("lib{stem}.so")
+        }
+    }
+
+    fn asset_for(name: &str, body: &[u8]) -> PlatformAsset {
+        PlatformAsset {
+            url: format!("https://github.com/ggml-org/llama.cpp/releases/download/b0/{name}"),
+            size: body.len() as u64,
+            sha256: model_download::sha256_hex(body),
+            format: "tar.gz".into(),
+        }
+    }
+
+    /// The CUDA build's shape: the server archive, then a runtime archive
+    /// whose libraries sit in a folder of their own.
+    fn cuda_like() -> (Manifest, FakeServer) {
+        let server = server_binary_name();
+        let main = tgz(&[
+            (&format!("llama-b0/{server}"), b"cuda-server"),
+            (&format!("llama-b0/{}", lib("ggml-cuda")), b"cuda-backend"),
+        ]);
+        let rt = tgz(&[(&format!("cudart-b0/{}", lib("cudart")), b"cuda-runtime")]);
+        let main_asset = asset_for("main.tar.gz", &main);
+        let rt_asset = asset_for("cudart.tar.gz", &rt);
+        let mut srv = FakeServer::new(&main);
+        srv.more.push((rt_asset.url.clone(), rt));
+        let m = Manifest {
+            version: "b0".into(),
+            platform_key: "test".into(),
+            asset: main_asset,
+            extras: vec![rt_asset],
+            variant: Some("cuda".into()),
+        };
+        (m, srv)
+    }
+
+    #[test]
+    fn the_cuda_build_installs_its_runtime_beside_the_server_and_drops_the_old_backend() {
+        let dir = tmp("cuda");
+        let cfg = dir.join("cfg");
+        fs::create_dir_all(bin_dir(&cfg)).unwrap();
+        let old = bin_dir(&cfg).join(lib("ggml-vulkan"));
+        fs::write(&old, b"old-backend").unwrap();
+        let (m, srv) = cuda_like();
+        let mut seen = Vec::new();
+        let out = download_engine(&cfg, &m, &srv, &Control::default(), &mut |p| {
+            if let Progress::Bytes { done, total } = p {
+                seen.push((done, total));
+            }
+        });
+        assert!(matches!(out, Outcome::Done { .. }), "{out:?}");
+        let bin = bin_dir(&cfg);
+        assert_eq!(fs::read(server_path(&cfg)).unwrap(), b"cuda-server");
+        assert_eq!(
+            fs::read(bin.join(lib("ggml-cuda"))).unwrap(),
+            b"cuda-backend"
+        );
+        assert_eq!(fs::read(bin.join(lib("cudart"))).unwrap(), b"cuda-runtime");
+        assert!(!old.exists(), "a stale backend would load beside CUDA");
+        assert_eq!(installed_variant(&cfg).as_deref(), Some("cuda"));
+        // Progress counts the whole install, and only goes up.
+        let total = m.total_size();
+        assert!(seen.iter().all(|(_, t)| *t == Some(total)), "{seen:?}");
+        assert_eq!(seen.last().map(|(d, _)| *d), Some(total));
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "{seen:?}");
+        assert!(partial_total(&bin, &m).is_none(), "parts are cleaned up");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_whole_archive_is_not_asked_for_again_on_resume() {
+        let dir = tmp("cuda-resume");
+        let cfg = dir.join("cfg");
+        let (m, srv) = cuda_like();
+        let bin = bin_dir(&cfg);
+        fs::create_dir_all(&bin).unwrap();
+        // The first archive finished before a pause.
+        fs::write(part_path_for_asset(&bin, &m.asset), &srv.body).unwrap();
+        assert_eq!(partial_total(&bin, &m), Some(m.asset.size));
+        let out = download_engine(&cfg, &m, &srv, &Control::default(), &mut |_| {});
+        assert!(matches!(out, Outcome::Done { .. }), "{out:?}");
+        assert_eq!(*srv.urls.lock().unwrap(), vec![m.extras[0].url.clone()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_standard_build_marks_no_variant() {
+        let body = tiny_tgz_with_server();
+        let dir = tmp("plain-mark");
+        let cfg = dir.join("cfg");
+        let m = test_manifest(&body, ArchiveFormat::TarGz);
+        let out = download_engine(
+            &cfg,
+            &m,
+            &FakeServer::new(&body),
+            &Control::default(),
+            &mut |_| {},
+        );
+        assert!(matches!(out, Outcome::Done { .. }), "{out:?}");
+        assert_eq!(installed_variant(&cfg), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn gpu(vendor: crate::local_profile::GpuVendor, driver: &str) -> crate::local_profile::Gpu {
+        crate::local_profile::Gpu {
+            vendor,
+            name: "card".into(),
+            vram_mb: 8192,
+            free_vram_mb: None,
+            integrated: false,
+            unified: false,
+            driver: driver.into(),
+        }
+    }
+
+    #[test]
+    fn the_cuda_build_is_offered_only_for_an_nvidia_card_with_a_new_enough_driver() {
+        use crate::local_profile::GpuVendor::*;
+        for key in ["windows-x86_64", "linux-x86_64"] {
+            let m = faster_engine_for(key, &[gpu(Nvidia, "560.94")]).expect(key);
+            assert_eq!(m.variant.as_deref(), Some("cuda"));
+            assert_eq!(m.extras.len(), 1, "{key}: the CUDA runtime comes with it");
+            assert!(
+                m.total_size() > 400 * 1024 * 1024,
+                "{key}: it is a big download"
+            );
+            assert!(faster_engine_for(key, &[gpu(Amd, "24.10")]).is_none());
+            assert!(faster_engine_for(key, &[gpu(Nvidia, "470.256")]).is_none());
+            assert!(faster_engine_for(key, &[gpu(Nvidia, "")]).is_none());
+            assert!(faster_engine_for(key, &[]).is_none());
+        }
+        // An NVIDIA card next to an iGPU still counts.
+        assert!(
+            faster_engine_for("linux-x86_64", &[gpu(Intel, "xe"), gpu(Nvidia, "575.64")]).is_some()
+        );
+        // No CUDA build is pinned for ARM or Macs.
+        for key in [
+            "linux-aarch64",
+            "windows-aarch64",
+            "macos-aarch64",
+            "macos-x86_64",
+        ] {
+            assert!(
+                faster_engine_for(key, &[gpu(Nvidia, "560.94")]).is_none(),
+                "{key}"
+            );
         }
     }
 

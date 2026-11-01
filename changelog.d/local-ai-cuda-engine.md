@@ -1,0 +1,1 @@
+- Settings > Local AI offers a faster engine for NVIDIA GPUs on Windows and Linux (llama.cpp's CUDA build, about 640 to 740 MB with its CUDA runtime). It is never downloaded unasked, and one button switches back to the standard engine.
