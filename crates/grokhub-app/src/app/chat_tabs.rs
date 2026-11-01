@@ -524,7 +524,8 @@ mod chat_tabs_source_tests {
 
     #[test]
     fn main_tab_right_click_offers_only_clear_chat() {
-        let src = include_str!("chat_tabs.rs");
+        // A Windows checkout has CRLF line ends.
+        let src = include_str!("chat_tabs.rs").replace("\r\n", "\n");
         let main = src
             .split("if main {\n            // Main can't be renamed")
             .nth(1)
