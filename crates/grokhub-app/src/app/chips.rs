@@ -707,6 +707,7 @@ impl Cabin {
         }
         self.inflight_open = true;
         if upsert_inflight_card(&mut self.board, &id, &title) {
+            self.begin_run_card(&id);
             self.flush_board();
         }
     }
@@ -714,10 +715,14 @@ impl Cabin {
     /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
     /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
     pub(super) fn settle_turn_card(&mut self, assistant: &str) {
-        self.inflight_open = false;
         let Some(id) = self.chat_job_thread.clone() else {
+            self.inflight_open = false;
             return;
         };
+        if self.inflight_open {
+            self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Done);
+        }
+        self.inflight_open = false;
         let mut changed = settle_inflight_card(&mut self.board, &id);
         if apply_assistant_work_marks(&mut self.board, assistant, &id) {
             changed = true;
@@ -748,6 +753,7 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Stopped);
         if abandon_inflight_card(&mut self.board, &id) {
             self.flush_board();
             if let Some(title) = self
@@ -762,6 +768,23 @@ impl Cabin {
                 let key = format!("paused:{}", grokhub_core::engine_slug(&title));
                 self.engine_note("workboard", &key, &title);
             }
+        }
+    }
+
+    /// Each frame, cheaply: pick up another writer's board save (checked every
+    /// two seconds), and once an hour run the local sweep. No model is involved.
+    pub(super) fn tick_board_store(&mut self) {
+        let path = config::workboard_path();
+        crate::work_store::reload_if_changed(&path, &mut self.board);
+        let now = grokhub_core::now_ms();
+        if !crate::work_store::sweep_due(&path, now) {
+            return;
+        }
+        let live = self.live_card_ids();
+        let report = grokhub_core::sweep_work_cards(&mut self.board, now, &live);
+        if !report.is_empty() {
+            self.note_board_sweep(&report);
+            self.flush_board();
         }
     }
 

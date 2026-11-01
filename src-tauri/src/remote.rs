@@ -62,6 +62,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "answer_elicit",
     "cancel_chat",
     "close_chat",
+    // Pasted or dropped files only; the picker and paths stay on the computer.
+    "stage_attachment",
+    "remove_attachment",
     "list_automations",
     "add_automation",
     "set_automation_enabled",
@@ -255,6 +258,8 @@ impl Hub {
 struct Pairing {
     code: String,
     used: Instant,
+    /// The browsers using this code, for the Devices page; a new code starts empty.
+    browsers: crate::remote_devices::Browsers,
 }
 
 impl Pairing {
@@ -262,6 +267,7 @@ impl Pairing {
         Self {
             code: grokhub_core::new_token(),
             used: now,
+            browsers: Default::default(),
         }
     }
 
@@ -453,6 +459,54 @@ impl WebAccess {
         }
     }
 
+    /// The Devices page: this computer, whether web access is on, and the
+    /// browsers paired with the live code. Read from memory only.
+    pub fn devices(&self) -> crate::remote_devices::DevicesView {
+        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let (on, lan, browsers) = match running.as_ref() {
+            None => (false, String::new(), Vec::new()),
+            Some(run) => {
+                let browsers = live(&run.pairing, &self.streams, &self.chats, Instant::now())
+                    .browsers
+                    .views();
+                let (scheme, port) = match &run.front {
+                    Some((front, _)) => ("https", front.port),
+                    None => ("http", run.port),
+                };
+                let lan = lan_ip()
+                    .map(|ip| format!("{scheme}://{}", SocketAddr::new(ip, port)))
+                    .unwrap_or_default();
+                (true, lan, browsers)
+            }
+        };
+        crate::remote_devices::DevicesView {
+            computer: crate::remote_devices::computer_name(),
+            on,
+            lan,
+            browsers,
+        }
+    }
+
+    /// Signs out every browser: a new pairing code, so the old one gets a
+    /// 401, every event stream ends and the browsers' chats are forgotten.
+    /// Web access stays on. Off: no change.
+    pub fn forget_all(&self) -> crate::remote_devices::DevicesView {
+        if let Some(run) = self
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            *run.pairing.lock().unwrap_or_else(|e| e.into_inner()) = Pairing::new(Instant::now());
+            self.streams
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.chats.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+        self.devices()
+    }
+
     /// A conversation a browser started.
     pub fn owns(&self, conversation_id: &str) -> bool {
         self.chats
@@ -476,6 +530,18 @@ struct Job {
     chats: Chats,
     dispatch: Dispatch,
     assets: Assets,
+}
+
+impl Job {
+    fn browsers(&self, change: impl FnOnce(&mut crate::remote_devices::Browsers)) {
+        change(
+            &mut self
+                .pairing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .browsers,
+        );
+    }
 }
 
 fn accept_loop(server: &Server, job: &Job) {
@@ -520,8 +586,21 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.as_str().to_string());
+    let agent = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("User-Agent"))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
     let now = Instant::now();
-    let paired = live(&job.pairing, &job.streams, &job.chats, now).admit(auth.as_deref(), now);
+    let paired = {
+        let mut live = live(&job.pairing, &job.streams, &job.chats, now);
+        let paired = live.admit(auth.as_deref(), now);
+        if paired {
+            live.browsers.saw(&agent, grokhub_core::now_ms());
+        }
+        paired
+    };
     match route(req.method(), req.url()) {
         Route::Hello => send_json(req, 200, &json!({ "kind": KIND, "version": VERSION })),
         Route::Events if !paired => refuse(req),
@@ -557,10 +636,28 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             let mut reply = match args {
                 Err(err) => json!({ "ok": false, "error": format!("Bad arguments: {err}") }),
                 Ok(_) if !web_command(&command) => json!({ "ok": false, "error": refused() }),
-                Ok(args) => match (job.dispatch)(&command, args) {
-                    Ok(value) => json!({ "ok": true, "value": value }),
-                    Err(error) => json!({ "ok": false, "error": error }),
-                },
+                Ok(args) => {
+                    let chat = (command == "send_chat")
+                        .then(|| args["conversationId"].as_str().map(str::to_string))
+                        .flatten();
+                    if let Some(chat) = &chat {
+                        job.browsers(|b| b.chat(&agent, chat, true));
+                    }
+                    let reply = match (job.dispatch)(&command, args) {
+                        Ok(value) => json!({ "ok": true, "value": value }),
+                        Err(error) => json!({ "ok": false, "error": error }),
+                    };
+                    // A chat the desktop kept for itself isn't this browser's.
+                    if let Some(chat) = &chat {
+                        let kept = job
+                            .chats
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .contains(chat);
+                        job.browsers(|b| b.chat(&agent, chat, kept));
+                    }
+                    reply
+                }
             };
             // The newest event id once the command ran: the page waits for
             // its stream to reach it, so a chat's events land before the
@@ -828,6 +925,8 @@ mod tests {
             "imagine_generate",
             "imagine_cancel",
             "imagine_image",
+            "stage_attachment",
+            "remove_attachment",
         ] {
             assert!(web_command(name), "{name}");
         }
@@ -872,10 +971,15 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "stage_attachment_paths",
+            "pick_attachments",
             "get_autostart",
             "set_autostart",
             "set_summon_hotkey",
             "set_notifications",
+            "get_library",
+            "library_cover",
+            "library_play",
         ] {
             assert!(!web_command(name), "{name}");
         }
@@ -1195,5 +1299,195 @@ mod tests {
         );
         assert_eq!(parse(&body)["seq"], json!(3));
         access.stop();
+    }
+
+    const FIREFOX_ANDROID: &str =
+        "Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0";
+
+    /// A web call from a browser with this User-Agent: (status, body).
+    fn call_as(port: u16, command: &str, code: &str, agent: &str, body: &str) -> (u16, Value) {
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        write!(
+            sock,
+            "POST /remote/v1/call/{command} HTTP/1.1\r\nHost: x\r\nUser-Agent: {agent}\r\nAuthorization: Bearer {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("send");
+        let mut raw = String::new();
+        sock.read_to_string(&mut raw).expect("read");
+        let (head, body) = raw.split_once("\r\n\r\n").expect("a response");
+        let status = head
+            .split(' ')
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .expect("status");
+        (status, parse(body))
+    }
+
+    #[test]
+    fn a_paired_browser_shows_as_one_device_with_its_chats() {
+        let access = WebAccess::default();
+        let off = access.devices();
+        assert_eq!(
+            (off.on, off.lan.as_str(), off.browsers.len()),
+            (false, "", 0)
+        );
+        assert!(!off.computer.is_empty());
+
+        let (port, code) = serve(&access);
+        // Wrong codes and the open hello don't pair anything.
+        assert_eq!(
+            call_as(port, "get_settings", "wrong", FIREFOX_ANDROID, "").0,
+            401
+        );
+        assert!(access.devices().browsers.is_empty());
+
+        let before = grokhub_core::now_ms();
+        assert_eq!(
+            call_as(port, "get_settings", &code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        // A chat the browser started counts; one the window keeps doesn't.
+        access.adopt("c1");
+        let chat = r#"{"conversationId":"c1","text":"hi"}"#;
+        assert_eq!(
+            call_as(port, "send_chat", &code, FIREFOX_ANDROID, chat).1,
+            json!({ "ok": true, "value": "got hi", "seq": 0 })
+        );
+        let window = r#"{"conversationId":"window-1","text":"hi"}"#;
+        call_as(port, "send_chat", &code, FIREFOX_ANDROID, window);
+        let after = grokhub_core::now_ms();
+
+        let devices = access.devices();
+        assert!(devices.on);
+        assert_eq!(devices.browsers.len(), 1, "{devices:?}");
+        let browser = &devices.browsers[0];
+        assert_eq!(
+            (browser.name.as_str(), browser.chats),
+            ("Firefox on Android", 1)
+        );
+        assert!(before <= browser.first_seen && browser.first_seen <= browser.last_call);
+        assert!(browser.last_call <= after);
+        access.stop();
+        assert!(access.devices().browsers.is_empty());
+    }
+
+    #[test]
+    fn forget_all_changes_the_code_ends_streams_and_the_old_bearer_gets_401() {
+        let access = WebAccess::default();
+        let (port, code) = serve(&access);
+        assert_eq!(
+            call_as(port, "get_settings", &code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(10)));
+        write!(
+            sock,
+            "GET /remote/v1/events HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {code}\r\n\r\n"
+        )
+        .expect("send");
+        let mut lines = BufReader::new(sock);
+        let mut line = String::new();
+        while line != ": open\n" {
+            line.clear();
+            lines.read_line(&mut line).expect("a line");
+        }
+        access.adopt("c1");
+
+        let after = access.forget_all();
+        assert!(after.on);
+        assert!(after.browsers.is_empty());
+        let fresh = access.view().code;
+        assert_ne!(fresh, code);
+        assert_eq!(fresh.len(), 48);
+        assert!(!access.owns("c1"));
+        // The open stream ends with the last chunk.
+        while line != "0\r\n" {
+            line.clear();
+            lines.read_line(&mut line).expect("a line");
+        }
+        let (status, body) = call_as(port, "get_settings", &code, FIREFOX_ANDROID, "");
+        assert_eq!(
+            (status, body),
+            (
+                401,
+                json!({ "ok": false, "error": "Pair this browser first." })
+            )
+        );
+        assert_eq!(
+            call_as(port, "get_settings", &fresh, FIREFOX_ANDROID, "").0,
+            200
+        );
+        assert_eq!(access.devices().browsers.len(), 1);
+        access.stop();
+        // Off, it changes nothing.
+        assert!(!access.forget_all().on);
+    }
+
+    #[test]
+    fn nothing_about_devices_is_written_to_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-devices-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let access = WebAccess::default();
+        let view = access
+            .start(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+                Some(&dir),
+                Arc::new(|_, _| Ok(Value::Null)),
+                Arc::new(|_| None),
+            )
+            .expect("starts");
+        let port: u16 = view
+            .links
+            .last()
+            .and_then(|l| l.strip_prefix("http://127.0.0.1:"))
+            .and_then(|l| l.split('/').next())
+            .and_then(|p| p.parse().ok())
+            .expect("a localhost link");
+        assert_eq!(
+            call_as(port, "get_settings", &view.code, FIREFOX_ANDROID, "").0,
+            200
+        );
+        assert_eq!(access.devices().browsers.len(), 1);
+        access.forget_all();
+        access.stop();
+
+        let mut files: Vec<String> = Vec::new();
+        let mut walk = vec![dir.clone()];
+        while let Some(at) = walk.pop() {
+            for entry in std::fs::read_dir(&at).expect("readable").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk.push(path);
+                } else {
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    assert!(!text.contains("Firefox"), "{}", path.display());
+                    let name = path.strip_prefix(&dir).expect("inside");
+                    files.push(name.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        files.sort();
+        // Only the certificate the web access already keeps.
+        assert_eq!(
+            files,
+            [
+                "web-access/cert.pem",
+                "web-access/hosts",
+                "web-access/key.pem"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_devices_page_stays_on_the_desktop() {
+        assert!(!web_command("get_devices"));
+        assert!(!web_command("forget_all_devices"));
     }
 }

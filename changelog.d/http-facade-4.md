@@ -1,0 +1,1 @@
+- Internal: the shared HTTP client module (`grokhub_core::http`) now also builds the agents for the Grok model client, model listing and probes, the providers you added, the local model chat and speed test, MCP servers and their sign-in, web fetch, Brave search and Imagine media, so the agent crate no longer uses the HTTP library directly. No app behavior change.

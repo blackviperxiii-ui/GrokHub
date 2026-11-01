@@ -74,11 +74,13 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
     ("crates/grokhub-app/src/app/pulse_ui.rs", 1, "Pulse previews: egress_ok"),
     ("crates/grokhub-app/src/app/pulse_sources_ui.rs", 1, "Pulse sources: egress_ok on every hop"),
+    ("src-tauri/src/voice.rs", 1, "push-to-talk speech to text: guard_quiet (chat data) before the POST; the test override is plain-http loopback only"),
     ("src-tauri/src/oauth.rs", 1, "Sign in with Grok to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
+    ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
@@ -105,6 +107,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).
     ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1"),
+    ("crates/grokhub-core/src/game_watch_rl.rs", 1, "Rocket League Stats API on 127.0.0.1, read only"),
     ("crates/grokhub-core/src/game_watch_gsi.rs", 1, "game state integration listener's self-wake on 127.0.0.1"),
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),

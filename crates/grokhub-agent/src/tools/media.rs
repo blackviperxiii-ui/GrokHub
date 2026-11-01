@@ -36,17 +36,18 @@ impl ImagineApi for BlockedImagine {
 }
 
 pub(crate) struct UreqImagine {
-    agent: ureq::Agent,
+    agent: grokhub_core::http::Agent,
     bearer: String,
 }
 
 impl UreqImagine {
     pub(crate) fn new(bearer: String) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(20))
-            .timeout(Duration::from_secs(120))
-            .resolver(super::web_fetch::public_only_resolve)
-            .build();
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: Duration::from_secs(20),
+            overall: Some(Duration::from_secs(120)),
+            public_only: true,
+            ..Default::default()
+        });
         Self { agent, bearer }
     }
 
@@ -61,10 +62,11 @@ impl ImagineApi for UreqImagine {
         let response = self
             .agent
             .post(&endpoint(path))
-            .set("Authorization", &self.auth_header())
-            .set("User-Agent", crate::USER_AGENT)
-            .send_json(body)
-            .map_err(http_err)?;
+            .header("Authorization", &self.auth_header())
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status()
+            .send_json(body);
+        let response = answered(response)?;
         response.into_json::<Value>().map_err(|err| err.to_string())
     }
 
@@ -72,10 +74,11 @@ impl ImagineApi for UreqImagine {
         let response = self
             .agent
             .get(&endpoint(path))
-            .set("Authorization", &self.auth_header())
-            .set("User-Agent", crate::USER_AGENT)
-            .call()
-            .map_err(http_err)?;
+            .header("Authorization", &self.auth_header())
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status()
+            .call();
+        let response = answered(response)?;
         response.into_json::<Value>().map_err(|err| err.to_string())
     }
 
@@ -83,11 +86,15 @@ impl ImagineApi for UreqImagine {
     /// only goes to x.ai hosts. ureq drops it on a cross-host redirect.
     fn download(&self, url: &str) -> Result<Vec<u8>, String> {
         let host = https_host(url).ok_or_else(|| "media url must be https".to_string())?;
-        let mut req = self.agent.get(url).set("User-Agent", crate::USER_AGENT);
+        let mut req = self
+            .agent
+            .get(url)
+            .header("User-Agent", crate::USER_AGENT)
+            .any_status();
         if host == "x.ai" || host.ends_with(".x.ai") {
-            req = req.set("Authorization", &self.auth_header());
+            req = req.header("Authorization", &self.auth_header());
         }
-        let resp = req.call().map_err(http_err)?;
+        let resp = answered(req.call())?;
         let mut buf = Vec::new();
         std::io::Read::read_to_end(
             &mut std::io::Read::take(resp.into_reader(), MEDIA_CAP + 1),
@@ -141,14 +148,20 @@ fn https_host(url: &str) -> Option<String> {
     }
 }
 
-fn http_err(err: ureq::Error) -> String {
-    match err {
-        ureq::Error::Status(status, resp) => {
+/// A 2xx/3xx answer, or the error text for a 4xx/5xx (sent with `any_status`,
+/// so its whole body is read) or no answer.
+fn answered(
+    sent: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
+) -> Result<grokhub_core::http::Response, String> {
+    match sent {
+        Ok(resp) if resp.status() >= 400 => {
+            let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             let body: String = body.chars().take(500).collect();
-            format!("HTTP {status} {body}")
+            Err(format!("HTTP {status} {body}"))
         }
-        ureq::Error::Transport(err) => format!("imagine request failed: {err}"),
+        Ok(resp) => Ok(resp),
+        Err(err) => Err(format!("imagine request failed: {err}")),
     }
 }
 

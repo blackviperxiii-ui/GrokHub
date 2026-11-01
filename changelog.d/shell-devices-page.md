@@ -1,0 +1,1 @@
+- Shell: a Devices page shows this computer, whether Web access is on and the browsers paired right now (kept in memory only), with one button that signs every browser out by changing the pairing code.

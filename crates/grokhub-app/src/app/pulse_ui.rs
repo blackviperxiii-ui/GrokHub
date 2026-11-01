@@ -140,6 +140,8 @@ pub(super) struct PulseView {
     pub signin_note: bool,
     /// Source images that failed to download or decode. Their slot is dropped.
     image_failed: HashSet<String>,
+    /// The Fix it sheet a PC health card's main button opened.
+    pub fix: Option<super::pulse_fix_ui::FixSheet>,
 }
 
 /// How one Ideas row paints this frame.
@@ -170,6 +172,8 @@ pub(super) enum PulseAct {
     Retry(String),
     DeleteRecording(String),
     FixIt(String),
+    /// A PC health card's Fix it / Options: open the sheet of options.
+    Options(String),
     /// A code-idea card's Copy as GitHub issue (card 32 PR D).
     CopyIssue(String),
     RetryNow,
@@ -470,6 +474,9 @@ fn pulse_menu(
             }
         };
     let self_review = grokhub_core::self_review::card_target(&card.source_id);
+    if let Some(label) = super::pulse_fix_ui::fix_label(card) {
+        pick(ui, label, "", PulseAct::Options(id.clone()), act);
+    }
     if !feed && self_review.is_none() {
         pick(
             ui,
@@ -573,14 +580,14 @@ pub(super) fn run_label(card: &UpdateCard) -> &'static str {
 /// How an inline row action is drawn: Run is the amber CTA, Snooze is
 /// outlined in signal red, Dismiss is quiet text.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Quick {
+pub(super) enum Quick {
     Primary,
     Outline,
     Quiet,
 }
 
 /// One of the row's inline actions, in the Loadout button style.
-fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
+pub(super) fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
     let text = RichText::new(label)
         .size(crate::theme::FONT_TIP)
         .strong()
@@ -653,6 +660,9 @@ pub(super) fn paint_pulse_row(
                 if t.clicked() {
                     act = Some(PulseAct::Open(card.id.clone()));
                 }
+                if let Some(v) = card.pulse.verdict.as_ref() {
+                    super::pulse_fix_ui::paint_verdict(ui, v);
+                }
                 let blurb = idea_blurb(card);
                 if !blurb.is_empty() {
                     clamp_label(
@@ -681,7 +691,11 @@ pub(super) fn paint_pulse_row(
                                     act = Some(PulseAct::Snooze(card.id.clone()));
                                 }
                             }
-                            if quick_button(ui, run_label(card), Quick::Primary) {
+                            if let Some(label) = super::pulse_fix_ui::fix_label(card) {
+                                if quick_button(ui, label, Quick::Primary) {
+                                    act = Some(PulseAct::Options(card.id.clone()));
+                                }
+                            } else if quick_button(ui, run_label(card), Quick::Primary) {
                                 act = Some(PulseAct::Run(card.id.clone()));
                             }
                         });
@@ -843,6 +857,9 @@ pub(super) fn paint_post_body(
         .wrap()
         .selectable(false),
     );
+    if let Some(v) = card.pulse.verdict.as_ref() {
+        super::pulse_fix_ui::paint_verdict(ui, v);
+    }
     let takeaway = grokhub_core::short_takeaway(card);
     if !takeaway.is_empty() {
         clamp_label(
@@ -1144,6 +1161,7 @@ impl Cabin {
                 });
         });
         self.paint_feed_instructions_sheet(&ctx);
+        self.paint_pulse_fix_sheet(&ctx);
     }
 
     /// The title row with its two actions, then the sign-in note, the brief
@@ -1822,6 +1840,7 @@ impl Cabin {
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
             PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
+            PulseAct::Options(id) => self.open_pulse_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::BackupChip(id) => self.tap_backup_chip(&id),

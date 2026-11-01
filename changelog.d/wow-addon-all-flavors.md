@@ -1,0 +1,1 @@
+- The World of Warcraft addon now loads on Retail and every Classic flavor (Mists of Pandaria Classic, TBC Classic Anniversary, Classic Era and their test clients). On Classic it reads professions, talent trees, reputations, currencies and quests. A new **Install addon in all versions** button puts it into every WoW version you have in one click.
