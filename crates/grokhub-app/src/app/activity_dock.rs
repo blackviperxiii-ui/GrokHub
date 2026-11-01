@@ -486,6 +486,7 @@ impl Cabin {
         let listed: Vec<ActivityItem> = items.into_iter().take(DOCK_MAX).collect();
         let more = total.saturating_sub(listed.len());
         let mut act: Option<(ActivityKind, String, bool)> = None;
+        let mut open_card: Option<String> = None;
         let list = egui::Area::new(egui::Id::new("activity-dock-list"))
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(
@@ -574,23 +575,33 @@ impl Cabin {
                                 (ActivityKind::Routine, _) => "Open result",
                                 (ActivityKind::Background, _) => "Open chat",
                             };
-                            if ui
-                                .add(
+                            let chat_id = item_chat_id(&self.bg.runs, item);
+                            // A run that works a Workboard card can open it too.
+                            let card = super::board_ui::board_card_for_chat(&self.board, &chat_id);
+                            let row_btn = |ui: &mut egui::Ui, text: &str| {
+                                ui.add(
                                     egui::Button::new(
-                                        RichText::new(btn).size(11.0).color(crate::theme::fg()),
+                                        RichText::new(text).size(11.0).color(crate::theme::fg()),
                                     )
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::new(1.0, crate::theme::border())),
                                 )
                                 .clicked()
-                            {
-                                let chat_id = item_chat_id(&self.bg.runs, item);
-                                act = Some((
-                                    item.kind,
-                                    chat_id,
-                                    item.status == ActivityStatus::Waiting,
-                                ));
-                            }
+                            };
+                            ui.horizontal(|ui| {
+                                if row_btn(ui, btn) {
+                                    act = Some((
+                                        item.kind,
+                                        chat_id.clone(),
+                                        item.status == ActivityStatus::Waiting,
+                                    ));
+                                }
+                                if let Some(card) = card {
+                                    if row_btn(ui, "Open card") {
+                                        open_card = Some(card);
+                                    }
+                                }
+                            });
                         }
                         if more > 0 {
                             ui.label(
@@ -610,6 +621,10 @@ impl Cabin {
         });
         if shut {
             self.activity.open = false;
+        }
+        if let Some(id) = open_card {
+            self.activity.open = false;
+            self.open_board_card(&id);
         }
         if let Some((kind, chat_id, waiting)) = act {
             self.activity.open = false;

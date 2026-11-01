@@ -104,6 +104,12 @@ pub(super) enum BoardAct {
     },
     /// Stop the turn running in a card's chat.
     Stop,
+    /// Carry on a paused or interrupted run (KB-03 fills in the resume).
+    Resume(String),
+    /// A paused run becomes yours: back to To do, and the sweep leaves it.
+    HandBack(String),
+    /// Open or close a card's log drawer.
+    ToggleLog(String),
 }
 
 /// Drag payload for a workboard card: its id.
@@ -1298,7 +1304,11 @@ page_body(ui, "history", |ui| {
         | BoardAct::Link(id)
         | BoardAct::Unlink(id)
         | BoardAct::Save(id)
-        | BoardAct::SaveNotes { id, .. } = &act
+        | BoardAct::SaveNotes { id, .. }
+        | BoardAct::Work(id)
+        | BoardAct::Say { id, .. }
+        | BoardAct::Resume(id)
+        | BoardAct::HandBack(id) = &act
         {
             grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
         }
@@ -1435,6 +1445,28 @@ page_body(ui, "history", |ui| {
             }
             BoardAct::Stop => {
                 self.halt_work("Stopped");
+                false
+            }
+            BoardAct::Resume(id) => {
+                self.resume_work_card(&id);
+                // The card was touched above; Resume saves the board itself.
+                true
+            }
+            BoardAct::HandBack(id) => {
+                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
+                    c.origin = Some(grokhub_core::WorkOrigin::User);
+                    c.status = BoardStatus::Todo;
+                }
+                self.status = "The card is yours now. It is in To do.".into();
+                true
+            }
+            BoardAct::ToggleLog(id) => {
+                let open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
+                self.board_view.log = if open {
+                    None
+                } else {
+                    Some((id.clone(), self.read_card_log(&id)))
+                };
                 false
             }
             BoardAct::Open(id) => {
