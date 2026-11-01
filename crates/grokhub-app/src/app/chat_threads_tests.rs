@@ -587,27 +587,20 @@ fn pin_thread_flips_the_pin() {
 #[test]
 fn composer_and_history_omit_archived_idle_chrome() {
     let src = cabin_src();
-    let toast = fn_src(&src, "paint_archive_toast");
-    assert!(
-        !toast.contains("idle chat")
-            && !toast.contains("idle chats")
-            && !toast.contains("auto_archive_note")
-            && !toast.contains("ghost_pill(ui, \"Archived\")")
-            && !toast.contains("Nav::History"),
-        "composer archive toast must not show idle-archive chrome: {toast}"
-    );
-    assert!(
-        toast.contains("ghost_pill(ui, \"Undo\")"),
-        "manual archive Undo toast stays: {toast}"
-    );
     let live = src
         .split("ComposerStackSlot::LiveWork =>")
         .nth(1)
         .and_then(|s| s.split("ComposerStackSlot::SlashPalette =>").next())
         .expect("LiveWork slot");
     assert!(
-        live.contains("paint_archive_toast") && !live.contains("idle chat"),
-        "LiveWork must not embed idle-archive labels: {live}"
+        !live.contains("archive")
+            && !live.contains("diagnostics_notice")
+            && !live.contains("idle chat"),
+        "the composer stack paints no archive or diagnostics strip; the bell has them: {live}"
+    );
+    assert!(
+        !src.contains("fn paint_archive_toast") && !src.contains("fn paint_diagnostics_notice"),
+        "the old composer strips stay gone"
     );
     let hist = src
         .split("fn ui_history(")
@@ -673,17 +666,55 @@ fn archive_hides_from_main_list_and_reply_restores() {
         vec![0]
     );
     assert_eq!(cabin.status, "Archived Done chat");
+    let id = cabin.threads[1].id.clone();
+    assert_eq!(cabin.notices.items[0].text, "Archived Done chat");
     assert_eq!(
-        cabin.archive_undo.as_deref(),
-        Some(cabin.threads[1].id.as_str())
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::Unarchive(id.clone()))
     );
     cabin.unarchive_on_reply();
+    assert_eq!(
+        cabin.notices.items[0].action, None,
+        "a reply restored the chat, so its Undo goes quiet"
+    );
     assert!(!crate::threads::is_archived(&cabin.threads[1]));
     assert_eq!(cabin.status, "Restored Done chat to chats");
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
         vec![0, 1]
     );
+    quiet.settle();
+}
+
+#[test]
+fn bell_undo_restores_an_archived_chat_and_offers_undo_again() {
+    let mut quiet = QuietCabin::boot("bell-undo");
+    let cabin = &mut quiet.cabin;
+    cabin.threads.clear();
+    let mut keep = crate::threads::ChatThread::new("Keep", false);
+    keep.messages_mut().push(("user".into(), "stay".into()));
+    let mut done = crate::threads::ChatThread::new("Done chat", false);
+    done.messages_mut().push(("user".into(), "old".into()));
+    cabin.threads = vec![keep, done];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.notices.mark_read();
+    cabin.archive_thread_at(1);
+    assert_eq!(cabin.notices.unread, 1);
+    cabin.run_notice_action(0);
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(cabin.notices.items[0].text, "Unarchived Done chat");
+    assert_eq!(
+        cabin.notices.items[1].action, None,
+        "the Undo that ran is spent"
+    );
+    let id = cabin.threads[1].id.clone();
+    assert_eq!(
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::Archive(id))
+    );
+    cabin.run_notice_action(0);
+    assert!(crate::threads::is_archived(&cabin.threads[1]));
     quiet.settle();
 }
 

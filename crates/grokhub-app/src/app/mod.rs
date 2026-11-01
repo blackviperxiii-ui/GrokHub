@@ -207,6 +207,7 @@ mod model_wait_ui;
 mod native_signin_tests;
 mod net_log_ui;
 mod night;
+mod notices;
 mod nudge_watchers_ui;
 mod oauth;
 mod pages;
@@ -567,8 +568,8 @@ pub struct Cabin {
     /// [`DELETE_ALL_ARM`] deletes, anything later re-arms.
     history_delete_armed_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
-    /// Thread id for the quiet archive/unarchive Undo toast.
-    archive_undo: Option<String>,
+    /// Titlebar bell: archive Undo, diagnostics saves, status lines.
+    notices: notices::Notices,
     /// Local day the auto-archive pass last ran.
     chat_archive_day: Option<String>,
     last_receipt_ok: Option<bool>,
@@ -1207,7 +1208,7 @@ impl Cabin {
             history_q_at: None,
             history_delete_armed_at: None,
             history_hits: vec![],
-            archive_undo: None,
+            notices: Default::default(),
             chat_archive_day: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
@@ -1679,7 +1680,7 @@ impl Cabin {
             history_q_at: None,
             history_delete_armed_at: None,
             history_hits: Vec::new(),
-            archive_undo: None,
+            notices: Default::default(),
             chat_archive_day: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
@@ -5539,6 +5540,7 @@ impl eframe::App for Cabin {
         }
         self.sync_idea_card_actions();
         status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
+        self.mirror_status_notice();
         self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
