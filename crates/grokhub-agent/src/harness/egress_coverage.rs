@@ -1,5 +1,6 @@
 //! Spike-4c coverage: every outbound request builder in `crates/` (a `ureq`
-//! agent or request, a websocket client) sits behind the EgressGuard. Each file
+//! or `reqwest` agent or request, an agent from the `grokhub_core::http`
+//! facade, a websocket client) sits behind the EgressGuard. Each file
 //! that builds one is listed in [`WRAPPED`] with how many it builds and the
 //! guard call in front of them. A new builder fails this test until it is
 //! wrapped and listed, so the next fetch can't skip the guard.
@@ -26,6 +27,20 @@ const BUILDERS: &[&str] = &[
     "ureq::builder(",
     "ureq::AgentBuilder::new(",
     "ureq::Agent::new(",
+    // ureq 3 (behind the facade since LU-12 stage 5): its agent constructors,
+    // bare so a `use ureq::Agent;` import is caught too, and `ureq::run`.
+    "Agent::new_with_defaults(",
+    "Agent::new_with_config(",
+    "Agent::with_parts(",
+    ".new_agent(",
+    "ureq::run(",
+    // reqwest (none left in `crates/` since LU-12 stage 5).
+    "reqwest::blocking::Client::builder(",
+    "reqwest::Client::builder(",
+    "reqwest::blocking::Client::new(",
+    "reqwest::Client::new(",
+    "reqwest::get(",
+    "reqwest::blocking::get(",
     // The app's own client (`grokhub_core::http`): each agent counts where it's built.
     "http::agent(",
     "tungstenite::client(",
@@ -34,7 +49,9 @@ const BUILDERS: &[&str] = &[
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
 const WRAPPED: &[(&str, usize, &str)] = &[
-    ("grokhub-core/src/http.rs", 1, "agent factory (LU-12): no guard of its own; every caller is counted and listed here with the guard it runs first"),
+    ("grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; every caller is counted and listed here with the guard it runs first"),
+    ("grokhub-core/src/connectivity.rs", 1, "default_http_client: the connectivity re-probe (HEAD to the xAI models URL, no user data; run_probe_if_due sends nothing while Offline only is on) and the net log speed test (offline::refuse first)"),
+    ("grokhub-core/src/game_watch_league.rs", 1, "RiotLoopback: League's live client API on 127.0.0.1 only (loopback_self_signed: loopback-only resolver, https only, no redirects); no egress line (on-device)"),
     ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns and /v1/responses/compact): XAI_MODEL_ENDPOINTS + guard_egress (chat, personal) to api.x.ai"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
@@ -207,6 +224,26 @@ fn an_unwrapped_fetch_fails_the_coverage_check() {
     assert_eq!(
         unwrapped(&scan(&root), &listed),
         vec!["grokhub-demo/src/feed.rs: 2 outbound builder(s), 1 listed as wrapped".to_string()]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_direct_ureq_3_or_reqwest_client_counts_as_a_builder() {
+    let root = crate::harness::test_dir("egress-coverage-direct");
+    let src = root.join("grokhub-demo").join("src");
+    fs::create_dir_all(&src).unwrap();
+    let fixture = "use ureq::Agent;\n\
+                   pub fn a() { let _ = Agent::new_with_defaults(); }\n\
+                   pub fn b() { let _ = ureq::Agent::new_with_config(ureq::config::Config::default()); }\n\
+                   pub fn c() { let _ = ureq::config::Config::builder().build().new_agent(); }\n\
+                   pub fn d() { let _ = reqwest::blocking::Client::builder(); }\n";
+    fs::write(src.join("feed.rs"), fixture).unwrap();
+    assert_eq!(
+        unwrapped(&scan(&root), &[]),
+        vec![
+            "grokhub-demo/src/feed.rs: 4 outbound builder(s) with no EgressGuard entry".to_string()
+        ]
     );
     let _ = fs::remove_dir_all(root);
 }

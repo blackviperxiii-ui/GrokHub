@@ -29,7 +29,6 @@ egui-phosphor = { version = "0.14", default-features = false, features = ["regul
 egui_plot = "0.37"
 # U7f: optional dockable main panels (egui ^0.36; serde persists dock.json; no egui/eframe bump).
 egui_dock = { version = "0.21", features = ["serde"] }
-ureq = { workspace = true }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 global-hotkey = "0.9"
 image = { workspace = true, features = ["webp", "ico", "bmp"] }
