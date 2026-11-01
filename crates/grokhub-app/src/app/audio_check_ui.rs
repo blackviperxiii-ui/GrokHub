@@ -123,35 +123,19 @@ impl Cabin {
         }
     }
 
-    /// While the microphone is open, say so above every page.
-    pub(super) fn paint_listen_indicator(&mut self, ctx: &egui::Context) {
-        let Some(live) = self.audio_check.as_ref() else {
-            return;
-        };
+    /// While the microphone is open, the titlebar says so
+    /// ([`Self::paint_titlebar_live`]).
+    pub(super) fn listen_line(&self) -> Option<String> {
+        let live = self.audio_check.as_ref()?;
         let secs = live
             .started
             .elapsed()
             .as_secs()
             .min(u64::from(ac::CLIP_SECS));
-        let line = format!(
+        Some(format!(
             "● Audio check: listening 0:{secs:02} of 0:{:02}",
             ac::CLIP_SECS
-        );
-        egui::Area::new(egui::Id::new("audio-check-indicator"))
-            .order(egui::Order::Foreground)
-            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
-            .show(ctx, |ui| {
-                egui::Frame::NONE
-                    .fill(crate::theme::elevated())
-                    .corner_radius(crate::theme::CHROME_RADIUS)
-                    .stroke(egui::Stroke::new(2.0_f32, crate::theme::offline()))
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&line).size(13.0).color(crate::theme::fg()));
-                        });
-                    });
-            });
+        ))
     }
 }
 

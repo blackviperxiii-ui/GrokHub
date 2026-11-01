@@ -148,6 +148,8 @@ impl Cabin {
                         self.ui_activity_dock(ui);
                         // Bell just left of Activity (RTL).
                         self.ui_notice_bell(ui);
+                        // Recording and audio-check clocks, left of the bell.
+                        self.paint_titlebar_live(ui);
                         if !loadout {
                             self.paint_personality_switch(ui);
                         }

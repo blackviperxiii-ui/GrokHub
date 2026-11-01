@@ -28,6 +28,8 @@ pub(super) enum NoticeAction {
     Archive(String),
     /// Open the folder that holds this file.
     OpenFolder(std::path::PathBuf),
+    /// Turn this recording folder's stills into a skill draft.
+    SaveAsSkill(std::path::PathBuf),
 }
 
 impl NoticeAction {
@@ -35,6 +37,7 @@ impl NoticeAction {
         match self {
             NoticeAction::Unarchive(_) | NoticeAction::Archive(_) => "Undo",
             NoticeAction::OpenFolder(_) => "Open folder",
+            NoticeAction::SaveAsSkill(_) => "Save as skill",
         }
     }
 }
@@ -157,6 +160,19 @@ impl Cabin {
                 }
             }
             NoticeAction::OpenFolder(path) => self.open_folder_of(&path),
+            NoticeAction::SaveAsSkill(dir) => {
+                if super::screen_record_ui::watch_offer_dir().as_deref() != Some(dir.as_path()) {
+                    return;
+                }
+                self.start_watch_learn_extract();
+                // Still an offer (no key yet, stills gone): keep the pill for
+                // another try.
+                if super::screen_record_ui::watch_offer_dir().as_deref() == Some(dir.as_path()) {
+                    if let Some(n) = self.notices.items.get_mut(idx) {
+                        n.action = Some(NoticeAction::SaveAsSkill(dir));
+                    }
+                }
+            }
         }
     }
 
