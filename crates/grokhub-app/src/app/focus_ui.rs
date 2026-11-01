@@ -36,6 +36,8 @@ pub(super) struct FocusState {
     pub game: super::game_companion_ui::GameUi,
     /// The game watcher's GSI file and listener.
     pub watch: super::game_watch_ui::WatchState,
+    /// Battle.net games and the WoW combat log follow.
+    pub wow: super::wow_ui::WowState,
     /// New 3D models in Downloads.
     pub models: super::model_drop_ui::ModelDropState,
     /// The screenshot Explain offer's folder scan and image load.
@@ -54,6 +56,7 @@ impl Cabin {
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();
+        self.tick_wow();
         self.tick_model_drop();
         self.poll_screenshot_offer();
         if self.focus.shot.busy() {

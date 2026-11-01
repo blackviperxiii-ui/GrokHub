@@ -1,0 +1,9 @@
+## Interface: 120000, 110207, 50501, 40402, 11508
+## Title: Loadout
+## Notes: Records your own characters' level, zone, gold, played time and boss kills for the Loadout desktop app. Read-only: automates nothing.
+## Author: Loadout
+## Version: 1.0.0
+## SavedVariables: LoadoutDB
+## X-Loadout-App: 1
+
+Loadout.lua

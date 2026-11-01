@@ -10,6 +10,7 @@ pub mod audio_check;
 pub mod automation;
 pub mod autonomy;
 pub mod backup_nudge;
+pub mod battlenet;
 pub mod bg_task;
 pub mod brain_policy;
 pub mod brand;
@@ -174,6 +175,8 @@ pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;
+pub mod wow_addon;
+pub mod wow_saved;
 pub mod xai_signin;
 pub mod xp;
 
