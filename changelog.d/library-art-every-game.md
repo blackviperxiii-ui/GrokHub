@@ -1,0 +1,1 @@
+- More Library games get real art. Loadout now also looks for the other cover files Steam keeps on your PC (the 2x and capsule box art, the hero and capsule headers), and when the store's usual file names are missing it asks Steam's store for the game's own header, which newer games keep under a hashed address. Games Steam has no art for at all still get the painted cover.

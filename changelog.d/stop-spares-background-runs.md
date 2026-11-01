@@ -1,0 +1,1 @@
+- Stop in the composer now ends only the chat's own run: background runs and scheduled loops keep going, and tray Halt still stops everything. On Windows, a command that leaves a background process holding its output no longer freezes the run; Loadout waits about two seconds, ends the leftover job, and answers with what arrived.

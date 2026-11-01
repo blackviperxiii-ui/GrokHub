@@ -4,10 +4,8 @@
 //! The child is its own process group or job so a stop kills the whole tree.
 
 use std::path::Path;
-#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-#[cfg(unix)]
 use std::time::Instant;
 
 use serde_json::{json, Value};
@@ -389,14 +387,11 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> Vec<u8> {
     cap.bytes()
 }
 
-/// How long to keep reading after bash ends, for output still in flight.
-#[cfg(unix)]
+/// How long to keep reading after the shell ends, for output still in flight.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
-#[cfg(unix)]
 const HELD_OPEN: &str =
     "\n(a background process still holds this command's output; stopped waiting for it)";
 
-#[cfg(unix)]
 fn spawn_reader(
     pipe: Option<impl std::io::Read + Send + 'static>,
     into: Arc<Mutex<CapBuf>>,
@@ -422,7 +417,6 @@ fn spawn_reader(
 
 /// True once every reader hit end of file; false when the grace ran out or
 /// Stop was pressed first. Readers left running end when their pipe closes.
-#[cfg(unix)]
 fn drain_readers(
     readers: &[std::thread::JoinHandle<()>],
     stop: &dyn Fn() -> bool,
@@ -440,7 +434,6 @@ fn drain_readers(
     }
 }
 
-#[cfg(unix)]
 fn take_buf(buf: &Mutex<CapBuf>) -> Vec<u8> {
     std::mem::replace(
         &mut *buf.lock().unwrap_or_else(|err| err.into_inner()),
@@ -883,11 +876,11 @@ mod tests {
 mod win {
     use std::ffi::OsStr;
     use std::fs::File;
-    use std::io::Read;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::ptr;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -911,6 +904,9 @@ mod win {
 
     use super::{finish, CapBuf, POLL};
 
+    /// After the job is ended, how long its pipes get to close.
+    const LEFTOVER_GRACE: Duration = Duration::from_millis(500);
+
     pub(super) fn run_hook(
         cwd: &Path,
         command: &str,
@@ -928,7 +924,7 @@ mod win {
             match child.poll() {
                 Poll::Running => thread::sleep(POLL),
                 Poll::Exited(code) => {
-                    let (stdout, stderr) = child.output_split();
+                    let (stdout, stderr, _) = child.output_split(&|| false);
                     return Ok(super::HookProc {
                         exit_code: Some(i32::try_from(code).unwrap_or(1)),
                         stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -939,7 +935,7 @@ mod win {
                 Poll::Failed(err) => return Err(err),
             }
         };
-        let (stdout, stderr) = child.output_split();
+        let (stdout, stderr, _) = child.output_split(&|| false);
         let _ = timed_out;
         Ok(super::HookProc {
             exit_code: None,
@@ -1002,7 +998,7 @@ mod win {
                 }
             }
         };
-        let raw = child.output();
+        let raw = child.output(stop);
         Ok(match kind {
             Kind::Exited(code) => finish(&format!("exit {code}"), &raw, code != 0),
             Kind::TimedOut => finish(&format!("timed out after {timeout_ms}ms"), &raw, true),
@@ -1032,8 +1028,9 @@ mod win {
         stderr_write: HANDLE,
         stdin_read: HANDLE,
         stdin_write: HANDLE,
-        reader: Option<thread::JoinHandle<Vec<u8>>>,
-        err_reader: Option<thread::JoinHandle<Vec<u8>>>,
+        readers: Vec<thread::JoinHandle<()>>,
+        out_buf: Arc<Mutex<CapBuf>>,
+        err_buf: Arc<Mutex<CapBuf>>,
     }
 
     impl JobChild {
@@ -1057,8 +1054,9 @@ mod win {
                 stderr_write: ptr::null_mut(),
                 stdin_read: ptr::null_mut(),
                 stdin_write: ptr::null_mut(),
-                reader: None,
-                err_reader: None,
+                readers: Vec::new(),
+                out_buf: Arc::new(Mutex::new(CapBuf::new())),
+                err_buf: Arc::new(Mutex::new(CapBuf::new())),
             };
             unsafe {
                 child.job = CreateJobObjectW(ptr::null(), ptr::null());
@@ -1152,8 +1150,10 @@ mod win {
                 }
                 let stdout = take_file(&mut child.stdout_read);
                 let stderr = take_file(&mut child.stderr_read);
-                child.reader = Some(thread::spawn(move || read_file(stdout)));
-                child.err_reader = Some(thread::spawn(move || read_file(stderr)));
+                child.readers = vec![
+                    super::spawn_reader(Some(stdout), Arc::clone(&child.out_buf)),
+                    super::spawn_reader(Some(stderr), Arc::clone(&child.err_buf)),
+                ];
             }
             Ok(child)
         }
@@ -1190,27 +1190,43 @@ mod win {
             }
         }
 
-        fn output(self) -> Vec<u8> {
-            let (stdout, stderr) = self.output_split();
-            super::merge_output(stdout, stderr)
+        fn output(self, stop: &dyn Fn() -> bool) -> Vec<u8> {
+            let (stdout, stderr, drained) = self.output_split(stop);
+            let mut raw = super::merge_output(stdout, stderr);
+            if !drained {
+                raw.extend_from_slice(super::HELD_OPEN.as_bytes());
+            }
+            raw
         }
 
-        fn output_split(mut self) -> (Vec<u8>, Vec<u8>) {
+        /// What the command wrote, and whether every reader reached the end.
+        /// A process that broke out of the job (or one still in it after the
+        /// shell ended) can keep a pipe open: wait a moment, never past Stop,
+        /// end the job, and answer with what arrived.
+        fn output_split(mut self, stop: &dyn Fn() -> bool) -> (Vec<u8>, Vec<u8>, bool) {
             close(&mut self.stdout_write);
             close(&mut self.stderr_write);
             close(&mut self.stdin_write);
             close(&mut self.stdin_read);
-            let stdout = self
-                .reader
-                .take()
-                .and_then(|handle| handle.join().ok())
-                .unwrap_or_default();
-            let stderr = self
-                .err_reader
-                .take()
-                .and_then(|handle| handle.join().ok())
-                .unwrap_or_default();
-            (stdout, stderr)
+            let mut drained = super::drain_readers(&self.readers, stop, super::DRAIN_GRACE);
+            if !drained {
+                unsafe {
+                    if !self.job.is_null() {
+                        TerminateJobObject(self.job, 1);
+                    }
+                }
+                drained = super::drain_readers(&self.readers, &|| false, LEFTOVER_GRACE);
+            }
+            if drained {
+                for reader in self.readers.drain(..) {
+                    let _ = reader.join();
+                }
+            }
+            (
+                super::take_buf(&self.out_buf),
+                super::take_buf(&self.err_buf),
+                drained,
+            )
         }
     }
 
@@ -1240,20 +1256,6 @@ mod win {
         let raw = std::mem::replace(handle, ptr::null_mut());
         // The pipe end is exclusively owned from here. Drop closes it.
         unsafe { File::from_raw_handle(raw) }
-    }
-
-    fn read_file(mut file: File) -> Vec<u8> {
-        let mut cap = CapBuf::new();
-        let mut buf = [0u8; 8192];
-        loop {
-            match file.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => cap.push(&buf[..n]),
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        cap.bytes()
     }
 
     fn os_err(prefix: &str) -> String {
