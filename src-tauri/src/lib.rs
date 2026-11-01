@@ -34,6 +34,7 @@ pub mod plugins;
 pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
+pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
@@ -698,6 +699,31 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     off_main(move || history::delete(&dir, &doomed)).await??;
     end_chat(&state, &id);
     Ok(())
+}
+
+/// Agents: the open chat's to-dos and background tasks.
+#[tauri::command]
+async fn get_queue(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || queue::queue(&dir, &conversation_id)).await
+}
+
+/// Agents → Stop: one task by id, or every task of the chat without one.
+#[tauri::command]
+async fn stop_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: Option<String>,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::stop(&conversation_id, task_id.as_deref())?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -1707,6 +1733,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             close_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "get_queue" => out(block_on(get_queue(state, own(args)?))?),
+        "stop_task" => out(block_on(stop_task(
+            state,
+            own(args)?,
+            arg(args, "taskId")?,
+        ))?),
         "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
         "add_automation" => out(add_automation(
             state,
@@ -2309,6 +2341,8 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            get_queue,
+            stop_task,
             get_workboard,
             workboard_add,
             workboard_act,
