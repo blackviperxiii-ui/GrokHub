@@ -139,7 +139,7 @@ fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() 
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("effort-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     crate::config::save(&cabin.cfg).expect("save");
     let app_json = crate::config::config_dir().join("app.json");
@@ -155,7 +155,7 @@ fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() 
         );
     }
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 /// Router R1: there is no effort control in the composer, Settings or the slash list.
@@ -202,7 +202,7 @@ fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() 
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("health-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/health");
     let empty = last_chat_text(&cabin);
@@ -251,7 +251,7 @@ fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() 
         "a failed automation is a failed service: {}",
         cabin.status
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #107.
@@ -259,7 +259,7 @@ fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() 
 fn undo_retry_and_context_on_an_empty_chat() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("undo-retry");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.messages = std::sync::Arc::new(Vec::new());
     if let Some(t) = cabin.threads.get_mut(cabin.thread_idx) {
@@ -273,7 +273,7 @@ fn undo_retry_and_context_on_an_empty_chat() {
     assert!(!cabin.running);
     cabin.run_slash_line("/context");
     assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #108.
@@ -281,7 +281,7 @@ fn undo_retry_and_context_on_an_empty_chat() {
 fn mode_slash_sets_think_and_auto() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("mode-slash");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.model.clear();
     cabin.run_slash_line("/mode think");
@@ -294,7 +294,7 @@ fn mode_slash_sets_think_and_auto() {
         cabin.status,
         "Mode auto — routes Fast / Balance / Think / Max"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #109.
@@ -302,7 +302,7 @@ fn mode_slash_sets_think_and_auto() {
 fn usage_and_host_slashes_set_status_without_a_run() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("usage-host");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/usage");
     assert!(cabin.status.starts_with("today "));
@@ -312,7 +312,7 @@ fn usage_and_host_slashes_set_status_without_a_run() {
     cabin.run_slash_line("/host");
     assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #110.
@@ -320,7 +320,7 @@ fn usage_and_host_slashes_set_status_without_a_run() {
 fn board_slash_opens_the_workboard_and_scratch_blocks_memory() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("board-scratch");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.board.clear();
     cabin.run_slash_line("/board");
@@ -331,7 +331,7 @@ fn board_slash_opens_the_workboard_and_scratch_blocks_memory() {
     cabin.messages = cabin.threads[0].messages.clone();
     cabin.run_slash_line("/remember harbor note");
     assert_eq!(cabin.status, "Scratch — no memory writes");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #112.
@@ -339,9 +339,9 @@ fn board_slash_opens_the_workboard_and_scratch_blocks_memory() {
 fn fix_opens_about_and_dream_refuses_without_login() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("fix-dream");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("HOME", &root);
-    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("HOME", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.api_key.clear();
     cabin.running = true;
@@ -360,8 +360,8 @@ fn fix_opens_about_and_dream_refuses_without_login() {
     assert_eq!(cabin.status, "Sign in with Grok or add an API key.");
     assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.imagine_want_focus);
-    std::env::remove_var("GROKHUB_CONFIG");
-    std::env::remove_var("GROKHUB_GROK");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
 }
 
 // Landed from PR #113.
@@ -369,7 +369,7 @@ fn fix_opens_about_and_dream_refuses_without_login() {
 fn remember_appends_memory_and_refuses_a_secret() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("remember-write");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body.clear();
@@ -386,7 +386,7 @@ fn remember_appends_memory_and_refuses_a_secret() {
     cabin.run_slash_line("/remember sk-abcdefghijklmnopqrst");
     assert_eq!(cabin.status, "Secrets never in markdown");
     assert_eq!(cabin.mem_body, before);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #114.
@@ -394,7 +394,7 @@ fn remember_appends_memory_and_refuses_a_secret() {
 fn memory_goal_model_loop_forget_and_empty_imagine() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("memory-goal");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body = "harbor light\nkeep the dock\n".into();
@@ -428,7 +428,7 @@ fn memory_goal_model_loop_forget_and_empty_imagine() {
     assert!(cabin.imagine_want_focus);
     assert!(!cabin.running);
     assert!(!cabin.imagine_pending);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #115.
@@ -436,7 +436,7 @@ fn memory_goal_model_loop_forget_and_empty_imagine() {
 fn skill_hub_help_and_clear() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("skill-hub");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.hub_on = false;
     cabin.skill_list.clear();
@@ -463,7 +463,7 @@ fn skill_hub_help_and_clear() {
     assert!(!cabin.imagine_pending);
     assert!(cabin.messages.is_empty());
     assert_eq!(cabin.status, "Cleared");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #116.
@@ -471,7 +471,7 @@ fn skill_hub_help_and_clear() {
 fn rename_pin_and_delete_the_open_chat() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("rename-pin");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/scratch");
     assert_eq!(cabin.threads.len(), 1);
@@ -490,7 +490,7 @@ fn rename_pin_and_delete_the_open_chat() {
     assert_eq!(cabin.threads.len(), 1);
     assert_eq!(cabin.threads[0].title, "Chat");
     assert!(!cabin.threads[0].scratch);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #117.
@@ -498,7 +498,7 @@ fn rename_pin_and_delete_the_open_chat() {
 fn export_writes_a_chat_and_empty_video_does_not_send() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("export-video");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/scratch");
     cabin.cfg.project_dir.clear();
@@ -520,7 +520,7 @@ fn export_writes_a_chat_and_empty_video_does_not_send() {
     assert!(cabin.imagine_prompt.is_empty());
     assert!(!cabin.running);
     assert!(!cabin.imagine_pending);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #118.
@@ -528,9 +528,9 @@ fn export_writes_a_chat_and_empty_video_does_not_send() {
 fn voice_without_login_stays_off_and_profile_clears() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("voice-profile");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let old_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", "");
+    unsafe { std::env::set_var("PATH", "") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.api_key.clear();
     cabin.listen_voice();
@@ -541,10 +541,10 @@ fn voice_without_login_stays_off_and_profile_clears() {
     assert!(cabin.cfg.profile_picture.is_empty());
     assert_eq!(cabin.status, "Saved");
     match old_path {
-        Some(p) => std::env::set_var("PATH", p),
-        None => std::env::remove_var("PATH"),
+        Some(p) => unsafe { std::env::set_var("PATH", p) },
+        None => unsafe { std::env::remove_var("PATH") },
     }
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #119.
@@ -552,7 +552,7 @@ fn voice_without_login_stays_off_and_profile_clears() {
 fn scratch_btw_worktree_and_plan() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("scratch-btw");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = false;
     cabin.run_slash_line("/view-plan");
@@ -585,7 +585,7 @@ fn scratch_btw_worktree_and_plan() {
     cabin.run_slash_line("/view-plan");
     assert!(cabin.plan_open);
     assert_eq!(cabin.status, "View plan");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #120.
@@ -593,9 +593,9 @@ fn scratch_btw_worktree_and_plan() {
 fn import_without_openclaw_and_consult_without_login() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("import-consult");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("HOME", &root);
-    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("HOME", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.api_key.clear();
     cabin.run_slash_line("/import");
@@ -619,8 +619,8 @@ fn import_without_openclaw_and_consult_without_login() {
     cabin.run_slash_line("/consult harbor");
     assert_eq!(cabin.status, "Sign in with Grok or add an API key.");
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
-    std::env::remove_var("GROKHUB_GROK");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
 }
 
 // Landed from PR #122.
@@ -628,8 +628,8 @@ fn import_without_openclaw_and_consult_without_login() {
 fn skills_connectors_and_sessions_without_grok() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("skills-sessions");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/skills");
     assert!(matches!(cabin.nav, Nav::Skills));
@@ -640,8 +640,8 @@ fn skills_connectors_and_sessions_without_grok() {
     assert!(matches!(cabin.nav, Nav::History));
     assert_eq!(cabin.status, "History");
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
-    std::env::remove_var("GROKHUB_GROK");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
 }
 
 // Landed from PR #124.
@@ -649,12 +649,12 @@ fn skills_connectors_and_sessions_without_grok() {
 fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("room");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let home_s = home.display().to_string().trim_end_matches('/').to_string();
     let prev_home = std::env::var("HOME").ok();
-    std::env::set_var("HOME", &home_s);
+    unsafe { std::env::set_var("HOME", &home_s) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/rewind --files");
     assert_eq!(cabin.status, "Bind a project first — /project bind");
@@ -679,10 +679,10 @@ fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(dir.is_dir(), "room directory was not created");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     match prev_home {
-        Some(h) => std::env::set_var("HOME", h),
-        None => std::env::remove_var("HOME"),
+        Some(h) => unsafe { std::env::set_var("HOME", h) },
+        None => unsafe { std::env::remove_var("HOME") },
     }
 }
 
@@ -691,13 +691,13 @@ fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
 fn inhabit_refuses_a_missing_peer() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("inhabit");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/inhabit cabin-2");
     assert_eq!(cabin.status, "No paired peer named cabin-2");
     assert!(!cabin.running);
     assert!(cabin.inhabit_rx.is_none());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #126.
@@ -705,8 +705,8 @@ fn inhabit_refuses_a_missing_peer() {
 fn rewind_and_compact_stay_closed_without_grok() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("rewind-compact");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.live_mut().push(("user".into(), "harbor".into()));
     cabin.live_mut().push(("assistant".into(), "light".into()));
@@ -738,8 +738,8 @@ fn rewind_and_compact_stay_closed_without_grok() {
     assert_eq!(cabin.messages.len(), 9);
     assert!(!cabin.running);
     assert_ne!(cabin.status, "Compacting…", "no chat, nothing to compact");
-    std::env::remove_var("GROKHUB_CONFIG");
-    std::env::remove_var("GROKHUB_GROK");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
 }
 
 // Landed from PR #128.
@@ -747,8 +747,8 @@ fn rewind_and_compact_stay_closed_without_grok() {
 fn models_and_inspect_without_grok() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("models-inspect");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/models");
     assert!(
@@ -764,8 +764,8 @@ fn models_and_inspect_without_grok() {
     assert!(matches!(cabin.nav, Nav::Settings));
     assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
-    std::env::remove_var("GROKHUB_GROK");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
 }
 
 // Landed from PR #129.
@@ -773,7 +773,7 @@ fn models_and_inspect_without_grok() {
 fn permission_slashes_arm_always_and_set_auto() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("permission-slash");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
     cabin.run_slash_line("/always-approve");
@@ -803,7 +803,7 @@ fn permission_slashes_arm_always_and_set_auto() {
     assert_eq!(cabin.status, "Permission auto");
     assert!(cabin.confirm.is_none());
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #130.
@@ -811,7 +811,7 @@ fn permission_slashes_arm_always_and_set_auto() {
 fn learn_reflects_nothing_new_and_scratch_refuses() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("learn-reflect");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/learn");
     assert_eq!(cabin.status, "Reflecting…");
@@ -830,7 +830,7 @@ fn learn_reflects_nothing_new_and_scratch_refuses() {
     cabin.run_slash_line("/learn");
     assert_eq!(cabin.status, "Scratch — no reflect");
     assert!(cabin.reflect_rx.is_none());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #131.
@@ -838,7 +838,7 @@ fn learn_reflects_nothing_new_and_scratch_refuses() {
 fn appearance_theme_tray_and_wall_save() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("appearance");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert_eq!(cabin.cfg.theme, "ops-dark");
     assert!(cabin.cfg.close_to_tray);
@@ -858,7 +858,7 @@ fn appearance_theme_tray_and_wall_save() {
     assert!(!cabin.cfg.imagine_wall);
     assert_eq!(cabin.status, "Saved");
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #134.
@@ -866,10 +866,10 @@ fn appearance_theme_tray_and_wall_save() {
 fn composer_slash_runs_and_plain_text_refuses_without_grok() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("composer-send");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let missing = root.join("no-grok");
     let prev_grok = std::env::var_os("GROKHUB_GROK");
-    std::env::set_var("GROKHUB_GROK", &missing);
+    unsafe { std::env::set_var("GROKHUB_GROK", &missing) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.send_from_composer("/help".into());
     assert!(!cabin.running);
@@ -887,8 +887,8 @@ fn composer_slash_runs_and_plain_text_refuses_without_grok() {
     assert_eq!(cabin.messages.len(), before);
     assert!(cabin.messages.iter().all(|(role, _)| role != "user"));
     match prev_grok {
-        Some(v) => std::env::set_var("GROKHUB_GROK", v),
-        None => std::env::remove_var("GROKHUB_GROK"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_GROK", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_GROK") },
     }
 }
 
@@ -898,7 +898,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
     let root = crate::config::test_config_root("workflow-usage");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     for with_thread in [false, true] {
         let mut cabin = Cabin::quiet_for_test();
@@ -939,7 +939,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
     assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.running);
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -948,8 +948,8 @@ fn hooks_slash_opens_connectors_on_the_hooks_section() {
     let root = crate::config::test_config_root("hooks-slash");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_GROK", root.join("missing-grok")) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/mcps");
@@ -970,8 +970,8 @@ fn hooks_slash_opens_connectors_on_the_hooks_section() {
     assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert!(cabin.scroll_to_hooks);
 
-    std::env::remove_var("GROKHUB_GROK");
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_GROK") };
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #161.
@@ -980,7 +980,7 @@ fn model_slash_saves_without_a_run() {
     let _hold = config::hold_test_config();
     let root = config::test_config_root("model-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1013,7 +1013,7 @@ fn model_slash_saves_without_a_run() {
     );
     assert_eq!(config::load().model, "grok-4.7");
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1023,8 +1023,8 @@ fn help_slash_lists_commands_without_a_run() {
     impl Drop for RestoreConfig {
         fn drop(&mut self) {
             match self.0.take() {
-                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
         }
     }
@@ -1034,7 +1034,7 @@ fn help_slash_lists_commands_without_a_run() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
     let _restore = RestoreConfig(std::env::var("GROKHUB_CONFIG").ok());
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     if cabin.threads.is_empty() {
@@ -1066,7 +1066,7 @@ fn unknown_slash_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("unknown-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     if cabin.threads.is_empty() {
@@ -1122,7 +1122,7 @@ fn clear_slash_empties_the_chat() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("clear-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -1150,7 +1150,7 @@ fn clear_slash_empties_the_chat() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #176.
@@ -1159,7 +1159,7 @@ fn context_slash_counts_an_empty_chat() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("context-slash");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     if cabin.threads.get(cabin.thread_idx).is_none() {

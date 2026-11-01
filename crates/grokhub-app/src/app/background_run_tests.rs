@@ -776,7 +776,7 @@ fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
     let root = crate::config::test_config_root("feed-reject");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _pin = crate::config::TestConfigDir::set(root.clone());
 
     let mut cabin = Cabin::quiet_for_test();
@@ -827,7 +827,7 @@ fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
         ]
     );
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -836,7 +836,7 @@ fn a_filed_idea_that_reaches_done_counts_as_completed_once() {
     let root = crate::config::test_config_root("feed-complete");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _pin = crate::config::TestConfigDir::set(root.clone());
 
     let mut cabin = Cabin::quiet_for_test();
@@ -882,7 +882,7 @@ fn a_filed_idea_that_reaches_done_counts_as_completed_once() {
     );
     assert!(!signals.contains("release checklist"), "{signals}");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 /// 2.10.87: the chat window has no Thinking dot and no Background button.

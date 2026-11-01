@@ -55,7 +55,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("recipes");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let recipe = Recipe {
             screen: Some(ScreenSize { w: 1920, h: 1080 }),
             ops: vec![ComputerOp::Act {
@@ -66,7 +66,7 @@ mod tests {
         assert_eq!(load_recipe("desk-1").unwrap(), recipe);
         assert_eq!(load_last().unwrap(), recipe);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

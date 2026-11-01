@@ -688,19 +688,19 @@ mod tests {
     fn a_deck_shot_opens_library_on_its_picked_game() {
         let before = std::env::var(DECK_PICK_ENV).ok();
         let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::remove_var(DECK_PICK_ENV);
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
+        unsafe { std::env::remove_var(DECK_PICK_ENV) };
         assert_eq!(first_view().picked, None, "the first game by default");
-        std::env::set_var(DECK_PICK_ENV, " 1086940 ");
+        unsafe { std::env::set_var(DECK_PICK_ENV, " 1086940 ") };
         assert_eq!(first_view().picked, Some(Pick::Steam(1086940)));
-        std::env::remove_var("GROKHUB_DECK_SHOT");
+        unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") };
         assert_eq!(first_view().picked, None, "ignored outside a deck shot");
         match before {
-            Some(v) => std::env::set_var(DECK_PICK_ENV, v),
-            None => std::env::remove_var(DECK_PICK_ENV),
+            Some(v) => unsafe { std::env::set_var(DECK_PICK_ENV, v) },
+            None => unsafe { std::env::remove_var(DECK_PICK_ENV) },
         }
         if let Some(v) = before_shot {
-            std::env::set_var("GROKHUB_DECK_SHOT", v);
+            unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) };
         }
     }
 

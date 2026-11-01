@@ -565,13 +565,13 @@ mod tests {
     struct NoGrok;
     impl NoGrok {
         fn set(root: &std::path::Path) -> Self {
-            std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+            unsafe { std::env::set_var("GROKHUB_GROK", root.join("missing-grok")) };
             Self
         }
     }
     impl Drop for NoGrok {
         fn drop(&mut self) {
-            std::env::remove_var("GROKHUB_GROK");
+            unsafe { std::env::remove_var("GROKHUB_GROK") };
         }
     }
 

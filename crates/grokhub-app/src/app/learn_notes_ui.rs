@@ -196,7 +196,7 @@ mod tests {
         let root = config::test_config_root(tag);
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         config::ensure_memory_seeds();
         root
     }
@@ -284,7 +284,7 @@ mod tests {
             !log.contains("Sammy") && !log.contains("the spare key is under the planter"),
             "{log}"
         );
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -303,7 +303,7 @@ mod tests {
             config::read_memory("USER.md"),
             "# User\n\nWho you are. Edit this.\n"
         );
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     /// A model `USER_FACT:` gets the same privacy and safety checks as a
@@ -338,7 +338,7 @@ mod tests {
             config::read_memory("USER.md"),
             "# User\n\n- Name: Sam.\n- Plays chess most nights.\n"
         );
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     /// A reflect asked for mid-write runs after it, on top of its lines.
@@ -370,7 +370,7 @@ mod tests {
             "# User\n\n- Uses a standing desk.\n- Plays chess most nights.\n"
         );
         assert_eq!(cabin.mem_body, config::read_memory("USER.md"));
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -388,6 +388,6 @@ mod tests {
             "# User\n\n- Plays chess.\n- Uses a standing desk.\n"
         );
         assert_eq!(config::read_memory("USER.md"), cabin.mem_body);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }

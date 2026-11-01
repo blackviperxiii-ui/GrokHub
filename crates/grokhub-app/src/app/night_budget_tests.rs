@@ -674,7 +674,7 @@ fn background_model_calls_run_at_low_effort() {
 fn night_add_lands_a_daily_job_and_a_loop() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("night-add");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.add_automation_seed("every day at 9, summarize the board");
     assert_eq!(cabin.status, "Automation added · daily at 09:00");
@@ -702,7 +702,7 @@ fn full_loop_list_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("full-loop-list");
     let _ = std::fs::create_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.grok_loops = (0..50)
         .map(|_| grokhub_core::new_loop("30m".into(), "check".into(), 0))
@@ -719,7 +719,7 @@ fn full_loop_list_stays_off_a_run() {
 fn full_automation_list_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("full-auto");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.automations = (0..50)
         .map(|i| grokhub_core::Automation {
@@ -743,7 +743,7 @@ fn full_automation_list_stays_off_a_run() {
     assert_eq!(cabin.automations.len(), 50);
     assert!(cabin.grok_loops.is_empty());
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]

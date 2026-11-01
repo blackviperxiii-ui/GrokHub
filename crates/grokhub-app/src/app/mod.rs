@@ -358,23 +358,23 @@ const PROFILE_NAME_MAX: usize = 64;
 /// Latest cabin config a background save may write. Name keystrokes and picture
 /// changes each publish a generation. A writer saves only its own generation.
 struct CfgSlot {
-    gen: u64,
+    r#gen: u64,
     cfg: AppConfig,
 }
 
 fn publish_cfg(slot: &mut CfgSlot, mut cfg: AppConfig) -> u64 {
     cfg.api_key.clear();
-    let mut gen = slot.gen.wrapping_add(1);
-    if gen == 0 {
-        gen = 1;
+    let mut r#gen = slot.r#gen.wrapping_add(1);
+    if r#gen == 0 {
+        r#gen = 1;
     }
-    slot.gen = gen;
+    slot.r#gen = r#gen;
     slot.cfg = cfg;
-    gen
+    r#gen
 }
 
-fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
-    if gen != 0 && slot.gen == gen {
+fn cfg_if_current(slot: &CfgSlot, r#gen: u64) -> Option<AppConfig> {
+    if r#gen != 0 && slot.r#gen == r#gen {
         Some(slot.cfg.clone())
     } else {
         None
@@ -1133,7 +1133,7 @@ impl Cabin {
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let cfg_slot = Arc::new(Mutex::new(CfgSlot {
-            gen: 0,
+            r#gen: 0,
             cfg: cfg.clone(),
         }));
         let persist_io = Arc::new(Mutex::new(()));
@@ -1668,7 +1668,7 @@ impl Cabin {
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
+            cfg_slot: Arc::new(Mutex::new(CfgSlot { r#gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
             board_notes: String::new(),
@@ -3223,12 +3223,12 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
-        let gen = self.next_persist_gen();
+        let r#gen = self.next_persist_gen();
         let (persist_done_tx, persist_done_rx) = mpsc::channel();
         // PersistService pins config_dir and write_persist_disk_in_order.
         let err = self.persist_err.clone();
         self.persist_svc
-            .submit_full(dir.clone(), snap.clone(), gen, Some(persist_done_tx), err);
+            .submit_full(dir.clone(), snap.clone(), r#gen, Some(persist_done_tx), err);
         std::thread::spawn(move || {
             let _ = persist_done_rx.recv();
             // EgressGuard: log the send (no content) or send nothing. A grant

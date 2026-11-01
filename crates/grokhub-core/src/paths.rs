@@ -126,19 +126,19 @@ mod tests {
         let _g = LOCK.lock().unwrap();
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
-        std::env::remove_var("HOME");
-        std::env::set_var("USERPROFILE", r"C:\Users\user");
+        unsafe { std::env::remove_var("HOME") };
+        unsafe { std::env::set_var("USERPROFILE", r"C:\Users\user") };
         let got = user_home().expect("USERPROFILE");
         assert!(got.ends_with("user") || got.to_string_lossy().contains("user"));
-        std::env::remove_var("USERPROFILE");
+        unsafe { std::env::remove_var("USERPROFILE") };
         assert!(user_home().is_none() || old_home.is_some());
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_up {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
+            Some(v) => unsafe { std::env::set_var("USERPROFILE", v) },
+            None => unsafe { std::env::remove_var("USERPROFILE") },
         }
     }
 

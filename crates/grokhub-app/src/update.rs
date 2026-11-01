@@ -561,11 +561,11 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         let prev_src = env::var("GROKHUB_SRC").ok();
-        env::remove_var("GROKHUB_SRC");
+        unsafe { env::remove_var("GROKHUB_SRC") };
         let prev_cfg = env::var("GROKHUB_CONFIG").ok();
         let cfg = crate::config::test_config_root("src-tilde-cfg");
         let _ = fs::remove_dir_all(&cfg);
-        env::set_var("GROKHUB_CONFIG", &cfg);
+        unsafe { env::set_var("GROKHUB_CONFIG", &cfg) };
         let rest = root
             .strip_prefix(&home)
             .map(|p| {
@@ -576,12 +576,12 @@ mod tests {
             .unwrap_or_else(|_| root.to_string_lossy().into_owned());
         let found = resolve_source(&format!("~/{rest}"));
         match prev_src {
-            Some(v) => env::set_var("GROKHUB_SRC", v),
-            None => env::remove_var("GROKHUB_SRC"),
+            Some(v) => unsafe { env::set_var("GROKHUB_SRC", v) },
+            None => unsafe { env::remove_var("GROKHUB_SRC") },
         }
         match prev_cfg {
-            Some(v) => env::set_var("GROKHUB_CONFIG", v),
-            None => env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { env::remove_var("GROKHUB_CONFIG") },
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&cfg);
@@ -602,11 +602,11 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         let prev = env::var("GROKHUB_SRC").ok();
-        env::set_var("GROKHUB_SRC", &root);
+        unsafe { env::set_var("GROKHUB_SRC", &root) };
         let found = resolve_source("");
         match prev {
-            Some(v) => env::set_var("GROKHUB_SRC", v),
-            None => env::remove_var("GROKHUB_SRC"),
+            Some(v) => unsafe { env::set_var("GROKHUB_SRC", v) },
+            None => unsafe { env::remove_var("GROKHUB_SRC") },
         }
         assert_eq!(found, Some(root.clone()));
         let _ = fs::remove_dir_all(&root);
@@ -731,7 +731,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
         let _ = fs::remove_dir_all(&cfg);
-        env::set_var("GROKHUB_CONFIG", &cfg);
+        unsafe { env::set_var("GROKHUB_CONFIG", &cfg) };
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -787,8 +787,8 @@ mod tests {
         assert!(out.contains("exit 0"), "{out}");
         assert!(root.join("overlay.ok").is_file(), "{out}");
         match prev_cfg {
-            Some(v) => env::set_var("GROKHUB_CONFIG", v),
-            None => env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { env::remove_var("GROKHUB_CONFIG") },
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&bare);
@@ -837,7 +837,7 @@ mod tests {
         #[cfg(windows)]
         {
             let prev = env::var_os("LOCALAPPDATA");
-            env::set_var("LOCALAPPDATA", &home);
+            unsafe { env::set_var("LOCALAPPDATA", &home) };
             let bin = home.join("Programs").join("GrokHub").join("grokhub.exe");
             std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
             std::fs::write(&bin, b"MZ").unwrap();
@@ -846,8 +846,8 @@ mod tests {
                 bin.to_string_lossy()
             );
             match prev {
-                Some(v) => env::set_var("LOCALAPPDATA", v),
-                None => env::remove_var("LOCALAPPDATA"),
+                Some(v) => unsafe { env::set_var("LOCALAPPDATA", v) },
+                None => unsafe { env::remove_var("LOCALAPPDATA") },
             }
         }
         let acts = grokhub_core::restart_acts(false, false, "/opt/grokhub", true);

@@ -125,7 +125,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sec");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let s = Secrets {
             oauth: Some(XaiOAuthTokens {
                 access_token: "tok".into(),
@@ -187,7 +187,7 @@ mod tests {
             );
         }
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[cfg(windows)]
@@ -196,7 +196,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sec-win");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         fs::create_dir_all(&root).expect("root");
         let path = secrets_path();
         let body = br#"{"apiKey":"xai-world","oauth":null}"#;
@@ -214,7 +214,7 @@ mod tests {
         );
         assert_eq!(fs::read(&path).expect("bytes"), body);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sec-conn");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
         let catalog = grokhub_core::mcp_catalog::bundled();
         let entry = catalog.get("brave-search").expect("brave-search");
@@ -277,7 +277,7 @@ mod tests {
         assert!(cfg.contains("\"tokenRef\""), "{cfg}");
         assert!(!cfg.contains(token), "{cfg}");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -285,7 +285,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sec-conn-deny");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
         let catalog = grokhub_core::mcp_catalog::bundled();
         let entry = catalog.get("brave-search").expect("brave-search");
@@ -310,7 +310,7 @@ mod tests {
         let cfg = fs::read_to_string(root.join("mcp.json")).unwrap();
         assert!(!cfg.contains("tokenRef"), "{cfg}");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

@@ -34,7 +34,7 @@ pub fn silence_windows_hard_errors() {
         const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
         const MODE: u32 = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
         #[link(name = "kernel32")]
-        extern "system" {
+        unsafe extern "system" {
             fn SetErrorMode(u_mode: u32) -> u32;
             fn SetThreadErrorMode(dw_new_mode: u32, lp_old_mode: *mut u32) -> i32;
         }

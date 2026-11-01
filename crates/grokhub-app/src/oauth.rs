@@ -579,7 +579,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("avatar");
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         std::fs::create_dir_all(&root).unwrap();
         let src = root.join("shot.png");
         let img = image::RgbaImage::from_pixel(8, 4, image::Rgba([9, 8, 7, 255]));
@@ -594,6 +594,6 @@ mod tests {
         std::fs::write(root.join("note.txt"), b"hello").unwrap();
         assert!(install_profile_picture(&root.join("note.txt")).is_err());
         let _ = std::fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }

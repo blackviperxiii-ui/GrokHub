@@ -49,51 +49,55 @@ struct StubState {
 }
 
 unsafe extern "system" fn enum_cabin(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let state = &mut *(lparam as *mut FindState);
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid != state.pid {
-        return TRUE;
+    unsafe {
+        let state = &mut *(lparam as *mut FindState);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != state.pid {
+            return TRUE;
+        }
+        let mut buf = [0u16; 64];
+        let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        if n <= 0 {
+            return TRUE;
+        }
+        let title = String::from_utf16_lossy(&buf[..n as usize]);
+        if title == grokhub_core::brand::product_name() {
+            state.hwnd = hwnd;
+            return 0; // stop
+        }
+        TRUE
     }
-    let mut buf = [0u16; 64];
-    let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-    if n <= 0 {
-        return TRUE;
-    }
-    let title = String::from_utf16_lossy(&buf[..n as usize]);
-    if title == grokhub_core::brand::product_name() {
-        state.hwnd = hwnd;
-        return 0; // stop
-    }
-    TRUE
 }
 
 unsafe extern "system" fn enum_hide_stubs(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let state = &*(lparam as *const StubState);
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid != state.pid || hwnd == state.cabin {
-        return TRUE;
+    unsafe {
+        let state = &*(lparam as *const StubState);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != state.pid || hwnd == state.cabin {
+            return TRUE;
+        }
+        if IsWindowVisible(hwnd) == 0 {
+            return TRUE;
+        }
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut rc) == 0 {
+            return TRUE;
+        }
+        let w = rc.right - rc.left;
+        let h = rc.bottom - rc.top;
+        // egui Visible(false) spawns a ~14×14 untitled ghost; hide anything tiny.
+        if w > 0 && h > 0 && (w < 200 || h < 200) {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+        TRUE
     }
-    if IsWindowVisible(hwnd) == 0 {
-        return TRUE;
-    }
-    let mut rc = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if GetWindowRect(hwnd, &mut rc) == 0 {
-        return TRUE;
-    }
-    let w = rc.right - rc.left;
-    let h = rc.bottom - rc.top;
-    // egui Visible(false) spawns a ~14×14 untitled ghost; hide anything tiny.
-    if w > 0 && h > 0 && (w < 200 || h < 200) {
-        let _ = ShowWindow(hwnd, SW_HIDE);
-    }
-    TRUE
 }
 
 struct LargestState {
@@ -131,27 +135,29 @@ fn cabin_hwnd() -> Option<HWND> {
 }
 
 unsafe extern "system" fn enum_largest(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let state = &mut *(lparam as *mut LargestState);
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid != state.pid {
-        return TRUE;
+    unsafe {
+        let state = &mut *(lparam as *mut LargestState);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != state.pid {
+            return TRUE;
+        }
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut rc) == 0 {
+            return TRUE;
+        }
+        let area = (rc.right - rc.left).saturating_mul(rc.bottom - rc.top);
+        if area > state.best_area && area >= 200 * 200 {
+            state.best_area = area;
+            state.hwnd = hwnd;
+        }
+        TRUE
     }
-    let mut rc = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if GetWindowRect(hwnd, &mut rc) == 0 {
-        return TRUE;
-    }
-    let area = (rc.right - rc.left).saturating_mul(rc.bottom - rc.top);
-    if area > state.best_area && area >= 200 * 200 {
-        state.best_area = area;
-        state.hwnd = hwnd;
-    }
-    TRUE
 }
 
 /// Hide egui's leftover 14×14 ghosts so Alt-Tab / taskbar stay clean.
@@ -700,19 +706,21 @@ struct TitledState {
 }
 
 unsafe extern "system" fn enum_titled(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let state = &mut *(lparam as *mut TitledState);
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid != state.pid {
-        return TRUE;
+    unsafe {
+        let state = &mut *(lparam as *mut TitledState);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != state.pid {
+            return TRUE;
+        }
+        let mut buf = [0u16; 64];
+        let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        if n <= 0 || buf[..n as usize] != state.title[..] {
+            return TRUE;
+        }
+        state.hwnd = hwnd;
+        0
     }
-    let mut buf = [0u16; 64];
-    let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-    if n <= 0 || buf[..n as usize] != state.title[..] {
-        return TRUE;
-    }
-    state.hwnd = hwnd;
-    0
 }
 
 /// This process's top-level window titled exactly `title`.

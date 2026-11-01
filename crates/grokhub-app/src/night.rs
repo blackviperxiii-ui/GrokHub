@@ -44,7 +44,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("night");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let a = Automation {
             id: "auto-1".into(),
             name: "board".into(),
@@ -64,7 +64,7 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded[0].schedule, "weekdays");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

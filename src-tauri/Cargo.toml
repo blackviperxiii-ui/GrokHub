@@ -4,12 +4,17 @@
 [package]
 name = "grokhub-shell"
 version = "3.5.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 publish = false
 
 [workspace]
+
+# Same as the main workspace: edition 2024 turns collapsible_if on for nested
+# `if let`s; old ones stay as written (LU-09), new code may use let chains.
+[lints.clippy]
+collapsible_if = "allow"
 
 [lib]
 name = "grokhub_shell"

@@ -1108,7 +1108,7 @@ mod feed_action_tests {
         let root = crate::config::test_config_root("paused-job-card");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::create_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         cabin.new_thread(false);
         let job_thread = cabin.threads[cabin.thread_idx].id.clone();
@@ -1168,7 +1168,7 @@ mod feed_action_tests {
         let root = crate::config::test_config_root("discuss-feed-card");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::create_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         let long = "I'll look up two real pieces that fit your Linux work. \
 Grok Build changes how a cancel hits a live turn. \

@@ -186,7 +186,7 @@ mod tests {
     fn refresh_caches_evidence_for_the_turn() {
         let root = crate::config::test_config_root("evidence-refresh");
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         let chat = "ev-chat";
         let mut click = hx::Span::soft_allow(
@@ -206,7 +206,7 @@ mod tests {
         let ev = cabin.harness.evidence.clone().expect("evidence");
         drop(cabin);
         let _ = std::fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
         assert_eq!(ev.chat_id, chat);
         assert_eq!(ev.turn, 1);
         assert_eq!(ev.confidence, "inferred");

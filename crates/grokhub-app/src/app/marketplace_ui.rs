@@ -514,7 +514,7 @@ mod tests {
         let root = crate::config::test_config_root("market-key");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
         let mut cabin = Cabin::quiet_for_test();
         let brave = entry("brave-search");
@@ -545,7 +545,7 @@ mod tests {
         );
         assert!(cabin.market.key.is_empty());
         assert!(crate::secrets::open_connector_token("brave-search").is_none());
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

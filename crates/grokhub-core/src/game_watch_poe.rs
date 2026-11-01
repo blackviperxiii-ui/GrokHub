@@ -150,9 +150,9 @@ pub fn parse_line(line: &str) -> Option<PoeLine> {
     }
     // `Generating level 83 area "MapWorldsCemetery" with seed 1234`, a
     // debug line with no name in front, so chat can't make one.
-    if let Some(gen) = rest.strip_prefix("Generating level ") {
-        let (level, gen) = gen.split_once(" area \"")?;
-        let (id, seed) = gen.split_once("\" with seed ")?;
+    if let Some(r#gen) = rest.strip_prefix("Generating level ") {
+        let (level, r#gen) = r#gen.split_once(" area \"")?;
+        let (id, seed) = r#gen.split_once("\" with seed ")?;
         return Some(PoeLine::Generated {
             level: level.parse().ok()?,
             id: id.to_owned(),

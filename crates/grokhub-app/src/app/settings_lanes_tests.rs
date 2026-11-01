@@ -99,13 +99,13 @@ fn work_root_uses_the_home_folder() {
     impl Drop for RestoreHome {
         fn drop(&mut self) {
             match self.prev.take() {
-                Some(h) => std::env::set_var("HOME", h),
-                None => std::env::remove_var("HOME"),
+                Some(h) => unsafe { std::env::set_var("HOME", h) },
+                None => unsafe { std::env::remove_var("HOME") },
             }
             #[cfg(windows)]
             match self.prev_profile.take() {
-                Some(p) => std::env::set_var("USERPROFILE", p),
-                None => std::env::remove_var("USERPROFILE"),
+                Some(p) => unsafe { std::env::set_var("USERPROFILE", p) },
+                None => unsafe { std::env::remove_var("USERPROFILE") },
             }
         }
     }
@@ -117,9 +117,11 @@ fn work_root_uses_the_home_folder() {
         prev_profile: std::env::var_os("USERPROFILE"),
     };
     #[cfg(windows)]
-    std::env::remove_var("USERPROFILE");
+    unsafe {
+        std::env::remove_var("USERPROFILE")
+    };
     let home = std::env::temp_dir().join("grokhub-work-root-1054");
-    std::env::set_var("HOME", &home);
+    unsafe { std::env::set_var("HOME", &home) };
     let got = app.work_root();
     #[cfg(not(windows))]
     let expect = {
@@ -245,7 +247,7 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
     let root = crate::config::test_config_root("acct-oauth-ui");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     // quiet_for_test: no install/update workers that can outlive the test on Windows.
     let mut cabin = Cabin::quiet_for_test();
     assert!(
@@ -299,7 +301,7 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
         settings.contains("pull_account_oauth_from_disk"),
         "Settings must pull secrets.json oauth before painting Account"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Folded from PR #354.
@@ -456,7 +458,7 @@ fn export_dest_joins_under_config_or_project() {
     let root = crate::config::test_config_root("export-dest");
     let _ = std::fs::remove_dir_all(&root);
     let _pin = crate::config::TestConfigDir::set(root.clone());
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.project_dir.clear();
@@ -474,7 +476,7 @@ fn export_dest_joins_under_config_or_project() {
         "a bound project_dir joins under that path"
     );
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);
 }
 

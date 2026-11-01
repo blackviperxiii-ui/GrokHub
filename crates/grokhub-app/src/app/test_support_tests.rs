@@ -15,7 +15,7 @@ pub(super) struct RestoreEnv {
 impl RestoreEnv {
     pub(super) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let prev = std::env::var(key).ok();
-        std::env::set_var(key, value);
+        unsafe { std::env::set_var(key, value) };
         Self { key, prev }
     }
 }
@@ -23,23 +23,23 @@ impl RestoreEnv {
 impl Drop for RestoreEnv {
     fn drop(&mut self) {
         match self.prev.take() {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
         }
     }
 }
 
 pub(super) fn restore_env(key: &str, prev: Option<std::ffi::OsString>) {
     match prev {
-        Some(v) => std::env::set_var(key, v),
-        None => std::env::remove_var(key),
+        Some(v) => unsafe { std::env::set_var(key, v) },
+        None => unsafe { std::env::remove_var(key) },
     }
 }
 
 pub(super) fn isolated_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
     let root = crate::config::test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     (root, Cabin::quiet_for_test())
 }
 
@@ -58,7 +58,7 @@ pub(super) fn release_isolated(root: &std::path::Path, cabin: Cabin) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let _ = std::fs::remove_dir_all(root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 /// Isolated cabin. Skips the grok installer and the update probe. Restores env on drop.
@@ -85,10 +85,10 @@ impl QuietBoot {
         let prev_tray = std::env::var_os("GROKHUB_TRAY");
         let root = crate::config::test_config_root(label);
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
-        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
-        std::env::set_var("GROKHUB_QUIET_BOOT", "1");
-        std::env::set_var("GROKHUB_TRAY", "0");
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+        unsafe { std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz") };
+        unsafe { std::env::set_var("GROKHUB_QUIET_BOOT", "1") };
+        unsafe { std::env::set_var("GROKHUB_TRAY", "0") };
         Self {
             root,
             prev_config,
@@ -217,7 +217,7 @@ impl IsolatedConfig {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("config root");
         let prev = std::env::var_os("GROKHUB_CONFIG");
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         Self { prev, root }
     }
 }
@@ -225,8 +225,8 @@ impl IsolatedConfig {
 impl Drop for IsolatedConfig {
     fn drop(&mut self) {
         match self.prev.take() {
-            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-            None => std::env::remove_var("GROKHUB_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
         }
         let _ = std::fs::remove_dir_all(&self.root);
     }
@@ -354,7 +354,7 @@ pub(super) fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, st
     let root = crate::config::test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     (crate::config::TestConfigDir::set(root.clone()), root)
 }
 

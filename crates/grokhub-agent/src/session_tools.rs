@@ -747,7 +747,7 @@ mod tests {
         tx: &std::sync::mpsc::Sender<crate::mcp::ElicitNote>,
         action: &str,
         content: Option<Value>,
-    ) -> impl FnMut(LoopEvent) {
+    ) -> impl FnMut(LoopEvent) + use<> {
         let tx = tx.clone();
         let action = action.to_string();
         move |ev: LoopEvent| {

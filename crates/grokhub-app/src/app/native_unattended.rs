@@ -691,7 +691,7 @@ mod tests {
     impl Env {
         fn set(root: &std::path::Path) -> Self {
             let prev = std::env::var("GROKHUB_CONFIG").ok();
-            std::env::set_var("GROKHUB_CONFIG", root);
+            unsafe { std::env::set_var("GROKHUB_CONFIG", root) };
             Self { prev }
         }
     }
@@ -699,8 +699,8 @@ mod tests {
     impl Drop for Env {
         fn drop(&mut self) {
             match &self.prev {
-                Some(value) => std::env::set_var("GROKHUB_CONFIG", value),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(value) => unsafe { std::env::set_var("GROKHUB_CONFIG", value) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
         }
     }

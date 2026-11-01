@@ -53,14 +53,16 @@ fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
 }
 
 unsafe fn wide_to_string(p: *const u16) -> String {
-    if p.is_null() {
-        return String::new();
+    unsafe {
+        if p.is_null() {
+            return String::new();
+        }
+        let mut len = 0usize;
+        while *p.add(len) != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
     }
-    let mut len = 0usize;
-    while *p.add(len) != 0 {
-        len += 1;
-    }
-    String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
 fn parse_sddl(sddl: &str) -> io::Result<LocalMem> {

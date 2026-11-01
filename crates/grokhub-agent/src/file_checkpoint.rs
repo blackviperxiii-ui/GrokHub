@@ -514,7 +514,7 @@ mod tests {
         fs::write(&ssh, b"secret-key-material").unwrap();
 
         let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &fake_home);
+        unsafe { std::env::set_var("HOME", &fake_home) };
 
         assert_eq!(begin_step("conv-c"), Some(1));
         before_write(&ssh);
@@ -526,8 +526,8 @@ mod tests {
         );
 
         match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         let _ = fs::remove_dir_all(&base);
     }

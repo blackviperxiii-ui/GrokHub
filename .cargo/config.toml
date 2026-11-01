@@ -3,6 +3,8 @@
 # model client) and timing budgets, so side by side in one process they fail
 # on a clean machine. CI runs cargo-nextest, which gives every test its own
 # process and ignores this.
+# That is also why the tests' `unsafe { std::env::set_var(..) }` calls
+# (edition 2024) are sound: no other test thread reads the environment.
 [env]
 RUST_TEST_THREADS = "1"
 

@@ -2560,8 +2560,12 @@ fn install_desktop_host() {
 fn phone_home(app: &tauri::App) -> tauri::Result<()> {
     let data = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data)?;
-    std::env::set_var("HOME", &data);
-    std::env::set_var("GROKHUB_CONFIG", data.join("config"));
+    // SAFETY: first thing in setup, before any of the app's own threads
+    // start or anything reads HOME / GROKHUB_CONFIG.
+    unsafe {
+        std::env::set_var("HOME", &data);
+        std::env::set_var("GROKHUB_CONFIG", data.join("config"));
+    }
     Ok(())
 }
 

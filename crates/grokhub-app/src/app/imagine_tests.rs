@@ -123,15 +123,15 @@ fn kick_imagine_local_send_stores_harbor_url() {
         fn drop(&mut self) {
             crate::xai::set_imagine_base_override(None);
             match self.config.take() {
-                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
             match self.tray.take() {
-                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
-                None => std::env::remove_var("GROKHUB_TRAY"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_TRAY", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_TRAY") },
             }
             for (k, v) in self.proxies.drain(..) {
-                std::env::set_var(k, v);
+                unsafe { std::env::set_var(k, v) };
             }
         }
     }
@@ -152,14 +152,14 @@ fn kick_imagine_local_send_stores_harbor_url() {
     ] {
         if let Ok(v) = std::env::var(key) {
             restore.proxies.push((key.to_string(), v));
-            std::env::remove_var(key);
+            unsafe { std::env::remove_var(key) };
         }
     }
     let root = crate::config::test_config_root("imagine-local");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_TRAY", "0");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_TRAY", "0") };
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -300,7 +300,7 @@ fn kick_imagine_local_send_stores_harbor_url() {
 fn missing_recipe_does_not_replay() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("missing-recipe");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.replay_saved_recipe("harbor"));
     assert_eq!(cabin.status, "No recipe harbor");
@@ -310,7 +310,7 @@ fn missing_recipe_does_not_replay() {
     assert_eq!(cabin.status, "No recipe last");
     assert!(cabin.recipe_desk_rx.is_none());
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #182.
@@ -323,12 +323,12 @@ fn empty_imagine_opens_without_a_run() {
     impl Drop for RestoreEnv182 {
         fn drop(&mut self) {
             match self.config.take() {
-                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-                None => std::env::remove_var("GROKHUB_CONFIG"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
             }
             match self.tray.take() {
-                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
-                None => std::env::remove_var("GROKHUB_TRAY"),
+                Some(v) => unsafe { std::env::set_var("GROKHUB_TRAY", v) },
+                None => unsafe { std::env::remove_var("GROKHUB_TRAY") },
             }
         }
     }
@@ -341,8 +341,8 @@ fn empty_imagine_opens_without_a_run() {
     let root = crate::config::test_config_root("empty-imagine");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    std::env::set_var("GROKHUB_TRAY", "0");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    unsafe { std::env::set_var("GROKHUB_TRAY", "0") };
 
     let mut cabin = Cabin::quiet_for_test();
     let kind_before = cabin.imagine_kind;
@@ -371,7 +371,7 @@ fn empty_imagine_opens_without_a_run() {
 fn imagine_while_busy_stays_halted() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("imagine-busy");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.imagine_prompt = "a red boat".into();
     cabin.running = true;
@@ -388,7 +388,7 @@ fn imagine_without_key_stays_off_a_run() {
     let root = crate::config::test_config_root("imagine-key");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.secrets.oauth = None;
@@ -403,7 +403,7 @@ fn imagine_without_key_stays_off_a_run() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #224.
@@ -552,7 +552,7 @@ fn imagine_more_finishes_agent_count_and_results_chrome() {
     let root = crate::config::test_config_root("imagine-more-paint");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.nav = Nav::Imagine;
     cabin.imagine_kind = grokhub_core::ImagineKind::Agent;

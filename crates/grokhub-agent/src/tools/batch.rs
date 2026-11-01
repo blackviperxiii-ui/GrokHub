@@ -120,14 +120,11 @@ where
             });
         }
     });
-    let collected = {
-        let slots = results.lock().unwrap_or_else(|e| e.into_inner());
-        slots
-            .iter()
-            .map(|o| o.as_ref().expect("batch worker left a hole").clone())
-            .collect::<Vec<ToolOutput>>()
-    };
-    collected
+    let slots = results.lock().unwrap_or_else(|e| e.into_inner());
+    slots
+        .iter()
+        .map(|o| o.as_ref().expect("batch worker left a hole").clone())
+        .collect::<Vec<ToolOutput>>()
 }
 
 pub fn cancelled_output() -> ToolOutput {

@@ -650,8 +650,8 @@ mod tests {
         std::fs::create_dir_all(&desk).unwrap();
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", &home);
-        std::env::set_var("USERPROFILE", &home);
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("USERPROFILE", &home) };
 
         let mut cabin = Cabin::quiet_for_test();
         let mut thread = crate::threads::ChatThread::new("Hangout", false);
@@ -801,12 +801,12 @@ mod tests {
         assert_eq!(md, shown, "the zip holds exactly what the preview showed");
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_up {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
+            Some(v) => unsafe { std::env::set_var("USERPROFILE", v) },
+            None => unsafe { std::env::remove_var("USERPROFILE") },
         }
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&root);
@@ -825,8 +825,8 @@ mod tests {
         std::fs::create_dir_all(&desk).unwrap();
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", &home);
-        std::env::set_var("USERPROFILE", &home);
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("USERPROFILE", &home) };
 
         let mut cabin = Cabin::quiet_for_test();
         let mut thread = crate::threads::ChatThread::new("Hangout", false);
@@ -886,12 +886,12 @@ mod tests {
         assert!(path.is_file() && second.is_file());
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_up {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
+            Some(v) => unsafe { std::env::set_var("USERPROFILE", v) },
+            None => unsafe { std::env::remove_var("USERPROFILE") },
         }
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&root);
@@ -916,8 +916,8 @@ mod tests {
         std::fs::create_dir_all(home.join("Desktop")).unwrap();
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", &home);
-        std::env::set_var("USERPROFILE", &home);
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("USERPROFILE", &home) };
 
         let mut cabin = Cabin::quiet_for_test();
         let mut thread = crate::threads::ChatThread::new("Hangout", false);
@@ -991,12 +991,12 @@ mod tests {
         );
 
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         match old_up {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
+            Some(v) => unsafe { std::env::set_var("USERPROFILE", v) },
+            None => unsafe { std::env::remove_var("USERPROFILE") },
         }
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&root);
