@@ -32,6 +32,12 @@ vi.mock("./api", () => ({
   closeChat: vi.fn(() => Promise.resolve()),
   onChatEvent: () => Promise.resolve(() => {}),
   onEventGap: () => Promise.resolve(() => {}),
+  // Attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 import { Chat } from "./Chat";
