@@ -567,6 +567,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_steady_effort(&mut self, on: bool) {
+        if self.cfg.steady_effort == on {
+            return;
+        }
+        self.cfg.steady_effort = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_reduce_motion(&mut self, on: bool) {
         if self.cfg.reduce_motion == on {
             return;
@@ -1051,6 +1060,15 @@ impl Cabin {
                                                             self.ui_chat_archive_row(ui);
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
+                                                            }
+                                                            let mut steady_effort = self.cfg.steady_effort;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Steady effort",
+                                                                "Thinks harder only after two failed tools in a row, keeps chat at High or below, and eases back after a clean step. Spends less; a hard run of errors may get less thought. Off by default.",
+                                                                &mut steady_effort,
+                                                            ) {
+                                                                self.set_steady_effort(steady_effort);
                                                             }
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets
