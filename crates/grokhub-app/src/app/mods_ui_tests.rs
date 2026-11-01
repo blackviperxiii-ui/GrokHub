@@ -114,7 +114,7 @@ fn offline_only_greys_search_and_keeps_installed() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("mods-offline");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _off = grokhub_core::offline::force_for_thread(true);
     let mut cabin = Cabin::quiet_for_test();
     let rail = mod_rail(&[game(413150, "Stardew Valley", 1, 1)], &[], false);
@@ -138,7 +138,7 @@ fn offline_only_greys_search_and_keeps_installed() {
         shown.iter().any(|t| t.contains("Singleplayer")),
         "mode note: {shown:?}"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
