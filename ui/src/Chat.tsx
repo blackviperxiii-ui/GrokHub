@@ -14,7 +14,9 @@ import {
   answerPermission,
   cancelChat,
   closeChat,
+  getLastChat,
   getSettings,
+  loadChat,
   setModel,
   onChatEvent,
   onEventGap,
@@ -30,6 +32,7 @@ import {
   type SlashEffect,
   type SlashHit,
   type Suggestion,
+  type Transcript,
 } from "./api";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import type { RunNotice } from "./Automations";
@@ -59,6 +62,8 @@ export type Item =
       answer: Answer | "ended" | null;
     }
   | { kind: "suggest"; items: Suggestion[] }
+  /** A saved chat's tool steps, named on one muted line instead of cards. */
+  | { kind: "tools"; text: string }
   | ({ kind: "notice" } & RunNotice)
   /** What a slash command did. It stays in the log and never reaches the model. */
   | { kind: "slash"; command: string; text: string }
@@ -148,6 +153,20 @@ function SignedOut({
     </div>
   );
 }
+
+/** A saved chat's lines as the log shows them. */
+export function itemsFrom(transcript: Transcript): Item[] {
+  return transcript.lines.map((line): Item => {
+    if (line.role === "user") return { kind: "user", text: line.text };
+    if (line.role === "tools") return { kind: "tools", text: line.text };
+    return { kind: "assistant", text: line.text, streaming: false };
+  });
+}
+
+/** How many more older lines each Show earlier loads. */
+export const EARLIER_STEP = 200;
+
+export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open the chat again.";
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
@@ -384,6 +403,12 @@ function LogItem({
           <p className="card-detail-line plain">{item.text}</p>
         </div>
       );
+    case "tools":
+      return (
+        <p className="tools-ran" data-role="tools">
+          Tools ran: {item.text}
+        </p>
+      );
     case "suggest":
       return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
   }
@@ -395,7 +420,10 @@ function LogItem({
  * like Start over, unless it is already there. `active`: the Chat tab is
  * showing, so the approvals chips read Settings again. `remote`: the web app,
  * where the approvals stay the computer's. `notice`: an automation run that
- * ended; a new `n` posts it in this chat. */
+ * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
+ * a new `n` shows it, and the next message carries it on. `deleted`: a chat
+ * History deleted; if it is the open one, a new chat starts. On the desktop
+ * the chat open at the last close comes back on mount. */
 export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
@@ -403,6 +431,8 @@ export function Chat({
   onOpenView,
   prefill,
   notice,
+  open,
+  deleted,
   active = true,
   remote = false,
   grokSignIn = false,
@@ -415,6 +445,8 @@ export function Chat({
   onOpenView?: (view: Extract<SlashEffect, { kind: "open" }>["view"]) => void;
   prefill?: Prefill;
   notice?: RunNotice & { n: number };
+  open?: { id: string; n: number };
+  deleted?: { id: string; n: number };
   active?: boolean;
   remote?: boolean;
   /** Settings → Account offers Sign in with Grok here. */
@@ -424,6 +456,10 @@ export function Chat({
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
+  /** Older lines of a reopened chat not shown yet. */
+  const [earlier, setEarlier] = useState(0);
+  /** The person already moved on, so the last chat must not land on top. */
+  const touched = useRef(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -469,6 +505,76 @@ export function Chat({
     }
   }
 
+  /** A new conversation; the old one stays saved for History. */
+  function startFresh() {
+    touched.current = true;
+    setItems([]);
+    setEarlier(0);
+    setError(null);
+    setConversationId(newConversationId());
+  }
+
+  function show(transcript: Transcript) {
+    setConversationId(transcript.id);
+    setItems(itemsFrom(transcript));
+    setEarlier(transcript.earlier);
+    setError(null);
+  }
+
+  // The saved chat shows only if nothing was typed or picked meanwhile.
+  const restoreLast = useEffectEvent((last: Transcript | null) => {
+    if (last && !touched.current) show(last);
+  });
+
+  useEffect(() => {
+    if (remote) return;
+    getLastChat().then(
+      (last) => restoreLast(last),
+      () => {},
+    );
+  }, [remote]);
+
+  // Only a new pick acts; the conversation it leaves is the latest, not a
+  // dependency.
+  const openPicked = useEffectEvent((id: string) => {
+    if (id === conversationId) return;
+    if (busyRef.current) {
+      setError(OPEN_BUSY);
+      return;
+    }
+    touched.current = true;
+    void closeChat(conversationId);
+    loadChat(id).then(show, (err) => setError(String(err)));
+  });
+
+  useEffect(() => {
+    if (open) openPicked(open.id);
+  }, [open]);
+
+  // Deleting the chat on screen starts a new one; deleting another leaves it.
+  const dropDeleted = useEffectEvent((id: string) => {
+    if (id === conversationId) startFresh();
+  });
+
+  useEffect(() => {
+    if (!deleted) return;
+    const id = deleted.id;
+    // After this render, so the reset is one render of its own.
+    const timer = window.setTimeout(() => dropDeleted(id), 0);
+    return () => window.clearTimeout(timer);
+  }, [deleted]);
+
+  /** Reloads the saved chat with more of its start. The log has at least as
+   * many items as the saved lines it shows, so nothing shown drops off. */
+  async function showEarlier() {
+    if (busyRef.current) return;
+    try {
+      show(await loadChat(conversationId, items.length + EARLIER_STEP));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   // Only a new prefill acts; switching conversations must not re-run it, so the
   // conversation it reads is the latest, not a dependency.
   const applyPrefill = useEffectEvent((next: Prefill) => {
@@ -478,8 +584,10 @@ export function Chat({
         setError(MISSION_BUSY);
         return;
       }
+      touched.current = true;
       void closeChat(conversationId);
       setItems([]);
+      setEarlier(0);
       setError(null);
       setConversationId(to);
     }
@@ -534,9 +642,7 @@ export function Chat({
   function startOver() {
     if (busy) return;
     void closeChat(conversationId);
-    setItems([]);
-    setError(null);
-    setConversationId(newConversationId());
+    startFresh();
   }
 
   /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
@@ -548,6 +654,7 @@ export function Chat({
     as?: SessionMode,
   ) {
     if ((!text && files.length === 0) || busy) return;
+    touched.current = true;
     const unread = files.find((f) => f.status);
     if (unread) {
       setError(`${unread.name}: ${unread.status}`);
@@ -654,6 +761,7 @@ export function Chat({
     const text = (picked ?? draft).trim();
     const files = picked === undefined ? attach.files : [];
     if ((!text && files.length === 0) || busy) return;
+    touched.current = true;
     if (picked === undefined && isSlashCommand(text)) {
       await slash(text);
       return;
@@ -726,6 +834,16 @@ export function Chat({
               <p className="empty">{CHAT_EMPTY}</p>
             </div>
           )
+        )}
+        {earlier > 0 && (
+          <button
+            type="button"
+            className="link earlier"
+            disabled={busy}
+            onClick={() => void showEarlier()}
+          >
+            Show earlier messages ({earlier})
+          </button>
         )}
         {items.map((item, i) => (
           <LogItem

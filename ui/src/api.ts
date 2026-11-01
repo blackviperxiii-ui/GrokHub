@@ -291,6 +291,61 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** A saved chat on the History page (src-tauri/src/history.rs). */
+export interface ChatRow {
+  id: string;
+  title: string;
+  /** Unix ms the chat started. */
+  created: number;
+  /** Unix ms of its last saved turn. */
+  updated: number;
+  model: string;
+}
+
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
+export type LineRole = "user" | "assistant" | "tools";
+
+export interface TranscriptLine {
+  role: LineRole;
+  text: string;
+}
+
+/** A saved chat as Chat shows it: the newest lines, and how many older ones were left out. */
+export interface Transcript {
+  id: string;
+  title: string;
+  lines: TranscriptLine[];
+  earlier: number;
+}
+
+/** History is this computer's; the web app never calls these. */
+export function listChats(): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("list_chats");
+}
+
+export function searchChats(query: string): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("search_chats", { query });
+}
+
+/** Opens a saved chat; the next message in it carries on from its saved turns. */
+export function loadChat(id: string, limit?: number): Promise<Transcript> {
+  return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
+}
+
+/** The chat open when the app last closed, if it is still saved. */
+export function getLastChat(): Promise<Transcript | null> {
+  return invoke<Transcript | null>("get_last_chat");
+}
+
+export function renameChat(id: string, title: string): Promise<void> {
+  return invoke<void>("rename_chat", { id, title });
+}
+
+/** Deletes the saved chat; a reply still running in it stops. */
+export function deleteChat(id: string): Promise<void> {
+  return invoke<void>("delete_chat", { id });
+}
+
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
