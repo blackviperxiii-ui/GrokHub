@@ -366,7 +366,7 @@ impl Cabin {
                         .unwrap_or_default();
                     let todos = grokhub_agent::todos_for(&todo_session);
                     if !self.grok_tasks.is_empty() {
-                        crate::cards::section_label(ui, "Grok tasks");
+                        crate::cards::section_label(ui, "Agent tasks");
                         ui.add_space(8.0);
                         for (id, title, done) in &self.grok_tasks {
                             let st = queue_task_label(title, *done);
