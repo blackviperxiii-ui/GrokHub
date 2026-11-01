@@ -93,12 +93,12 @@ export interface Prefill {
 }
 
 const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: "Message Grok",
+  chat: `Message ${PRODUCT_NAME}`,
   plan: "Describe what to plan",
   btw: "Ask on the side",
 };
 
-export const CHAT_EMPTY = "Ask Grok anything.";
+export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
   `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";

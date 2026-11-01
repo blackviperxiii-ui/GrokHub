@@ -31,7 +31,7 @@ import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 import { StatusLine, useNote } from "./ui";
 
 export const DESKTOP_NOTE =
-  "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
+  `${PRODUCT_NAME} can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.`;
 
 /** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
 export const SUMMON_KEYS =
@@ -258,7 +258,7 @@ export function Settings({
         </p>
         {caps.desktopControl && (
           <Toggle checked={desktopControl} onChange={setDesktopControl}>
-            Let Grok control the desktop
+            Let {PRODUCT_NAME} control the desktop
           </Toggle>
         )}
         {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
@@ -302,7 +302,7 @@ export function Settings({
             checked={loaded.notifications}
             onChange={(on) => void flip(() => setNotifications(on))}
           >
-            Notify me when Grok needs an OK or finishes while {PRODUCT_NAME} is in the background
+            Notify me when the agent needs an OK or finishes while {PRODUCT_NAME} is in the background
           </Toggle>
         )}
       </div>

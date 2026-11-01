@@ -15,7 +15,7 @@ export interface Settings {
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
-  /** Settings → Let Grok control the desktop. */
+  /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
   theme: Theme;
@@ -82,7 +82,7 @@ export type ChatEvent =
   | {
       kind: "elicit";
       id: string;
-      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      /** "Plan" for a plan to approve, "Question" for the agent's question, or the connector. */
       server: string;
       message: string;
       mode: "form" | "url";
@@ -90,7 +90,7 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
-      /** Answers to tap for Grok's question, the recommended one first. */
+      /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
     };
 
