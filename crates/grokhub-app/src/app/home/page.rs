@@ -72,7 +72,26 @@ impl Cabin {
                         pose,
                     );
                 }
-                if edit_resp.on_hover_text("Edit Home").clicked() {
+                // The pencil alone floated with no label; name it, and let
+                // the words open the editor too.
+                let label = ui.painter().layout_no_wrap(
+                    "Edit Home".to_string(),
+                    egui::FontId::proportional(crate::theme::TYPE_CAPTION),
+                    crate::theme::muted(),
+                );
+                let label_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        edit_btn.left() - 6.0 - label.size().x,
+                        edit_btn.center().y - label.size().y / 2.0,
+                    ),
+                    label.size(),
+                );
+                let label_resp = ui
+                    .allocate_rect(label_rect, egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.painter()
+                    .galley(label_rect.min, label, crate::theme::muted());
+                if label_resp.clicked() || edit_resp.on_hover_text("Edit Home").clicked() {
                     self.home_edit = Some(HomeEditDraft::from_layout(&self.home_layout));
                 }
 

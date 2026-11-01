@@ -19,6 +19,10 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  setModel: vi.fn<(id: string) => Promise<Settings>>(),
+  listModels: vi.fn(),
+  slashHits: vi.fn(() => Promise.resolve([])),
+  runSlash: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -29,6 +33,10 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  setModel: api.setModel,
+  listModels: api.listModels,
+  slashHits: api.slashHits,
+  runSlash: api.runSlash,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -51,6 +59,8 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
 };
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
@@ -332,6 +342,33 @@ describe("Chat", () => {
     expect(await screen.findByText("Not run: the turn ended")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a Deny from a notification shows on its card", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write both");
+
+    emit(id, { kind: "permission", id: "n1", title: "write", action: "n.txt", reason: "" });
+    emit(id, { kind: "permission", id: "n2", title: "edit", action: "m.txt", reason: "" });
+    emit(id, { kind: "answered", id: "n1", answer: "deny" });
+
+    expect(screen.getByRole("group", { name: "Approve write" })).toHaveTextContent("Denied");
+    const other = screen.getByRole("group", { name: "Approve edit" });
+    expect(other).not.toHaveTextContent("Denied");
+    expect(screen.getAllByRole("button", { name: "Allow once" })).toHaveLength(1);
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("an answer that comes after the turn ended leaves the card ended", () => {
+    const ended: Item[] = [
+      { kind: "permission", id: "a", title: "write", action: "", reason: "", answer: "ended" },
+      { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
+    ];
+    expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
+      answer: "deny",
+    });
   });
 
   it("Stop cancels the turn in flight", async () => {
