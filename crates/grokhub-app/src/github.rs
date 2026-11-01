@@ -1,4 +1,4 @@
-use grokhub_core::{github_api_path, MEDIA_FILE_CAP, TEXT_FILE_CAP};
+use grokhub_core::{github_api_path, MEDIA_FILE_CAP};
 use std::io::Read;
 
 pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
@@ -16,22 +16,21 @@ pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
     if let Err(why) = crate::xai::egress_ok(&url, &[grokhub_agent::harness::DataClass::Chat]) {
         return why;
     }
-    let resp = match ureq::get(&url)
-        .set("authorization", &format!("Bearer {}", token.trim()))
-        .set("user-agent", "GrokHub")
-        .set("accept", "application/vnd.github+json")
-        .set("x-github-api-version", "2022-11-28")
-        .timeout(std::time::Duration::from_secs(30))
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        overall: Some(std::time::Duration::from_secs(30)),
+        ..Default::default()
+    });
+    let resp = match agent
+        .get(&url)
+        .header("authorization", &format!("Bearer {}", token.trim()))
+        .header("user-agent", "GrokHub")
+        .header("accept", "application/vnd.github+json")
+        .header("x-github-api-version", "2022-11-28")
         .call()
     {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, r)) => {
-            let mut buf = Vec::new();
-            let _ = r
-                .into_reader()
-                .take(TEXT_FILE_CAP as u64)
-                .read_to_end(&mut buf);
-            let body = String::from_utf8_lossy(&buf);
+        // The facade keeps the first 64 KiB of the error body, as before.
+        Err(grokhub_core::http::Error::Status { code, body, .. }) => {
             return format!(
                 "GitHub {code}: {}",
                 body.chars().take(240).collect::<String>()

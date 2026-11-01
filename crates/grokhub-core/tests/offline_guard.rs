@@ -82,8 +82,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
     // Sign-in, updates, downloads.
-    ("crates/grokhub-app/src/oauth.rs", 4, "xAI sign-in: egress_ok"),
-    ("crates/grokhub-app/src/imagine_auth.rs", 2, "Imagine sign-in: egress_ok"),
+    ("crates/grokhub-app/src/oauth.rs", 1, "xAI sign-in (auth_agent callers): egress_ok"),
+    ("crates/grokhub-app/src/imagine_auth.rs", 1, "Imagine sign-in (auth_agent callers): egress_ok"),
     ("crates/grokhub-app/src/update.rs", 1, "latest tag check: egress_ok"),
     ("crates/grokhub-app/src/release_update.rs", 1, "release download: egress_ok; the plan is refused first (update_cmds_*)"),
     ("crates/grokhub-core/src/update.rs", 2, "git fetch of the channel tips: offline::refuse"),
@@ -96,7 +96,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_effort.rs", 1, "llama-server /props on loopback (refuses any other host)"),
     ("crates/grokhub-agent/src/route/local_spec.rs", 1, "speed test against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
-    ("crates/grokhub-app/src/desktop.rs", 4, "hub health, CDP HTTP + websocket: loopback via egress_ok"),
+    ("crates/grokhub-app/src/desktop.rs", 3, "hub health and CDP HTTP (loopback_agent), CDP websocket: loopback via egress_ok"),
     ("crates/grokhub-app/src/app/print_alerts_ui.rs", 1, "the user's printer: LAN, allowed (a public host is refused by egress_ok)"),
     ("crates/grokhub-app/src/app/lan_host.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
