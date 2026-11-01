@@ -12,6 +12,7 @@ pub mod attention;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
+pub mod cleanup;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
