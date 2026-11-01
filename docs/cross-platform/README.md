@@ -101,7 +101,11 @@ lockfile in step, and `bump --check` fails if they drift.
   replaced this with the agent loop, below.)
 - Settings: model and close-to-tray in `shell.json` in the GrokHub config
   folder. The xAI API key lives in the OS keychain (service `GrokHub`, account
-  `shell-console-key`). Grok sign-in (OAuth) comes with Phase 3.
+  `shell-console-key`). Sign in with Grok (device code) is in Settings →
+  Account on desktop and iOS; its tokens live in the keychain under account
+  `shell-xai-oauth`, and a live sign-in is used before the key. Android gets
+  it once the keyring has an Android store. `GROKHUB_SHELL_OAUTH_URL` points
+  sign-in at a loopback mock auth server for tests (plain-http loopback only).
 - Tray: Show GrokHub and Quit. A left click shows the window.
 - `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
   plain-http loopback URLs are accepted, so it cannot move real traffic.

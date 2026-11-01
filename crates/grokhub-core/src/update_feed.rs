@@ -5430,6 +5430,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::game_watch_elite::session_card(&elite, at),
             "Elite Dangerous",
         ));
+        let farm = crate::stardew_saves::StardewFarm {
+            farm: Some("Pickle".into()),
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::stardew_saves::session_card(
+                &crate::stardew_saves::FarmSession {
+                    before: None,
+                    after: farm,
+                },
+                at,
+            ),
+            "Stardew Valley",
+        ));
         rows
     }
 
