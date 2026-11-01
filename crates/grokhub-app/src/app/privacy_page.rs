@@ -194,9 +194,9 @@ pub(super) fn cloud_line(cloud: Cloud) -> &'static str {
     if !cloud.signed_in {
         "Grok isn't signed in, so nothing can leave this PC."
     } else if cloud.local_jobs {
-        "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
+        "Chat and background tasks send their prompts to the cloud model. This PC's model takes over only when no cloud model answers or you're offline."
     } else {
-        "Chat and background tasks send their prompts to Grok in the cloud."
+        "Chat and background tasks send their prompts to the cloud model."
     }
 }
 
@@ -214,9 +214,9 @@ pub(super) fn cloud_state(week: &Week, cloud: Cloud) -> &'static str {
 /// The On-device model switch's hint, by what the router really does.
 pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
     match (on, installed) {
-        (false, _) => "Background tasks use Grok in the cloud",
+        (false, _) => "Background tasks use the cloud model",
         (true, false) => {
-            "On, but the on-device model isn't installed, so background tasks still use Grok"
+            "On, but the on-device model isn't installed, so background tasks still use the cloud model"
         }
         (true, true) => "Used only when no cloud model answers or you're offline",
     }
@@ -747,14 +747,14 @@ mod tests {
         assert_eq!(cloud_state(&Week::Loading, CLOUD_ONLY), "—");
         assert_eq!(
             cloud_line(CLOUD_ONLY),
-            "Chat and background tasks send their prompts to Grok in the cloud."
+            "Chat and background tasks send their prompts to the cloud model."
         );
         assert_eq!(
             cloud_line(Cloud {
                 signed_in: true,
                 local_jobs: true
             }),
-            "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
+            "Chat and background tasks send their prompts to the cloud model. This PC's model takes over only when no cloud model answers or you're offline."
         );
         assert_eq!(
             cloud_line(SIGNED_OUT),
@@ -762,11 +762,11 @@ mod tests {
         );
         assert_eq!(
             local_hint(false, true),
-            "Background tasks use Grok in the cloud"
+            "Background tasks use the cloud model"
         );
         assert_eq!(
             local_hint(true, false),
-            "On, but the on-device model isn't installed, so background tasks still use Grok"
+            "On, but the on-device model isn't installed, so background tasks still use the cloud model"
         );
         assert_eq!(
             local_hint(true, true),
@@ -846,7 +846,7 @@ mod tests {
             "LOCAL FIRST",
             "Nothing left this PC this week.",
             "\nREADY\n",
-            "Chat and background tasks send their prompts to Grok in the cloud.",
+            "Chat and background tasks send their prompts to the cloud model.",
         ] {
             assert!(ready.contains(want), "missing {want:?} in {ready}");
         }
