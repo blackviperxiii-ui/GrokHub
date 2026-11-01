@@ -131,10 +131,7 @@ impl Cabin {
             return;
         }
         let version = crate::update::build_version_line();
-        let version = version
-            .strip_prefix("GrokHub ")
-            .unwrap_or(&version)
-            .to_string();
+        let version = grokhub_core::strip_product_prefix(&version).to_string();
         let messages: Vec<(String, String)> = if self.thread_idx < self.threads.len()
             && self.threads[self.thread_idx].id == thread.id
             && !self.messages.is_empty()

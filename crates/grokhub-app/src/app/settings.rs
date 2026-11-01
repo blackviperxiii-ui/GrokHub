@@ -1540,7 +1540,7 @@ impl Cabin {
     pub(super) fn copy_diagnostics(&mut self, ctx: &egui::Context) {
         let version = crate::update::build_version_line();
         let bundle = diagnostics_bundle(
-            version.strip_prefix("GrokHub ").unwrap_or(&version),
+            grokhub_core::strip_product_prefix(&version),
             self.has_key(),
             HUB_KIND,
             self.skill_list.len(),
