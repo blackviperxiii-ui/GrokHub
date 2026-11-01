@@ -1745,6 +1745,33 @@ textarea.code {
   border-color: var(--accent);
 }
 
+.work-badge.queued {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.work-badge.priority.high {
+  border-color: var(--danger-text);
+  color: var(--danger-text);
+}
+
+/* A card dragged over another lands just above it. */
+.board-card[data-drop-above="yes"]:hover {
+  box-shadow: 0 -3px 0 var(--accent);
+}
+
+.work-triage,
+.board-block,
+.board-steps-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.board-steps-edit textarea {
+  font-family: inherit;
+}
+
 .work-open {
   display: flex;
   flex-direction: column;

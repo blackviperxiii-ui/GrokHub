@@ -786,7 +786,9 @@ impl Cabin {
     pub(super) fn tick_board_store(&mut self) {
         let path = config::workboard_path();
         crate::work_store::reload_if_changed(&path, &mut self.board);
-        self.tick_board_sweep(grokhub_core::now_ms());
+        let now = grokhub_core::now_ms();
+        self.tick_board_sweep(now);
+        self.tick_board_queue(now);
     }
 
     pub(super) fn flush_board(&mut self) {

@@ -13,6 +13,8 @@ import {
   workboardAdd,
   workboardDeleteArchived,
   workboardLog,
+  workboardPlaybook,
+  workboardRecur,
   workboardResume,
   workboardStamp,
   workboardSweepDismiss,
@@ -22,14 +24,16 @@ import {
   type BoardCard,
   type BoardLane,
   type BoardPage,
+  type BoardWork,
   type WorkLogLine,
 } from "./api";
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
+import { CardTriage, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
-  "Drag a card to move it, or use its Move menu. Work puts the card in the chat box for you to send. The cabin keeps this same board, and neither overwrites the other's changes.";
+  "Drag a card to move it, or drop it on a card to put it above that one. Work puts the card in the chat box for you to send. The cabin keeps this same board, and neither overwrites the other's changes.";
 /** How often the page checks whether the cabin saved the board. */
 export const STAMP_EVERY_MS = 3000;
 /** Longest "Left off" text on a compact card, like the cabin's meta line. */
@@ -191,10 +195,14 @@ export function Workboard({
     return run(() => workboardAct(card.id, what), done);
   }
 
-  async function work(card: BoardCard) {
+  function work(card: BoardCard) {
+    return startWork(() => workboardWork(card.id));
+  }
+
+  async function startWork(start: () => Promise<BoardWork>) {
     setBusy(true);
     try {
-      const started = await workboardWork(card.id);
+      const started = await start();
       setPage(started.page);
       setNote(null);
       onWork(started.prompt);
@@ -218,6 +226,17 @@ export function Workboard({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** A drop on a card: into its column, just above it. */
+  function dropOn(event: DragEvent, lane: BoardLane, before: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    const from = dragging;
+    setDragging(null);
+    if (!from || from.id === before || busy) return;
+    const card = page?.columns.flatMap((c) => c.cards).find((c) => c.id === from.id);
+    if (card) void act(card, { kind: "place", to: lane, before });
   }
 
   function drop(event: DragEvent, lane: BoardLane) {
@@ -272,6 +291,7 @@ export function Workboard({
           </button>
         </div>
       )}
+      {page?.queueNote && <p className="card-status">{page.queueNote}</p>}
       {page === null && !note && <p className="empty">Loading the workboard…</p>}
       {page && total === 0 && <p className="empty">{BOARD_EMPTY}</p>}
       {page && total > 0 && (
@@ -316,6 +336,18 @@ export function Workboard({
                       onResume={() => void resume(card)}
                       onDragStart={() => setDragging({ id: card.id, lane: col.lane })}
                       onDragEnd={() => setDragging(null)}
+                      onDropHere={
+                        dragging && dragging.id !== card.id && col.lane !== "followUp"
+                          ? (e) => dropOn(e, col.lane, card.id)
+                          : undefined
+                      }
+                      onPlaybook={(id, name) => void startWork(() => workboardPlaybook(card.id, id, name))}
+                      onRecur={(choice) =>
+                        void run(
+                          () => workboardRecur(card.id, choice),
+                          "It recurs now. Each run reports back on this card.",
+                        )
+                      }
                       onNow={() => setNow(Date.now())}
                       onError={(err) => setNote(String(err))}
                     />
@@ -548,24 +580,32 @@ function MoveMenu({
  * paused run, Move up and down, and its log, read only when you ask. */
 function CardDetail({
   card,
+  lane,
   at,
   count,
   busy,
   now,
   resumable,
   onAct,
+  onWork,
   onResume,
+  onPlaybook,
+  onRecur,
   onNow,
   onError,
 }: {
   card: BoardCard;
+  lane: BoardLane;
   at: number;
   count: number;
   busy: boolean;
   now: number;
   resumable: boolean;
   onAct: OnAct;
+  onWork: () => void;
   onResume: () => void;
+  onPlaybook: (id: string, name: string) => void;
+  onRecur: (choice: number) => void;
   onNow: () => void;
   onError: (err: unknown) => void;
 }) {
@@ -582,6 +622,18 @@ function CardDetail({
 
   return (
     <div className="work-open">
+      <CardTriage
+        card={card}
+        lane={lane}
+        busy={busy}
+        desktop={resumable}
+        onAct={onAct}
+        onWork={onWork}
+        onPlaybook={onPlaybook}
+        onRecur={onRecur}
+        onError={onError}
+      />
+      {card.userSteps && card.steps.length > 0 && <p className="card-status">Your plan</p>}
       {card.steps.length > 0 && (
         <ol className="work-steps" aria-label="Steps">
           {card.steps.map((step, i) => (
@@ -705,6 +757,9 @@ function BoardCardRow({
   onResume,
   onDragStart,
   onDragEnd,
+  onDropHere,
+  onPlaybook,
+  onRecur,
   onNow,
   onError,
 }: {
@@ -723,6 +778,10 @@ function BoardCardRow({
   onResume: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
+  /** Set while another card is dragged over this one's column. */
+  onDropHere?: (event: DragEvent) => void;
+  onPlaybook: (id: string, name: string) => void;
+  onRecur: (choice: number) => void;
   onNow: () => void;
   onError: (err: unknown) => void;
 }) {
@@ -762,6 +821,11 @@ function BoardCardRow({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
+      data-drop-above={onDropHere ? "yes" : undefined}
+      onDragOver={(e) => {
+        if (onDropHere) e.preventDefault();
+      }}
+      onDrop={onDropHere}
     >
       {editing ? (
         <form className="board-edit" onSubmit={(e) => void saveEdit(e)}>
@@ -799,6 +863,10 @@ function BoardCardRow({
           <div className="work-meta">
             <span className={`work-badge ${card.owner === "Agent" ? "agent" : "you"}`}>{card.owner}</span>
             {card.kind && <span className="work-badge kind">{card.kind}</span>}
+            {card.queued && <span className="work-badge queued">{card.queued}</span>}
+            {priorityChip(card.priority) && (
+              <span className={`work-badge priority ${card.priority}`}>{priorityChip(card.priority)}</span>
+            )}
             {meta.length > 0 && <span className="card-status">{meta.join(" · ")}</span>}
           </div>
           {card.detail && <div className="card-status">{card.detail}</div>}
@@ -832,13 +900,17 @@ function BoardCardRow({
       {isOpen && editing === null && (
         <CardDetail
           card={card}
+          lane={lane}
           at={at}
           count={count}
           busy={busy}
           now={now}
           resumable={resumable}
           onAct={onAct}
+          onWork={onWork}
           onResume={onResume}
+          onPlaybook={onPlaybook}
+          onRecur={onRecur}
           onNow={onNow}
           onError={onError}
         />

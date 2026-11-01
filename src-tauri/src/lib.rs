@@ -1331,6 +1331,31 @@ async fn workboard_work(
 
 /// Delete every archived card archived `days` ago or more (0: all of them),
 /// with their logs. The page asks first with the count.
+/// Start a playbook on a card: linked, then started as Work.
+#[tauri::command]
+async fn workboard_playbook(
+    state: State<'_, ShellState>,
+    id: String,
+    playbook: String,
+    name: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::start_playbook(&dir, &id, &playbook, &name)).await?
+}
+
+/// Make it recurring: an automation from the card that then owns it.
+#[tauri::command]
+async fn workboard_recur(
+    state: State<'_, ShellState>,
+    id: String,
+    choice: usize,
+    clock: automations::Clock,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    let clock = now_clock(clock);
+    off_main(move || workboard::make_recurring(&dir, &id, choice, clock)).await?
+}
+
 #[tauri::command]
 async fn workboard_delete_archived(
     state: State<'_, ShellState>,
@@ -2209,6 +2234,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "act")?,
         ))?),
         "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
+        "workboard_recur" => out(block_on(workboard_recur(
+            state,
+            arg(args, "id")?,
+            arg(args, "choice")?,
+            arg(args, "clock")?,
+        ))?),
         "workboard_stamp" => out(block_on(workboard_stamp(state))?),
         "workboard_log" => out(block_on(workboard_log(state, arg(args, "id")?))?),
         "workboard_delete_archived" => out(block_on(workboard_delete_archived(
@@ -2783,6 +2814,8 @@ pub fn run() {
             workboard_add,
             workboard_act,
             workboard_work,
+            workboard_playbook,
+            workboard_recur,
             workboard_stamp,
             workboard_log,
             workboard_resume,

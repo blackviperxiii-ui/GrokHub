@@ -342,12 +342,21 @@ fn work_update(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     }
     let reply = wr::edit_board_file(&path, now, |cards| {
         let c = find_mine(cards, &id)?;
+        let mut kept = None;
         if let (Some(n), Some(st)) = (step, status) {
             let at = (n as usize)
                 .checked_sub(1)
                 .filter(|i| *i < c.steps.len())
                 .ok_or_else(|| format!("`{}` has no step {n}.", c.id))?;
-            c.steps[at].status = st;
+            // The user edited the plan: their version stands, and a step only
+            // moves forward.
+            if grokhub_core::work_triage::agent_may_set(c.user_steps, c.steps[at].status, st) {
+                c.steps[at].status = st;
+            } else {
+                kept = Some(format!(
+                    "Step {n} is in the user's plan as they left it, so it stays."
+                ));
+            }
         }
         let auto_next = wr::next_step(&c.steps);
         let has_steps = !c.steps.is_empty();
@@ -366,7 +375,11 @@ fn work_update(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
         }
         cp.at_ms = now;
         wi::clean_card(c);
-        Ok::<String, String>(render_card(c))
+        let card = render_card(c);
+        Ok::<String, String>(match kept {
+            Some(note) => format!("{note}\n{card}"),
+            None => card,
+        })
     })??;
     if !note.is_empty() {
         let _ = append_work_log(&wr::work_dir(ctx.config_dir), &id, now, wr::LOG_NOTE, &note);

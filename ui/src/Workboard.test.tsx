@@ -2,7 +2,16 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BoardAct, BoardCard, BoardLane, BoardPage, BoardResume, BoardWork, WorkLogLine } from "./api";
+import type {
+  BoardAct,
+  BoardCard,
+  BoardLane,
+  BoardPage,
+  BoardResume,
+  BoardWork,
+  PlaybookPage,
+  WorkLogLine,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getWorkboard: vi.fn<() => Promise<BoardPage>>(),
@@ -15,6 +24,10 @@ const api = vi.hoisted(() => ({
   workboardDeleteArchived: vi.fn<(days: number) => Promise<BoardPage>>(),
   workboardSweepUndo: vi.fn<() => Promise<BoardPage>>(),
   workboardSweepDismiss: vi.fn<() => Promise<BoardPage>>(),
+  workboardPlaybook: vi.fn<(id: string, playbook: string, name: string) => Promise<BoardWork>>(),
+  workboardRecur: vi.fn<(id: string, choice: number) => Promise<BoardPage>>(),
+  getPlaybooks: vi.fn<() => Promise<PlaybookPage>>(),
+  RECUR_CHOICES: ["Every day at 9 AM", "Every weekday at 9 AM", "Every day at 6 PM"],
 }));
 
 vi.mock("./api", () => api);
@@ -49,6 +62,10 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     chat: null,
     updatedMs: 0,
     archivedMs: 0,
+    queued: null,
+    flow: null,
+    userSteps: false,
+    stepsText: "",
     ...over,
   };
 }
@@ -63,6 +80,7 @@ function board(cards: Partial<Record<BoardLane, BoardCard[]>>, archived: BoardCa
     archived,
     stamp,
     swept: null,
+    queueNote: null,
   };
 }
 
@@ -96,7 +114,7 @@ function inCard(name: string) {
 
 describe("Workboard", () => {
   beforeEach(() => {
-    for (const fn of Object.values(api)) fn.mockReset();
+    for (const fn of Object.values(api)) if (typeof fn === "function") fn.mockReset();
     api.workboardStamp.mockResolvedValue(1);
   });
   afterEach(() => {
@@ -480,5 +498,121 @@ describe("Workboard", () => {
     });
     await waitFor(() => expect(within(column("Doing")).getByText("Write release notes")).toBeVisible());
     expect(api.getWorkboard).toHaveBeenCalledTimes(2);
+  });
+  it("Agent: do this queues a card, and the board shows it waiting for the cabin", async () => {
+    api.getWorkboard.mockResolvedValue(TODO);
+    const queued = board({ todo: [card({ queued: "Queued" })] });
+    api.workboardAct.mockResolvedValue({ ...queued, queueNote: "Queued cards start in the cabin." });
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+    const handOver = within(screen.getByRole("group", { name: "Agent: do this" }));
+    await userEvent.click(handOver.getByRole("button", { name: "Queue" }));
+    expect(api.workboardAct).toHaveBeenCalledWith("w-1", { kind: "queue" });
+    expect(await screen.findByText("Queued cards start in the cabin.")).toBeVisible();
+    expect(inCard("Write release notes").getAllByText("Queued")[0]).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Take off the queue" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("w-1", { kind: "unqueue" });
+  });
+
+  it("Now is Work: the card's prompt goes to the chat box", async () => {
+    api.getWorkboard.mockResolvedValue(TODO);
+    api.workboardWork.mockResolvedValue({ prompt: "Work on this workboard card", page: MOVED });
+    const onWork = vi.fn();
+    render(<Workboard onWork={onWork} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Now" }));
+    expect(api.workboardWork).toHaveBeenCalledWith("w-1");
+    expect(onWork).toHaveBeenCalledWith("Work on this workboard card");
+  });
+
+  it("blocks with a reason, sets the priority and saves your steps", async () => {
+    const steps = card({
+      steps: [{ text: "Read the spec", status: "done" }],
+      stepsText: "[x] Read the spec",
+    });
+    api.getWorkboard.mockResolvedValue(board({ todo: [steps] }));
+    api.workboardAct.mockResolvedValue(board({ todo: [steps] }));
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Block…" }));
+    const block = within(screen.getByRole("form", { name: "Block" }));
+    expect(block.getByRole("button", { name: "Block" })).toBeDisabled();
+    await userEvent.type(block.getByRole("textbox", { name: "What is it waiting on?" }), "Waiting on review");
+    await userEvent.click(block.getByRole("button", { name: "Block" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("w-1", { kind: "block", reason: "Waiting on review" });
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Priority" }), "high");
+    expect(api.workboardAct).toHaveBeenLastCalledWith("w-1", { kind: "priority", priority: "high" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit steps" }));
+    const box = screen.getByRole("textbox", { name: "Steps" });
+    expect(box).toHaveValue("[x] Read the spec");
+    await userEvent.type(box, "{enter}Write the parser");
+    await userEvent.click(screen.getByRole("button", { name: "Save steps" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("w-1", {
+      kind: "steps",
+      text: "[x] Read the spec\nWrite the parser",
+    });
+  });
+
+  it("Unblock shows on a blocked card", async () => {
+    const blocked = card({ checkpoint: { goal: "", next: "", blocker: "Review", refs: [] } });
+    api.getWorkboard.mockResolvedValue(board({ blocked: [blocked] }));
+    api.workboardAct.mockResolvedValue(board({ todo: [card()] }));
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+    expect(screen.queryByRole("group", { name: "Agent: do this" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Unblock" }));
+    expect(api.workboardAct).toHaveBeenCalledWith("w-1", { kind: "unblock" });
+  });
+
+  it("a drop on a card puts the dragged card above it", async () => {
+    const other = card({ id: "w-3", title: "Ship it" });
+    api.getWorkboard.mockResolvedValue(board({ todo: [card(), other] }));
+    api.workboardAct.mockResolvedValue(board({ todo: [other, card()] }));
+    render(<Workboard onWork={() => {}} />);
+    const ship = await screen.findByRole("listitem", { name: "Ship it" });
+    fireEvent.dragStart(ship);
+    const target = screen.getByRole("listitem", { name: "Write release notes" });
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+    expect(api.workboardAct).toHaveBeenCalledTimes(1);
+    expect(api.workboardAct).toHaveBeenCalledWith("w-3", { kind: "place", to: "todo", before: "w-1" });
+  });
+
+  it("starts a playbook on the card and makes it recurring", async () => {
+    api.getWorkboard.mockResolvedValue(TODO);
+    api.getPlaybooks.mockResolvedValue({
+      rows: [
+        { id: "linux_repair", name: "Linux repair", summary: "", source: "shipped", fits: "", steps: "", text: "" },
+      ],
+      problems: [],
+    });
+    api.workboardPlaybook.mockResolvedValue({ prompt: "Work on this workboard card", page: TODO });
+    api.workboardRecur.mockResolvedValue(TODO);
+    const onWork = vi.fn();
+    render(<Workboard onWork={onWork} onResume={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Start a flow" }));
+    const start = within(screen.getByRole("group", { name: "Start a flow" }));
+    expect(start.getByRole("button", { name: "Start" })).toBeDisabled();
+    await userEvent.selectOptions(await start.findByRole("combobox", { name: "Playbook" }), "linux_repair");
+    await userEvent.click(start.getByRole("button", { name: "Start" }));
+    expect(api.workboardPlaybook).toHaveBeenCalledWith("w-1", "linux_repair", "Linux repair");
+    expect(onWork).toHaveBeenCalledWith("Work on this workboard card");
+
+    const recur = within(screen.getByRole("group", { name: "Make it recurring" }));
+    await userEvent.selectOptions(recur.getByRole("combobox", { name: "Schedule" }), "1");
+    await userEvent.click(recur.getByRole("button", { name: "Make it recurring" }));
+    expect(api.workboardRecur).toHaveBeenCalledWith("w-1", 1);
+  });
+
+  it("leaves Start a flow out of the web app", async () => {
+    api.getWorkboard.mockResolvedValue(TODO);
+    render(<Workboard onWork={() => {}} onResume={() => {}} resumable={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Write release notes/ }));
+    expect(screen.queryByRole("group", { name: "Start a flow" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Make it recurring" })).toBeVisible();
   });
 });

@@ -58,6 +58,8 @@ pub(super) struct BoardView {
     /// Settings' tidy row, read from `workboard-tidy.json` when first shown and
     /// again after each sweep, never per frame.
     pub tidy: Option<grokhub_core::work_file::BoardTidy>,
+    /// The queue and the block and steps editors.
+    pub triage: super::board_triage::TriageView,
 }
 
 /// A sweep's result once its thread ends: `Some(None)` when another writer
@@ -231,6 +233,14 @@ pub(super) fn card_badges(card: &BoardCard) -> Vec<(&'static str, BadgeTone)> {
     let mut out = vec![(owner, tone)];
     if let Some(kind) = work_kind_label(card.kind) {
         out.push((kind, BadgeTone::Neutral));
+    }
+    if grokhub_core::work_triage::is_queued(card) {
+        out.push(("Queued", BadgeTone::Accent));
+    }
+    match grokhub_core::work_triage::priority_label(&card.priority) {
+        "High" => out.push(("High", BadgeTone::Warning)),
+        "Low" => out.push(("Low", BadgeTone::Neutral)),
+        _ => {}
     }
     out
 }
@@ -799,6 +809,34 @@ impl Cabin {
         } else if resp.clicked() {
             *act = Some(BoardAct::Expand(id.clone()));
         }
+        // A drop on a card lands just above it, in its column. Follow up keeps
+        // its newest-first order.
+        if let Some(column) = card
+            .status
+            .column()
+            .filter(|c| *c != KanbanColumn::FollowUp)
+        {
+            if resp
+                .dnd_hover_payload::<BoardDrag>()
+                .is_some_and(|d| d.0 != id)
+            {
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.top() - 4.0,
+                    egui::Stroke::new(2.0_f32, crate::theme::link()),
+                );
+            }
+            if let Some(drag) = resp
+                .dnd_release_payload::<BoardDrag>()
+                .filter(|d| d.0 != id)
+            {
+                *act = Some(BoardAct::Place {
+                    id: drag.0.clone(),
+                    column,
+                    before: Some(id.clone()),
+                });
+            }
+        }
         if dragging {
             super::pages::paint_drag_ghost(ui.ctx(), &card.title);
         }
@@ -996,9 +1034,11 @@ impl Cabin {
                     .color(crate::theme::subtle()),
             );
         };
+        self.paint_card_triage(ui, card, act);
         if !card.steps.is_empty() {
             let (filled, total) = card_progress(card);
-            label(ui, &format!("Steps {filled} / {total}"));
+            let mine = if card.user_steps { " · your plan" } else { "" };
+            label(ui, &format!("Steps {filled} / {total}{mine}"));
             for step in &card.steps {
                 let color = match step.status {
                     StepStatus::Done | StepStatus::Skipped => crate::theme::muted(),
@@ -1417,6 +1457,7 @@ impl Cabin {
                 chosen = Some(BoardAct::HandBack(id.clone()));
             }
         }
+        self.board_triage_menu(ui, card, &mut chosen);
         let notes_label = if card.notes.trim().is_empty() {
             "Add notes"
         } else {

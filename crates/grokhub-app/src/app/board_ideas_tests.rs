@@ -1631,3 +1631,250 @@ fn activity_row_finds_the_card_for_its_chat() {
     );
     assert_eq!(board_card_for_chat(&cards, ""), None);
 }
+
+/// A live background run, as the queue's start would leave it.
+fn live_bg_run(id: u64, origin: grokhub_core::BgOrigin) -> super::background::BgRun {
+    super::background::BgRun {
+        id,
+        thread_id: String::new(),
+        title: "queued".into(),
+        origin,
+        rx: None,
+        say: String::new(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: None,
+    }
+}
+
+#[test]
+fn a_queued_card_starts_only_when_idle_and_one_at_a_time() {
+    use grokhub_core::work_triage as wt;
+    use grokhub_core::{BgOrigin, BoardStatus, BG_TASK_MAX};
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-queue");
+    cabin.board = vec![
+        work_card("first", BoardStatus::Todo),
+        work_card("second", BoardStatus::Todo),
+        work_card("plain", BoardStatus::Todo),
+    ];
+    let settle = super::board_triage::QUEUE_SETTLE_MS;
+    let t0 = 1_000_000;
+    assert!(cabin.apply_board_act(Some(BoardAct::Assign {
+        id: "second".into(),
+        queue: true,
+    })));
+    assert!(cabin.apply_board_act(Some(BoardAct::Assign {
+        id: "first".into(),
+        queue: true,
+    })));
+    // Queued second first, so it goes first.
+    assert_eq!(
+        wt::next_queued(&cabin.board).map(|c| c.id.as_str()),
+        Some("second")
+    );
+    let card = cabin.board.iter().find(|c| c.id == "first").unwrap();
+    assert_eq!(card.origin, Some(grokhub_core::WorkOrigin::User));
+    assert!(card.touched);
+
+    let mut started: Vec<String> = Vec::new();
+    let start = |cabin: &mut Cabin,
+                 card: &BoardCard,
+                 run: u64,
+                 started: &mut Vec<String>|
+     -> Result<u64, String> {
+        started.push(card.id.clone());
+        wt::start_queued(&mut cabin.board, &card.id);
+        cabin.bg.runs.push(live_bg_run(run, BgOrigin::User));
+        Ok(run)
+    };
+
+    // Your chat is running: the queue waits.
+    cabin.running = true;
+    let r = cabin.step_board_queue(t0, None, true, |c, card| start(c, card, 1, &mut started));
+    assert_eq!(r, None);
+    assert!(cabin
+        .board_view
+        .triage
+        .wait
+        .as_deref()
+        .unwrap()
+        .contains("open chat"));
+    cabin.running = false;
+
+    // A protected game is up: the queue waits, whatever else is clear.
+    let game = Some("Queued work waits while you're gaming.".to_string());
+    let r = cabin.step_board_queue(t0, game, true, |c, card| start(c, card, 1, &mut started));
+    assert_eq!(r, None);
+    assert!(started.is_empty());
+
+    // All clear: it settles first, then starts the first in line.
+    let r = cabin.step_board_queue(t0, None, true, |c, card| start(c, card, 1, &mut started));
+    assert_eq!(r, None, "everything must read clear for a moment first");
+    let r = cabin.step_board_queue(t0 + settle, None, true, |c, card| {
+        start(c, card, 1, &mut started)
+    });
+    assert_eq!(r, Some(true));
+    assert_eq!(started, ["second"]);
+    let status = |cabin: &Cabin, id: &str| cabin.board.iter().find(|c| c.id == id).unwrap().status;
+    assert_eq!(status(&cabin, "second"), BoardStatus::InProgress);
+
+    // One queued run at a time: the next waits while it is live.
+    for t in [t0 + 2 * settle, t0 + 3 * settle] {
+        let r = cabin.step_board_queue(t, None, true, |c, card| start(c, card, 2, &mut started));
+        assert_eq!(r, None);
+    }
+    assert_eq!(started, ["second"]);
+    assert!(cabin
+        .board_view
+        .triage
+        .wait
+        .as_deref()
+        .unwrap()
+        .contains("queued card"));
+
+    // It ended. Background runs fill every slot: still waiting.
+    cabin.bg.runs[0].end = Some(grokhub_core::BgEnd::Done);
+    for n in 0..BG_TASK_MAX as u64 {
+        cabin.bg.runs.push(live_bg_run(10 + n, BgOrigin::Agent));
+    }
+    let r = cabin.step_board_queue(t0 + 4 * settle, None, true, |c, card| {
+        start(c, card, 2, &mut started)
+    });
+    assert_eq!(r, None);
+    assert!(
+        cabin.board_view.triage.queued_run.is_none(),
+        "the ended run is let go"
+    );
+
+    // A slot frees up: the next card starts once it settles.
+    cabin.bg.runs.truncate(1);
+    let t1 = t0 + 5 * settle;
+    assert_eq!(
+        cabin.step_board_queue(t1, None, true, |c, card| start(c, card, 2, &mut started)),
+        None
+    );
+    assert_eq!(
+        cabin.step_board_queue(t1 + settle, None, true, |c, card| start(
+            c,
+            card,
+            2,
+            &mut started
+        )),
+        Some(true)
+    );
+    assert_eq!(started, ["second", "first"]);
+    assert_eq!(
+        status(&cabin, "plain"),
+        BoardStatus::Todo,
+        "a card you never queued stays"
+    );
+    assert!(wt::next_queued(&cabin.board).is_none());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn the_queue_reads_the_game_guard_as_wait() {
+    use grokhub_core::game_guard::GameGuard;
+    let clear = GameGuard::default();
+    assert_eq!(super::board_triage::queue_game_wait(&clear), None);
+    let gaming = GameGuard {
+        gaming: true,
+        ..Default::default()
+    };
+    assert!(super::board_triage::queue_game_wait(&gaming).is_some());
+    let anticheat = GameGuard {
+        anticheat: Some("Vanguard"),
+        gaming: true,
+        ..Default::default()
+    };
+    assert!(super::board_triage::queue_game_wait(&anticheat)
+        .unwrap()
+        .contains("Vanguard"));
+}
+
+#[test]
+fn block_steps_and_reorder_land_on_disk_for_the_shell() {
+    use grokhub_core::work_triage as wt;
+    use grokhub_core::{BoardStatus, KanbanColumn, StepStatus};
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-triage");
+    let mut agent = work_card("agent", BoardStatus::InProgress);
+    agent.origin = Some(grokhub_core::WorkOrigin::Agent);
+    agent.steps = steps(&[StepStatus::Done, StepStatus::Doing, StepStatus::Planned]);
+    cabin.board = vec![
+        work_card("a", BoardStatus::Todo),
+        work_card("b", BoardStatus::Todo),
+        work_card("c", BoardStatus::Todo),
+        agent,
+    ];
+
+    // Block with a reason: it lands in the checkpoint.
+    assert!(!cabin.apply_board_act(Some(BoardAct::AskBlock("a".into()))));
+    assert_eq!(
+        cabin.board_view.triage.blocking,
+        Some(("a".into(), String::new()))
+    );
+    assert!(cabin.apply_board_act(Some(BoardAct::Block {
+        id: "a".into(),
+        reason: "Waiting on the API key".into(),
+    })));
+    assert!(cabin.board_view.triage.blocking.is_none());
+
+    // Your edit of the agent's steps: the plan is yours now.
+    assert!(!cabin.apply_board_act(Some(BoardAct::EditSteps("agent".into()))));
+    let text = cabin.board_view.triage.steps.clone().unwrap().1;
+    assert_eq!(text, "[x] Step 1\n[>] Step 2\n[ ] Step 3");
+    assert!(cabin.apply_board_act(Some(BoardAct::SaveSteps {
+        id: "agent".into(),
+        text: "[x] Step 1\n[-] Step 2\nCheck the logs".into(),
+    })));
+
+    // Drop c on b: c lands above b.
+    assert!(cabin.apply_board_act(Some(BoardAct::Place {
+        id: "c".into(),
+        column: KanbanColumn::Todo,
+        before: Some("b".into()),
+    })));
+    let path = crate::config::workboard_path();
+    crate::work_store::save(&path, &cabin.board).unwrap();
+
+    let disk = grokhub_core::work_file::read_board(&path).unwrap();
+    let a = disk.iter().find(|c| c.id == "a").unwrap();
+    assert_eq!(a.status, BoardStatus::Blocked);
+    assert_eq!(
+        a.checkpoint.as_ref().unwrap().blocker,
+        "Waiting on the API key"
+    );
+    let order: Vec<&str> = wt::in_column(&disk, KanbanColumn::Todo)
+        .iter()
+        .map(|&i| disk[i].id.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        ["c", "b"],
+        "the order is in the ranks the shell reads"
+    );
+    let agent = disk.iter().find(|c| c.id == "agent").unwrap();
+    assert!(agent.user_steps);
+    assert_eq!(agent.steps[1].status, StepStatus::Skipped);
+    assert_eq!(agent.checkpoint.as_ref().unwrap().next, "Check the logs");
+
+    // The run's next todo_write mirror keeps your version.
+    let mut card = agent.clone();
+    let todos = vec![
+        ("Step 1".to_string(), "completed".to_string()),
+        ("Step 2".to_string(), "in_progress".to_string()),
+        ("Step 3".to_string(), "pending".to_string()),
+    ];
+    grokhub_core::work_run::mirror_todos(&mut card, &todos, 99);
+    let texts: Vec<&str> = card.steps.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(texts, ["Step 1", "Step 2", "Check the logs"]);
+    assert_eq!(card.steps[1].status, StepStatus::Skipped);
+    release_isolated(&root, cabin);
+}
