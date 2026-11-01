@@ -33,6 +33,8 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** The composer's push-to-talk mic (desktops and phones). */
+  voice?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -164,6 +166,11 @@ export function sendChat(
   mode: SessionMode = "chat",
 ): Promise<string> {
   return invoke<string>("send_chat", { conversationId, text, mode });
+}
+
+/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
+export function transcribe(wav: string): Promise<string> {
+  return invoke<string>("transcribe", { wav });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */

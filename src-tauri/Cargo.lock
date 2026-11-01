@@ -1942,6 +1942,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "ureq",
+ "webkit2gtk",
 ]
 
 [[package]]

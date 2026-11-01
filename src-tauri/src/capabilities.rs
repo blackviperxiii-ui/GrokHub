@@ -19,13 +19,17 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// The composer's push-to-talk mic (xAI speech to text). Desktops and
+    /// phones; the web app never gets it.
+    pub voice: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
-/// Windows and macOS get everything; any other OS gets chat, memory,
-/// automations and connectors only.
+/// Windows and macOS get everything; phones get chat, memory, automations,
+/// connectors and voice; any other OS gets no voice either.
 pub fn for_os(os: &str) -> Capabilities {
     let desktop = matches!(os, "linux" | "windows" | "macos");
+    let phone = matches!(os, "android" | "ios");
     Capabilities {
         desktop_control: desktop,
         pulse: desktop,
@@ -33,6 +37,7 @@ pub fn for_os(os: &str) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        voice: desktop || phone,
     }
 }
 
@@ -64,6 +69,7 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            voice: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -79,9 +85,15 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            voice: true,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(for_os("ios"), none);
+    }
+
+    #[test]
+    fn another_os_gets_no_voice() {
+        assert!(!for_os("freebsd").voice);
     }
 
     #[test]
@@ -105,6 +117,7 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "voice": true,
             })
         );
     }

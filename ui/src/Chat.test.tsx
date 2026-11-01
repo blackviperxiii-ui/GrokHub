@@ -41,6 +41,8 @@ vi.mock("./api", () => ({
     api.gap = handler;
     return Promise.resolve(() => {});
   },
+  // Push to talk has its own tests (Mic.test.tsx).
+  transcribe: vi.fn(),
 }));
 
 import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";

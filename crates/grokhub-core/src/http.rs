@@ -104,6 +104,15 @@ impl Request {
             .map(Response)
             .map_err(Error::from_ureq)
     }
+
+    /// Send it with `body` as raw bytes (a multipart upload). Sets no
+    /// `Content-Type` of its own. Answers as [`Request::call`] does.
+    pub fn send_bytes(self, body: &[u8]) -> Result<Response, Error> {
+        self.0
+            .send_bytes(body)
+            .map(Response)
+            .map_err(Error::from_ureq)
+    }
 }
 
 /// A 1xx-3xx answer.
@@ -449,6 +458,20 @@ mod tests {
         );
         assert!(req.contains("Content-Length: 12\r\n"), "{req:?}");
         assert!(req.ends_with("\r\n\r\na=1&b=%C3%A9"), "{req:?}");
+    }
+
+    #[test]
+    fn post_sends_raw_bytes_as_they_are() {
+        let (port, server) = serve(vec![reply("200 OK", "", "{}")]);
+        agent(Opts::default())
+            .post(&format!("http://127.0.0.1:{port}/stt"))
+            .header("content-type", "application/octet-stream")
+            .send_bytes(b"RIFF\x00\x01")
+            .unwrap();
+        let req = &server.join().unwrap()[0];
+        assert!(req.starts_with("POST /stt HTTP/1.1\r\n"), "{req:?}");
+        assert!(req.contains("Content-Length: 6\r\n"), "{req:?}");
+        assert!(req.ends_with("\r\n\r\nRIFF\u{0}\u{1}"), "{req:?}");
     }
 
     #[test]
