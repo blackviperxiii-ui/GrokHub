@@ -1,4 +1,14 @@
-import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  memo,
+  startTransition,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  ViewTransition,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   answerElicit,
   answerPermission,
@@ -242,6 +252,92 @@ function PermissionCard({
   );
 }
 
+/** One entry in the log. It and Chat are compiled ("use memo"), and Chat passes
+ * the same handlers every render, so a reply streaming in redraws only the
+ * bubble it changes; a card above it is not drawn again. Cards come in as a
+ * transition and fade in where the webview has view transitions. */
+function LogItem({
+  item,
+  busy,
+  onAnswer,
+  onAnswerCard,
+  onPick,
+  onDraft,
+  onOpenAutomations,
+}: {
+  item: Item;
+  busy: boolean;
+  onAnswer: (id: string, answer: Answer) => void;
+  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  onPick: (prompt: string) => void;
+  onDraft: (text: string) => void;
+  onOpenAutomations?: () => void;
+}) {
+  "use memo";
+  switch (item.kind) {
+    case "user":
+      return <UserBubble text={item.text} />;
+    case "assistant":
+      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />;
+    case "tool":
+      return (
+        <ViewTransition>
+          <ToolCard title={item.title} status={item.status} detail={item.detail} />
+        </ViewTransition>
+      );
+    case "permission":
+      return (
+        <ViewTransition>
+          <PermissionCard item={item} onAnswer={(a) => onAnswer(item.id, a)} />
+        </ViewTransition>
+      );
+    case "elicit":
+      return (
+        <ViewTransition>
+          <ElicitCard item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
+        </ViewTransition>
+      );
+    case "notice":
+      return (
+        <div
+          className={item.ok ? "card notice" : "card notice warn"}
+          role="status"
+          aria-label={`${item.name} finished`}
+        >
+          <span className="card-title">{item.name}</span>
+          <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
+          <p className="card-detail-line">
+            {item.text.length > NOTICE_CHARS
+              ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
+              : item.text}
+          </p>
+          <div className="card-buttons">
+            <button
+              type="button"
+              className="quiet"
+              onClick={() =>
+                onDraft(
+                  item.ok
+                    ? `About the "${item.name}" automation run: `
+                    : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
+                )
+              }
+            >
+              {item.ok ? "Ask about it" : "Find the cause"}
+            </button>
+            {onOpenAutomations && (
+              <button type="button" className="link" onClick={onOpenAutomations}>
+                Open Automations
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    case "suggest":
+      return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
+  }
+}
+
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
@@ -267,6 +363,7 @@ export function Chat({
   active?: boolean;
   remote?: boolean;
 }) {
+  "use memo";
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
@@ -298,9 +395,10 @@ export function Chat({
     }
   }
 
-  useEffect(() => {
-    if (!prefill) return;
-    const to = prefill.conversationId;
+  // Only a new prefill acts; switching conversations must not re-run it, so the
+  // conversation it reads is the latest, not a dependency.
+  const applyPrefill = useEffectEvent((next: Prefill) => {
+    const to = next.conversationId;
     if (to && to !== conversationId) {
       if (busyRef.current) {
         setError(MISSION_BUSY);
@@ -311,14 +409,19 @@ export function Chat({
       setError(null);
       setConversationId(to);
     }
-    setDraft(prefill.text);
-    // Only a new prefill acts; switching conversations must not re-run it.
-  }, [prefill]);
+    setDraft(next.text);
+  });
   useEffect(() => {
-    if (!notice) return;
+    if (prefill) applyPrefill(prefill);
+  }, [prefill]);
+
+  // A new `n` posts the run's notice, once.
+  const [noticeN, setNoticeN] = useState<number>();
+  if (notice && notice.n !== noticeN) {
+    setNoticeN(notice.n);
     const { n: _n, ...run } = notice;
     setItems((now) => [...now, { kind: "notice", ...run }]);
-  }, [notice]);
+  }
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -330,7 +433,9 @@ export function Chat({
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
       else if (event.kind === "done") setItems(settle);
-      else setItems((now) => applyEvent(now, event));
+      else if (event.kind === "text") setItems((now) => applyEvent(now, event));
+      // A card is a transition, so the webview can fade it in; text streams as is.
+      else startTransition(() => setItems((now) => applyEvent(now, event)));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
@@ -367,11 +472,11 @@ export function Chat({
       await sendChat(conversationId, text, mode);
     } catch (err) {
       setError(String(err));
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-      setItems(settle);
     }
+    // After the catch rather than in a finally, which React Compiler can't compile yet.
+    busyRef.current = false;
+    setBusy(false);
+    setItems(settle);
   }
 
   async function answer(id: string, choice: Answer) {
@@ -398,6 +503,10 @@ export function Chat({
     } catch (err) {
       setError(String(err));
     }
+  }
+
+  function pick(prompt: string) {
+    void send(undefined, prompt);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -431,76 +540,18 @@ export function Chat({
         ) : (
           items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
         )}
-        {items.map((item, i) => {
-          switch (item.kind) {
-            case "user":
-              return <UserBubble key={i} text={item.text} />;
-            case "assistant":
-              return <AssistantBubble key={i} text={item.text} streaming={Boolean(item.streaming)} />;
-            case "tool":
-              return (
-                <ToolCard key={i} title={item.title} status={item.status} detail={item.detail} />
-              );
-            case "permission":
-              return (
-                <PermissionCard key={i} item={item} onAnswer={(a) => void answer(item.id, a)} />
-              );
-            case "elicit":
-              return (
-                <ElicitCard
-                  key={i}
-                  item={item}
-                  onAnswer={(action, value) => void answerCard(item, action, value)}
-                />
-              );
-            case "notice":
-              return (
-                <div
-                  key={i}
-                  className={item.ok ? "card notice" : "card notice warn"}
-                  role="status"
-                  aria-label={`${item.name} finished`}
-                >
-                  <span className="card-title">{item.name}</span>
-                  <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-                  <p className="card-detail-line">
-                    {item.text.length > NOTICE_CHARS
-                      ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
-                      : item.text}
-                  </p>
-                  <div className="card-buttons">
-                    <button
-                      type="button"
-                      className="quiet"
-                      onClick={() =>
-                        setDraft(
-                          item.ok
-                            ? `About the "${item.name}" automation run: `
-                            : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
-                        )
-                      }
-                    >
-                      {item.ok ? "Ask about it" : "Find the cause"}
-                    </button>
-                    {onOpenAutomations && (
-                      <button type="button" className="link" onClick={onOpenAutomations}>
-                        Open Automations
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            case "suggest":
-              return (
-                <SuggestRow
-                  key={i}
-                  items={item.items}
-                  busy={busy}
-                  onPick={(prompt) => void send(undefined, prompt)}
-                />
-              );
-          }
-        })}
+        {items.map((item, i) => (
+          <LogItem
+            key={i}
+            item={item}
+            busy={busy}
+            onAnswer={answer}
+            onAnswerCard={answerCard}
+            onPick={pick}
+            onDraft={setDraft}
+            onOpenAutomations={onOpenAutomations}
+          />
+        ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
             …

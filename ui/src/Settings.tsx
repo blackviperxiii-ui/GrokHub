@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
   getSettings,
@@ -51,12 +51,14 @@ export function Settings({
   // On a phone the sections are one row that scrolls; the next one peeks in.
   usePeek(nav, "x", settings !== null && sections(caps).length);
 
-  useEffect(() => {
-    if (goTo) {
-      setSection(goTo.section);
-      setNote(null);
-    }
-  }, [goTo]);
+  // A new palette pick opens its section. Settings stays mounted between visits,
+  // so showing it again keeps the section that was open.
+  const [goToN, setGoToN] = useState(goTo?.n);
+  if (goTo && goTo.n !== goToN) {
+    setGoToN(goTo.n);
+    setSection(goTo.section);
+    setNote(null);
+  }
 
   function show(next: Shape) {
     setSettings(next);
@@ -67,8 +69,23 @@ export function Settings({
     setDesktopControl(next.desktopControl);
   }
 
+  // Runs each time Settings shows. A field changed here and not saved keeps the
+  // edit; an untouched one takes the fresh value (Chat's chips save approvals too).
+  const refresh = useEffectEvent((next: Shape) => {
+    const was = settings;
+    if (!was) return show(next);
+    setSettings(next);
+    if (model === was.model) setModel(next.model);
+    if (closeToTray === was.closeToTray) setCloseToTray(next.closeToTray);
+    if (workspace === was.workspace) setWorkspace(next.workspace);
+    if (approvals === was.approvals) setApprovals(next.approvals);
+    if (desktopControl === was.desktopControl) setDesktopControl(next.desktopControl);
+  });
   useEffect(() => {
-    getSettings().then(show, (err) => setNote(String(err)));
+    getSettings().then(
+      (next) => refresh(next),
+      (err) => setNote(String(err)),
+    );
   }, []);
 
   // Each section is its own page: it opens at the top, however far the last one was read.

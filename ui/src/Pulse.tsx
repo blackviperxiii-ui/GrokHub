@@ -33,9 +33,10 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Runs each time Pulse shows; text typed here and not saved stays.
   useEffect(() => {
     getFeedPrompt().then(
-      (p) => setText(p.text),
+      (p) => setText((now) => now ?? p.text),
       (err) => setError(String(err)),
     );
   }, []);
@@ -89,7 +90,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [shown, setShown] = useState(PAGE_SIZE);
+  const [paged, setPaged] = useState(PAGE_SIZE);
   const end = useRef<HTMLLIElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -100,20 +101,18 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   }, []);
 
   const total = page?.feed.length ?? 0;
+  // Without IntersectionObserver nothing can tell when the end is in view, so every post shows.
+  const shown = typeof IntersectionObserver === "undefined" ? total : paged;
   const more = tab === "feed" && shown < total;
   useEffect(() => {
     const el = end.current;
     if (!more || !el) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setShown(total);
-      return;
-    }
     const seen = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) setShown((n) => n + PAGE_SIZE);
+      if (entries.some((e) => e.isIntersecting)) setPaged((n) => n + PAGE_SIZE);
     });
     seen.observe(el);
     return () => seen.disconnect();
-  }, [more, total, shown]);
+  }, [more, shown]);
 
   async function act(id: string, what: PulseAct, done?: string) {
     setBusy(true);
