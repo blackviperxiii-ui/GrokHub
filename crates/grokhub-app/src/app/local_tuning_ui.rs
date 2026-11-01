@@ -23,7 +23,7 @@ use super::*;
 use crate::config::LocalTuning;
 
 const FIRST_ROW: &str = "Local AI for chats";
-const FIRST_HINT: &str = "When the on-device model answers while you're online. Offline, or with no sign-in or key, it answers anyway.";
+const FIRST_HINT: &str = "When the on-device model answers while you're online. Offline, or with no sign-in or key, it answers anyway. A model picked under \"Use for your chats\" wins, and while a game keeps the device busy the cloud answers.";
 const FIRST_LABELS: [&str; 3] = [
     "Only when nothing else can answer",
     "First for your chats",
@@ -57,7 +57,7 @@ const THREADS_CHOICES: [(&str, &str); 3] = [
 const KEEP_ROW: &str = "Keep the model loaded";
 const KEEP_HINT: &str = "Stays in memory between chats instead of unloading after 10 idle minutes. Answers start faster; the memory stays in use.";
 const GAMES_ROW: &str = "When a game or fullscreen app runs";
-const GAMES_HINT: &str = "Unload frees the GPU and RAM for the game; the model loads again on the next ask once the game is gone. Share keeps it loaded but sized to the GPU memory, RAM and cores the game leaves free, and re-sizes it when the game takes more. When the model is the only one that can answer (offline, Local AI first), Unload shares instead.";
+const GAMES_HINT: &str = "Unload frees the GPU and RAM for the game; the model loads again on the next ask once the game is gone. Share keeps it loaded but sized to the GPU memory, RAM and cores the game leaves free, and re-sizes it when the game takes more. When the model is the only one that can answer (offline, or the cloud down), Unload shares instead.";
 const GAMES_LABELS: [&str; 3] = [
     "Unload the model (the game gets everything)",
     "Share with the game (fit into what it leaves free)",

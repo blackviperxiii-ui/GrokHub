@@ -112,6 +112,7 @@ pub mod model_download;
 pub mod model_drop;
 pub mod model_registry;
 pub mod models;
+pub mod mods;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
