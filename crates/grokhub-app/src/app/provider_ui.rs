@@ -38,7 +38,29 @@ const KEY_ROW: &str = "Provider key";
 const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the model.";
 pub(super) const PICK_ROW: &str = "Use for your chats";
 const PICK_HINT: &str = "A model from a provider you allowed. Auto never picks one on its own, and never to save money.";
-const PICK_OFF: &str = "Off (xAI only)";
+pub(super) const PICK_OFF: &str = "Off (Auto: xAI or Local AI)";
+/// The dropdown label of a provider model: free tiers are marked.
+pub(super) fn pick_label(id: &str) -> String {
+    if is_free_model(id) {
+        format!("{id}  · free")
+    } else {
+        id.to_string()
+    }
+}
+
+/// OpenRouter's free tier: a `:free` variant or its `free` auto-router.
+pub(super) fn is_free_model(id: &str) -> bool {
+    id.ends_with(":free") || id.ends_with("/free")
+}
+
+/// Free tiers first, then the rest, each group alphabetical.
+pub(super) fn sort_picks(ids: &mut [String]) {
+    ids.sort_by(|a, b| {
+        is_free_model(b)
+            .cmp(&is_free_model(a))
+            .then_with(|| a.cmp(b))
+    });
+}
 const KIND_ROW: &str = "Provider type";
 const KIND_HINT: &str =
     "How it talks. Detected from the address; pick one for a proxy under another name.";
@@ -301,7 +323,7 @@ impl Cabin {
                 self.harness.router.providers.kind = 0;
                 self.invalidate_providers();
                 self.status = format!(
-                    "{} added. Approve the card to allow it, or later in Settings → Permissions.",
+                    "{} added. Approve the card to allow it, then pick one of its models under “{PICK_ROW}”.",
                     p.dest()
                 );
                 self.ask_provider(&p.id);
@@ -455,7 +477,10 @@ impl Cabin {
         match hx::grant_destination(&dir, &p.dest(), CALL_DATA, hx::UserClick::from_click()) {
             Ok(_) => {
                 self.invalidate_providers();
-                self.status = format!("{} allowed. Revoke it in Settings → Permissions.", p.dest());
+                self.status = format!(
+                    "{} allowed. Pick one of its models under “{PICK_ROW}” to chat with it. Revoke it in Settings → Permissions.",
+                    p.dest()
+                );
                 self.refresh_models_now();
             }
             Err(e) => self.status = format!("Could not save the grant: {e}"),
@@ -492,7 +517,7 @@ impl Cabin {
                 .collect()
         };
         let (reg, _) = grokhub_agent::route::live::snapshot(&dir);
-        let choices: Vec<String> = reg
+        let mut choices: Vec<String> = reg
             .models
             .iter()
             .filter(|(id, r)| {
@@ -505,6 +530,7 @@ impl Cabin {
             })
             .map(|(id, _)| id.clone())
             .collect();
+        sort_picks(&mut choices);
         self.harness.router.providers.model_choices = Some(choices.clone());
         choices
     }
@@ -532,11 +558,11 @@ impl Cabin {
         let models = self.provider_model_choices();
         if !models.is_empty() || !self.cfg.provider_model.is_empty() {
             let mut labels = vec![PICK_OFF.to_string()];
-            labels.extend(models.iter().cloned());
+            labels.extend(models.iter().map(|m| pick_label(m)));
             let selected = if self.cfg.provider_model.is_empty() {
                 PICK_OFF.to_string()
             } else {
-                self.cfg.provider_model.clone()
+                pick_label(&self.cfg.provider_model)
             };
             if let Some(i) =
                 crate::cards::settings_dropdown(ui, PICK_ROW, PICK_HINT, &selected, &labels)
@@ -1258,5 +1284,38 @@ mod tests {
             "after invalidate, a fresh load sees the deleted file"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_picks_put_free_tiers_first_and_label_them() {
+        let mut ids: Vec<String> = [
+            "openrouter/zeta/big",
+            "openrouter/google/gemma-4-31b-it:free",
+            "openrouter/alpha/small",
+            "openrouter/openrouter/free",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        sort_picks(&mut ids);
+        assert_eq!(
+            ids,
+            vec![
+                "openrouter/google/gemma-4-31b-it:free".to_string(),
+                "openrouter/openrouter/free".to_string(),
+                "openrouter/alpha/small".to_string(),
+                "openrouter/zeta/big".to_string(),
+            ]
+        );
+        assert_eq!(
+            pick_label("openrouter/google/gemma-4-31b-it:free"),
+            "openrouter/google/gemma-4-31b-it:free  · free"
+        );
+        assert_eq!(
+            pick_label("openrouter/alpha/small"),
+            "openrouter/alpha/small"
+        );
+        assert!(!is_free_model("openrouter/vendor/freeform-7b"));
+        assert_eq!(PICK_OFF, "Off (Auto: xAI or Local AI)");
     }
 }

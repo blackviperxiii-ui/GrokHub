@@ -1,0 +1,3 @@
+- Settings → AI models: after a provider key or grant is saved, the status says to pick one of its models under "Use for your chats"; the pick lists free tiers first and marks them, and Off reads "Off (Auto: xAI or Local AI)".
+- Chat: an OpenRouter model your account's privacy settings (zero data retention or a guardrail) leave no endpoint for now says so and what to do, instead of the raw HTTP 404 text.
+- Local AI (Windows): the governor no longer throttles the on-device model because Loadout's own maximized window is in front; only another app's fullscreen window counts.

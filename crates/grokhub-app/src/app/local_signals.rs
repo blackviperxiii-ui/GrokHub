@@ -504,12 +504,12 @@ impl Os {
             self.pdh = Pdh::open();
         }
         let gpu = self.pdh.as_ref().and_then(|p| p.sample(own));
-        let (covers, foreground) = win_foreground();
+        let (covers, foreground, pid) = win_foreground();
         let quns = win_quns();
-        let fullscreen = match (quns, covers) {
-            (None, None) => None,
-            (q, c) => Some(q == Some(true) || c == Some(true)),
-        };
+        // GrokHub's own window in front (maximized, borderless) reads as busy
+        // and covers the monitor; it is never a game to throttle for.
+        let own_window = pid == Some(std::process::id());
+        let fullscreen = g::foreground_fullscreen(quns, covers, own_window);
         Fast {
             fullscreen,
             game: None,
@@ -529,11 +529,11 @@ fn win_quns() -> Option<bool> {
 }
 
 /// Whether the foreground window covers its monitor (the desktop itself
-/// doesn't count), and its executable's file name. The name comes from a
-/// Toolhelp snapshot by pid: the foreground app (often a game) is never
-/// opened, so its anti-cheat has nothing to log.
+/// doesn't count), its executable's file name, and its process id. The name
+/// comes from a Toolhelp snapshot by pid: the foreground app (often a game)
+/// is never opened, so its anti-cheat has nothing to log.
 #[cfg(windows)]
-fn win_foreground() -> (Option<bool>, Option<String>) {
+fn win_foreground() -> (Option<bool>, Option<String>, Option<u32>) {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -545,7 +545,7 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
-            return (Some(false), None);
+            return (Some(false), None, None);
         }
         let mut class = [0u16; 64];
         let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
@@ -569,7 +569,7 @@ fn win_foreground() -> (Option<bool>, Option<String>) {
         let name = (pid != 0)
             .then(|| grokhub_desktop::game_guard::exe_name_of(pid))
             .flatten();
-        (covers, name)
+        (covers, name, (pid != 0).then_some(pid))
     }
 }
 

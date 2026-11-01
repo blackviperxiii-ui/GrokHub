@@ -1753,3 +1753,22 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_openrouter_privacy_refusal_reads_as_what_to_do_not_a_raw_404() {
+    let body = "0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. We removed them for the following reasons: Provider not allowed by guardrail: 1 endpoint excluded; ZDR violation (account settings): 1 endpoint excluded";
+    assert!(providers::policy_refusal(404, body));
+    assert!(providers::policy_refusal(
+        404,
+        "ZDR violation (account settings)"
+    ));
+    // A plain missing model, a key problem or a server fault is not a policy refusal.
+    assert!(!providers::policy_refusal(
+        404,
+        "No endpoints found for vendor/model."
+    ));
+    assert!(!providers::policy_refusal(401, "guardrail"));
+    assert!(!providers::policy_refusal(503, "data policy"));
+    assert!(providers::POLICY_REFUSED.contains("Use for your chats"));
+    assert!(providers::POLICY_REFUSED.contains("https://openrouter.ai/settings/privacy"));
+}

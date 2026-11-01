@@ -316,6 +316,25 @@ pub fn covers_monitor(window: (i32, i32, i32, i32), monitor: (i32, i32, i32, i32
     window.0 <= monitor.0 && window.1 <= monitor.1 && window.2 >= monitor.2 && window.3 >= monitor.3
 }
 
+/// The Windows fullscreen signal from the notification state ([`quns_fullscreen`])
+/// and the foreground window ([`covers_monitor`]). The app's own window never
+/// counts: a maximized or borderless GrokHub window fills the work area and
+/// makes Windows report "busy", and throttling the on-device model for that
+/// would slow the user's own chat. `None` when neither reading is available.
+pub fn foreground_fullscreen(
+    quns: Option<bool>,
+    covers: Option<bool>,
+    own_window: bool,
+) -> Option<bool> {
+    if own_window {
+        return Some(false);
+    }
+    match (quns, covers) {
+        (None, None) => None,
+        (q, c) => Some(q == Some(true) || c == Some(true)),
+    }
+}
+
 /// Windows `GetSystemPowerStatus`: AC line (1 online), battery flag (128 none,
 /// 255 unknown), percent (255 unknown) and the battery saver flag.
 pub fn power_from_status(ac_line: u8, battery_flag: u8, percent: u8, saver: bool) -> PowerInfo {

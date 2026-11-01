@@ -1099,6 +1099,21 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
     Ok(out)
 }
 
+/// What the chat says when OpenRouter's account settings leave a model with
+/// no endpoint. OpenRouter answers HTTP 404 with "guardrail" / "ZDR" / "data
+/// policy" in the message; the raw text names its dashboards, not what to do.
+pub const POLICY_REFUSED: &str = "OpenRouter has no endpoint for this model under your account's privacy settings (zero data retention or a guardrail excluded it). Pick another model in Settings → AI models → Use for your chats, or change them at https://openrouter.ai/settings/privacy and https://openrouter.ai/settings/guardrails.";
+
+/// A provider reply that is a policy refusal from the account's own settings,
+/// not a model or network fault: HTTP 404 whose message names a guardrail,
+/// zero data retention or the data policy.
+pub fn policy_refusal(status: u16, message: &str) -> bool {
+    status == 404
+        && ["guardrail", "ZDR", "zero data retention", "data policy"]
+            .iter()
+            .any(|w| message.contains(w))
+}
+
 fn error_of(status: u16, body: &str) -> ClientError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let msg = v["error"]["message"]
@@ -1106,6 +1121,9 @@ fn error_of(status: u16, body: &str) -> ClientError {
         .or_else(|| v["error"].as_str())
         .or_else(|| v["message"].as_str())
         .unwrap_or("");
+    if policy_refusal(status, msg) {
+        return ClientError::Protocol(POLICY_REFUSED.to_string());
+    }
     map_http_status(
         status,
         &grokhub_core::redact_secrets(msg),

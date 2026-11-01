@@ -550,3 +550,29 @@ fn macos_battery_from_pmset() {
     let s = desk(|s| s.power = Some(parse_pmset_batt(batt, "")));
     assert_eq!(reason(&s, &r), (Level::Unload, "the battery is low"));
 }
+
+#[test]
+fn the_apps_own_window_in_front_is_never_a_fullscreen_app() {
+    // A borderless GrokHub window fills the work area: Windows says busy and
+    // the rect covers the monitor, but it is us, not a game.
+    assert_eq!(
+        foreground_fullscreen(Some(true), Some(true), true),
+        Some(false)
+    );
+    assert_eq!(foreground_fullscreen(None, None, true), Some(false));
+    // Someone else's window: either reading counts.
+    assert_eq!(
+        foreground_fullscreen(Some(true), Some(false), false),
+        Some(true)
+    );
+    assert_eq!(
+        foreground_fullscreen(Some(false), Some(true), false),
+        Some(true)
+    );
+    assert_eq!(
+        foreground_fullscreen(Some(false), Some(false), false),
+        Some(false)
+    );
+    assert_eq!(foreground_fullscreen(None, None, false), None);
+    assert_eq!(foreground_fullscreen(None, Some(false), false), Some(false));
+}
