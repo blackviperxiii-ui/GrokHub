@@ -1249,6 +1249,9 @@ mod r3b_tests;
 mod goal_tests;
 
 #[cfg(test)]
+mod ladder_steady_tests;
+
+#[cfg(test)]
 mod speed_bench_tests;
 
 #[cfg(test)]

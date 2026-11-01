@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDismiss } from "./ui";
 import { DOCK_MAX, dockItems, dockSummary, stepsLine, type ActivityItem } from "./activity";
 
 const STATUS_WORD: Record<ActivityItem["status"], string> = {
@@ -25,6 +26,7 @@ export function ActivityDock({
   now?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const dock = useDismiss<HTMLElement>(open, () => setOpen(false));
   const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
     if (fixedNow !== undefined) return;
@@ -39,7 +41,11 @@ export function ActivityDock({
   const more = shown.length - listed.length;
 
   return (
-    <aside className={waiting ? "activity-dock waiting" : "activity-dock"} aria-label="Activity">
+    <aside
+      ref={dock}
+      className={waiting ? "activity-dock waiting" : "activity-dock"}
+      aria-label="Activity"
+    >
       <button
         type="button"
         className="activity-toggle"

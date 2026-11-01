@@ -1,0 +1,1 @@
+- Internal: the shared HTTP client module (`grokhub_core::http`) now also builds the agents for the GitHub tool, the hub and browser-tab probes, Pulse previews and sources, the engine download, and the xAI and Imagine sign-in calls. No app behavior change.

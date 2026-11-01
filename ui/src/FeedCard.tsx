@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { pulseImage, type PulseIdea, type PulsePost } from "./api";
+import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -47,7 +48,7 @@ function TopicIcon({ icon, fallback = DEFAULT_ICON, className = "topic-icon" }: 
 }
 
 /** The writer's snippet: plain text with `[label](url)` cites and `**bold**`.
- * Links open in a new tab; nothing else is read as markup. */
+ * Links open in the browser; nothing else is read as markup. */
 export function Snippet({ text }: { text: string }) {
   const parts: ReactNode[] = [];
   const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
@@ -57,9 +58,9 @@ export function Snippet({ text }: { text: string }) {
     if (m.index > at) parts.push(text.slice(at, m.index));
     if (m[1] !== undefined) {
       parts.push(
-        <a key={m.index} href={m[2]} target="_blank" rel="noopener noreferrer">
+        <ExternalLink key={m.index} href={m[2]}>
           {m[1]}
-        </a>,
+        </ExternalLink>,
       );
     } else {
       parts.push(<strong key={m.index}>{m[3]}</strong>);
@@ -169,13 +170,36 @@ export interface FeedCardProps {
   onDiscuss: () => void;
   onDelete: () => void;
   onWhy: () => Promise<string>;
+  /** Hide it until tomorrow 9 AM. */
+  onSnooze?: () => void;
+  /** Take it off the page. */
+  onDismiss?: () => void;
+  /** Take it off and steer the writer away from posts like it. */
+  onNotThis?: () => void;
 }
 
 /** One Feed post: icon, title, cited snippet, media; Love and Discuss below;
- * time and a menu (date, why, delete) top right. */
-export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: FeedCardProps) {
+ * time and a menu (date, why, snooze, dismiss, not this, delete) top right.
+ * Delete asks first. */
+export function FeedCard({
+  post,
+  busy,
+  onLove,
+  onDiscuss,
+  onDelete,
+  onWhy,
+  onSnooze,
+  onDismiss,
+  onNotThis,
+}: FeedCardProps) {
   const [menu, setMenu] = useState(false);
   const [why, setWhy] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
+  const pick = (f: () => void) => () => {
+    setMenu(false);
+    f();
+  };
 
   async function askWhy() {
     setMenu(false);
@@ -187,7 +211,7 @@ export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: Fee
       <div className="feed-head">
         <TopicIcon icon={post.icon} />
         <div className="feed-title">{post.title}</div>
-        <div className="feed-corner">
+        <div className="feed-corner" ref={corner}>
           <span className="card-status">{post.ago}</span>
           <button
             type="button"
@@ -207,17 +231,29 @@ export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: Fee
               <button type="button" role="menuitem" onClick={() => void askWhy()}>
                 Why I created this
               </button>
+              {onSnooze && (
+                <button type="button" role="menuitem" disabled={busy} onClick={pick(onSnooze)}>
+                  Snooze until 9 AM
+                </button>
+              )}
+              {onDismiss && (
+                <button type="button" role="menuitem" disabled={busy} onClick={pick(onDismiss)}>
+                  Dismiss
+                </button>
+              )}
+              {onNotThis && (
+                <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotThis)}>
+                  Not this
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
                 className="danger"
                 disabled={busy}
-                onClick={() => {
-                  setMenu(false);
-                  onDelete();
-                }}
+                onClick={pick(() => setAsking(true))}
               >
-                Delete
+                Delete…
               </button>
             </div>
           )}
@@ -229,6 +265,19 @@ export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: Fee
         <p className="card-status why" role="note">
           {why}
         </p>
+      )}
+      {asking && (
+        <ConfirmRow
+          question="Delete this post?"
+          detail="It won't come back."
+          action="Delete"
+          busy={busy}
+          onConfirm={() => {
+            setAsking(false);
+            onDelete();
+          }}
+          onCancel={() => setAsking(false)}
+        />
       )}
       <div className="card-buttons feed-foot">
         <button
@@ -262,6 +311,7 @@ export interface IdeaRowProps {
  * Not interested. */
 export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaRowProps) {
   const [menu, setMenu] = useState(false);
+  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   const pick = (f: () => void) => () => {
     setMenu(false);
     f();
@@ -275,7 +325,7 @@ export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaR
           {idea.summary && <span className="idea-summary">{idea.summary}</span>}
         </span>
       </button>
-      <div className="feed-corner">
+      <div className="feed-corner" ref={corner}>
         <button
           type="button"
           className="quiet icon-button"
