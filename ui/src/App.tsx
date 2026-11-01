@@ -34,6 +34,7 @@ const loaders = {
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
@@ -43,6 +44,7 @@ const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
+const Workboard = lazy(loaders.workboard);
 
 /** How often the window tells the scheduler its clock. */
 const CLOCK_SHARE_MS = 5 * 60 * 1000;
@@ -327,6 +329,11 @@ export function App() {
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
+        </Page>
+      )}
+      {opened.has("workboard") && (
+        <Page shown={view === "workboard"}>
+          <Workboard onWork={ask} />
         </Page>
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (

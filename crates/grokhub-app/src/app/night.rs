@@ -692,9 +692,13 @@ impl Cabin {
         self.automation_span(&thread_id, &a.id);
         // Named for the job, not the skill steps riding in front of it.
         let title = grokhub_core::bg_task_title(&a.instructions);
-        if let Some(run) = self.bg.runs.last_mut() {
+        let run_id = self.bg.runs.last_mut().map(|run| {
             run.automation = Some(a.id.clone());
             run.title = title.clone();
+            run.id
+        });
+        if let Some(run_id) = run_id {
+            self.open_automation_card(run_id, &a.id, &a.name);
         }
         Ok(title)
     }
@@ -719,6 +723,13 @@ impl Cabin {
             .find(|x| x.id == id)
             .map(|a| a.name.clone())
             .unwrap_or_else(|| id.to_string());
+        // The automation's card gets its final checkpoint. A report that will be
+        // filed below leaves it for the Follow up card.
+        let files_report = matches!(end, BgEnd::Done)
+            && self.automations.iter().any(|x| {
+                x.id == id && grokhub_core::automation_needs_follow_up(&x.instructions, reply)
+            });
+        self.finish_automation_card(id, &end.into(), files_report);
         match end {
             BgEnd::Done => {
                 self.note_activity_routine_end(id, &title, true, reply);

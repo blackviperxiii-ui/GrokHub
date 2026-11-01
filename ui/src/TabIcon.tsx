@@ -12,6 +12,7 @@ const PATHS: Record<View, string> = {
   connectors: "M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5",
   devices: "M3 5h13v9H3zM7 18h5M9.5 14v4M18 9h3v10h-3z",
   settings: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+  workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   library: "M6 7h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.4 1.8L15 13H9l-1.6 1.8A3 3 0 0 1 2 13v-2a4 4 0 0 1 4-4zM7 10v3M5.5 11.5h3M15.5 11h0M18 12h0",
 };
 

@@ -237,7 +237,7 @@ pub fn archive(cards: &mut [BoardCard], id: &str, now: u64) -> bool {
     archive_card(c, now)
 }
 
-fn archive_card(c: &mut BoardCard, now: u64) -> bool {
+pub(crate) fn archive_card(c: &mut BoardCard, now: u64) -> bool {
     if c.status == BoardStatus::Dismissed {
         return false;
     }
@@ -504,7 +504,7 @@ fn work_log_path(dir: &Path, id: &str) -> Option<PathBuf> {
     work_log_file_name(id).map(|n| dir.join(n))
 }
 
-fn open_private(path: &Path, append: bool) -> std::io::Result<fs::File> {
+pub(crate) fn open_private(path: &Path, append: bool) -> std::io::Result<fs::File> {
     let mut o = fs::OpenOptions::new();
     o.create(true);
     if append {
