@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(req.class, "delete");
         assert_eq!(
             req.action,
-            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the cabin can't see which)"
+            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the app can't see which)"
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(
