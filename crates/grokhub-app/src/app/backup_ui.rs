@@ -159,7 +159,7 @@ impl Cabin {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
             for chip in &chips {
-                if super::change_undo::click_pill(ui, &chip.label) {
+                if super::pulse_ui::card_button(ui, &chip.label, super::pulse_ui::Quick::Outline) {
                     tapped = Some(chip.id.clone());
                 }
             }

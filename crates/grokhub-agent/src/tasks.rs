@@ -66,6 +66,8 @@ impl Ring {
 }
 
 struct TaskSlot {
+    /// The command, or the subagent's description, for a queue view.
+    title: String,
     ring: Arc<Mutex<Ring>>,
     read_at: AtomicU64,
     phase: Mutex<Phase>,
@@ -77,6 +79,7 @@ struct TaskSlot {
 }
 
 struct MonitorSlot {
+    title: String,
     stop: Arc<AtomicBool>,
     task_id: Option<String>,
 }
@@ -94,6 +97,23 @@ struct HubInner {
 /// One session's background commands, monitors, and pending notices.
 pub struct TaskHub {
     inner: Mutex<HubInner>,
+}
+
+/// Where a background command, subagent or monitor is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    Running,
+    Exited(i32),
+    /// Stopped by a kill, a Halt, or a spawn that failed while it ran.
+    Killed,
+}
+
+/// One row of a session's background work, for a queue view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRow {
+    pub id: String,
+    pub title: String,
+    pub state: TaskState,
 }
 
 impl TaskHub {
@@ -168,6 +188,7 @@ impl TaskHub {
             return Err("halted".into());
         }
         let slot = Arc::new(TaskSlot {
+            title: command,
             ring: Arc::new(Mutex::new(Ring::new())),
             read_at: AtomicU64::new(0),
             phase: Mutex::new(Phase::Running),
@@ -197,9 +218,11 @@ impl TaskHub {
 
     /// Register a running subagent. `sN` ids share the counter with commands and monitors.
     /// `kill` cancels it. Output is appended by the agent when it finishes.
+    /// `title` (its description) names it in a queue view.
     pub fn register_agent(
         self: &Arc<Self>,
         owner: Option<String>,
+        title: &str,
         kill: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<String, String> {
         if self.is_halted() {
@@ -213,7 +236,12 @@ impl TaskHub {
             hub.seq = hub.seq.saturating_add(1);
             format!("s{}", hub.seq)
         };
+        let title = match title.trim() {
+            "" => "Subagent".to_string(),
+            text => text.to_string(),
+        };
         let slot = Arc::new(TaskSlot {
+            title,
             ring: Arc::new(Mutex::new(Ring::new())),
             read_at: AtomicU64::new(0),
             phase: Mutex::new(Phase::Running),
@@ -354,6 +382,10 @@ impl TaskHub {
         self.lock().monitors.insert(
             id.clone(),
             MonitorSlot {
+                title: match description.trim() {
+                    "" => "Monitor".to_string(),
+                    text => format!("Monitor: {text}"),
+                },
                 stop: Arc::clone(&stop),
                 task_id: Some(watched.clone()),
             },
@@ -377,6 +409,50 @@ impl TaskHub {
             )
         });
         Ok(id)
+    }
+
+    /// Every background command, subagent and live monitor, oldest first.
+    /// A command a monitor started shows as that monitor.
+    pub fn rows(&self) -> Vec<TaskRow> {
+        // Phases are read after the hub lock is dropped: a subagent kill holds
+        // its phase while it locks the hub.
+        let (tasks, monitors): (Vec<_>, Vec<_>) = {
+            let hub = self.lock();
+            (
+                hub.tasks
+                    .iter()
+                    .filter(|(_, slot)| !slot.owned_by_monitor)
+                    .map(|(id, slot)| (id.clone(), Arc::clone(slot)))
+                    .collect(),
+                hub.monitors
+                    .iter()
+                    .map(|(id, slot)| TaskRow {
+                        id: id.clone(),
+                        title: slot.title.clone(),
+                        state: if slot.stop.load(Ordering::SeqCst) {
+                            TaskState::Killed
+                        } else {
+                            TaskState::Running
+                        },
+                    })
+                    .collect(),
+            )
+        };
+        let mut rows: Vec<TaskRow> = tasks
+            .into_iter()
+            .map(|(id, slot)| TaskRow {
+                id,
+                title: slot.title.clone(),
+                state: match *slot.phase.lock().unwrap_or_else(|err| err.into_inner()) {
+                    Phase::Running => TaskState::Running,
+                    Phase::Exited(code) => TaskState::Exited(code),
+                    Phase::Killed => TaskState::Killed,
+                },
+            })
+            .chain(monitors)
+            .collect();
+        rows.sort_by_key(|row| row.id.get(1..).and_then(|n| n.parse::<u64>().ok()));
+        rows
     }
 
     /// Kill every command and monitor. Later spawns fail until [`reopen`].
@@ -1042,6 +1118,47 @@ mod tests {
         assert_dead(grand);
         assert_dead(child);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rows_list_subagents_and_monitors_oldest_first_with_their_state() {
+        let hub = TaskHub::new("rows");
+        let named = hub
+            .register_agent(None, "  Read the docs ", Arc::new(|| {}))
+            .unwrap();
+        let bare = hub.register_agent(None, "", Arc::new(|| {})).unwrap();
+        hub.finish_agent(&named, "all read");
+        hub.start_monitor(
+            Path::new("."),
+            None,
+            Some(bare.clone()),
+            None,
+            60_000,
+            "build log".into(),
+        )
+        .unwrap();
+        let row = |id: &str, title: &str, state| TaskRow {
+            id: id.into(),
+            title: title.into(),
+            state,
+        };
+        assert_eq!(
+            hub.rows(),
+            vec![
+                row("s1", "Read the docs", TaskState::Exited(0)),
+                row("s2", "Subagent", TaskState::Running),
+                row("m3", "Monitor: build log", TaskState::Running),
+            ]
+        );
+        for _ in 0..7 {
+            hub.register_agent(None, "more", Arc::new(|| {})).unwrap();
+        }
+        hub.kill(&bare).unwrap();
+        let rows = hub.rows();
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids.last(), Some(&"s10"));
+        assert_eq!(rows[1], row("s2", "Subagent", TaskState::Killed));
+        hub.halt_all();
     }
 
     fn remember(hub: &Arc<TaskHub>) {

@@ -234,7 +234,11 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
         assert!(!texts.iter().any(|t| t == header), "{header}: {texts:?}");
     }
     assert!(
-        texts.iter().any(|t| t == "AUTOMATE") && texts.iter().any(|t| t == "DO"),
+        texts.iter().any(|t| t == "Automate") && texts.iter().any(|t| t == "Do"),
+        "the type reads as a plain tag, not a capitalised button: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == "AUTOMATE" || t == "DO"),
         "{texts:?}"
     );
     assert_eq!(
@@ -770,7 +774,7 @@ fn pulse_header_shows_both_actions_and_no_tabs_at_every_width() {
 }
 
 #[test]
-fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row() {
+fn pulse_rows_show_their_two_buttons_on_focus_and_keys_act_on_the_focused_row() {
     let mut quiet = QuietCabin::boot("pulse-keys");
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
@@ -815,7 +819,8 @@ fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row()
     );
     assert_eq!(count(&rest, "···"), 3);
 
-    // Down focuses the first row; its Run · Snooze · Dismiss show inline.
+    // Down focuses the first row; its two buttons, Run and Snooze, show
+    // inline. Dismiss waits in ··· like every card's extras.
     let down = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::ArrowDown)]);
     assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-city"));
     assert_eq!(
@@ -824,7 +829,7 @@ fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row()
             count(&down, "Snooze"),
             count(&down, "Dismiss")
         ),
-        (1, 1, 1)
+        (1, 1, 0)
     );
     // J moves down, K back up.
     assert_eq!(cabin.pulse_key(egui::Key::J, &rows), None);
@@ -1087,10 +1092,12 @@ fn pulse_deck_match_6_chrome_tokens() {
         "AUTOMATE tag is amber on the deck"
     );
     assert!(
-        pulse.contains("Quick::Primary")
-            && pulse.contains("Quick::Outline")
-            && pulse.contains("Quick::Quiet"),
-        "Run / Snooze / Dismiss keep the Loadout button styles"
+        pulse.contains("Quick::Primary") && pulse.contains("Quick::Outline"),
+        "cards keep the Loadout primary and outlined button styles"
+    );
+    assert!(
+        !pulse.contains("click_pill(") && !pulse.contains("fn paint_heart_button"),
+        "every card's buttons share the one primary / secondary style"
     );
 }
 
@@ -1351,4 +1358,57 @@ fn behavior_settings_list_the_pc_helpers_first() {
     );
     assert_eq!(src.matches("ui_wind_down_row(ui)").count(), 1);
     assert_eq!(src.matches("ui_downloads_tidy_row(ui)").count(), 1);
+}
+
+/// Every post gets the same two buttons, weightiest first, and its other
+/// actions go in its ···. Like is never the amber primary.
+#[test]
+fn every_post_shows_two_buttons_and_puts_the_rest_in_its_menu() {
+    use super::pulse_ui::{post_actions, post_overflow, FeedPostAct, POST_BUTTONS};
+    let labels = |acts: &[(String, FeedPostAct)]| -> Vec<String> {
+        acts.iter().map(|(l, _)| l.clone()).collect()
+    };
+    let now = now_ms();
+
+    // Done for you: Undo leads, "Don't do this again" second, Like spills over.
+    let dfy = grokhub_core::done_for_you_card(
+        "Turned off the notes connection",
+        "It failed every start.",
+        grokhub_core::DoneForYou {
+            kind: "connection".into(),
+            target: "notes".into(),
+            undo_ref: 4,
+            mind_key: "proactive:connection_disable".into(),
+            answered: false,
+        },
+        now,
+    );
+    let acts = post_actions(&dfy, false);
+    assert_eq!(
+        labels(&acts[..POST_BUTTONS]),
+        ["Undo", "Don't do this again"]
+    );
+    assert_eq!(labels(&post_overflow(&acts)), ["Like"]);
+
+    // A hobby tip: Done and Skip on the post; Too easy and Too hard in ···.
+    let mut hobby = pulse_idea("hobby", "Try a new chord", "learn the chord", 1);
+    hobby.pulse.hobby_path = Some(grokhub_core::hobby_paths::HobbyPathMeta {
+        hobby: "guitar".into(),
+        step_id: "chord-1".into(),
+        answered: false,
+    });
+    let acts = post_actions(&hobby, false);
+    assert_eq!(labels(&acts[..POST_BUTTONS]), ["Done", "Skip"]);
+    assert_eq!(
+        labels(&post_overflow(&acts)),
+        ["Too easy", "Too hard", "Like"]
+    );
+    // Answered, its tip buttons go and Like is all that is left.
+    hobby.pulse.hobby_path.as_mut().unwrap().answered = true;
+    assert_eq!(labels(&post_actions(&hobby, false)), ["Like"]);
+    assert!(post_overflow(&post_actions(&hobby, false)).is_empty());
+
+    // A plain post that is liked reads Liked.
+    hobby.reaction = Some(grokhub_core::CardReaction::Up);
+    assert_eq!(labels(&post_actions(&hobby, false)), ["Liked"]);
 }

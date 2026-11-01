@@ -230,6 +230,7 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
                 .iter()
                 .find(|r| !r.read && r.name == *name)
                 .map(|r| r.schema.clone())
+                .or_else(|| crate::self_manage::work::schema(name))
         })
         .collect();
     if !gate.readonly_session {
@@ -352,6 +353,11 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
         .trim();
     if name.is_empty() {
         return ToolOutput::err("name is required");
+    }
+    // KB-02/KB-04: the `work_*` tools are in neither the stable list nor the
+    // index; they load by name only.
+    if let Some(schema) = crate::self_manage::work::schema(name) {
+        return finish_load(name, schema);
     }
     if crate::self_manage::self_tool(name).is_some() {
         if crate::self_manage::is_read(name) {
@@ -760,5 +766,39 @@ mod tests {
         assert!(!loaded.failed);
         let listed = crate::tools::dispatch(&ctx, "scheduler_list", "{}");
         assert!(!listed.failed);
+    }
+
+    /// KB-02/KB-04: the `work_*` tools cost no bytes until loaded by name. They
+    /// are in neither the stable list, the index nor the legacy list.
+    #[test]
+    fn work_tools_load_by_name_only() {
+        let gate = chat(false, false);
+        begin_turn("conv-work-tools");
+        let stable = stable_schemas(&gate, ON);
+        let stable_text = serde_json::to_string(&stable).unwrap();
+        let work_names = [
+            "work_get",
+            "work_list",
+            "work_update",
+            "work_add",
+            "work_archive",
+        ];
+        let legacy = serde_json::to_string(&legacy_schemas(&gate)).unwrap();
+        for name in work_names {
+            assert!(!stable_text.contains(name), "{name} is in the stable list");
+            assert!(!legacy.contains(name), "{name} is in the legacy list");
+        }
+        let out = run_load_tool_schema(&json!({"name": "work_update"}));
+        assert!(!out.failed, "{}", out.text);
+        let volatile = volatile_schemas(&gate, ON);
+        assert_eq!(volatile.len(), 1);
+        assert_eq!(volatile[0]["name"], "work_update");
+        assert_eq!(
+            serde_json::to_string(&stable_schemas(&gate, ON)).unwrap(),
+            stable_text,
+            "loading one keeps the stable prefix byte-identical"
+        );
+        let missing = run_load_tool_schema(&json!({"name": "work_delete"}));
+        assert!(missing.failed, "there is no delete");
     }
 }

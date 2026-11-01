@@ -26,19 +26,25 @@ import { TabIcon } from "./TabIcon";
 // load the first time they open, and again in the background once the app is
 // idle so that first click does not wait on the network or disk.
 const loaders = {
+  agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
+  workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
 };
+const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
+const Devices = lazy(loaders.devices);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
+const Workboard = lazy(loaders.workboard);
 
 /** How often the window tells the scheduler its clock. */
 const CLOCK_SHARE_MS = 5 * 60 * 1000;
@@ -68,6 +74,8 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // The open chat for the Agents page: the conversation the window last heard from.
+  const [openChat, setOpenChat] = useState<string>();
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
@@ -106,6 +114,7 @@ export function App() {
     let stop: (() => void) | undefined;
     let dropped = false;
     void onChatEvent((envelope) => {
+      setOpenChat(envelope.conversationId);
       setActivity((now) => {
         const key = `chat:${envelope.conversationId}`;
         const next = chatActivity(now[key], envelope, Date.now());
@@ -320,6 +329,21 @@ export function App() {
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
           <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
+        </Page>
+      )}
+      {opened.has("workboard") && (
+        <Page shown={view === "workboard"}>
+          <Workboard onWork={ask} />
+        </Page>
+      )}
+      {opened.has("devices") && caps.webAccess && !caps.remote && (
+        <Page shown={view === "devices"}>
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+        </Page>
+      )}
+      {opened.has("agents") && (
+        <Page shown={view === "agents"}>
+          <Agents conversationId={openChat} onOpenChat={() => setView("chat")} />
         </Page>
       )}
     </div>

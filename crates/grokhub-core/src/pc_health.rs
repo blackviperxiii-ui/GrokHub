@@ -34,11 +34,26 @@ pub const LEDGER_FILE: &str = "pc-health.json";
 pub struct PcHealthSettings {
     #[serde(default)]
     pub enabled: bool,
+    /// Skip the card after a session the verdict calls normal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiet_when_normal: bool,
+    /// The user's own warm lines (°C); `None` keeps the built-in ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_warn_c: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_warn_c: Option<u8>,
+    /// No summary cards until this unix ms (Pause these cards for a week).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paused_until_ms: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl PcHealthSettings {
     pub fn is_default(&self) -> bool {
-        !self.enabled
+        *self == Self::default()
     }
 }
 
@@ -133,6 +148,10 @@ pub struct PcHealthLedger {
     pub last_summary_ms: u64,
     #[serde(default)]
     pub last_game: String,
+    /// Recent sessions, oldest first, for the verdict's baseline and the
+    /// Fix it sheet's compare view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<crate::pc_health_advice::SessionStat>,
 }
 
 /// Outcome of one observe tick.

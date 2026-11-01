@@ -1,0 +1,1 @@
+- Pulse: PC health cards open with a one-line verdict against your own recent sessions, and Fix it opens a sheet of options (compare runs, FPS cap and cooling steps, quiet mode, warn lines, pause, ask).

@@ -36,8 +36,11 @@ describe("paletteRows", () => {
       "Pulse",
       "Journal",
       "Automations",
+      "Agents",
       "Memory",
       "Connectors",
+      "Workboard",
+      "Devices",
       "Library",
       "Settings",
       "Settings: General",
@@ -60,8 +63,10 @@ describe("paletteRows", () => {
       "Chat",
       "Journal",
       "Automations",
+      "Agents",
       "Memory",
       "Connectors",
+      "Workboard",
       "Settings",
       "Settings: General",
       "Settings: Account",
@@ -75,7 +80,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Agents", "Memory", "Connectors", "Workboard", "Settings"]);
   });
 
   it("puts the commands this shell can run after the pages", () => {
@@ -94,12 +99,14 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(6, 9)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(8, 11)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Chat",
       "Automations",
+      "Agents",
       "Memory",
       "Connectors",
+      "Workboard",
       "Settings",
       "New chat",
       "Shortcuts",
@@ -151,7 +158,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(9, 15)).toEqual([
+    expect(rows.slice(11, 17)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -310,8 +317,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 16, the last, ends at 676.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 576, behavior: "auto" });
+      // Row 18, the last, ends at 756.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 656, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

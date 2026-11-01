@@ -1908,6 +1908,17 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::game_watch_rl::match_card(&Default::default(), now),
         "Rocket League",
     ));
+    rows.push((
+        "end_factorio_session",
+        grokhub_core::factorio_state::session_card(
+            &grokhub_core::factorio_state::FactorioSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "Factorio",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
