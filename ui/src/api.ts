@@ -811,6 +811,64 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
+export interface BoardCard {
+  id: string;
+  title: string;
+  detail: string;
+  /** Your notes for the agent; Work hands them over. */
+  notes: string;
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
+}
+
+export interface BoardColumn {
+  lane: BoardLane;
+  label: string;
+  cards: BoardCard[];
+}
+
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
+}
+
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" };
+
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
+}
+
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 
@@ -1013,6 +1071,39 @@ export function getWebAccess(): Promise<WebAccess> {
 
 export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
+}
+
+/** A browser paired with Web access right now (src-tauri/src/remote_devices.rs). */
+export interface PairedBrowser {
+  /** The browser and its system, like "Firefox on Android". */
+  name: string;
+  /** Unix ms. */
+  firstSeen: number;
+  /** Unix ms. */
+  lastCall: number;
+  /** Chats it sent a message in. */
+  chats: number;
+}
+
+/** The Devices page; desktop only, kept in memory only. */
+export interface Devices {
+  /** This computer's name. */
+  computer: string;
+  /** Whether web access is on. */
+  on: boolean;
+  /** The web app's LAN address without the code; empty while off. */
+  lan: string;
+  /** The most recently used first. */
+  browsers: PairedBrowser[];
+}
+
+export function getDevices(): Promise<Devices> {
+  return invoke<Devices>("get_devices");
+}
+
+/** Signs out every browser: a new pairing code ends every pairing. */
+export function forgetAllDevices(): Promise<Devices> {
+  return invoke<Devices>("forget_all_devices");
 }
 
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */

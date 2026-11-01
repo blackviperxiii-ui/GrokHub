@@ -114,23 +114,26 @@ pub fn cloud_queue_note(class: &str) -> String {
     format!("Waiting for the network: {what} needs the cloud.")
 }
 
-/// Classify a `ureq` error for [`grokhub_core::connectivity::note_global_transport_hint`].
-pub fn classify_ureq_error(err: &ureq::Error) -> grokhub_core::connectivity::TransportHint {
+/// Classify an HTTP error for [`grokhub_core::connectivity::note_global_transport_hint`].
+pub fn classify_http_error(
+    err: &grokhub_core::http::Error,
+) -> grokhub_core::connectivity::TransportHint {
     use grokhub_core::connectivity::{classify_http_status, TransportHint};
+    use grokhub_core::http::{Error, TransportKind};
     match err {
-        ureq::Error::Status(code, _) => classify_http_status(*code),
-        ureq::Error::Transport(t) => match t.kind() {
-            ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io => {
+        Error::Status { code, .. } => classify_http_status(*code),
+        Error::Transport { kind, .. } => match kind {
+            TransportKind::Dns | TransportKind::Connect | TransportKind::Io => {
                 TransportHint::OfflineCandidate
             }
-            _ => TransportHint::Inconclusive,
+            TransportKind::Other => TransportHint::Inconclusive,
         },
     }
 }
 
-/// Feed ureq transport failures into the cabin connectivity engine.
-pub fn note_ureq_transport(err: &ureq::Error) {
-    let hint = classify_ureq_error(err);
+/// Feed HTTP transport failures into the cabin connectivity engine.
+pub fn note_http_transport(err: &grokhub_core::http::Error) {
+    let hint = classify_http_error(err);
     grokhub_core::connectivity::note_global_transport_hint(hint, grokhub_core::now_ms());
 }
 
@@ -219,10 +222,30 @@ mod tests {
     }
 
     #[test]
-    fn ureq_connect_errors_are_offline_candidates() {
+    fn http_connect_errors_are_offline_candidates() {
         use grokhub_core::connectivity::TransportHint;
-        let err = ureq::get("http://127.0.0.1:1/").call().unwrap_err();
-        assert_eq!(classify_ureq_error(&err), TransportHint::OfflineCandidate);
+        use grokhub_core::http::{agent, Error, Opts, TransportKind};
+        let err = agent(Opts::default())
+            .get("http://127.0.0.1:1/")
+            .call()
+            .err()
+            .unwrap();
+        assert_eq!(classify_http_error(&err), TransportHint::OfflineCandidate);
+        let bad_url = Error::Transport {
+            kind: TransportKind::Other,
+            message: "bad url".into(),
+        };
+        assert_eq!(classify_http_error(&bad_url), TransportHint::Inconclusive);
+        let unavailable = Error::Status {
+            code: 503,
+            body: String::new(),
+            retry_after: None,
+            message: "x: status code 503".into(),
+        };
+        assert_eq!(
+            classify_http_error(&unavailable),
+            TransportHint::CloudReachable
+        );
     }
 
     #[test]

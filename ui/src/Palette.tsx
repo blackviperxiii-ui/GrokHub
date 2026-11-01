@@ -28,7 +28,9 @@ export type View =
   | "memory"
   | "connectors"
   | "settings"
-  | "library";
+  | "library"
+  | "workboard"
+  | "devices";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -75,12 +77,15 @@ export const VIEW_LABELS: Record<View, string> = {
   memory: "Memory",
   connectors: "Connectors",
   settings: "Settings",
+  workboard: "Workboard",
+  devices: "Devices",
   library: "Library",
 };
 
 /** The pages this platform shows, in tab order. History and the journal
  * are this computer's files, so the web app leaves them on the desktop (a
- * browser sees only the chats it started). */
+ * browser sees only the chats it started); Devices is about this computer's
+ * Web access, so only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
     "chat",
@@ -90,6 +95,8 @@ export function views(caps: Capabilities): View[] {
     "automations",
     "memory",
     "connectors",
+    "workboard",
+    ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
     "settings",
   ];

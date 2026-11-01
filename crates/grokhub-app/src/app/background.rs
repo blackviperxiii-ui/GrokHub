@@ -93,6 +93,8 @@ impl BgRun {
 pub(super) struct BgWork {
     pub runs: Vec<BgRun>,
     pub next_id: u64,
+    /// `(run id, card id)`: the board card each live run checkpoints (KB-02).
+    pub cards: Vec<(u64, String)>,
     /// `(thread id, note)` for runs that ended since that chat's last turn.
     pub unread: Vec<(String, String)>,
     /// Background results for the turn being kicked. Set on each send.
@@ -281,6 +283,7 @@ impl Cabin {
             );
         });
         let title = bg_task_title(task);
+        let card_session = child_id.clone();
         self.bg.next_id += 1;
         self.bg.runs.push(BgRun {
             id: self.bg.next_id,
@@ -298,6 +301,10 @@ impl Cabin {
             native_session: Some(child_id),
             automation: None,
         });
+        // A scheduled run takes its automation's card in `start_scheduled_run`.
+        if matches!(origin, BgOrigin::User | BgOrigin::Agent) {
+            self.open_bg_card(self.bg.next_id, &title, &card_session);
+        }
         Ok(title)
     }
 
@@ -402,6 +409,7 @@ impl Cabin {
         }
         let mut crashed: Vec<grokhub_core::UpdateCard> = Vec::new();
         let mut scheduled_tokens = 0u64;
+        let mut tools: Vec<(u64, String, ToolCard)> = Vec::new();
         for run in self.bg.runs.iter_mut() {
             let Some(rx) = run.rx.take() else {
                 continue;
@@ -415,6 +423,10 @@ impl Cabin {
                     Ok(GrokPEvent::Tool(card)) => {
                         if !card.title.trim().is_empty() {
                             run.action = redact_held_secrets(&card.title, &self.secret_hold);
+                        }
+                        if matches!(card.status.as_str(), "completed" | "failed") {
+                            let session = run.native_session.clone().unwrap_or_default();
+                            tools.push((run.id, session, card));
                         }
                     }
                     Ok(GrokPEvent::Recovering(_)) => run.action = "Retrying…".into(),
@@ -465,6 +477,9 @@ impl Cabin {
         for card in crashed {
             self.post_feed_card(card);
         }
+        if !tools.is_empty() {
+            self.log_bg_tools(tools);
+        }
         // Scheduled runs are the governor's Automations job.
         self.governor_charge(JobKind::Automations, scheduled_tokens);
         self.post_finished_bg_runs();
@@ -499,6 +514,11 @@ impl Cabin {
             done.push(self.bg.runs.remove(i));
         }
         done.reverse();
+        for run in &done {
+            let end = run.end.clone().unwrap_or(BgEnd::Done);
+            self.finish_bg_card(run.id, &(&end).into(), run.origin == BgOrigin::Scheduled);
+        }
+        self.flush_board();
         for run in done {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
@@ -617,6 +637,7 @@ impl Cabin {
                 }
             }
         }
+        self.end_run_card(&run.thread_id, &end.into());
         let mut changed = if *end == BgEnd::Done {
             settle_inflight_card(&mut self.board, &run.thread_id)
         } else {
@@ -684,8 +705,14 @@ impl Cabin {
             if run.origin == BgOrigin::Detached {
                 detached = true;
             }
+            let stopped = grokhub_core::work_run::RunEnd::Stopped;
+            self.finish_bg_card(run.id, &stopped, run.origin == BgOrigin::Scheduled);
         }
-        if detached && abandon_inflight_card(&mut self.board, thread_id) {
+        if detached {
+            self.end_run_card(thread_id, &grokhub_core::work_run::RunEnd::Stopped);
+            abandon_inflight_card(&mut self.board, thread_id);
+        }
+        if n > 0 {
             self.flush_board();
         }
         self.bg.unread.retain(|(id, _)| id != thread_id);
@@ -697,6 +724,15 @@ impl Cabin {
         for run in self.bg.runs.iter_mut() {
             run.stop_native();
             run.rx = None;
+        }
+        let ids: Vec<(u64, bool)> = self
+            .bg
+            .runs
+            .iter()
+            .map(|r| (r.id, r.origin == BgOrigin::Scheduled))
+            .collect();
+        for (id, scheduled) in ids {
+            self.finish_bg_card(id, &grokhub_core::work_run::RunEnd::Stopped, scheduled);
         }
         self.bg.runs.clear();
     }

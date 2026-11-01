@@ -32,12 +32,18 @@ pub enum Channel {
     /// Loadout's own addon or mod, loaded by the game's official addon or
     /// mod system, which only writes a file Loadout reads.
     OfficialAddon(&'static str),
+    /// The game maker's own read-only web API, with a key the user makes.
+    /// Nothing runs on the user's computer beside the game.
+    OfficialWebApi(&'static str),
 }
 
 impl Channel {
     pub fn describe(self) -> &'static str {
         match self {
-            Channel::GameFile(s) | Channel::OfficialLocalApi(s) | Channel::OfficialAddon(s) => s,
+            Channel::GameFile(s)
+            | Channel::OfficialLocalApi(s)
+            | Channel::OfficialAddon(s)
+            | Channel::OfficialWebApi(s) => s,
         }
     }
 
@@ -125,6 +131,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "gw2",
+        name: "Guild Wars 2",
+        steam_app_id: Some(1284210),
+        protection: Protection::None,
+        channels: &[Channel::OfficialWebApi(
+            "ArenaNet's official API with your read-only key; nothing added to the game",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "stardew",
         name: "Stardew Valley",
         steam_app_id: Some(413150),
@@ -141,6 +157,16 @@ pub const ALL: &[Integration] = &[
         protection: Protection::None,
         channels: &[Channel::OfficialAddon(
             "a Loadout addon through ZeniMax's Lua addon API and saved variables, installed only when you click",
+        )],
+        status: Status::Built,
+    },
+    Integration {
+        id: "factorio",
+        name: "Factorio",
+        steam_app_id: Some(427520),
+        protection: Protection::None,
+        channels: &[Channel::OfficialAddon(
+            "a Loadout mod through Factorio's mod API that writes a summary to script-output, installed only when you click",
         )],
         status: Status::Built,
     },
@@ -255,9 +281,13 @@ mod tests {
         );
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
+        let gw2 = by_id("gw2").unwrap();
+        assert!(!gw2.channels[0].is_addon());
+        assert!(gw2.how().contains("read-only key"));
         assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
         assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
         assert!(by_id("eso").unwrap().how().contains("only when you click"));
         assert!(by_id("rocketleague").unwrap().follows_the_rules());
+        assert_eq!(by_id("factorio").unwrap().steam_app_id, Some(427520));
     }
 }

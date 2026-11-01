@@ -35,6 +35,7 @@ pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_devices;
 pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
@@ -42,6 +43,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod slash;
 pub mod voice;
+pub mod workboard;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1050,6 +1052,41 @@ async fn journal_to_mission(
 }
 
 #[tauri::command]
+async fn get_workboard(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn workboard_add(
+    state: State<'_, ShellState>,
+    title: String,
+    detail: String,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::add(&dir, &title, &detail)).await?
+}
+
+#[tauri::command]
+async fn workboard_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: workboard::Act,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::act(&dir, &id, act)).await?
+}
+
+#[tauri::command]
+async fn workboard_work(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::work(&dir, &id)).await?
+}
+
+#[tauri::command]
 async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     off_main(move || permissions::load(&dir, &workspace)).await
@@ -1474,6 +1511,19 @@ fn set_web_access(
     )
 }
 
+/// The Devices page (desktop only; not a web command): this computer, web
+/// access, and the browsers paired right now. Kept in memory only.
+#[tauri::command]
+fn get_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.devices()
+}
+
+/// Devices → Sign out all browsers: a new pairing code ends every pairing.
+#[tauri::command]
+fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.forget_all()
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -1718,6 +1768,18 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_workboard" => out(block_on(get_workboard(state))?),
+        "workboard_add" => out(block_on(workboard_add(
+            state,
+            arg(args, "title")?,
+            arg(args, "detail")?,
+        ))?),
+        "workboard_act" => out(block_on(workboard_act(
+            state,
+            arg(args, "id")?,
+            arg(args, "act")?,
+        ))?),
+        "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2233,6 +2295,8 @@ pub fn run() {
             run_local_speed_test,
             get_web_access,
             set_web_access,
+            get_devices,
+            forget_all_devices,
             get_update_status,
             set_update_channel,
             check_shell_update,
@@ -2245,6 +2309,10 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            get_workboard,
+            workboard_add,
+            workboard_act,
+            workboard_work,
             get_behavior,
             save_behavior,
             save_defaults,
