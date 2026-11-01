@@ -267,7 +267,7 @@ export function App() {
       )}
       {opened.has("connectors") && (
         <Page shown={view === "connectors"}>
-          <Connectors />
+          <Connectors remote={Boolean(caps.remote)} />
         </Page>
       )}
       {opened.has("library") && caps.library && (

@@ -478,6 +478,8 @@ export interface ConnectorRow {
   account: string;
   needsSignIn: boolean;
   canDisconnect: boolean;
+  /** False once its switch turned it off. */
+  enabled: boolean;
 }
 
 export interface ConnectorsChanged {
@@ -505,6 +507,64 @@ export function signOutConnector(name: string): Promise<ConnectorsChanged> {
 /** Only after the person confirmed it on the page. */
 export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
+}
+
+/** One connector in the Add sheet's catalog. */
+export interface CatalogRow {
+  id: string;
+  name: string;
+  publisher: string;
+  category: string;
+  description: string;
+  auth: "none" | "oauth" | "key" | "google" | "own";
+  keyHint: string;
+  target: string;
+  installed: boolean;
+}
+
+export interface CatalogView {
+  rows: CatalogRow[];
+  /** What Refresh did, when it ran. */
+  note: string | null;
+}
+
+/** A key waiting on its approval card. */
+export interface KeyCard {
+  id: string;
+  name: string;
+  action: string;
+}
+
+/** `refresh` reads the official registry; only from the Refresh click. */
+export function connectorCatalog(refresh = false): Promise<CatalogView> {
+  return invoke<CatalogView>("connector_catalog", { refresh });
+}
+
+export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+}
+
+/** A pasted `mcpServers` config; names already set up are kept. */
+export function addConnectorConfig(text: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_connector_config", { text });
+}
+
+export function setConnectorEnabled(name: string, on: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Opens the server's sign-in page in the browser and waits for it. */
+export function signInConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("sign_in_connector", { name });
+}
+
+/** Posts the approval card; nothing is saved until `answerConnectorKey`. */
+export function saveConnectorKey(name: string, key: string): Promise<KeyCard> {
+  return invoke<KeyCard>("save_connector_key", { name, key });
+}
+
+export function answerConnectorKey(id: string, approve: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("answer_connector_key", { id, approve });
 }
 
 /** One Feed post: something that happened or was found. */
