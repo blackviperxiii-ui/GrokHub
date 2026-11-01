@@ -455,6 +455,7 @@ fn pulse_menu(
     kind: PulseType,
     feed: bool,
     why: Option<&str>,
+    extra: &[(String, PulseAct)],
     act: &mut Option<PulseAct>,
 ) {
     let id = card.id.clone();
@@ -476,6 +477,9 @@ fn pulse_menu(
     let self_review = grokhub_core::self_review::card_target(&card.source_id);
     if let Some(label) = super::pulse_fix_ui::fix_label(card) {
         pick(ui, label, "", PulseAct::Options(id.clone()), act);
+    }
+    for (label, a) in extra {
+        pick(ui, label, "", a.clone(), act);
     }
     if !feed && self_review.is_none() {
         pick(
@@ -577,47 +581,61 @@ pub(super) fn run_label(card: &UpdateCard) -> &'static str {
     }
 }
 
-/// How an inline row action is drawn: Run is the amber CTA, Snooze is
-/// outlined in signal red, Dismiss is quiet text.
+/// How a card button is drawn. Every card has at most two: the primary is the
+/// amber CTA and the secondary is outlined in signal red. Anything more waits
+/// in the card's ···.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Quick {
     Primary,
     Outline,
-    Quiet,
 }
 
 /// One of the row's inline actions, in the Loadout button style.
 pub(super) fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
+    quick_button_resp(ui, label, style).clicked()
+}
+
+/// The same button, handing back its response so a caller can pick which
+/// clicks count.
+fn quick_button_resp(ui: &mut egui::Ui, label: &str, style: Quick) -> egui::Response {
     let text = RichText::new(label)
         .size(crate::theme::FONT_TIP)
         .strong()
         .extra_letter_spacing(0.8);
     use crate::ui_kit::recipe::{look, Part, State, BUTTON_RADIUS};
-    let button = match style {
-        Quick::Primary | Quick::Outline => {
-            let state = if style == Quick::Primary {
-                State::Accent
-            } else {
-                State::Default
-            };
-            let l = look(Part::Button, state);
-            egui::Button::new(text.color(l.ink))
-                .fill(l.fill)
-                .stroke(l.stroke)
-        }
-        Quick::Quiet => egui::Button::new(text.color(crate::theme::muted())).frame(false),
+    let state = match style {
+        Quick::Primary => State::Accent,
+        Quick::Outline => State::Default,
     };
+    let l = look(Part::Button, state);
+    let button = egui::Button::new(text.color(l.ink))
+        .fill(l.fill)
+        .stroke(l.stroke);
     ui.add(
         button
             .corner_radius(BUTTON_RADIUS)
             .min_size(egui::vec2(0.0, 22.0)),
     )
-    .clicked()
+}
+
+/// The row's type ("Do", "Learn"…) as a plain tag: a small dot in the type's
+/// color and the word in quiet text, so it never reads as a button.
+fn paint_type_tag(ui: &mut egui::Ui, kind: PulseType) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), 3.0, type_color(kind));
+    ui.label(
+        RichText::new(kind.label())
+            .size(crate::theme::FONT_TIP - 1.0)
+            .color(crate::theme::subtle()),
+    );
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
-/// type word, and ···. Hovered or focused, Run · Snooze · Dismiss show inline.
-/// On a narrow page Run always shows and Snooze and Dismiss stay in ···.
+/// type tag, and ···. Hovered or focused, its two buttons show inline: the
+/// primary (Run, Do it, Send…, Fix it or Options) and Snooze. Dismiss and the
+/// rest wait in ···. On a narrow page only the primary shows.
 /// Returns the action, the row's rect, and whether the bold line is hovered.
 pub(super) fn paint_pulse_row(
     ui: &mut egui::Ui,
@@ -674,22 +692,12 @@ pub(super) fn paint_pulse_row(
                     );
                 }
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(kind.label().to_ascii_uppercase())
-                            .size(crate::theme::FONT_TIP - 1.0)
-                            .strong()
-                            .color(type_color(kind)),
-                    );
+                    paint_type_tag(ui, kind);
                     if active || st.compact {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            if !st.compact {
-                                if quick_button(ui, "Dismiss", Quick::Quiet) {
-                                    act = Some(PulseAct::Dismiss(card.id.clone()));
-                                }
-                                if quick_button(ui, "Snooze", Quick::Outline) {
-                                    act = Some(PulseAct::Snooze(card.id.clone()));
-                                }
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if !st.compact && quick_button(ui, "Snooze", Quick::Outline) {
+                                act = Some(PulseAct::Snooze(card.id.clone()));
                             }
                             if let Some(label) = super::pulse_fix_ui::fix_label(card) {
                                 if quick_button(ui, label, Quick::Primary) {
@@ -704,7 +712,7 @@ pub(super) fn paint_pulse_row(
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 crate::cards::dots_menu(ui, active, |ui| {
-                    pulse_menu(ui, card, kind, false, why, &mut act)
+                    pulse_menu(ui, card, kind, false, why, &[], &mut act)
                 });
             });
         });
@@ -726,6 +734,7 @@ pub(super) fn paint_feed_icon(ui: &mut egui::Ui, card: &UpdateCard) {
     icon(ui, feed_glyph(card), category_tint(pc::card_category(card)));
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FeedPostAct {
     Like,
     Discuss,
@@ -759,85 +768,153 @@ pub(super) enum SourceAct {
     MoreLike,
 }
 
-/// Open and Retry on a crash card (a run killed from outside, exit 143).
-fn paint_crash(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    if !grokhub_core::is_crash_card(card) || card.status == grokhub_core::UpdateStatus::Dismissed {
-        return None;
+/// What a post's action does on the page.
+pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
+    let id = card.id.clone();
+    match did {
+        FeedPostAct::Like => PulseAct::Like(id),
+        FeedPostAct::Discuss => PulseAct::Discuss(id),
+        FeedPostAct::Link(url) => PulseAct::Link(url),
+        FeedPostAct::Undo => PulseAct::Undo(id),
+        FeedPostAct::NeverAgain => PulseAct::NeverAgain(id),
+        FeedPostAct::Open => PulseAct::Open(id),
+        FeedPostAct::Retry => PulseAct::Retry(id),
+        FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(id),
+        FeedPostAct::FixIt(fix) => PulseAct::FixIt(fix),
+        FeedPostAct::RetryNow => PulseAct::RetryNow,
+        FeedPostAct::Source(did) => PulseAct::Source(id, did),
+        FeedPostAct::HobbyDone => PulseAct::HobbyDone(id),
+        FeedPostAct::HobbySkip => PulseAct::HobbySkip(id),
+        FeedPostAct::HobbyTooEasy => PulseAct::HobbyTooEasy(id),
+        FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(id),
     }
-    let mut act = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if card.action.is_some() && super::change_undo::click_pill(ui, "Open") {
-            act = Some(FeedPostAct::Open);
-        }
-        if card.prompt.is_some() && super::change_undo::click_pill(ui, "Retry") {
-            act = Some(FeedPostAct::Retry);
-        }
-    });
-    act
 }
 
-/// Retry now on a no-route wait card; the wait also retries on its own.
-fn paint_model_wait(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    if !grokhub_core::is_model_wait_card(card)
-        || card.status == grokhub_core::UpdateStatus::Dismissed
+/// A post's actions, weightiest first. The first two are its buttons; the
+/// rest wait in its ···. Like comes last, so a post with nothing else to do
+/// shows Like alone, drawn as the secondary button.
+pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String, FeedPostAct)> {
+    let live = card.status != grokhub_core::UpdateStatus::Dismissed;
+    let mut acts: Vec<(String, FeedPostAct)> = Vec::new();
+    let mut add = |label: &str, did: FeedPostAct| acts.push((label.to_string(), did));
+    if live && super::fix_it::is_diagnosis_report_card(card) {
+        let is_screen = grokhub_core::screen_recording_dir(card).is_some();
+        add("Fix it", FeedPostAct::FixIt(card.id.clone()));
+        if is_screen && card.action.is_some() {
+            add("Open", FeedPostAct::Open);
+        }
+        if is_screen {
+            add("Delete recording", FeedPostAct::DeleteRecording);
+        }
+    }
+    if live && grokhub_core::is_crash_card(card) {
+        if card.prompt.is_some() {
+            add("Retry", FeedPostAct::Retry);
+        }
+        if card.action.is_some() {
+            add("Open", FeedPostAct::Open);
+        }
+    }
+    if live && grokhub_core::is_model_wait_card(card) {
+        add("Retry now", FeedPostAct::RetryNow);
+    }
+    if card.kind == UpdateKind::DoneForYou
+        && card.done_for_you.as_ref().is_some_and(|d| !d.answered)
     {
-        return None;
+        add("Undo", FeedPostAct::Undo);
+        add("Don't do this again", FeedPostAct::NeverAgain);
     }
-    super::change_undo::click_pill(ui, "Retry now").then_some(FeedPostAct::RetryNow)
+    if card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered) {
+        add("Done", FeedPostAct::HobbyDone);
+        add("Skip", FeedPostAct::HobbySkip);
+        add("Too easy", FeedPostAct::HobbyTooEasy);
+        add("Too hard", FeedPostAct::HobbyTooHard);
+    }
+    if live && grokhub_core::wind_down::is_wind_down_card(card) {
+        add("Sleep the PC", FeedPostAct::Open);
+    }
+    if live && grokhub_core::local_model_news::is_upgrade_card(card) {
+        add("Open in Settings", FeedPostAct::Open);
+    }
+    let source = grokhub_core::pulse_sources::is_source_post(card);
+    let liked = card.reaction == Some(CardReaction::Up);
+    if source {
+        add(
+            if liked { "Saved" } else { "Save" },
+            FeedPostAct::Source(SourceAct::Save),
+        );
+        add(
+            "Not interested",
+            FeedPostAct::Source(SourceAct::NotInterested),
+        );
+        add(
+            if looking_more {
+                "Looking…"
+            } else {
+                "More like this"
+            },
+            FeedPostAct::Source(SourceAct::MoreLike),
+        );
+    }
+    if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
+        add("Discuss", FeedPostAct::Discuss);
+    }
+    if !source {
+        add(if liked { "Liked" } else { "Like" }, FeedPostAct::Like);
+    }
+    acts
 }
 
-/// Open, Fix it, and Delete recording on a screen or audio report card.
-fn paint_recording(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    super::fix_it::paint_diagnosis_report_actions(ui, card)
+/// How many of a post's actions sit on the post; the rest go in its ···.
+pub(super) const POST_BUTTONS: usize = 2;
+
+/// One card button, answering a pointer click only (Undo and Delete live
+/// here, and a stray key must never fire them).
+pub(super) fn card_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
+    let resp = quick_button_resp(ui, label, style);
+    resp.clicked_by(egui::PointerButton::Primary)
 }
 
-/// The Done-for-you pills, while the card is unanswered.
-fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    let open = card.kind == UpdateKind::DoneForYou
-        && card.done_for_you.as_ref().is_some_and(|d| !d.answered);
-    if !open {
+/// The post's two buttons: the first action as the amber primary, the second
+/// outlined. Like is never the primary, so a post with only Like shows it
+/// outlined.
+fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Option<FeedPostAct> {
+    if acts.is_empty() {
         return None;
     }
-    let mut act = None;
+    let mut hit = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if super::change_undo::click_pill(ui, "Undo") {
-            act = Some(FeedPostAct::Undo);
-        }
-        if super::change_undo::click_pill(ui, "Don't do this again") {
-            act = Some(FeedPostAct::NeverAgain);
-        }
-    });
-    act
-}
-
-/// Done / Skip / Too easy / Too hard on an unanswered hobby learning-path tip.
-fn paint_hobby_path(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    let open = card.pulse.hobby_path.as_ref().is_some_and(|m| !m.answered);
-    if !open {
-        return None;
-    }
-    let mut act = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if super::change_undo::click_pill(ui, "Done") {
-            act = Some(FeedPostAct::HobbyDone);
-        }
-        if super::change_undo::click_pill(ui, "Skip") {
-            act = Some(FeedPostAct::HobbySkip);
-        }
-        if super::change_undo::click_pill(ui, "Too easy") {
-            act = Some(FeedPostAct::HobbyTooEasy);
-        }
-        if super::change_undo::click_pill(ui, "Too hard") {
-            act = Some(FeedPostAct::HobbyTooHard);
+        for (i, (label, did)) in acts.iter().take(POST_BUTTONS).enumerate() {
+            let style = if i == 0 && *did != FeedPostAct::Like {
+                Quick::Primary
+            } else {
+                Quick::Outline
+            };
+            if card_button(ui, label, style) {
+                hit = Some(did.clone());
+            }
         }
     });
-    act
+    hit
 }
 
-/// Title, short takeaway, Read at, images, then Like / Discuss.
+/// The post's actions past its two buttons, for its ···. Open, Retry and
+/// Delete recording are left out: the ··· already has them.
+pub(super) fn post_overflow(acts: &[(String, FeedPostAct)]) -> Vec<(String, FeedPostAct)> {
+    acts.iter()
+        .skip(POST_BUTTONS)
+        .filter(|(_, did)| {
+            !matches!(
+                did,
+                FeedPostAct::Open | FeedPostAct::Retry | FeedPostAct::DeleteRecording
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// Title, short takeaway, Read at, images, then the post's two buttons.
 /// `thumbs` is empty when the post has no image yet.
 /// `looking_more` is true while a More like this check is in flight.
 pub(super) fn paint_post_body(
@@ -900,54 +977,8 @@ pub(super) fn paint_post_body(
         paint_thumbs(ui, thumbs);
     }
     ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 14.0;
-        if grokhub_core::pulse_sources::is_source_post(card) {
-            if let Some(did) = paint_source_actions(ui, card, looking_more) {
-                act = Some(FeedPostAct::Source(did));
-            }
-        } else if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
-            act = Some(FeedPostAct::Like);
-        }
-        if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
-            let talk = ui.add(
-                egui::Button::new(RichText::new("Discuss").size(crate::theme::FONT_TIP))
-                    .frame(false)
-                    .min_size(egui::vec2(0.0, 24.0)),
-            );
-            if talk.clicked() {
-                act = Some(FeedPostAct::Discuss);
-            }
-        }
-    });
-    if let Some(done) = paint_done_for_you(ui, card) {
-        act = Some(done);
-    }
-    if let Some(hobby) = paint_hobby_path(ui, card) {
-        act = Some(hobby);
-    }
-    if let Some(crash) = paint_crash(ui, card) {
-        act = Some(crash);
-    }
-    if grokhub_core::wind_down::is_wind_down_card(card)
-        && card.status != grokhub_core::UpdateStatus::Dismissed
-        && super::change_undo::click_pill(ui, "Sleep the PC")
-    {
-        act = Some(FeedPostAct::Open);
-    }
-    if grokhub_core::local_model_news::is_upgrade_card(card)
-        && card.status != grokhub_core::UpdateStatus::Dismissed
-        && super::change_undo::click_pill(ui, "Open in Settings")
-    {
-        act = Some(FeedPostAct::Open);
-    }
-    if super::fix_it::is_diagnosis_report_card(card) {
-        if let Some(rec) = paint_recording(ui, card) {
-            act = Some(rec);
-        }
-    }
-    if let Some(wait) = paint_model_wait(ui, card) {
-        act = Some(wait);
+    if let Some(did) = paint_post_buttons(ui, &post_actions(card, looking_more)) {
+        act = Some(did);
     }
     act
 }
@@ -965,68 +996,12 @@ fn paint_day_brief_taps(
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (label, prompt, source) in taps.iter().take(grokhub_core::day_brief::ITEM_CAP) {
-            let btn = ui.add(
-                egui::Button::new(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_TIP)
-                        .color(crate::theme::fg()),
-                )
-                .frame(false)
-                .min_size(egui::vec2(0.0, 22.0)),
-            );
-            if btn.clicked() {
+            if card_button(ui, label, Quick::Outline) {
                 picked = Some((prompt.clone(), source.clone()));
             }
         }
     });
     picked
-}
-
-/// Save, Not interested and More like this under a source post. Save reads Saved
-/// once the post is in Saved Finds. More like this reads Looking… while a check
-/// it started is still running.
-fn paint_source_actions(
-    ui: &mut egui::Ui,
-    card: &UpdateCard,
-    looking_more: bool,
-) -> Option<SourceAct> {
-    let saved = card.reaction == Some(CardReaction::Up);
-    let mut act = None;
-    for (label, did) in [
-        (if saved { "Saved" } else { "Save" }, SourceAct::Save),
-        ("Not interested", SourceAct::NotInterested),
-        (
-            if looking_more {
-                "Looking…"
-            } else {
-                "More like this"
-            },
-            SourceAct::MoreLike,
-        ),
-    ] {
-        let color =
-            if (did == SourceAct::Save && saved) || (did == SourceAct::MoreLike && looking_more) {
-                crate::theme::fg()
-            } else {
-                crate::theme::muted()
-            };
-        let button = ui.add(
-            egui::Button::new(
-                RichText::new(label)
-                    .size(crate::theme::FONT_TIP)
-                    .color(color),
-            )
-            .frame(false)
-            .min_size(egui::vec2(0.0, 24.0)),
-        );
-        if button.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if button.clicked() {
-            act = Some(did);
-        }
-    }
-    act
 }
 
 /// "Why: air compressors", under a source post's summary.
@@ -1059,75 +1034,6 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
         UpdateKind::Digest => "Daily digest".into(),
         _ => grokhub_core::brand::product_name().into(),
     }
-}
-
-fn paint_heart_button(ui: &mut egui::Ui, on: bool) -> bool {
-    let label = if on { "Liked" } else { "Like" };
-    let resp = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            // Heart plus word, about 60px: hovering either lights both.
-            let hot = ui.rect_contains_pointer(egui::Rect::from_min_size(
-                ui.cursor().min,
-                egui::vec2(60.0, 18.0),
-            ));
-            let (rect, r1) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            let tint = if on {
-                egui::Color32::from_rgb(0xf0, 0x4e, 0x6a)
-            } else if hot {
-                crate::theme::fg()
-            } else {
-                crate::theme::muted()
-            };
-            let c = rect.center();
-            let s = 7.0;
-            if on {
-                ui.painter()
-                    .circle_filled(c + egui::vec2(-0.45 * s, -0.25 * s), 0.5 * s, tint);
-                ui.painter()
-                    .circle_filled(c + egui::vec2(0.45 * s, -0.25 * s), 0.5 * s, tint);
-                let pts = vec![
-                    c + egui::vec2(-0.93 * s, -0.08 * s),
-                    c + egui::vec2(0.93 * s, -0.08 * s),
-                    c + egui::vec2(0.0, 0.95 * s),
-                ];
-                ui.painter()
-                    .add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
-            } else {
-                let stroke = egui::Stroke::new(1.4_f32, tint);
-                let mut pts = ring(
-                    c + egui::vec2(-0.45 * s, -0.25 * s),
-                    0.5 * s,
-                    0.5 * s,
-                    2.6,
-                    6.2,
-                    10,
-                );
-                pts.extend(ring(
-                    c + egui::vec2(0.45 * s, -0.25 * s),
-                    0.5 * s,
-                    0.5 * s,
-                    3.2,
-                    6.9,
-                    10,
-                ));
-                pts.push(c + egui::vec2(0.0, 0.95 * s));
-                pts.push(pts[0]);
-                ui.painter().add(egui::Shape::line(pts, stroke));
-            }
-            let r2 = ui.add(
-                egui::Label::new(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_TIP)
-                        .color(tint),
-                )
-                .sense(egui::Sense::click())
-                .selectable(false),
-            );
-            r1.clicked() || r2.clicked()
-        })
-        .inner;
-    resp
 }
 
 impl Cabin {
@@ -1468,7 +1374,7 @@ impl Cabin {
     }
 
     /// One post: "source · age" with ··· on top, the headline, the short
-    /// takeaway, the source link, its images, then Like / Discuss.
+    /// takeaway, the source link, its images, then its two buttons.
     fn paint_pulse_post(
         &mut self,
         ui: &mut egui::Ui,
@@ -1479,6 +1385,11 @@ impl Cabin {
         let kind = pc::pulse_type(card);
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
         let why = self.reaction_why(card);
+        let extra: Vec<(String, PulseAct)> =
+            post_overflow(&post_actions(card, self.sources.looking_more))
+                .into_iter()
+                .map(|(label, did)| (label, feed_act(card, did)))
+                .collect();
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1505,31 +1416,13 @@ impl Cabin {
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             crate::cards::dots_menu(ui, false, |ui| {
-                                pulse_menu(ui, card, kind, true, why.as_deref(), &mut act)
+                                pulse_menu(ui, card, kind, true, why.as_deref(), &extra, &mut act)
                             });
                         });
                     });
                     if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more)
                     {
-                        act = Some(match did {
-                            FeedPostAct::Like => PulseAct::Like(card.id.clone()),
-                            FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
-                            FeedPostAct::Link(url) => PulseAct::Link(url),
-                            FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
-                            FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
-                            FeedPostAct::Open => PulseAct::Open(card.id.clone()),
-                            FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
-                            FeedPostAct::DeleteRecording => {
-                                PulseAct::DeleteRecording(card.id.clone())
-                            }
-                            FeedPostAct::FixIt(id) => PulseAct::FixIt(id),
-                            FeedPostAct::RetryNow => PulseAct::RetryNow,
-                            FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
-                            FeedPostAct::HobbyDone => PulseAct::HobbyDone(card.id.clone()),
-                            FeedPostAct::HobbySkip => PulseAct::HobbySkip(card.id.clone()),
-                            FeedPostAct::HobbyTooEasy => PulseAct::HobbyTooEasy(card.id.clone()),
-                            FeedPostAct::HobbyTooHard => PulseAct::HobbyTooHard(card.id.clone()),
-                        });
+                        act = Some(feed_act(card, did));
                     }
                     if let Some(id) = self.paint_backup_one_taps(ui, card) {
                         act = Some(PulseAct::BackupChip(id));
