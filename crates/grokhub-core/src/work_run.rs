@@ -39,7 +39,7 @@ pub fn next_step(steps: &[WorkStep]) -> String {
 
 /// The card's checkpoint, made when it has none. The goal starts as the title,
 /// so a checkpoint is never empty and survives `clean_card`.
-fn checkpoint(card: &mut BoardCard) -> &mut Checkpoint {
+pub(crate) fn checkpoint(card: &mut BoardCard) -> &mut Checkpoint {
     let title = card.title.clone();
     let cp = card.checkpoint.get_or_insert_with(Checkpoint::default);
     if cp.goal.trim().is_empty() {
@@ -80,6 +80,19 @@ pub fn mirror_todos(card: &mut BoardCard, todos: &[(String, String)], now: u64) 
             })
             .collect(),
     );
+    if card.user_steps {
+        // Your plan stands: the agent's to-dos only move your steps forward.
+        let moved = crate::work_triage::agent_onto_user_plan(card, &steps);
+        let next = next_step(&card.steps);
+        if !moved && card.checkpoint.as_ref().is_some_and(|c| c.next == next) {
+            return false;
+        }
+        let cp = checkpoint(card);
+        cp.next = next;
+        cp.at_ms = now;
+        clean_card(card);
+        return true;
+    }
     let next = next_step(&steps);
     let same_next = card.checkpoint.as_ref().is_some_and(|c| c.next == next);
     if steps == card.steps && same_next {

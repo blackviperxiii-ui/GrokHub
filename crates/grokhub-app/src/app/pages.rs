@@ -113,6 +113,47 @@ pub(super) enum BoardAct {
     HandBack(String),
     /// Open or close a card's log drawer.
     ToggleLog(String),
+    /// Agent: do this, now (Work on it) or on the queue.
+    Assign {
+        id: String,
+        queue: bool,
+    },
+    Unqueue(String),
+    /// A drop on a card: into its column, just above it.
+    Place {
+        id: String,
+        column: KanbanColumn,
+        before: Option<String>,
+    },
+    Priority {
+        id: String,
+        priority: &'static str,
+    },
+    /// Open the reason field under the card.
+    AskBlock(String),
+    Block {
+        id: String,
+        reason: String,
+    },
+    Unblock(String),
+    /// Open the steps editor under the card.
+    EditSteps(String),
+    SaveSteps {
+        id: String,
+        text: String,
+    },
+    /// Close the block or steps editor.
+    CancelTriage,
+    /// Start a recipe or playbook on the card.
+    Flow {
+        id: String,
+        flow: grokhub_core::CardFlow,
+    },
+    /// Make it recurring with one of `work_triage::RECUR_CHOICES`.
+    Recur {
+        id: String,
+        choice: usize,
+    },
 }
 
 /// Drag payload for a workboard card: its id.
@@ -1185,12 +1226,11 @@ page_body(ui, "history", |ui| {
                                 let col_w = ui.available_width();
                                 crate::cards::section_label(ui, col.label());
                                 ui.add_space(6.0);
-                                let ids: Vec<String> = self
-                                    .board
-                                    .iter()
-                                    .filter(|c| c.status.column() == Some(*col))
-                                    .map(|c| c.id.clone())
-                                    .collect();
+                                let ids: Vec<String> =
+                                    grokhub_core::work_triage::in_column(&self.board, *col)
+                                        .into_iter()
+                                        .map(|i| self.board[i].id.clone())
+                                        .collect();
                                 if ids.is_empty() {
                                     ui.label(
                                         RichText::new("—")
@@ -1226,8 +1266,11 @@ page_body(ui, "history", |ui| {
                                     }
                                 }
                                 if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
-                                    if let Some(status) =
-                                        from(&self.board, &drag).and_then(|st| board_drop_move(st, *col))
+                                    // A drop on a card already placed it above that card.
+                                    let placed = matches!(act, Some(BoardAct::Place { .. }));
+                                    if let Some(status) = from(&self.board, &drag)
+                                        .and_then(|st| board_drop_move(st, *col))
+                                        .filter(|_| !placed)
                                     {
                                         act = Some(BoardAct::Move {
                                             id: drag.0.clone(),
@@ -1268,7 +1311,10 @@ page_body(ui, "history", |ui| {
         | BoardAct::Work(id)
         | BoardAct::Say { id, .. }
         | BoardAct::Resume(id)
-        | BoardAct::HandBack(id) = &act
+        | BoardAct::HandBack(id)
+        | BoardAct::Place { id, .. }
+        | BoardAct::Priority { id, .. }
+        | BoardAct::Unblock(id) = &act
         {
             grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
         }
@@ -1305,12 +1351,62 @@ page_body(ui, "history", |ui| {
                 self.board_link = false;
                 true
             }
-            BoardAct::Move { id, status } => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = status;
-                }
-                true
+            BoardAct::Move { id, status } => match status.column() {
+                // To the end of the column, numbered so the shell shows the same order.
+                Some(column) => grokhub_core::work_triage::place_card(
+                    &mut self.board,
+                    &id,
+                    column,
+                    None,
+                    grokhub_core::now_ms(),
+                ),
+                None => false,
+            },
+            BoardAct::Place { id, column, before } => grokhub_core::work_triage::place_card(
+                &mut self.board,
+                &id,
+                column,
+                before.as_deref(),
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::Assign { id, queue } => self.assign_card(&id, queue),
+            BoardAct::Unqueue(id) => grokhub_core::work_triage::unqueue_card(&mut self.board, &id),
+            BoardAct::Priority { id, priority } => {
+                grokhub_core::work_triage::set_priority(&mut self.board, &id, priority)
+                    .unwrap_or(false)
             }
+            BoardAct::AskBlock(id) => {
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.steps = None;
+                self.board_view.triage.blocking = Some((id, String::new()));
+                false
+            }
+            BoardAct::Block { id, reason } => self.block_board_card(&id, &reason),
+            BoardAct::Unblock(id) => grokhub_core::work_triage::unblock_card(
+                &mut self.board,
+                &id,
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::EditSteps(id) => {
+                let text = self
+                    .board
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(grokhub_core::work_triage::steps_text)
+                    .unwrap_or_default();
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = Some((id, text));
+                false
+            }
+            BoardAct::SaveSteps { id, text } => self.save_board_steps(&id, &text),
+            BoardAct::CancelTriage => {
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = None;
+                false
+            }
+            BoardAct::Flow { id, flow } => self.start_card_flow(&id, flow),
+            BoardAct::Recur { id, choice } => self.make_card_recurring(&id, choice),
             BoardAct::Archive(id) => {
                 grokhub_core::archive_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }

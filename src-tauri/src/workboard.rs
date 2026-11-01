@@ -30,6 +30,7 @@ use grokhub_core::work_file::{
 use grokhub_core::work_item::{
     clip_line, remove_work_log, DAY_MS, IDLE_ARCHIVE_MS, SWEEP_EVERY_MS,
 };
+use grokhub_core::work_triage::{self as wt, end_rank, in_column};
 use grokhub_core::{
     BoardCard, BoardStatus, KanbanColumn, StepStatus, WorkKind, WorkLogEvent, WorkOrigin,
 };
@@ -47,6 +48,10 @@ pub const LOG_READ_MAX: u64 = 32 * 1024;
 /// resume block KB-03 sends; the draft stays inside the same cap.
 pub const RESUME_DRAFT_MAX: usize = 1200;
 pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
+
+/// The page's line while cards wait in the queue and the cabin is closed.
+pub const QUEUE_WAITS_FOR_CABIN: &str =
+    "Queued cards start in the cabin once it is open and nothing else is running.";
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
@@ -135,6 +140,14 @@ pub struct Card {
     pub updated_ms: u64,
     /// When it was archived; 0 for a card on the board.
     pub archived_ms: u64,
+    /// "Queued", "Queued · 2nd": waiting for the agent. None when not queued.
+    pub queued: Option<String>,
+    /// The playbook, recipe or automation started on it: "Playbook · Linux repair".
+    pub flow: Option<String>,
+    /// You edited the steps, so the agent works from your version.
+    pub user_steps: bool,
+    /// The steps as the editor shows them, one a line with its mark.
+    pub steps_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -157,6 +170,8 @@ pub struct Page {
     /// The shell's last sweep archived these cards and you have not undone or
     /// dismissed it. Only cards still archived count.
     pub swept: Option<Swept>,
+    /// Cards wait in the queue and the cabin, which starts them, is closed.
+    pub queue_note: Option<String>,
 }
 
 /// One sweep's notice: "Archived 2 finished cards", with Undo.
@@ -206,6 +221,27 @@ pub enum Act {
     Restore,
     /// For good, with its progress log. The UI asks first.
     Delete,
+    /// Agent: do this → Queue. The cabin starts it once nothing else runs.
+    Queue,
+    Unqueue,
+    /// "high", "normal" or "low".
+    Priority {
+        priority: String,
+    },
+    /// To Blocked, with the reason written into the checkpoint.
+    Block {
+        reason: String,
+    },
+    Unblock,
+    /// Your edit of the steps, one a line.
+    Steps {
+        text: String,
+    },
+    /// Into `to`, just above `before` (a card there), or at its end.
+    Place {
+        to: Lane,
+        before: Option<String>,
+    },
 }
 
 /// What Work puts in the chat box, and the board after the card moved.
@@ -295,7 +331,7 @@ fn progress(card: &BoardCard) -> [u32; 2] {
     [filled, total]
 }
 
-fn card(c: &BoardCard) -> Card {
+fn card(c: &BoardCard, all: &[BoardCard]) -> Card {
     Card {
         id: c.id.clone(),
         title: c.title.clone(),
@@ -333,24 +369,11 @@ fn card(c: &BoardCard) -> Card {
         chat: c.thread_id.clone(),
         updated_ms: c.updated_ms.max(c.active_ms),
         archived_ms: c.archived_ms,
+        queued: wt::queue_place(all, &c.id).map(wt::queue_label),
+        flow: c.flow.as_ref().map(|f| f.line()),
+        user_steps: c.user_steps,
+        steps_text: wt::steps_text(c),
     }
-}
-
-/// A column's cards in board order: lowest rank first, file order on a tie.
-fn in_column(cards: &[BoardCard], column: KanbanColumn) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..cards.len())
-        .filter(|&i| cards[i].status.column() == Some(column))
-        .collect();
-    idx.sort_by_key(|&i| cards[i].rank);
-    idx
-}
-
-/// The rank that puts a card at the end of `column`.
-fn end_rank(cards: &[BoardCard], column: KanbanColumn) -> i64 {
-    in_column(cards, column)
-        .last()
-        .map(|&j| cards[j].rank.saturating_add(1))
-        .unwrap_or(0)
 }
 
 /// The shell's sweep notices, one per config folder, until Undo or Dismiss.
@@ -516,7 +539,7 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
             Column {
                 lane,
                 label: col.label().to_string(),
-                cards: here.into_iter().map(|i| card(&cards[i])).collect(),
+                cards: here.into_iter().map(|i| card(&cards[i], cards)).collect(),
             }
         })
         .collect();
@@ -527,9 +550,12 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
     archived.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
     Page {
         columns,
-        archived: archived.into_iter().map(card).collect(),
+        archived: archived.into_iter().map(|c| card(c, cards)).collect(),
         stamp,
         swept: swept_for(config_dir, cards),
+        queue_note: (cards.iter().any(wt::is_queued)
+            && !cabin_open(config_dir, grokhub_core::now_ms()))
+        .then(|| QUEUE_WAITS_FOR_CABIN.to_string()),
     }
 }
 
@@ -604,16 +630,15 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bo
         }
         Act::Move { to } => {
             let column = to.column();
-            if cards[i].status.column() == Some(column) {
-                false
-            } else {
-                let rank = end_rank(cards, column);
-                let c = &mut cards[i];
-                c.status = column.status();
-                c.rank = rank;
-                true
-            }
+            cards[i].status.column() != Some(column) && wt::place_card(cards, id, column, None, now)
         }
+        Act::Place { to, before } => wt::place_card(cards, id, to.column(), before.as_deref(), now),
+        Act::Queue => wt::queue_card(cards, id, now)?,
+        Act::Unqueue => wt::unqueue_card(cards, id),
+        Act::Priority { priority } => wt::set_priority(cards, id, priority)?,
+        Act::Block { reason } => wt::block_card(cards, id, reason, now)?,
+        Act::Unblock => wt::unblock_card(cards, id, now),
+        Act::Steps { text } => wt::edit_steps(&mut cards[i], text, now),
         Act::Rank { up } => match cards[i].status.column() {
             Some(column) => {
                 let order = in_column(cards, column);
@@ -657,7 +682,16 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bo
     // A change you made is yours, so the sweep leaves the card.
     let yours = matches!(
         act,
-        Act::Edit { .. } | Act::Notes { .. } | Act::Move { .. } | Act::Rank { .. } | Act::HandBack
+        Act::Edit { .. }
+            | Act::Notes { .. }
+            | Act::Move { .. }
+            | Act::Rank { .. }
+            | Act::HandBack
+            | Act::Place { .. }
+            | Act::Priority { .. }
+            | Act::Block { .. }
+            | Act::Unblock
+            | Act::Steps { .. }
     );
     if changed && yours {
         grokhub_core::mark_touched(cards, id, now);
@@ -684,8 +718,13 @@ pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
 /// done or an automation's Follow up, and stops being new. The chat is the
 /// shell's own, so the card is not linked to a cabin chat.
 pub fn work(config_dir: &Path, id: &str) -> Result<Work, String> {
+    let now = grokhub_core::now_ms();
     let (prompt, page) = change(config_dir, |cards| {
         let i = find(cards, id)?;
+        // Agent: do this → Now. A card in Done or Blocked still opens its chat.
+        if wt::assign_now(cards, id).is_ok() {
+            grokhub_core::mark_touched(cards, id, now);
+        }
         let prompt = grokhub_core::card_work_prompt(&cards[i]);
         let to_doing = cards[i].status != BoardStatus::Done
             && cards[i].automation.is_none()
@@ -700,6 +739,57 @@ pub fn work(config_dir: &Path, id: &str) -> Result<Work, String> {
         Ok(prompt)
     })?;
     Ok(Work { prompt, page })
+}
+
+/// Start a playbook on the card: the card links it, then it starts as Work
+/// (Now) does. The agent picks its playbook from the work itself, so the
+/// first message is the card's own and nothing more.
+pub fn start_playbook(
+    config_dir: &Path,
+    id: &str,
+    playbook: &str,
+    name: &str,
+) -> Result<Work, String> {
+    if playbook.trim().is_empty() {
+        return Err("Pick a playbook.".into());
+    }
+    let flow = wt::CardFlow::new(wt::FlowKind::Playbook, playbook, name);
+    change(config_dir, |cards| {
+        find(cards, id)?;
+        wt::assign_now(cards, id)?;
+        wt::link_flow(cards, id, flow);
+        Ok(())
+    })?;
+    work(config_dir, id)
+}
+
+/// Make it recurring: a new automation from the card's title on one of
+/// [`wt::RECUR_CHOICES`], which then owns the card. Its runs report here.
+pub fn make_recurring(
+    config_dir: &Path,
+    id: &str,
+    choice: usize,
+    clock: grokhub_core::LocalClock,
+) -> Result<Page, String> {
+    let cards = read_board(&path(config_dir))?;
+    let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
+    if c.automation.is_some() {
+        return Err("An automation already owns this card.".into());
+    }
+    let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
+    let list = crate::automations::add(config_dir, &seed, clock)?;
+    let added = list.last().ok_or("The automation was not saved.")?;
+    let (auto_id, name) = (added.id.clone(), added.name.clone());
+    let owned = change(config_dir, |cards| {
+        find(cards, id)?;
+        wt::own_by_automation(cards, id, &auto_id, &name);
+        Ok(())
+    });
+    if owned.is_err() {
+        // The card went meanwhile: no automation left behind for it.
+        let _ = crate::automations::remove(config_dir, &auto_id);
+    }
+    Ok(owned?.1)
 }
 
 /// The first message Resume puts in the chat box: the card and where it left
@@ -1438,5 +1528,171 @@ mod tests {
         assert!(matches!(parsed, Act::Rank { up: true }));
         let parsed: Act = serde_json::from_str(r#"{"kind":"handBack"}"#).expect("hand back");
         assert!(matches!(parsed, Act::HandBack));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"place","to":"todo","before":"w-1"}"#).expect("place");
+        assert!(matches!(parsed, Act::Place { to: Lane::Todo, before: Some(b) } if b == "w-1"));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"place","to":"done","before":null}"#)
+            .expect("place at the end");
+        assert!(matches!(
+            parsed,
+            Act::Place {
+                to: Lane::Done,
+                before: None
+            }
+        ));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"queue"}"#).expect("queue");
+        assert!(matches!(parsed, Act::Queue));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"block","reason":"Review"}"#).expect("block");
+        assert!(matches!(parsed, Act::Block { reason } if reason == "Review"));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"priority","priority":"high"}"#).expect("priority");
+        assert!(matches!(parsed, Act::Priority { priority } if priority == "high"));
+        let parsed: Act = serde_json::from_str(r#"{"kind":"steps","text":"A\nB"}"#).expect("steps");
+        assert!(matches!(parsed, Act::Steps { text } if text == "A\nB"));
+    }
+
+    #[test]
+    fn a_reorder_and_a_block_land_where_the_cabin_reads_them() {
+        let config = temp_dir("triage");
+        cabin_writes(
+            &config,
+            &[
+                board_card("a", BoardStatus::Todo),
+                board_card("b", BoardStatus::Todo),
+                board_card("c", BoardStatus::Todo),
+            ],
+        );
+        // Drop c on a: c lands above a, in the ranks the cabin sorts by.
+        let to_a = Act::Place {
+            to: Lane::Todo,
+            before: Some("a".into()),
+        };
+        let page = act(&config, "c", to_a).unwrap();
+        assert_eq!(ids(&page, Lane::Todo), ["c", "a", "b"]);
+        let disk = on_disk(&config);
+        let cabin_order: Vec<&str> = in_column(&disk, KanbanColumn::Todo)
+            .iter()
+            .map(|&i| disk[i].id.as_str())
+            .collect();
+        assert_eq!(cabin_order, ["c", "a", "b"]);
+        assert!(disk[2].touched, "a reorder is yours");
+
+        // An order the cabin saved shows the same here.
+        let mut cabin = on_disk(&config);
+        assert!(wt::place_card(
+            &mut cabin,
+            "b",
+            KanbanColumn::Todo,
+            Some("c"),
+            1
+        ));
+        cabin_writes(&config, &cabin);
+        assert_eq!(ids(&load(&config).unwrap(), Lane::Todo), ["b", "c", "a"]);
+
+        // Block with a reason: it lands in the checkpoint a resume reads.
+        assert!(act(
+            &config,
+            "a",
+            Act::Block {
+                reason: "  ".into()
+            }
+        )
+        .is_err());
+        let block = Act::Block {
+            reason: "Waiting on review".into(),
+        };
+        let page = act(&config, "a", block).unwrap();
+        let a = &lane(&page, Lane::Blocked)[0];
+        assert_eq!(a.checkpoint.as_ref().unwrap().blocker, "Waiting on review");
+        let saved = on_disk(&config);
+        let a = saved.iter().find(|c| c.id == "a").unwrap();
+        assert_eq!(a.checkpoint.as_ref().unwrap().blocker, "Waiting on review");
+        let page = act(&config, "a", Act::Unblock).unwrap();
+        assert_eq!(
+            ids(&page, Lane::Todo),
+            ["b", "c", "a"],
+            "back at the end of Todo"
+        );
+        assert_eq!(
+            lane(&page, Lane::Todo)[2]
+                .checkpoint
+                .as_ref()
+                .unwrap()
+                .blocker,
+            ""
+        );
+
+        let high = Act::Priority {
+            priority: "high".into(),
+        };
+        let page = act(&config, "b", high).unwrap();
+        assert_eq!(lane(&page, Lane::Todo)[0].priority, "high");
+
+        let steps = Act::Steps {
+            text: "[x] Read the spec\nWrite the parser".into(),
+        };
+        let page = act(&config, "b", steps).unwrap();
+        let b = &lane(&page, Lane::Todo)[0];
+        assert!(b.user_steps);
+        assert_eq!(b.steps_text, "[x] Read the spec\n[ ] Write the parser");
+        assert_eq!(b.checkpoint.as_ref().unwrap().next, "Write the parser");
+    }
+
+    #[test]
+    fn a_card_queued_here_waits_for_the_cabin() {
+        use grokhub_core::scheduler_lease::{write_lease, SchedulerLease};
+        let config = temp_dir("queue");
+        let mut agent = board_card("a", BoardStatus::Todo);
+        agent.origin = Some(WorkOrigin::Agent);
+        cabin_writes(&config, &[agent, board_card("b", BoardStatus::Done)]);
+        let page = act(&config, "a", Act::Queue).unwrap();
+        let a = &lane(&page, Lane::Todo)[0];
+        assert_eq!(a.queued.as_deref(), Some("Queued"));
+        assert_eq!(a.owner, "You", "a card you hand over is yours");
+        assert_eq!(page.queue_note.as_deref(), Some(QUEUE_WAITS_FOR_CABIN));
+        assert!(
+            act(&config, "b", Act::Queue).is_err(),
+            "a done card is not queued"
+        );
+
+        // The cabin is open: it starts queued cards, so no note.
+        let now = grokhub_core::now_ms();
+        let lease = SchedulerLease {
+            owner: LeaseOwner::Cabin,
+            pid: 1,
+            beat_ms: now,
+        };
+        write_lease(&config, &lease).unwrap();
+        assert_eq!(load(&config).unwrap().queue_note, None);
+
+        let page = act(&config, "a", Act::Unqueue).unwrap();
+        assert_eq!(lane(&page, Lane::Todo)[0].queued, None);
+    }
+
+    #[test]
+    fn make_it_recurring_files_an_automation_that_owns_the_card() {
+        let config = temp_dir("recur");
+        cabin_writes(&config, &[board_card("a", BoardStatus::Todo)]);
+        let clock = crate::automations::Clock {
+            weekday: 1,
+            hour: 8,
+            minute: 0,
+        }
+        .at(grokhub_core::now_ms());
+        assert!(make_recurring(&config, "a", 9, clock).is_err());
+        let page = make_recurring(&config, "a", 0, clock).unwrap();
+        let list = crate::automations::load(&config).unwrap();
+        assert_eq!(list.len(), 1);
+        let card = &lane(&page, Lane::Todo)[0];
+        assert_eq!(card.kind, Some("Automation"));
+        assert!(card.flow.as_deref().unwrap().starts_with("Automation · "));
+        let saved = on_disk(&config);
+        assert_eq!(saved[0].automation.as_deref(), Some(list[0].id.as_str()));
+        assert!(
+            make_recurring(&config, "a", 1, clock).is_err(),
+            "one automation owns a card"
+        );
+        assert_eq!(crate::automations::load(&config).unwrap().len(), 1);
     }
 }

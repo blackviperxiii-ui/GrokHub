@@ -896,6 +896,14 @@ export interface BoardCard {
   updatedMs: number;
   /** When it was archived; 0 for a card on the board. */
   archivedMs: number;
+  /** "Queued", "Queued · 2nd": waiting for the agent; null when not queued. */
+  queued: string | null;
+  /** The flow started on it: "Playbook · Linux repair". */
+  flow: string | null;
+  /** You edited the steps, so the agent works from your version. */
+  userSteps: boolean;
+  /** The steps as the editor shows them, one a line with its mark. */
+  stepsText: string;
 }
 
 export interface BoardColumn {
@@ -912,6 +920,8 @@ export interface BoardPage {
   stamp: number;
   /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
   swept: BoardSwept | null;
+  /** Cards wait in the queue and the cabin, which starts them, is closed. */
+  queueNote: string | null;
 }
 
 export interface BoardSwept {
@@ -936,7 +946,18 @@ export type BoardAct =
   | { kind: "handBack" }
   | { kind: "archive" }
   | { kind: "restore" }
-  | { kind: "delete" };
+  | { kind: "delete" }
+  | { kind: "queue" }
+  | { kind: "unqueue" }
+  | { kind: "priority"; priority: "high" | "normal" | "low" }
+  | { kind: "block"; reason: string }
+  | { kind: "unblock" }
+  | { kind: "steps"; text: string }
+  | { kind: "place"; to: BoardLane; before: string | null };
+
+/** Make it recurring: the schedules offered, in the order the shell's
+ * `work_triage::RECUR_CHOICES` keeps them. */
+export const RECUR_CHOICES = ["Every day at 9 AM", "Every weekday at 9 AM", "Every day at 6 PM"] as const;
 
 export interface WorkLogLine {
   at: number;
@@ -981,6 +1002,16 @@ export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
 
 export function workboardWork(id: string): Promise<BoardWork> {
   return invoke<BoardWork>("workboard_work", { id });
+}
+
+/** Start a playbook on a card: it links the playbook, then starts as Work. */
+export function workboardPlaybook(id: string, playbook: string, name: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_playbook", { id, playbook, name });
+}
+
+/** Make it recurring: an automation from the card, `choice` in RECUR_CHOICES. */
+export function workboardRecur(id: string, choice: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_recur", { id, choice, clock: wallClock() });
 }
 
 /** Delete archived cards archived `days` ago or more (0: all of them), with

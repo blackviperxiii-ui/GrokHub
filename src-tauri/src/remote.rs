@@ -110,6 +110,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "workboard_add",
     "workboard_act",
     "workboard_work",
+    "workboard_recur",
     "workboard_delete_archived",
     "workboard_sweep_undo",
     "workboard_sweep_dismiss",
@@ -1021,6 +1022,7 @@ mod tests {
             "workboard_add",
             "workboard_act",
             "workboard_work",
+            "workboard_recur",
             "workboard_delete_archived",
             "workboard_sweep_undo",
             "workboard_sweep_dismiss",
@@ -1028,6 +1030,8 @@ mod tests {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("workboard_resume"));
+        // Playbooks live on the computer, so starting one stays there too.
+        assert!(!web_command("workboard_playbook"));
         // The tidy setting stays on the computer, like the rest of Settings.
         assert!(!web_command("set_workboard_tidy"));
     }

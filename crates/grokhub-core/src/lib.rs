@@ -191,6 +191,7 @@ pub mod work_file;
 pub mod work_item;
 pub mod work_resume;
 pub mod work_run;
+pub mod work_triage;
 pub mod workboard;
 pub mod wow_addon;
 pub mod wow_saved;
@@ -708,6 +709,7 @@ pub use work_item::{
     restore as restore_work_card, stamp_changes, sweep as sweep_work_cards, BoardBase, Checkpoint,
     StepStatus, SweepReport, WorkKind, WorkLogEvent, WorkOrigin, WorkStep,
 };
+pub use work_triage::{CardFlow, FlowKind};
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,
     automation_needs_follow_up, card_notes_hash, card_work_prompt, clean_card_notes,
