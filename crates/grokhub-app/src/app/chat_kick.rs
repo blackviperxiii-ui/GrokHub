@@ -90,12 +90,21 @@ impl Cabin {
             }
         }
         self.touch();
-        remember_typed_prompt(
-            &mut self.chip_memory,
-            &text,
-            now_ms(),
-            Self::local_clock().hour as u8,
-        );
+        // A chip's send was learned on its click; a typed ask teaches its
+        // kind (never its words) and leaves no chip to credit.
+        self.chip_turn_key = self.chip_send_key.take();
+        if self.chip_turn_key.is_none() {
+            let clock = Self::local_clock();
+            remember_typed_prompt(&mut self.chip_memory, &text, now_ms(), clock.hour as u8);
+            grokhub_core::remember_intent(
+                &mut self.chip_memory,
+                "",
+                &text,
+                now_ms(),
+                clock.hour as u8,
+                clock.weekday,
+            );
+        }
         remember_home_surface(&mut self.chip_memory, "chat", now_ms());
         if !persist_user_turn(self.chat_ready()) {
             self.hands_attach = false;

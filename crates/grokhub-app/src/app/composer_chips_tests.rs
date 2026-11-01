@@ -1410,3 +1410,44 @@ fn chat_paste_stays_off_a_run() {
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
+
+/// LO-27: only the chip that started a turn is credited with how it went,
+/// and a typed ask teaches its kind of ask, never its words.
+#[test]
+fn a_chip_turn_is_credited_to_its_chip_and_a_typed_turn_to_none() {
+    let mut cabin = Cabin::quiet_for_test();
+    let fix = grokhub_core::QuickChip {
+        id: "seed-stutter".into(),
+        label: "Fix my stutter".into(),
+        value: "Fix my stutter".into(),
+        kind: grokhub_core::ChipKind::Chat,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    cabin.apply_chip(fix.clone());
+    assert_eq!(cabin.chip_send_key, None, "the send window closes");
+    assert!(
+        cabin.chip_memory.intents.contains_key("game.perf"),
+        "the click teaches its kind of ask"
+    );
+    let typed_before = cabin.chip_memory.intents.get("game.perf").map(|h| h.uses);
+
+    let src = include_str!("chat_kick.rs");
+    assert!(
+        src.contains("self.chip_turn_key = self.chip_send_key.take();")
+            && src.contains("if self.chip_turn_key.is_none() {"),
+        "a typed turn has no chip and learns only its kind"
+    );
+    for (file, body) in [
+        ("acp.rs", include_str!("acp.rs")),
+        ("jobs.rs", include_str!("jobs.rs")),
+    ] {
+        assert!(
+            !body.contains("remember_chip_outcome(")
+                && body.contains("if let Some(key) = self.chip_turn_key.take()"),
+            "{file} credits only the chip that started the turn"
+        );
+    }
+    assert_eq!(typed_before, Some(1));
+}
