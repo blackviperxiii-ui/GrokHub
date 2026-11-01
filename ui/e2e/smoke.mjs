@@ -1245,7 +1245,14 @@ async function desktop(s, config) {
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});
-  const approvals = await find(s, ".settings > form select");
+  await click(s, ".settings > form button[type='submit']");
+  await waitFor("the saved desktop switch", () => {
+    const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+    return saved.desktopControl === true;
+  });
+  // Approvals live in Settings → Defaults.
+  await section(s, "Defaults");
+  const approvals = await waitFor("the approvals pick", () => find(s, ".settings > form select"));
   const always = await wd("POST", `${s}/element/${approvals}/element`, {
     using: "css selector",
     value: "option[value='always']",

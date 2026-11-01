@@ -5,6 +5,7 @@ import type { Capabilities, Settings as Shape } from "./api";
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
+  saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Shape>>(),
   saveSettings:
     vi.fn<
       (
@@ -29,6 +30,21 @@ vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> })
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
+// Behavior, Privacy and Background have their own tests.
+vi.mock("./Behavior", () => ({
+  Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
+    readOnly ? (
+      <p>Behavior read-only</p>
+    ) : (
+      <button type="button" onClick={() => onCloseToTray?.(false)}>
+        Behavior panel
+      </button>
+    ),
+}));
+vi.mock("./Privacy", () => ({
+  Privacy: ({ readOnly }: { readOnly?: boolean }) => <p>{readOnly ? "Privacy read-only" : "Privacy panel"}</p>,
+}));
+vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
 import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
@@ -61,47 +77,34 @@ describe("Settings", () => {
     api.getSettings.mockResolvedValue(shape({}));
   });
 
-  it("loads and saves the model, work folder and tray choice", async () => {
-    api.saveSettings.mockResolvedValue(
-      shape({ model: "grok-5", closeToTray: false, workspace: "/work", workspacePath: "/work" }),
+  it("loads and saves the model, keeping what Defaults and Behavior saved", async () => {
+    api.saveDefaults.mockResolvedValue(
+      shape({ workspace: "/work", workspacePath: "/work", approvals: "always" }),
     );
+    api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
     render(<Settings caps={DESKTOP} />);
 
     const model = await screen.findByLabelText("Model");
     expect(model).toHaveValue("grok-4.7");
-    await userEvent.clear(model);
-    await userEvent.type(model, " grok-5 ");
-    expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
-    await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
+    // The folder, approvals and tray moved out of General.
+    expect(screen.queryByLabelText("Work folder")).toBeNull();
+    expect(screen.queryByLabelText("Approvals")).toBeNull();
+    expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
+
+    await openSection("Defaults");
+    await userEvent.type(screen.getByLabelText("Work folder"), "/work");
+    await userEvent.selectOptions(screen.getByLabelText("Approvals"), "always");
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always");
+    await openSection("Behavior");
+    await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
+
+    await openSection("General");
+    await userEvent.clear(screen.getByLabelText("Model"));
+    await userEvent.type(screen.getByLabelText("Model"), " grok-5 ");
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
-
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "ask", false);
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", false);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText(/keeps Loadout in the tray/)).not.toBeChecked();
-    expect(screen.getByText("/work")).toBeInTheDocument();
-  });
-
-  it("approvals start at Ask and Always says what still asks", async () => {
-    api.saveSettings.mockResolvedValue(shape({ approvals: "always" }));
-    render(<Settings caps={DESKTOP} />);
-
-    const pick = await screen.findByLabelText("Approvals");
-    expect(pick).toHaveValue("ask");
-    expect(
-      screen.getByText("It asks before it changes a file or runs a command."),
-    ).toBeInTheDocument();
-    await userEvent.selectOptions(pick, "always");
-    expect(
-      screen.getByText(
-        "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
-      ),
-    ).toHaveClass("warn");
-    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
-
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "always", false);
-    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Approvals")).toHaveValue("always");
   });
 
   it("desktop control starts off, says what still asks, and saves", async () => {
@@ -157,15 +160,18 @@ describe("Settings", () => {
     expect(await screen.findByLabelText("Model")).toBeInTheDocument();
     expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
-    expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Defaults",
+      "Behavior",
       "Appearance",
       "Personality",
       "Playbooks",
       "Permissions",
+      "Privacy & data",
+      "Background",
       "About",
     ]);
   });
@@ -173,15 +179,18 @@ describe("Settings", () => {
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
-    expect(screen.getByLabelText(/keeps Loadout in the tray/)).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Defaults",
+      "Behavior",
       "Appearance",
       "Personality",
       "Playbooks",
       "Permissions",
+      "Privacy & data",
+      "Background",
       "Pulse",
       "Local AI",
       "Web access",
@@ -201,9 +210,17 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
 
+    await openSection("Defaults");
+    expect(screen.getByLabelText("Work folder")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API key")).toBeNull();
+
+    await openSection("Behavior");
+    expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Work folder")).toBeNull();
+
     await openSection("Appearance");
     expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Behavior panel" })).toBeNull();
 
     await openSection("Personality");
     expect(screen.getByText("Personality panel")).toBeInTheDocument();
@@ -217,9 +234,17 @@ describe("Settings", () => {
     expect(screen.getByText("Permissions panel")).toBeInTheDocument();
     expect(screen.queryByText("Playbooks panel")).toBeNull();
 
+    await openSection("Privacy & data");
+    expect(screen.getByText("Privacy panel")).toBeInTheDocument();
+    expect(screen.queryByText("Permissions panel")).toBeNull();
+
+    await openSection("Background");
+    expect(screen.getByText("Background panel")).toBeInTheDocument();
+    expect(screen.queryByText("Privacy panel")).toBeNull();
+
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
-    expect(screen.queryByText("Permissions panel")).toBeNull();
+    expect(screen.queryByText("Background panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
@@ -271,6 +296,13 @@ describe("Settings", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText("Local AI panel")).toBeNull();
     expect(screen.queryByText("Web access panel")).toBeNull();
+    // Defaults, Behavior, Privacy & data and Background, read-only.
+    for (const head of ["Defaults", "Behavior", "Privacy & data", "Background"]) {
+      expect(screen.getByRole("heading", { level: 2, name: head })).toBeInTheDocument();
+    }
+    expect(screen.getByText("Behavior read-only")).toBeInTheDocument();
+    expect(screen.getByText("Privacy read-only")).toBeInTheDocument();
+    expect(screen.getByText("Background panel")).toBeInTheDocument();
   });
 
   it("applies a theme at once and saves it", async () => {

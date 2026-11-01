@@ -1,7 +1,8 @@
 //! The shell's own settings file, `shell.json` in the GrokHub config folder.
 //! The API key is never written here; it lives in the OS keychain.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "shell.json";
@@ -63,6 +64,85 @@ pub struct ShellSettings {
     /// explicit presets, and a stored pick of one speaks in the default voice.
     pub explicit_personalities: bool,
     pub theme: Theme,
+    /// Settings → Behavior. A value this build cannot read loads as its default.
+    #[serde(deserialize_with = "lenient_behavior")]
+    pub behavior: Behavior,
+}
+
+/// Settings → Behavior: the composer and the limits on scheduled work.
+/// Everything starts off, and empty quiet hours are none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Behavior {
+    /// Sentence autocomplete in the composer.
+    pub autocomplete: bool,
+    /// Quiet hours for automations, as `HH:MM`. Both empty is none.
+    pub quiet_start: String,
+    pub quiet_end: String,
+    /// Tokens a day, one of [`grokhub_core::TOKEN_BUDGETS`]. 0 is off.
+    pub daily_token_budget: u64,
+    /// Pause scheduled work over the daily budget.
+    pub pause_over_budget: bool,
+}
+
+impl Behavior {
+    /// The same choices with the quiet hours written as `HH:MM`, or why not.
+    pub fn checked(self) -> Result<Self, String> {
+        let (quiet_start, quiet_end) = quiet_hours(&self.quiet_start, &self.quiet_end)?;
+        if !grokhub_core::TOKEN_BUDGETS.contains(&self.daily_token_budget) {
+            return Err("Pick a daily token budget from the list.".into());
+        }
+        Ok(Self {
+            quiet_start,
+            quiet_end,
+            ..self
+        })
+    }
+}
+
+/// Quiet hours as typed: both empty is none, otherwise two different clocks.
+pub fn quiet_hours(start: &str, end: &str) -> Result<(String, String), String> {
+    let (start, end) = (start.trim(), end.trim());
+    if start.is_empty() && end.is_empty() {
+        return Ok((String::new(), String::new()));
+    }
+    if start.is_empty() || end.is_empty() {
+        return Err("Set both times, or clear both for no quiet hours.".into());
+    }
+    let clock = |text: &str| {
+        let fixed = grokhub_core::normalize_hm(text, "");
+        if fixed.is_empty() {
+            Err(format!("{text} isn't a time. Use one like 22:00."))
+        } else {
+            Ok(fixed)
+        }
+    };
+    let (start, end) = (clock(start)?, clock(end)?);
+    if start == end {
+        return Err("Start and end are the same. Clear both for no quiet hours.".into());
+    }
+    Ok((start, end))
+}
+
+/// Reads each Behavior field on its own, so one value this build can't read
+/// (a typo, a newer build's choice) resets that field, never the whole file.
+fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Error> {
+    let raw = Value::deserialize(d)?;
+    let flag = |key: &str| raw.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let text = |key: &str| raw.get(key).and_then(Value::as_str).unwrap_or("");
+    let (quiet_start, quiet_end) =
+        quiet_hours(text("quietStart"), text("quietEnd")).unwrap_or_default();
+    Ok(Behavior {
+        autocomplete: flag("autocomplete"),
+        quiet_start,
+        quiet_end,
+        daily_token_budget: raw
+            .get("dailyTokenBudget")
+            .and_then(Value::as_u64)
+            .filter(|b| grokhub_core::TOKEN_BUDGETS.contains(b))
+            .unwrap_or(0),
+        pause_over_budget: flag("pauseOverBudget"),
+    })
 }
 
 impl Default for ShellSettings {
@@ -76,7 +156,40 @@ impl Default for ShellSettings {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            behavior: Behavior::default(),
         }
+    }
+}
+
+/// One row of the daily token budget list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetChoice {
+    pub value: u64,
+    /// "Off" or "1.0M tokens a day".
+    pub label: String,
+}
+
+/// Settings → Behavior as the page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BehaviorView {
+    pub close_to_tray: bool,
+    pub behavior: Behavior,
+    pub budgets: Vec<BudgetChoice>,
+}
+
+pub fn behavior_view(settings: &ShellSettings) -> BehaviorView {
+    BehaviorView {
+        close_to_tray: settings.close_to_tray,
+        behavior: settings.behavior.clone(),
+        budgets: grokhub_core::TOKEN_BUDGETS
+            .iter()
+            .map(|&value| BudgetChoice {
+                value,
+                label: grokhub_core::token_budget_label(value),
+            })
+            .collect(),
     }
 }
 
@@ -152,6 +265,7 @@ mod tests {
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                behavior: Behavior::default(),
             }
         );
     }
@@ -197,6 +311,13 @@ mod tests {
             personality: "pirate".into(),
             explicit_personalities: true,
             theme: Theme::Dark,
+            behavior: Behavior {
+                autocomplete: true,
+                quiet_start: "22:00".into(),
+                quiet_end: "07:00".into(),
+                daily_token_budget: 1_000_000,
+                pause_over_budget: true,
+            },
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -208,6 +329,9 @@ mod tests {
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
+        assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
+        assert!(raw.contains("\"dailyTokenBudget\": 1000000"), "{raw}");
+        assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -230,6 +354,7 @@ mod tests {
                 personality: String::new(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                behavior: Behavior::default(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -247,6 +372,7 @@ mod tests {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            behavior: Behavior::default(),
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
@@ -276,5 +402,88 @@ mod tests {
         std::fs::write(path(&dir), r#"{"theme":"light"}"#).expect("write");
         assert_eq!(load(&dir).theme, Theme::Light);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn behavior_values_this_build_cannot_read_load_as_the_defaults() {
+        let dir = temp_dir("behavior");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            path(&dir),
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
+        )
+        .expect("write");
+        let loaded = load(&dir);
+        assert_eq!(
+            (loaded.model.as_str(), loaded.behavior),
+            (
+                "grok-5",
+                Behavior {
+                    autocomplete: false,
+                    quiet_start: String::new(),
+                    quiet_end: String::new(),
+                    daily_token_budget: 0,
+                    pause_over_budget: false,
+                }
+            )
+        );
+        std::fs::write(path(&dir), r#"{"model":"grok-5","behavior":"loud"}"#).expect("write");
+        assert_eq!(load(&dir).behavior, Behavior::default());
+        // One bad field leaves the good ones alone.
+        std::fs::write(
+            path(&dir),
+            r#"{"behavior":{"autocomplete":true,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
+        )
+        .expect("write");
+        assert_eq!(
+            load(&dir).behavior,
+            Behavior {
+                autocomplete: true,
+                quiet_start: "23:00".into(),
+                quiet_end: "06:30".into(),
+                daily_token_budget: 0,
+                pause_over_budget: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quiet_hours_are_both_or_neither() {
+        assert_eq!(quiet_hours(" ", ""), Ok((String::new(), String::new())));
+        assert_eq!(
+            quiet_hours("22:00", " 7:05 "),
+            Ok(("22:00".to_string(), "07:05".to_string()))
+        );
+        assert_eq!(
+            quiet_hours("22:00", ""),
+            Err("Set both times, or clear both for no quiet hours.".to_string())
+        );
+        assert_eq!(
+            quiet_hours("25:00", "07:00"),
+            Err("25:00 isn't a time. Use one like 22:00.".to_string())
+        );
+        assert_eq!(
+            quiet_hours("07:00", "07:00"),
+            Err("Start and end are the same. Clear both for no quiet hours.".to_string())
+        );
+        let picked = Behavior {
+            quiet_start: "9:00".into(),
+            quiet_end: "17:00".into(),
+            daily_token_budget: 500_000,
+            ..Behavior::default()
+        };
+        assert_eq!(
+            picked.clone().checked().map(|b| b.quiet_start),
+            Ok("09:00".to_string())
+        );
+        assert_eq!(
+            Behavior {
+                daily_token_budget: 7,
+                ..picked
+            }
+            .checked(),
+            Err("Pick a daily token budget from the list.".to_string())
+        );
     }
 }
