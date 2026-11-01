@@ -1055,6 +1055,47 @@ async fn workboard_work(
     off_main(move || workboard::work(&dir, &id)).await?
 }
 
+/// Delete every archived card archived `days` ago or more (0: all of them),
+/// with their logs. The page asks first with the count.
+#[tauri::command]
+async fn workboard_delete_archived(
+    state: State<'_, ShellState>,
+    days: u32,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::delete_archived(&dir, days)).await?
+}
+
+/// Undo on the sweep notice: its cards go back to Todo.
+#[tauri::command]
+async fn workboard_sweep_undo(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::undo_sweep(&dir)).await?
+}
+
+/// Dismiss the sweep notice; the cards stay archived.
+#[tauri::command]
+async fn workboard_sweep_dismiss(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::dismiss_sweep(&dir)).await?
+}
+
+/// Settings → Workboard tidy: auto-archive age and the auto-delete choice.
+#[tauri::command]
+async fn get_workboard_tidy(state: State<'_, ShellState>) -> Result<workboard::Tidy, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::tidy(&dir)).await
+}
+
+#[tauri::command]
+async fn set_workboard_tidy(
+    state: State<'_, ShellState>,
+    auto_delete_days: u32,
+) -> Result<workboard::Tidy, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::set_auto_delete(&dir, auto_delete_days)).await?
+}
+
 #[tauri::command]
 async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
@@ -1812,6 +1853,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
         "workboard_stamp" => out(block_on(workboard_stamp(state))?),
         "workboard_log" => out(block_on(workboard_log(state, arg(args, "id")?))?),
+        "workboard_delete_archived" => out(block_on(workboard_delete_archived(
+            state,
+            arg(args, "days")?,
+        ))?),
+        "workboard_sweep_undo" => out(block_on(workboard_sweep_undo(state))?),
+        "workboard_sweep_dismiss" => out(block_on(workboard_sweep_dismiss(state))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2207,6 +2254,9 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // The Workboard's local tidy, while the cabin is closed. No model.
+            #[cfg(desktop)]
+            workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
@@ -2348,6 +2398,11 @@ pub fn run() {
             workboard_stamp,
             workboard_log,
             workboard_resume,
+            workboard_delete_archived,
+            workboard_sweep_undo,
+            workboard_sweep_dismiss,
+            get_workboard_tidy,
+            set_workboard_tidy,
             get_behavior,
             save_behavior,
             save_defaults,

@@ -790,6 +790,8 @@ export interface BoardCard {
   /** The cabin chat that works it. */
   chat: string | null;
   updatedMs: number;
+  /** When it was archived; 0 for a card on the board. */
+  archivedMs: number;
 }
 
 export interface BoardColumn {
@@ -804,6 +806,22 @@ export interface BoardPage {
   archived: BoardCard[];
   /** The file's mtime, for the change check. */
   stamp: number;
+  /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
+  swept: BoardSwept | null;
+}
+
+export interface BoardSwept {
+  text: string;
+  ids: string[];
+  at: number;
+}
+
+/** Settings → Workboard tidy. */
+export interface BoardTidy {
+  /** Days with no activity before a card is archived. */
+  autoArchiveDays: number;
+  /** 0 is off (the default); else 30 or 90. */
+  autoDeleteDays: number;
 }
 
 export type BoardAct =
@@ -859,6 +877,29 @@ export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
 
 export function workboardWork(id: string): Promise<BoardWork> {
   return invoke<BoardWork>("workboard_work", { id });
+}
+
+/** Delete archived cards archived `days` ago or more (0: all of them), with
+ * their logs. Cards on the board are never touched. */
+export function workboardDeleteArchived(days: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_delete_archived", { days });
+}
+
+/** Undo on the sweep notice: its cards go back to Todo. */
+export function workboardSweepUndo(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_undo");
+}
+
+export function workboardSweepDismiss(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_dismiss");
+}
+
+export function getWorkboardTidy(): Promise<BoardTidy> {
+  return invoke<BoardTidy>("get_workboard_tidy");
+}
+
+export function setWorkboardTidy(autoDeleteDays: number): Promise<BoardTidy> {
+  return invoke<BoardTidy>("set_workboard_tidy", { autoDeleteDays });
 }
 
 /** Resume a paused run. A stub until KB-03 fills in the real resume. */

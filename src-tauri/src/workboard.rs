@@ -17,10 +17,19 @@
 //! Token budget (KB-04): all of this is local file work. Nothing here reaches
 //! a prompt or the tool list.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
 
-use grokhub_core::work_file::{board_stamp, read_board, read_work_log_tail, update_board};
-use grokhub_core::work_item::{clip_line, remove_work_log};
+use grokhub_core::scheduler_lease::{lease_fresh, read_lease, LeaseOwner};
+use grokhub_core::work_file::{
+    board_stamp, delete_archived_board, read_board, read_tidy, read_work_log_tail,
+    set_auto_delete_days, sweep_board, update_board, TidyRun,
+};
+use grokhub_core::work_item::{
+    clip_line, remove_work_log, DAY_MS, IDLE_ARCHIVE_MS, SWEEP_EVERY_MS,
+};
 use grokhub_core::{
     BoardCard, BoardStatus, KanbanColumn, StepStatus, WorkKind, WorkLogEvent, WorkOrigin,
 };
@@ -124,6 +133,8 @@ pub struct Card {
     /// The cabin chat that works it.
     pub chat: Option<String>,
     pub updated_ms: u64,
+    /// When it was archived; 0 for a card on the board.
+    pub archived_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -143,6 +154,28 @@ pub struct Page {
     pub archived: Vec<Card>,
     /// The file's mtime, for the view's change check.
     pub stamp: u64,
+    /// The shell's last sweep archived these cards and you have not undone or
+    /// dismissed it. Only cards still archived count.
+    pub swept: Option<Swept>,
+}
+
+/// One sweep's notice: "Archived 2 finished cards", with Undo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Swept {
+    pub text: String,
+    pub ids: Vec<String>,
+    pub at: u64,
+}
+
+/// Settings → Workboard tidy, as both apps show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tidy {
+    /// Days with no activity before the sweep archives a card. Fixed.
+    pub auto_archive_days: u32,
+    /// 0 is off (the default); else 30 or 90.
+    pub auto_delete_days: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -299,6 +332,7 @@ fn card(c: &BoardCard) -> Card {
         can_resume: can_resume(c),
         chat: c.thread_id.clone(),
         updated_ms: c.updated_ms.max(c.active_ms),
+        archived_ms: c.archived_ms,
     }
 }
 
@@ -319,7 +353,158 @@ fn end_rank(cards: &[BoardCard], column: KanbanColumn) -> i64 {
         .unwrap_or(0)
 }
 
-fn page(cards: &[BoardCard], stamp: u64) -> Page {
+/// The shell's sweep notices, one per config folder, until Undo or Dismiss.
+fn swept_notes() -> &'static Mutex<HashMap<PathBuf, Swept>> {
+    static NOTES: std::sync::OnceLock<Mutex<HashMap<PathBuf, Swept>>> = std::sync::OnceLock::new();
+    NOTES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The open notice for `config_dir`, trimmed to cards still archived; none
+/// once all of them are back on the board or gone.
+fn swept_for(config_dir: &Path, cards: &[BoardCard]) -> Option<Swept> {
+    let notes = swept_notes().lock().unwrap_or_else(|e| e.into_inner());
+    let note = notes.get(config_dir)?;
+    let ids: Vec<String> = note
+        .ids
+        .iter()
+        .filter(|id| {
+            cards
+                .iter()
+                .any(|c| &c.id == *id && c.status == BoardStatus::Dismissed)
+        })
+        .cloned()
+        .collect();
+    (!ids.is_empty()).then(|| Swept {
+        ids,
+        ..note.clone()
+    })
+}
+
+/// The notice line for a sweep, as the cabin's bell words it.
+pub fn sweep_text(report: &grokhub_core::SweepReport) -> Option<String> {
+    let done = report.archived_done.len();
+    let idle = report.archived_idle.len();
+    let plural = |n: usize| if n == 1 { "card" } else { "cards" };
+    match (done, idle) {
+        (0, 0) => None,
+        (d, 0) => Some(format!("Archived {d} finished {}", plural(d))),
+        (0, i) => Some(format!("Archived {i} {} idle for 30 days", plural(i))),
+        (d, i) => Some(format!(
+            "Archived {} {}: {d} finished, {i} idle for 30 days",
+            d + i,
+            plural(d + i)
+        )),
+    }
+}
+
+/// True while the cabin is open: its scheduler beat is fresh. The cabin runs
+/// the sweep then, so the shell leaves it.
+fn cabin_open(config_dir: &Path, now: u64) -> bool {
+    read_lease(config_dir).is_some_and(|l| l.owner == LeaseOwner::Cabin && lease_fresh(&l, now))
+}
+
+/// One look of the shell's sweep timer. While the cabin is open it does
+/// nothing. Otherwise it runs the shared tidy: at once when `first` (the
+/// shell just started), else only when no app swept in six hours. What it
+/// archived becomes the page's notice with Undo. Local only; no model.
+pub fn sweep_tick(config_dir: &Path, now: u64, first: bool) -> Result<Option<TidyRun>, String> {
+    if cabin_open(config_dir, now) {
+        return Ok(None);
+    }
+    let every = if first { 0 } else { SWEEP_EVERY_MS };
+    // The shell runs no turns that hold a card open for 30 days; a live run
+    // updates its card, so nothing live is idle long enough to be archived.
+    let run = sweep_board(&path(config_dir), &work_dir(config_dir), now, &[], every)?;
+    if let Some(r) = run.as_ref().map(|r| &r.report) {
+        if let Some(text) = sweep_text(r) {
+            let ids = r
+                .archived_done
+                .iter()
+                .chain(&r.archived_idle)
+                .cloned()
+                .collect();
+            swept_notes()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(config_dir.to_path_buf(), Swept { text, ids, at: now });
+        }
+    }
+    Ok(run)
+}
+
+/// How often the shell's sweep timer looks. The sweep itself runs only when
+/// six hours passed since either app swept.
+const SWEEP_LOOK: Duration = Duration::from_secs(10 * 60);
+
+/// The shell's sweep timer: once at start, then a look every ten minutes.
+pub fn start_sweeper(config_dir: PathBuf) {
+    std::thread::spawn(move || {
+        let mut first = true;
+        loop {
+            if sweep_tick(&config_dir, grokhub_core::now_ms(), first).is_ok() {
+                first = false;
+            }
+            std::thread::sleep(SWEEP_LOOK);
+        }
+    });
+}
+
+/// Undo on the sweep notice: the cards it archived go back to Todo.
+pub fn undo_sweep(config_dir: &Path) -> Result<Page, String> {
+    let note = swept_notes()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(config_dir);
+    let now = grokhub_core::now_ms();
+    let ((), page) = change(config_dir, |cards| {
+        for id in note.iter().flat_map(|n| &n.ids) {
+            grokhub_core::restore_work_card(cards, id, now);
+        }
+        Ok(())
+    })?;
+    Ok(page)
+}
+
+/// Dismiss on the sweep notice: the cards stay archived.
+pub fn dismiss_sweep(config_dir: &Path) -> Result<Page, String> {
+    swept_notes()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(config_dir);
+    load(config_dir)
+}
+
+/// The bulk delete: every archived card archived at least `days` ago (0: all
+/// archived cards), with their logs. Cards on the board are never touched.
+/// The UI asks first with the count.
+pub fn delete_archived(config_dir: &Path, days: u32) -> Result<Page, String> {
+    if days > 3650 {
+        return Err("Pick all, 30 days or 90 days.".into());
+    }
+    let path = path(config_dir);
+    let (_, cards) = delete_archived_board(
+        &path,
+        &work_dir(config_dir),
+        u64::from(days) * DAY_MS,
+        grokhub_core::now_ms(),
+    )?;
+    Ok(page(config_dir, &cards, board_stamp(&path)))
+}
+
+pub fn tidy(config_dir: &Path) -> Tidy {
+    Tidy {
+        auto_archive_days: (IDLE_ARCHIVE_MS / DAY_MS) as u32,
+        auto_delete_days: read_tidy(&path(config_dir)).auto_delete_days,
+    }
+}
+
+/// Settings: auto-delete archived cards after 30 or 90 days, or Off (0).
+pub fn set_auto_delete(config_dir: &Path, days: u32) -> Result<Tidy, String> {
+    set_auto_delete_days(&path(config_dir), days)?;
+    Ok(tidy(config_dir))
+}
+
+fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
     let columns = Lane::ALL
         .iter()
         .map(|&lane| {
@@ -344,6 +529,7 @@ fn page(cards: &[BoardCard], stamp: u64) -> Page {
         columns,
         archived: archived.into_iter().map(card).collect(),
         stamp,
+        swept: swept_for(config_dir, cards),
     }
 }
 
@@ -354,7 +540,7 @@ fn clip(text: &str, max: usize) -> String {
 pub fn load(config_dir: &Path) -> Result<Page, String> {
     let path = path(config_dir);
     let cards = read_board(&path)?;
-    Ok(page(&cards, board_stamp(&path)))
+    Ok(page(config_dir, &cards, board_stamp(&path)))
 }
 
 /// The file's mtime, so the view reloads only after a save.
@@ -375,7 +561,7 @@ fn change<R>(
 ) -> Result<(R, Page), String> {
     let path = path(config_dir);
     let (out, cards) = update_board(&path, edit)?;
-    Ok((out, page(&cards, board_stamp(&path))))
+    Ok((out, page(config_dir, &cards, board_stamp(&path))))
 }
 
 /// Adds a card to the end of Todo, as the cabin's New card does.
@@ -925,6 +1111,142 @@ mod tests {
         );
         assert!(log_tail(&dir, "w-3").is_empty(), "its log is gone too");
         assert_eq!(act(&dir, "w-3", Act::Delete), Err(GONE.to_string()));
+    }
+
+    #[test]
+    fn the_shell_sweep_archives_without_a_model_and_undo_restores() {
+        let dir = temp_dir("sweep");
+        let now = grokhub_core::now_ms();
+        let mut agent = board_card("agent", BoardStatus::Done);
+        agent.origin = Some(WorkOrigin::Agent);
+        agent.created_ms = now - 2 * DAY_MS;
+        let mut mine = board_card("mine", BoardStatus::Done);
+        mine.origin = Some(WorkOrigin::User);
+        mine.created_ms = now - 2 * DAY_MS;
+        let mut touched = board_card("touched", BoardStatus::Done);
+        touched.origin = Some(WorkOrigin::Agent);
+        touched.created_ms = now - 2 * DAY_MS;
+        touched.touched = true;
+        cabin_writes(&dir, &[agent, mine, touched]);
+
+        let run = sweep_tick(&dir, now, true)
+            .expect("tick")
+            .expect("at start it runs");
+        assert_eq!(run.report.archived_done, vec!["agent".to_string()]);
+        let page = load(&dir).expect("load");
+        let archived: Vec<&str> = page.archived.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            archived,
+            vec!["agent"],
+            "your cards and touched ones stay on the board"
+        );
+        assert_eq!(page.archived[0].archived_ms, now);
+        let swept = page.swept.expect("one notice for the sweep");
+        assert_eq!(swept.text, "Archived 1 finished card");
+        assert_eq!(swept.ids, vec!["agent".to_string()]);
+
+        // Ten minutes on, the timer looks again: not due for six hours.
+        assert_eq!(sweep_tick(&dir, now + 600_000, false).expect("tick"), None);
+
+        let page = undo_sweep(&dir).expect("undo");
+        assert_eq!(page.swept, None);
+        assert!(page.archived.is_empty());
+        assert_eq!(
+            ids(&page, Lane::Todo),
+            vec!["agent"],
+            "Undo puts it back in Todo"
+        );
+        assert_eq!(
+            raw(&dir).iter().find(|c| c.id == "agent").unwrap().status,
+            BoardStatus::Todo
+        );
+    }
+
+    #[test]
+    fn the_shell_leaves_the_sweep_to_an_open_cabin() {
+        use grokhub_core::scheduler_lease::{write_lease, SchedulerLease};
+        let dir = temp_dir("sweep-cabin");
+        let now = grokhub_core::now_ms();
+        let mut agent = board_card("agent", BoardStatus::Done);
+        agent.origin = Some(WorkOrigin::Agent);
+        agent.created_ms = now - 2 * DAY_MS;
+        cabin_writes(&dir, &[agent]);
+        let beat = |beat_ms| SchedulerLease {
+            owner: LeaseOwner::Cabin,
+            pid: 1,
+            beat_ms,
+        };
+        write_lease(&dir, &beat(now)).unwrap();
+        assert_eq!(sweep_tick(&dir, now, true).expect("tick"), None);
+        assert_eq!(
+            raw(&dir)[0].status,
+            BoardStatus::Done,
+            "the cabin's to sweep"
+        );
+        assert_eq!(load(&dir).unwrap().swept, None);
+
+        // The cabin closed: its beat goes stale and the shell sweeps.
+        write_lease(&dir, &beat(now - 10 * 60_000)).unwrap();
+        assert!(sweep_tick(&dir, now, true).expect("tick").is_some());
+        assert_eq!(raw(&dir)[0].status, BoardStatus::Dismissed);
+        let page = dismiss_sweep(&dir).expect("dismiss");
+        assert_eq!(page.swept, None);
+        assert_eq!(page.archived.len(), 1, "Dismiss leaves the card archived");
+    }
+
+    #[test]
+    fn bulk_delete_takes_archived_cards_and_logs_and_never_the_board() {
+        let dir = temp_dir("bulk");
+        let now = grokhub_core::now_ms();
+        let archived = |id: &str, ago: u64| {
+            let mut c = board_card(id, BoardStatus::Dismissed);
+            c.archived_ms = now - ago;
+            c
+        };
+        cabin_writes(
+            &dir,
+            &[
+                archived("old", 95 * DAY_MS),
+                archived("mid", 45 * DAY_MS),
+                archived("new", DAY_MS),
+                board_card("todo", BoardStatus::Todo),
+                board_card("done", BoardStatus::Done),
+            ],
+        );
+        for id in ["old", "mid", "new", "todo"] {
+            append_work_log(&work_dir(&dir), id, 1, "step", "x").unwrap();
+        }
+        let page = delete_archived(&dir, 90).expect("older than 90");
+        assert_eq!(page.archived.len(), 2);
+        let page = delete_archived(&dir, 30).expect("older than 30");
+        let left: Vec<&str> = page.archived.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(left, vec!["new"]);
+        let page = delete_archived(&dir, 0).expect("all archived");
+        assert!(page.archived.is_empty());
+        assert_eq!(
+            raw(&dir).iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["todo", "done"],
+            "the board is never touched"
+        );
+        assert!(log_tail(&dir, "old").is_empty() && log_tail(&dir, "new").is_empty());
+        assert_eq!(log_tail(&dir, "todo").len(), 1);
+        assert!(delete_archived(&dir, 99_999).is_err());
+    }
+
+    #[test]
+    fn the_tidy_setting_defaults_to_off_and_takes_30_or_90() {
+        let dir = temp_dir("tidy");
+        assert_eq!(
+            tidy(&dir),
+            Tidy {
+                auto_archive_days: 30,
+                auto_delete_days: 0
+            }
+        );
+        assert_eq!(set_auto_delete(&dir, 90).expect("90").auto_delete_days, 90);
+        assert_eq!(tidy(&dir).auto_delete_days, 90);
+        assert!(set_auto_delete(&dir, 12).is_err());
+        assert_eq!(set_auto_delete(&dir, 0).expect("off").auto_delete_days, 0);
     }
 
     #[test]

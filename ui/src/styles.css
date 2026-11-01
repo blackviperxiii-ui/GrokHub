@@ -3052,6 +3052,19 @@ label.toggle-row {
   gap: 8px;
 }
 
+.board-archived > input {
+  min-width: min(280px, 100%);
+}
+
+/* The sweep's notice: one line with Undo and Dismiss. */
+.board-swept {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
 /* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
 .agents {
   flex: 1;

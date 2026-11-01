@@ -1465,6 +1465,156 @@ fn bell_sweep_undo_restores_the_cards_and_paused_runs_ring_once() {
     release_isolated(&root, cabin);
 }
 
+/// Runs the cabin's sweep timer until its thread reports back.
+fn run_sweep_timer(cabin: &mut Cabin, now: u64) {
+    cabin.tick_board_sweep(now);
+    let start = std::time::Instant::now();
+    while cabin.board_view.sweep.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        cabin.tick_board_sweep(now);
+    }
+    assert!(cabin.board_view.sweep.is_none(), "the sweep thread ended");
+}
+
+#[test]
+fn the_sweep_timer_archives_on_disk_without_a_model_and_undo_restores() {
+    use grokhub_core::{BoardStatus, WorkOrigin};
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-sweep-timer");
+    let day = grokhub_core::work_item::DAY_MS;
+    let now = grokhub_core::now_ms();
+    let mut agent = work_card("agent", BoardStatus::Done);
+    agent.origin = Some(WorkOrigin::Agent);
+    agent.created_ms = now - 2 * day;
+    let mut mine = work_card("mine", BoardStatus::Done);
+    mine.origin = Some(WorkOrigin::User);
+    mine.created_ms = now - 2 * day;
+    let mut touched = work_card("touched", BoardStatus::Done);
+    touched.origin = Some(WorkOrigin::Agent);
+    touched.created_ms = now - 2 * day;
+    touched.touched = true;
+    let path = crate::config::workboard_path();
+    grokhub_core::work_file::write_board(&path, &[agent, mine, touched]).unwrap();
+    cabin.board = crate::config::load_board();
+
+    run_sweep_timer(&mut cabin, now);
+    let status = |cabin: &Cabin, id: &str| cabin.board.iter().find(|c| c.id == id).unwrap().status;
+    assert_eq!(
+        status(&cabin, "agent"),
+        BoardStatus::Dismissed,
+        "in memory at once"
+    );
+    assert_eq!(
+        status(&cabin, "mine"),
+        BoardStatus::Done,
+        "your card never auto-archives"
+    );
+    assert_eq!(
+        status(&cabin, "touched"),
+        BoardStatus::Done,
+        "nor one you touched"
+    );
+    let disk = grokhub_core::work_file::read_board(&path).unwrap();
+    assert_eq!(
+        disk[0].status,
+        BoardStatus::Dismissed,
+        "the sweep wrote the file"
+    );
+    let sweeps = cabin
+        .notices
+        .items
+        .iter()
+        .filter(|n| n.text.starts_with("Archived"))
+        .count();
+    assert_eq!(sweeps, 1, "one bell notice per sweep");
+    assert_eq!(cabin.notices.items[0].text, "Archived 1 finished card");
+
+    // The next frame is not due: the timer waits six hours.
+    cabin.tick_board_sweep(now + 1);
+    assert!(cabin.board_view.sweep.is_none());
+
+    cabin.run_notice_action(0);
+    assert_eq!(
+        status(&cabin, "agent"),
+        BoardStatus::Todo,
+        "Undo restores it"
+    );
+    crate::config::save_board(&cabin.board).unwrap();
+    let disk = grokhub_core::work_file::read_board(&path).unwrap();
+    assert_eq!(
+        disk[0].status,
+        BoardStatus::Todo,
+        "and the restore is saved"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn the_archived_view_lists_newest_first_finds_and_bulk_deletes_only_archived() {
+    use super::board_ui::{
+        archived_older_count, archived_rows, auto_delete_label, bulk_delete_label,
+        confirm_delete_text,
+    };
+    use grokhub_core::BoardStatus;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-archived-view");
+    let day = grokhub_core::work_item::DAY_MS;
+    let now = grokhub_core::now_ms();
+    let archived = |id: &str, title: &str, ago: u64| {
+        let mut c = work_card(id, BoardStatus::Dismissed);
+        c.title = title.into();
+        c.archived_ms = now - ago;
+        c
+    };
+    cabin.board = vec![
+        archived("old", "Flash the router", 95 * day),
+        archived("mid", "Sort photos", 45 * day),
+        archived("new", "Router notes", day),
+        work_card("todo", BoardStatus::Todo),
+        work_card("done", BoardStatus::Done),
+    ];
+    let ids = |rows: Vec<&grokhub_core::BoardCard>| -> Vec<String> {
+        rows.into_iter().map(|c| c.id.clone()).collect()
+    };
+    assert_eq!(
+        ids(archived_rows(&cabin.board, "")),
+        vec!["new", "mid", "old"]
+    );
+    assert_eq!(
+        ids(archived_rows(&cabin.board, "ROUTER")),
+        vec!["new", "old"]
+    );
+    assert_eq!(archived_older_count(&cabin.board, 0, now), 3);
+    assert_eq!(archived_older_count(&cabin.board, 30, now), 2);
+    assert_eq!(archived_older_count(&cabin.board, 90, now), 1);
+    assert_eq!(bulk_delete_label(0), "Delete all archived");
+    assert_eq!(bulk_delete_label(90), "Delete archived older than 90 days");
+    assert_eq!(
+        confirm_delete_text(2),
+        "Delete 2 archived cards and their logs for good?"
+    );
+    assert_eq!(auto_delete_label(0), "Off");
+
+    let logs = crate::work_store::work_dir();
+    for id in ["old", "mid", "new", "todo"] {
+        grokhub_core::work_item::append_work_log(&logs, id, 1, "step", "x").unwrap();
+    }
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::DeleteArchived(30))));
+    assert_eq!(cabin.status, "Deleted 2 archived cards");
+    assert!(!logs.join("old.jsonl").exists() && !logs.join("mid.jsonl").exists());
+    assert!(logs.join("new.jsonl").exists());
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::DeleteArchived(0))));
+    let left: Vec<&str> = cabin.board.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(
+        left,
+        vec!["todo", "done"],
+        "bulk delete never touches the board"
+    );
+    assert!(logs.join("todo.jsonl").exists());
+    assert!(!cabin.apply_board_act(Some(super::pages::BoardAct::DeleteArchived(0))));
+    release_isolated(&root, cabin);
+}
+
 #[test]
 fn activity_row_finds_the_card_for_its_chat() {
     use super::board_ui::board_card_for_chat;

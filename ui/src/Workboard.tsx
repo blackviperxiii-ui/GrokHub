@@ -11,9 +11,12 @@ import {
   getWorkboard,
   workboardAct,
   workboardAdd,
+  workboardDeleteArchived,
   workboardLog,
   workboardResume,
   workboardStamp,
+  workboardSweepDismiss,
+  workboardSweepUndo,
   workboardWork,
   type BoardAct,
   type BoardCard,
@@ -57,6 +60,32 @@ export function ago(at: number, now: number): string {
 
 type Lanes = { lane: BoardLane; label: string }[];
 
+const DAY_MS = 86_400_000;
+/** The bulk deletes the Archived view offers: all, then older than 30 or 90 days. */
+export const BULK_DAYS = [0, 30, 90] as const;
+
+export function bulkLabel(days: number): string {
+  return days === 0 ? "Delete all archived" : `Delete archived older than ${days} days`;
+}
+
+/** How many archived cards a bulk delete of `days` takes, by the backend's rule. */
+export function olderCount(cards: BoardCard[], days: number, now: number): number {
+  return cards.filter((c) => c.archivedMs > 0 && now - c.archivedMs >= days * DAY_MS).length;
+}
+
+export function confirmText(n: number): string {
+  return n === 1
+    ? "Delete 1 archived card and its log for good?"
+    : `Delete ${n} archived cards and their logs for good?`;
+}
+
+/** Archived cards whose title, detail or notes hold `query`, any case. */
+export function findArchived(cards: BoardCard[], query: string): BoardCard[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return cards;
+  return cards.filter((c) => [c.title, c.detail, c.notes].some((t) => t.toLowerCase().includes(q)));
+}
+
 /** The cabin's Workboards page on the same workboard.json. Every change goes
  * through the shared board lock and merge, so neither app overwrites the
  * other, and the page reloads when the file changes. `onWork` puts a card's
@@ -84,6 +113,9 @@ export function Workboard({
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [query, setQuery] = useState("");
+  /** A bulk delete waiting for its confirm: days, 0 for all. */
+  const [bulk, setBulk] = useState<number | null>(null);
   const [dragging, setDragging] = useState<{ id: string; lane: BoardLane } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
@@ -225,6 +257,21 @@ export function Workboard({
           {note}
         </p>
       )}
+      {page?.swept && (
+        <div className="board-swept" role="group" aria-label="Tidy">
+          <span>{page.swept.text}</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(workboardSweepUndo, "Put back in Todo.")}
+          >
+            Undo
+          </button>
+          <button type="button" className="quiet" disabled={busy} onClick={() => void run(workboardSweepDismiss)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {page === null && !note && <p className="empty">Loading the workboard…</p>}
       {page && total === 0 && <p className="empty">{BOARD_EMPTY}</p>}
       {page && total > 0 && (
@@ -284,21 +331,48 @@ export function Workboard({
             type="button"
             className="quiet"
             aria-pressed={showArchived}
-            onClick={() => setShowArchived((v) => !v)}
+            onClick={() => {
+              setShowArchived((v) => !v);
+              setBulk(null);
+            }}
           >
             Archived ({page.archived.length})
           </button>
           {showArchived && (
-            <ul className="rows" aria-label="Archived cards">
-              {page.archived.map((card) => (
-                <ArchivedRow
-                  key={card.id}
-                  card={card}
-                  busy={busy}
-                  onAct={(what, done) => act(card, what, done)}
-                />
-              ))}
-            </ul>
+            <>
+              <input
+                aria-label="Find an archived card"
+                placeholder="Find an archived card"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <BulkDelete
+                cards={page.archived}
+                now={now}
+                busy={busy}
+                pending={bulk}
+                onAsk={setBulk}
+                onDelete={async (days) => {
+                  const n = olderCount(page.archived, days, now);
+                  if (await run(() => workboardDeleteArchived(days), `Deleted ${n} archived ${n === 1 ? "card" : "cards"}.`))
+                    setBulk(null);
+                }}
+              />
+              <ul className="rows" aria-label="Archived cards">
+                {findArchived(page.archived, query).map((card) => (
+                  <ArchivedRow
+                    key={card.id}
+                    card={card}
+                    busy={busy}
+                    now={now}
+                    onAct={(what, done) => act(card, what, done)}
+                  />
+                ))}
+              </ul>
+              {findArchived(page.archived, query).length === 0 && (
+                <p className="card-status">No archived card matches.</p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -336,10 +410,53 @@ function DeleteButton({ card, busy, onAct }: { card: BoardCard; busy: boolean; o
   );
 }
 
-function ArchivedRow({ card, busy, onAct }: { card: BoardCard; busy: boolean; onAct: OnAct }) {
+/** The bulk deletes, each asking first with the count. None touches a card
+ * on the board. */
+function BulkDelete({
+  cards,
+  now,
+  busy,
+  pending,
+  onAsk,
+  onDelete,
+}: {
+  cards: BoardCard[];
+  now: number;
+  busy: boolean;
+  pending: number | null;
+  onAsk: (days: number | null) => void;
+  onDelete: (days: number) => Promise<void>;
+}) {
+  if (pending !== null) {
+    const n = olderCount(cards, pending, now);
+    return (
+      <span className="board-confirm" role="group" aria-label="Delete archived cards?">
+        <span>{confirmText(n)}</span>
+        <button type="button" className="danger" disabled={busy || n === 0} onClick={() => void onDelete(pending)}>
+          Delete {n}
+        </button>
+        <button type="button" className="quiet" onClick={() => onAsk(null)}>
+          Keep
+        </button>
+      </span>
+    );
+  }
+  return (
+    <div className="card-buttons" role="group" aria-label="Delete archived">
+      {BULK_DAYS.filter((days) => olderCount(cards, days, now) > 0).map((days) => (
+        <button key={days} type="button" className="quiet" disabled={busy} onClick={() => onAsk(days)}>
+          {bulkLabel(days)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ArchivedRow({ card, busy, now, onAct }: { card: BoardCard; busy: boolean; now: number; onAct: OnAct }) {
   return (
     <li className="card board-card done" aria-label={card.title}>
       <div className="card-title">{card.title}</div>
+      {card.archivedMs > 0 && <div className="card-status">Archived {ago(card.archivedMs, now)}</div>}
       <div className="card-buttons">
         <button
           type="button"

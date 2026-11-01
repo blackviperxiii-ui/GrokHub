@@ -105,6 +105,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "workboard_add",
     "workboard_act",
     "workboard_work",
+    "workboard_delete_archived",
+    "workboard_sweep_undo",
+    "workboard_sweep_dismiss",
     "get_behavior",
     "get_privacy",
     "get_background",
@@ -1008,10 +1011,15 @@ mod tests {
             "workboard_add",
             "workboard_act",
             "workboard_work",
+            "workboard_delete_archived",
+            "workboard_sweep_undo",
+            "workboard_sweep_dismiss",
         ] {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("workboard_resume"));
+        // The tidy setting stays on the computer, like the rest of Settings.
+        assert!(!web_command("set_workboard_tidy"));
     }
 
     #[test]

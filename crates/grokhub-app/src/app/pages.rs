@@ -82,6 +82,9 @@ pub(super) enum BoardAct {
     Restore(String),
     /// Remove the card for good. Its chat stays in History.
     Delete(String),
+    /// Delete every archived card archived at least this many days ago (0: all
+    /// of them), with their logs. Cards on the board stay.
+    DeleteArchived(u32),
     Link(String),
     Unlink(String),
     Open(String),
@@ -1235,50 +1238,7 @@ page_body(ui, "history", |ui| {
                             }
                         });
                         }
-                        let archived: Vec<(String, String)> = self
-                            .board
-                            .iter()
-                            .filter(|c| c.status == BoardStatus::Dismissed)
-                            .map(|c| (c.id.clone(), c.title.clone()))
-                            .collect();
-                        if !archived.is_empty() {
-                            ui.add_space(12.0);
-                            crate::cards::section_label(ui, "Archived");
-                            for (id, title) in archived {
-                                let width = ui.available_width().max(1.0);
-                                let cache_id = egui::Id::new((
-                                    "cabin-board-arch-h",
-                                    id.as_str(),
-                                    super::chat_ui::pane_width_bucket(width),
-                                ));
-                                let cached =
-                                    ui.ctx().data(|d| d.get_temp::<f32>(cache_id)).unwrap_or(0.0);
-                                // One `horizontal`: one parent auto-id. The cached
-                                // height already includes the spacing under the row.
-                                if super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
-                                    ui.skip_ahead_auto_ids(1);
-                                    continue;
-                                }
-                                let y0 = ui.cursor().min.y;
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(title)
-                                            .size(crate::theme::FONT_TIP)
-                                            .color(crate::theme::muted()),
-                                    );
-                                    if crate::cards::ghost_pill(ui, "Restore") {
-                                        act = Some(BoardAct::Restore(id.clone()));
-                                    }
-                                    if crate::cards::ghost_pill(ui, "Delete") {
-                                        act = Some(BoardAct::Delete(id));
-                                    }
-                                });
-                                let h = (ui.cursor().min.y - y0).max(0.0);
-                                if h > 0.0 {
-                                    ui.ctx().data_mut(|d| d.insert_temp(cache_id, h));
-                                }
-                            }
-                        }
+                        self.ui_board_archived(ui, &mut act);
                     });
         });
         // Only a click opens a card; hover does nothing. A drag folds it at once.
@@ -1383,6 +1343,39 @@ page_body(ui, "history", |ui| {
                     "Card deleted".into()
                 };
                 true
+            }
+            BoardAct::DeleteArchived(days) => {
+                self.board_view.confirm = None;
+                let now = grokhub_core::now_ms();
+                let threads: Vec<(String, Option<String>)> = self
+                    .board
+                    .iter()
+                    .filter(|c| c.status == BoardStatus::Dismissed)
+                    .map(|c| (c.id.clone(), c.thread_id.clone()))
+                    .collect();
+                let gone = crate::work_store::delete_archived(
+                    &mut self.board,
+                    u64::from(days) * grokhub_core::work_item::DAY_MS,
+                    now,
+                );
+                let mut unparked = false;
+                for id in &gone {
+                    self.forget_board_card_view(id);
+                    let thread = threads
+                        .iter()
+                        .find(|(t, _)| t == id)
+                        .and_then(|(_, t)| t.clone());
+                    unparked |= self.unpark_follow_up_chat(thread.as_deref());
+                }
+                if unparked {
+                    self.persist();
+                }
+                let n = gone.len();
+                self.status = format!(
+                    "Deleted {n} archived {}",
+                    if n == 1 { "card" } else { "cards" }
+                );
+                n > 0
             }
             BoardAct::Link(id) => {
                 let thread = self.visible_thread_id();

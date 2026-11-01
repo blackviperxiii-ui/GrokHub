@@ -37,6 +37,7 @@ vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
+vi.mock("./WorkboardTidy", () => ({ WorkboardTidy: () => <p>Workboard tidy</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
     readOnly ? (

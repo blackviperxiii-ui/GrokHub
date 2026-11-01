@@ -47,6 +47,93 @@ pub(super) struct BoardView {
     /// Paused runs already told to the bell. `None` until the first look, so
     /// cards that were paused before this session stay quiet.
     pub paused_seen: Option<std::collections::HashSet<String>>,
+    /// A sweep running off the UI thread; it fills the slot when it ends.
+    pub sweep: Option<SweepSlot>,
+    /// The Archived view is open under the board.
+    pub show_archived: bool,
+    /// What you typed to find an archived card.
+    pub archived_query: String,
+    /// A delete in the Archived view waiting for its confirm click.
+    pub confirm: Option<ArchivedDelete>,
+    /// Settings' tidy row, read from `workboard-tidy.json` when first shown and
+    /// again after each sweep, never per frame.
+    pub tidy: Option<grokhub_core::work_file::BoardTidy>,
+}
+
+/// A sweep's result once its thread ends: `Some(None)` when another writer
+/// swept recently or the board could not be read.
+pub(super) type SweepSlot =
+    std::sync::Arc<std::sync::Mutex<Option<Option<grokhub_core::work_file::TidyRun>>>>;
+
+/// A delete in the Archived view that asks first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ArchivedDelete {
+    /// One archived card.
+    One(String),
+    /// Every archived card archived at least this many days ago; 0 is all.
+    Older(u32),
+}
+
+/// The bulk deletes the Archived view offers: all, then older than 30 or 90 days.
+pub(super) const BULK_DELETE_DAYS: [u32; 3] = [0, 30, 90];
+
+/// Archived cards, newest first, whose title, detail or notes hold `query`
+/// (any case). An empty query keeps them all.
+pub(super) fn archived_rows<'a>(cards: &'a [BoardCard], query: &str) -> Vec<&'a BoardCard> {
+    let q = query.trim().to_lowercase();
+    let mut rows: Vec<&BoardCard> = cards
+        .iter()
+        .filter(|c| c.status == BoardStatus::Dismissed)
+        .filter(|c| {
+            q.is_empty()
+                || [&c.title, &c.detail, &c.notes]
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&q))
+        })
+        .collect();
+    rows.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
+    rows
+}
+
+/// How many archived cards a bulk delete of `days` would take, by the same rule
+/// as `delete_archived`: all of them for 0, else those archived `days` ago or more.
+pub(super) fn archived_older_count(cards: &[BoardCard], days: u32, now: u64) -> usize {
+    let age = u64::from(days) * grokhub_core::work_item::DAY_MS;
+    cards
+        .iter()
+        .filter(|c| {
+            c.status == BoardStatus::Dismissed
+                && c.archived_ms > 0
+                && now.saturating_sub(c.archived_ms) >= age
+        })
+        .count()
+}
+
+/// The pill for a bulk delete.
+pub(super) fn bulk_delete_label(days: u32) -> String {
+    if days == 0 {
+        "Delete all archived".into()
+    } else {
+        format!("Delete archived older than {days} days")
+    }
+}
+
+/// The confirm line, with the count, before a delete.
+pub(super) fn confirm_delete_text(n: usize) -> String {
+    if n == 1 {
+        "Delete 1 archived card and its log for good?".into()
+    } else {
+        format!("Delete {n} archived cards and their logs for good?")
+    }
+}
+
+/// Settings: the auto-delete choice as a label.
+pub(super) fn auto_delete_label(days: u32) -> String {
+    if days == 0 {
+        "Off".into()
+    } else {
+        format!("After {days} days")
+    }
 }
 
 pub(super) fn board_chat_edit_id(id: &str) -> egui::Id {
@@ -1076,6 +1163,213 @@ impl Cabin {
                 format!("Interrupted: {title}. Resume it from the Workboard."),
                 Some(super::notices::NoticeAction::OpenCard(id)),
             );
+        }
+    }
+
+    /// The cabin's sweep timer, from the per-frame board tick: at start, then
+    /// every six hours. The sweep runs off the UI thread on the board file under
+    /// the lock the shell and the agent's tools share, so it never runs twice
+    /// when both apps are open. Local only: no model client, nothing in a prompt.
+    pub(super) fn tick_board_sweep(&mut self, now: u64) {
+        if let Some(slot) = &self.board_view.sweep {
+            let done = slot.lock().ok().and_then(|mut g| g.take());
+            if let Some(run) = done {
+                self.board_view.sweep = None;
+                self.apply_board_tidy(run);
+            }
+            return;
+        }
+        let path = config::workboard_path();
+        let Some(every) = crate::work_store::sweep_due(&path, now) else {
+            return;
+        };
+        let live = self.live_card_ids();
+        let slot: SweepSlot = Default::default();
+        self.board_view.sweep = Some(slot.clone());
+        std::thread::spawn(move || {
+            let run = crate::work_store::sweep(&path, now, &live, every)
+                .ok()
+                .flatten();
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(run);
+            }
+        });
+    }
+
+    /// A sweep ended: take its cards from disk at once, so Undo finds them, and
+    /// raise one bell notice for what it archived (with Undo) and one for what
+    /// auto-delete removed.
+    pub(super) fn apply_board_tidy(&mut self, run: Option<grokhub_core::work_file::TidyRun>) {
+        self.board_view.tidy = None;
+        let Some(run) = run else {
+            return;
+        };
+        if run.report.is_empty() && run.deleted.is_empty() {
+            return;
+        }
+        crate::work_store::reload_now(&config::workboard_path(), &mut self.board);
+        for id in &run.deleted {
+            self.forget_board_card_view(id);
+        }
+        self.note_board_sweep(&run.report);
+        if !run.deleted.is_empty() {
+            let n = run.deleted.len();
+            self.notify(
+                super::notices::NoticeKind::Info,
+                format!(
+                    "Auto-delete removed {n} old archived {}",
+                    if n == 1 { "card" } else { "cards" }
+                ),
+                None,
+            );
+        }
+    }
+
+    /// Settings: the Workboard tidy. Auto-archive is fixed at 30 days idle (and
+    /// a day after an agent's finished card you never touched); auto-delete is
+    /// off unless you choose 30 or 90 days. Both apps read the same choice.
+    pub(super) fn ui_workboard_tidy_row(&mut self, ui: &mut egui::Ui) {
+        let path = config::workboard_path();
+        let tidy = *self
+            .board_view
+            .tidy
+            .get_or_insert_with(|| grokhub_core::work_file::read_tidy(&path));
+        crate::cards::help_text(
+            ui,
+            "Workboard: auto-archive after 30 days with no activity. An agent's finished card you never opened goes after a day. Archived cards stay until you delete them.",
+        );
+        let labels: Vec<String> = grokhub_core::work_item::AUTO_DELETE_DAYS
+            .iter()
+            .map(|d| auto_delete_label(*d))
+            .collect();
+        if let Some(i) = crate::cards::settings_dropdown(
+            ui,
+            "Auto-delete archived",
+            "Delete archived cards and their logs this long after they were archived. Off by default.",
+            &auto_delete_label(tidy.auto_delete_days),
+            &labels,
+        ) {
+            let days = grokhub_core::work_item::AUTO_DELETE_DAYS[i];
+            match grokhub_core::work_file::set_auto_delete_days(&path, days) {
+                Ok(t) => {
+                    self.board_view.tidy = Some(t);
+                    self.status = "Saved".into();
+                }
+                Err(e) => self.status = e,
+            }
+        }
+    }
+
+    /// The Archived view under the board: newest first, a search, Restore and
+    /// Delete on each card, and the bulk deletes. Every delete asks first with
+    /// the count, and none touches a card on the board.
+    pub(super) fn ui_board_archived(&mut self, ui: &mut egui::Ui, act: &mut Option<BoardAct>) {
+        let total = self
+            .board
+            .iter()
+            .filter(|c| c.status == BoardStatus::Dismissed)
+            .count();
+        if total == 0 {
+            self.board_view.show_archived = false;
+            return;
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            crate::cards::section_label(ui, &format!("Archived · {total}"));
+            let label = if self.board_view.show_archived {
+                "Hide"
+            } else {
+                "Show"
+            };
+            if crate::cards::ghost_pill(ui, label) {
+                self.board_view.show_archived = !self.board_view.show_archived;
+                self.board_view.confirm = None;
+            }
+        });
+        if !self.board_view.show_archived {
+            return;
+        }
+        let now = grokhub_core::now_ms();
+        ui.add(
+            egui::TextEdit::singleline(&mut self.board_view.archived_query)
+                .hint_text("Find an archived card")
+                .desired_width(280.0),
+        );
+        ui.add_space(4.0);
+        // The bulk deletes, or the one waiting for its confirm.
+        let pending = self.board_view.confirm.clone();
+        ui.horizontal_wrapped(|ui| match &pending {
+            Some(ArchivedDelete::Older(days)) => {
+                let n = archived_older_count(&self.board, *days, now);
+                ui.label(
+                    RichText::new(confirm_delete_text(n))
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::fg()),
+                );
+                if n > 0 && crate::cards::danger_pill(ui, "Delete") {
+                    *act = Some(BoardAct::DeleteArchived(*days));
+                }
+                if crate::cards::ghost_pill(ui, "Cancel") {
+                    self.board_view.confirm = None;
+                }
+            }
+            _ => {
+                for days in BULK_DELETE_DAYS {
+                    if archived_older_count(&self.board, days, now) > 0
+                        && crate::cards::ghost_pill(ui, &bulk_delete_label(days))
+                    {
+                        self.board_view.confirm = Some(ArchivedDelete::Older(days));
+                    }
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let rows: Vec<(String, String, u64)> =
+            archived_rows(&self.board, &self.board_view.archived_query)
+                .into_iter()
+                .map(|c| (c.id.clone(), c.title.clone(), c.archived_ms))
+                .collect();
+        if rows.is_empty() {
+            crate::cards::help_text(ui, "No archived card matches.");
+        }
+        for (id, title, archived_ms) in rows {
+            let asking = pending == Some(ArchivedDelete::One(id.clone()));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(&title)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::muted()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "archived {}",
+                        grokhub_core::pulse::ago_label(archived_ms, now)
+                    ))
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::subtle()),
+                );
+                if asking {
+                    ui.label(
+                        RichText::new(confirm_delete_text(1))
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::fg()),
+                    );
+                    if crate::cards::danger_pill(ui, "Delete") {
+                        self.board_view.confirm = None;
+                        *act = Some(BoardAct::Delete(id.clone()));
+                    }
+                    if crate::cards::ghost_pill(ui, "Keep") {
+                        self.board_view.confirm = None;
+                    }
+                } else {
+                    if crate::cards::ghost_pill(ui, "Restore") {
+                        *act = Some(BoardAct::Restore(id.clone()));
+                    }
+                    if crate::cards::ghost_pill(ui, "Delete") {
+                        self.board_view.confirm = Some(ArchivedDelete::One(id.clone()));
+                    }
+                }
+            });
         }
     }
 
