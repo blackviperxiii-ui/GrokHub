@@ -310,7 +310,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         .unwrap();
         let toc = toc_for(&root);
         assert!(
-            toc.contains("## Interface: 120105, 120100, 120007, 120005, 120000, 110207, 50501, 40402, 11508\n"),
+            toc.contains("## Interface: 120105, 120100, 120007, 120005, 120000, 110207, 50504, 50501, 40402, 20506, 11509, 11508\n"),
             "{toc}"
         );
         assert!(toc.contains("## SavedVariables: LoadoutDB\n"));
