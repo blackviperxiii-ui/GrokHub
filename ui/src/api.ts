@@ -52,6 +52,8 @@ export interface Capabilities {
   summonHotkey?: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications?: boolean;
+  /** The Library page: this computer's Steam games. */
+  library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -64,6 +66,7 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
   webAccess: false,
   plugins: false,
+  library: false,
 };
 
 /** The web app gets chat, memory, automations, connectors and Pulse. */
@@ -196,13 +199,62 @@ export function clearApiKey(): Promise<Settings> {
   return invoke<Settings>("clear_api_key");
 }
 
-/** Runs one prompt through the agent loop; resolves with the stop reason. */
+/** Runs one prompt through the agent loop; resolves with the stop reason.
+ * `attachments`: paths from `stageAttachment`, in the chips' order. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode: SessionMode = "chat",
+  attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+}
+
+/** A file waiting on the composer (src-tauri/src/attach.rs). */
+export interface Staged {
+  /** The copy in the chat's folder; send it back with the message. */
+  path: string;
+  name: string;
+  kind: "image" | "text" | "document";
+  /** "Picture shot.png", "File notes.md". */
+  label: string;
+  /** The note when the chat's model can't read it; it won't send. */
+  status: string | null;
+}
+
+/** One picked or dropped file: staged, or why not. */
+export interface StageOutcome {
+  staged: Staged | null;
+  error: string | null;
+}
+
+/** A pasted or dropped file's bytes, as base64. */
+export function stageAttachment(conversationId: string, name: string, data: string): Promise<Staged> {
+  return invoke<Staged>("stage_attachment", { conversationId, name, data });
+}
+
+/** Files dropped on the window, by path (the desktop window only). */
+export function stageAttachmentPaths(conversationId: string, paths: string[]): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("stage_attachment_paths", { conversationId, paths });
+}
+
+/** The + button: the system file picker, then each pick is staged. */
+export function pickAttachments(conversationId: string): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("pick_attachments", { conversationId });
+}
+
+export function removeAttachment(conversationId: string, path: string): Promise<void> {
+  return invoke<void>("remove_attachment", { conversationId, path });
+}
+
+/** Files dropped on the desktop window arrive as paths. Outside the shell
+ * this never fires; the page's own drop event has the files. */
+export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  if (!inShell()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
+  });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -1187,4 +1239,40 @@ export interface BackgroundPage {
 
 export function getBackground(): Promise<BackgroundPage> {
   return invoke<BackgroundPage>("get_background");
+}
+
+/** One Steam game on this computer (src-tauri/src/library.rs). */
+export interface LibraryGame {
+  appId: number;
+  name: string;
+  /** False while Steam downloads or updates it. */
+  installed: boolean;
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  /** Minutes played, 0 when never played. */
+  playtimeMin: number;
+}
+
+export interface LibraryPage {
+  /** A Steam library folder was found on this computer. */
+  steamFound: boolean;
+  /** Most recently played first. */
+  games: LibraryGame[];
+}
+
+/** Tall box art for the grid, the wide store header for the detail column. */
+export type CoverShape = "tall" | "wide";
+
+export function getLibrary(): Promise<LibraryPage> {
+  return invoke<LibraryPage>("get_library");
+}
+
+/** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
+export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+  return invoke<string | null>("library_cover", { appId, shape });
+}
+
+/** Ask Steam to start the game. Resolves to a line to show. */
+export function libraryPlay(appId: number): Promise<string> {
+  return invoke<string>("library_play", { appId });
 }

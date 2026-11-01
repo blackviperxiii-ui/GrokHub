@@ -58,8 +58,8 @@ async function openSection(name: string) {
   await userEvent.click(await screen.findByRole("button", { name }));
 }
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true };
-const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true };
+const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 /** A desktop with start at login, the summon hotkey and notifications. */
 const BASICS: Capabilities = { ...DESKTOP, autostart: true, summonHotkey: true, notifications: true };

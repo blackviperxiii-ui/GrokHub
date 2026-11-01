@@ -53,6 +53,7 @@ mod win_audio;
 #[cfg(windows)]
 mod win_native;
 mod window;
+mod work_store;
 mod xai;
 
 use app::Cabin;
