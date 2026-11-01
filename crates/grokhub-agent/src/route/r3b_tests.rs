@@ -309,20 +309,23 @@ fn usable_needs_a_key_and_a_grant_that_covers_the_data() {
 #[test]
 fn provider_agent_dials_through_the_public_only_resolver() {
     let arm = include_str!("providers.rs")
-        .split("fn agent() -> ureq::Agent {")
+        .split("fn agent() -> grokhub_core::http::Agent {")
         .nth(1)
         .and_then(|s| s.split("fn reply(").next())
         .expect("provider agent");
+    // `public_only` dials through public_only_resolve (grokhub_core::http tests).
     assert!(
-        arm.contains(".resolver(crate::public_only_resolve)"),
+        arm.contains("public_only: true,"),
         "provider dials must use public_only_resolve: {arm}"
     );
     assert!(
-        arm.contains(".redirects(0)"),
+        arm.contains("redirects: 0,"),
         "provider dials must not follow redirects blindly: {arm}"
     );
     assert!(
-        !arm.contains("env_proxy") && !arm.to_ascii_lowercase().contains("http_proxy"),
+        !arm.contains("env_proxy")
+            && !arm.contains("proxy_from_env")
+            && !arm.to_ascii_lowercase().contains("http_proxy"),
         "env proxy would skip public_only_resolve on the target: {arm}"
     );
 }

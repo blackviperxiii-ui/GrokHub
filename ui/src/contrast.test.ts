@@ -82,6 +82,8 @@ const PAIRS: [string, string, number][] = [
   ["muted", "panel", 4.5],
   ["muted", "raised", 4.5],
   ["steel", "panel", 4.5],
+  // Code in a reply: strings and numbers on the code well.
+  ["steel", "bg", 4.5],
   ["accent-text", "accent", 4.5],
   ["danger-text", "bg", 4.5],
   ["danger-text", "panel", 4.5],

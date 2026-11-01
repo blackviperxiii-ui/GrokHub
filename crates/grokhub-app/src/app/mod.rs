@@ -170,6 +170,7 @@ mod elite_ui;
 mod episode_ui;
 mod eso_ui;
 mod evidence_ui;
+mod factorio_ui;
 mod feed_ui;
 mod file_writes;
 mod findings_ui;
@@ -231,6 +232,7 @@ mod proactive_ui;
 mod projects;
 mod provider_ui;
 mod pulse;
+mod pulse_fix_ui;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
@@ -265,6 +267,7 @@ mod web_search_ui;
 mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
+mod work_log;
 mod wow_ui;
 
 use background::BgWork;
@@ -477,6 +480,8 @@ pub struct Cabin {
     chat_job_thread: Option<String>,
     /// This attempt filed a Doing card. Fail paths use it to undo that write.
     inflight_open: bool,
+    /// Tool calls of this turn already on its card's progress log.
+    run_tools_logged: Vec<String>,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -1138,6 +1143,7 @@ impl Cabin {
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1622,6 +1628,7 @@ impl Cabin {
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
             hub: Arc::new(Mutex::new(grokhub_core::HubState::empty())),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -3636,6 +3643,17 @@ impl Cabin {
         self.last_heartbeat = Instant::now();
         // Halt holds every organ that starts work; local upkeep still runs.
         let now = now_ms();
+        // While this beat is fresh the shell fires no automations. Not from
+        // tests, whose config folder can be the real one.
+        #[cfg(not(test))]
+        {
+            static LEASE_BEAT: AtomicU64 = AtomicU64::new(0);
+            grokhub_core::scheduler_lease::beat_cabin_lease(
+                &config::config_dir(),
+                now,
+                &LEASE_BEAT,
+            );
+        }
         let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {

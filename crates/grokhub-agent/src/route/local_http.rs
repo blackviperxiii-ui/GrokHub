@@ -69,11 +69,12 @@ impl HttpLocalRuntime {
         self
     }
 
-    fn agent() -> ureq::Agent {
-        ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(5))
-            .timeout_read(std::time::Duration::from_secs(120))
-            .build()
+    fn agent() -> grokhub_core::http::Agent {
+        grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: std::time::Duration::from_secs(5),
+            read: Some(std::time::Duration::from_secs(120)),
+            ..Default::default()
+        })
     }
 
     fn post_chat(
@@ -81,7 +82,7 @@ impl HttpLocalRuntime {
         messages: &[ChatMessage],
         stream: bool,
         effort: Option<&str>,
-    ) -> Result<ureq::Response, String> {
+    ) -> Result<grokhub_core::http::Response, String> {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
@@ -94,8 +95,8 @@ impl HttpLocalRuntime {
         );
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("Content-Type", "application/json")
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Content-Type", "application/json")
             .send_json(body)
             .map_err(|e| format!("local model request failed: {e}"))
     }
@@ -154,13 +155,14 @@ impl HttpLocalRuntime {
         if !self.loopback_ok() {
             return None;
         }
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(2))
-            .timeout_read(std::time::Duration::from_secs(2))
-            .build();
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: std::time::Duration::from_secs(2),
+            read: Some(std::time::Duration::from_secs(2)),
+            ..Default::default()
+        });
         let v: Value = agent
             .get(&format!("{}/props", self.base_url))
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .header("Authorization", &format!("Bearer {}", self.token))
             .call()
             .ok()?
             .into_json()
@@ -268,8 +270,8 @@ impl LocalRuntime for HttpLocalRuntime {
         }
         let resp = Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("Content-Type", "application/json")
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Content-Type", "application/json")
             .send_json(body)
             .map_err(|e| format!("local model request failed: {e}"))?;
         if resp.status() >= 400 {
@@ -336,7 +338,10 @@ fn parse_json_object(text: &str) -> Option<Value> {
     serde_json::from_str(&t[start..=end]).ok()
 }
 
-fn read_sse(resp: ureq::Response, on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+fn read_sse(
+    resp: grokhub_core::http::Response,
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<String, String> {
     let reader = BufReader::new(resp.into_reader());
     let mut full = String::new();
     for line in reader.lines() {

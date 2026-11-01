@@ -54,6 +54,8 @@ pub(super) struct FocusState {
     pub eso: super::eso_ui::EsoUi,
     /// Rocket League's Stats API, read while the game runs.
     pub rl: super::rl_ui::RlUi,
+    /// The Loadout Factorio mod and what it wrote.
+    pub factorio: super::factorio_ui::FactorioUi,
     /// Guild Wars 2 through ArenaNet's web API.
     pub gw2: super::gw2_ui::Gw2Ui,
     /// Destiny 2 through Bungie.net's web API.
@@ -85,6 +87,7 @@ impl Cabin {
         self.tick_stardew();
         self.tick_eso();
         self.tick_rl();
+        self.tick_factorio();
         self.tick_gw2();
         self.tick_destiny();
         self.tick_osrs();

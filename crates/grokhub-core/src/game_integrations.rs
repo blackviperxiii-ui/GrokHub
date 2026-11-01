@@ -161,6 +161,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "factorio",
+        name: "Factorio",
+        steam_app_id: Some(427520),
+        protection: Protection::None,
+        channels: &[Channel::OfficialAddon(
+            "a Loadout mod through Factorio's mod API that writes a summary to script-output, installed only when you click",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "destiny2",
         name: "Destiny 2",
         steam_app_id: Some(1085660),
@@ -302,5 +312,6 @@ mod tests {
         assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
         assert!(by_id("eso").unwrap().how().contains("only when you click"));
         assert!(by_id("rocketleague").unwrap().follows_the_rules());
+        assert_eq!(by_id("factorio").unwrap().steam_app_id, Some(427520));
     }
 }
