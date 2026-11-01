@@ -3,8 +3,10 @@ import { CORE_ONLY, getCapabilities, getSettings, onChatEvent, type Capabilities
 import { chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
-import { Chat, type Prefill } from "./Chat";
-import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
+import { Chat, newConversationId, type Prefill } from "./Chat";
+import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
+import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
+import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
 import { useHidingBar } from "./tabBar";
@@ -18,12 +20,14 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
 const Journal = lazy(loaders.journal);
+const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
 const Settings = lazy(loaders.settings);
@@ -37,6 +41,8 @@ export function App() {
   const [prefill, setPrefill] = useState<Prefill>();
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
   const [palette, setPalette] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
@@ -65,6 +71,11 @@ export function App() {
       () => {},
     );
   }, []);
+  // The palette's Sign in row follows the key and the Grok sign-in, which
+  // Settings may have added.
+  useEffect(() => {
+    if (palette) getSettings().then((s) => setSignedOut(!s.hasApiKey && !s.signedIn), () => {});
+  }, [palette]);
   // The Activity Dock follows every chat turn, whichever view is open.
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -90,9 +101,17 @@ export function App() {
   }, []);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "k") {
         event.preventDefault();
         setPalette((open) => !open);
+      } else if (key === "n" || key === "," || key === "/") {
+        event.preventDefault();
+        setPalette(false);
+        if (key === "n") newChat();
+        else if (key === ",") setView("settings");
+        else setSheet((open) => !open);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -104,10 +123,27 @@ export function App() {
     setView("chat");
   }
 
+  /** A fresh conversation, as the chat's own New chat button starts. */
+  function newChat() {
+    setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: newConversationId() }));
+    setView("chat");
+  }
+
+  // The palette's commands this shell can run; the others have no row yet.
+  const runners: CommandRunners = {
+    "new-chat": newChat,
+    "sign-in": () => run({ kind: "settings", section: "account" }),
+    shortcuts: () => setSheet(true),
+  };
+
   function run(action: PaletteAction) {
     if (action.kind === "view") setView(action.view);
     else if (action.kind === "ask") ask(action.text);
-    else {
+    else if (action.kind === "command") runners[action.id]?.();
+    else if (action.kind === "chat") {
+      setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: action.id }));
+      setView("chat");
+    } else {
       setGoTo((now) => ({ section: action.section, n: (now?.n ?? 0) + 1 }));
       setView("settings");
     }
@@ -147,7 +183,15 @@ export function App() {
           Command
         </button>
       </header>
-      {palette && <Palette caps={caps} onPick={run} onClose={() => setPalette(false)} />}
+      {palette && (
+        <Palette
+          caps={caps}
+          sources={{ ...NO_SOURCES, runners, signedOut, slash: COMPOSER_SLASH }}
+          onPick={run}
+          onClose={() => setPalette(false)}
+        />
+      )}
+      {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}
       <div hidden={view !== "chat"}>
@@ -201,6 +245,7 @@ export function App() {
         )}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
+        {view === "library" && caps.library && <Library />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
       </Suspense>
     </div>

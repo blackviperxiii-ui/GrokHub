@@ -8,7 +8,7 @@ use grokhub_core::connectivity::ConnectivityUiPhase;
 pub(super) const OFFLINE_ONLY_CHIP: &str = "Offline only";
 /// The chip's hover: where the switch lives.
 pub(super) const OFFLINE_ONLY_TIP: &str =
-    "You turned on Offline only. Turn it off in Settings → Privacy & data.";
+    "You turned on Offline only. Turn it off in Settings → AI models.";
 
 /// The chip's main label: the Offline only switch wins over what the network says.
 pub(super) fn chip_label(offline_only: bool, phase: ConnectivityUiPhase) -> &'static str {
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(chip_label(false, ConnectivityUiPhase::Online), "Online");
         assert_eq!(
             OFFLINE_ONLY_TIP,
-            "You turned on Offline only. Turn it off in Settings → Privacy & data."
+            "You turned on Offline only. Turn it off in Settings → AI models."
         );
         let (shown, text) = painted(true);
         assert!(shown);
