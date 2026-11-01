@@ -5,8 +5,8 @@ use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
 use super::paint::{
-    connection_text, game_mode_text, gpu_temp_text, speeds_text, storage_rows, storage_text,
-    updates_text, usage_text, Tone,
+    connection_text, frame_rate_text, game_mode_text, gpu_temp_text, speeds_text, storage_rows,
+    storage_text, updates_text, usage_text, Tone,
 };
 use crate::app::budget_ui::WeekSpend;
 use grokhub_agent::indexers::system_state::DiskUse;
@@ -259,4 +259,12 @@ fn speeds_tile_reads_the_internet_log_and_sends_nothing_when_off() {
         ..on.clone()
     };
     assert_eq!(speeds_text(&down, now).tone, Tone::Alert);
+}
+
+#[test]
+fn frame_rate_tile_is_honest_about_not_reading_games() {
+    let t = frame_rate_text(false);
+    assert_eq!(t.big, "Not read");
+    assert_eq!(t.caption, "Loadout never hooks into games");
+    assert_eq!(t.tone, Tone::Quiet);
 }
