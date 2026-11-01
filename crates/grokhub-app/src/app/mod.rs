@@ -248,6 +248,7 @@ mod setup_wizard;
 mod sidebar;
 mod skill_undo;
 mod slash;
+mod stardew_ui;
 mod status_toasts;
 mod steam_ui;
 mod systems_brief_ui;

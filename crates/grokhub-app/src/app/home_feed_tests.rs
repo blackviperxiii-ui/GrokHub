@@ -1881,6 +1881,17 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::game_watch_elite::session_card(&elite, now),
         "Elite Dangerous",
     ));
+    rows.push((
+        "end_stardew_session",
+        grokhub_core::stardew_saves::session_card(
+            &grokhub_core::stardew_saves::FarmSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "Stardew Valley",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
