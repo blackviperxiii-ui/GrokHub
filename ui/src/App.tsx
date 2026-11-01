@@ -32,6 +32,7 @@ const loaders = {
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
@@ -43,6 +44,7 @@ const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
+const Skills = lazy(loaders.skills);
 const Settings = lazy(loaders.settings);
 const Workboard = lazy(loaders.workboard);
 
@@ -314,6 +316,11 @@ export function App() {
       {opened.has("memory") && (
         <Page shown={view === "memory"}>
           <Memory />
+        </Page>
+      )}
+      {opened.has("skills") && (
+        <Page shown={view === "skills"}>
+          <Skills onUse={ask} onOpenConnectors={() => setView("connectors")} remote={Boolean(caps.remote)} />
         </Page>
       )}
       {opened.has("connectors") && (

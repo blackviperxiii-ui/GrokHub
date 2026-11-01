@@ -22,6 +22,7 @@ pub mod local_engine;
 mod md_fixtures;
 pub mod memory;
 pub mod models;
+pub mod nyx;
 pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
@@ -41,6 +42,7 @@ pub mod remote_tls;
 pub mod scheduler;
 pub mod settings;
 pub mod shell_update;
+pub mod skills;
 pub mod slash;
 pub mod voice;
 pub mod workboard;
@@ -1149,6 +1151,31 @@ fn delete_personality(
     Ok(personalities(&state))
 }
 
+/// The chat's Nyx for the voice in use (or `voice`) and what the chat is
+/// doing: a running tool's title, else `mood`. Explicit art only with
+/// Adults-only personalities on.
+#[tauri::command]
+fn nyx_look(
+    state: State<'_, ShellState>,
+    voice: Option<String>,
+    mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
+) -> Option<nyx::NyxLook> {
+    let now = current(&state);
+    nyx::look(
+        &state.config_dir,
+        voice.as_deref().unwrap_or(&now.personality),
+        now.explicit_personalities,
+        nyx::activity(mood, tool.as_deref()),
+    )
+}
+
+/// Settings → Personality's pictures, by preset id.
+#[tauri::command]
+fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
+    nyx::tiles(&ids, current(&state).explicit_personalities)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -1217,6 +1244,29 @@ async fn fetch_plugin_market(
     capabilities::needs(capabilities::current().plugins, "Plugins")?;
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     off_main(move || plugins::fetch_market(&dir, &workspace, &url)).await
+}
+
+#[tauri::command]
+async fn get_skills(state: State<'_, ShellState>) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::load(&dir, &workspace, home.as_deref())).await
+}
+
+/// The page names the skill; the shell finds its folder itself.
+#[tauri::command]
+async fn open_skill_folder(
+    state: State<'_, ShellState>,
+    source: skills::Source,
+    name: String,
+) -> Result<(), String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        skills::folder(&dir, &workspace, home.as_deref(), source, &name)
+            .and_then(|folder| skills::open_folder(&folder))
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -1711,6 +1761,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_skills" => out(block_on(get_skills(state))?),
+        "nyx_look" => out(nyx_look(
+            state,
+            arg(args, "voice")?,
+            arg(args, "mood")?,
+            arg(args, "tool")?,
+        )),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -2211,6 +2268,8 @@ pub fn run() {
             plugin_act,
             install_plugin,
             fetch_plugin_market,
+            get_skills,
+            open_skill_folder,
             get_interests,
             add_interest,
             interest_act,
@@ -2246,6 +2305,8 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            nyx_look,
+            nyx_tiles,
             get_queue,
             stop_task,
             get_workboard,
