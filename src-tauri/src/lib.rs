@@ -33,6 +33,8 @@ pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
 pub mod remote_tls;
+#[cfg(desktop)]
+pub mod scheduler;
 pub mod settings;
 pub mod shell_update;
 pub mod slash;
@@ -641,6 +643,29 @@ fn set_automation_enabled(
     Ok(automations::rows(&list, clock))
 }
 
+/// Edit in place from the row's Edit box. Words with no time are refused.
+#[tauri::command]
+fn edit_automation(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = automations::edit(&state.config_dir, &id, &text, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+/// The window's wall clock, so the scheduler fires jobs at local times. Only
+/// this window reports it: a paired browser may be in another time zone.
+#[tauri::command]
+fn set_scheduler_clock(clock: automations::Clock) {
+    #[cfg(desktop)]
+    scheduler::note_ui_clock(clock, grokhub_core::now_ms());
+    #[cfg(not(desktop))]
+    let _ = clock;
+}
+
 #[tauri::command]
 fn remove_automation(
     state: State<'_, ShellState>,
@@ -826,6 +851,70 @@ async fn disconnect_connector(
 ) -> Result<connectors::Changed, String> {
     let workspace = workspace(&state);
     off_main(move || connectors::disconnect(&workspace, &name)).await?
+}
+
+/// The Add sheet's catalog; `refresh` only from the Refresh click.
+#[tauri::command]
+async fn connector_catalog(
+    state: State<'_, ShellState>,
+    refresh: bool,
+) -> Result<connectors::CatalogView, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::catalog(&workspace, refresh)).await
+}
+
+#[tauri::command]
+async fn add_catalog_connector(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_catalog(&workspace, &id)).await?
+}
+
+#[tauri::command]
+async fn add_connector_config(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_config(&workspace, &text)).await?
+}
+
+#[tauri::command]
+async fn set_connector_enabled(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::set_enabled(&workspace, &name, on)).await?
+}
+
+/// Opens the server's https sign-in page and waits for the browser to come back.
+#[tauri::command]
+async fn sign_in_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::sign_in(&workspace, &name, &opener::open)).await?
+}
+
+/// Posts the key's approval card; the page answers it with `answer_connector_key`.
+#[tauri::command]
+async fn save_connector_key(
+    state: State<'_, ShellState>,
+    name: String,
+    key: String,
+) -> Result<connectors::KeyCard, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::start_key(&workspace, &name, key)).await?
+}
+
+#[tauri::command]
+async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::Changed, String> {
+    off_main(move || connectors::answer_key(&id, approve)).await?
 }
 
 /// What this platform runs; the UI hides the rest.
@@ -1494,6 +1583,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
+        "edit_automation" => out(edit_automation(
+            state,
+            arg(args, "id")?,
+            arg(args, "text")?,
+            arg(args, "clock")?,
+        )?),
         "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
@@ -1537,6 +1632,25 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_background" => out(get_background(state)?),
         _ => Err(remote::refused()),
     }
+}
+
+/// Scheduled automations fire from here while the cabin is closed, with the
+/// settings as they are at each run.
+#[cfg(desktop)]
+fn start_scheduler(app: &tauri::App) {
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    let handle = app.handle().clone();
+    scheduler::start(
+        config_dir.clone(),
+        move || {
+            let settings = settings::load(&config_dir);
+            let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
+            Ok((route.client, route.model, route.workspace))
+        },
+        move |fired| {
+            let _ = handle.emit(scheduler::RAN_EVENT, fired);
+        },
+    );
 }
 
 #[tauri::command]
@@ -1884,6 +1998,8 @@ pub fn run() {
             app.listen_any(CHAT_EVENT, move |event| {
                 web.broadcast(CHAT_EVENT, event.payload())
             });
+            #[cfg(desktop)]
+            start_scheduler(app);
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
@@ -1930,6 +2046,8 @@ pub fn run() {
             add_automation,
             set_automation_enabled,
             remove_automation,
+            edit_automation,
+            set_scheduler_clock,
             run_automation,
             get_memory,
             save_memory,
@@ -1945,6 +2063,13 @@ pub fn run() {
             restart_connector,
             sign_out_connector,
             disconnect_connector,
+            connector_catalog,
+            add_catalog_connector,
+            add_connector_config,
+            set_connector_enabled,
+            sign_in_connector,
+            save_connector_key,
+            answer_connector_key,
             get_journal,
             journal_add,
             journal_act,

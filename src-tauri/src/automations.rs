@@ -1,8 +1,9 @@
 //! Automations (cross-platform recode, Phase 3b). The shell edits the same
 //! `automations.json` the egui cabin uses, so a job made in either shows in
-//! both. The cabin's pulse still fires them on schedule; there is no second
-//! scheduler. "Run now" runs one job unattended in Ask mode, so it can read
-//! but every tool that changes something is refused without a card.
+//! both. While the cabin is open its pulse fires them; once it is closed the
+//! shell's scheduler (`scheduler.rs`) does. "Run now" and scheduled runs go
+//! unattended in Ask mode, so a job can read but every tool that changes
+//! something is refused without a card.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,10 @@ pub struct Row {
     pub summary: String,
     /// Red line when the last run failed.
     pub health: Option<String>,
+    /// The words for the Edit box, `None` when words cannot say the schedule.
+    pub describe: Option<String>,
+    /// It has a check command, so only the cabin fires it.
+    pub cabin_only: bool,
 }
 
 pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
@@ -59,8 +64,16 @@ pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
             enabled: a.enabled,
             summary: grokhub_core::automation_summary_line(a, clock),
             health: grokhub_core::automation_health_line(a),
+            describe: grokhub_core::describe_automation(a),
+            cabin_only: cabin_only(a),
         })
         .collect()
+}
+
+/// A job gated by a check command runs only in the cabin, which runs the
+/// command first. The shell neither fires it nor counts it as due.
+pub fn cabin_only(a: &Automation) -> bool {
+    grokhub_core::night_check_command(&a.check_command).is_some()
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {
@@ -165,6 +178,35 @@ pub fn set_enabled(
     })
 }
 
+/// Edit in place: the new words set the name, the ask and the schedule. The
+/// id, pause state, run count, last run, health and any cabin check command
+/// stay. Words with no time are refused and nothing is written.
+pub fn edit(
+    config_dir: &Path,
+    id: &str,
+    text: &str,
+    clock: LocalClock,
+) -> Result<Vec<Automation>, String> {
+    let parsed = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
+    if parsed.name.trim().is_empty() {
+        return Err(ADD_HINT.into());
+    }
+    change(config_dir, id, |list, at| {
+        let old = &list[at];
+        let next = Automation {
+            id: old.id.clone(),
+            enabled: old.enabled,
+            check_command: old.check_command.clone(),
+            last_run: old.last_run,
+            next_run: None,
+            run_count: old.run_count,
+            health: old.health.clone(),
+            ..parsed
+        };
+        list[at] = grokhub_core::ensure_automation_schedule(next, clock);
+    })
+}
+
 pub fn remove(config_dir: &Path, id: &str) -> Result<Vec<Automation>, String> {
     change(config_dir, id, |list, at| {
         list.remove(at);
@@ -179,13 +221,14 @@ pub struct RunResult {
     pub stop: String,
 }
 
-/// Jobs a Run now is working on. A second Run now of the same job is refused.
+/// Jobs a Run now or a scheduled run is working on. A second run of the same
+/// job is refused.
 static RUNNING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
-struct Running(String);
+pub(crate) struct Running(String);
 
 impl Running {
-    fn claim(id: &str) -> Result<Self, String> {
+    pub(crate) fn claim(id: &str) -> Result<Self, String> {
         let mut running = RUNNING.lock().unwrap_or_else(|err| err.into_inner());
         if !running
             .get_or_insert_with(HashSet::new)
@@ -194,6 +237,14 @@ impl Running {
             return Err("That automation is already running.".into());
         }
         Ok(Self(id.to_string()))
+    }
+
+    fn holds(id: &str) -> bool {
+        RUNNING
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .as_ref()
+            .is_some_and(|set| set.contains(id))
     }
 }
 
@@ -206,27 +257,34 @@ impl Drop for Running {
     }
 }
 
-/// Runs one job now, unattended in Ask mode, and records the run on its row.
-/// The session is read-only, as the cabin's scheduled Ask jobs are, so an
-/// allow rule cannot turn a refused write into one that runs.
-pub fn run_now(
+/// One unattended run of `job` in Ask mode, as the shell's scheduler fires it.
+/// It records nothing on the row. The session is read-only, as the cabin's
+/// scheduled Ask jobs are, so an allow rule cannot turn a refused write into
+/// one that runs. Like the cabin's scheduled run, it takes the automation's
+/// board card into Doing and logs the start and end on it.
+pub fn execute(
     config_dir: &Path,
-    id: &str,
+    job: &Automation,
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
     workspace: PathBuf,
-) -> Result<RunResult, String> {
-    let job = load(config_dir)?
-        .into_iter()
-        .find(|a| a.id == id)
-        .ok_or_else(|| {
-            "That automation is gone. It may have been removed in the cabin.".to_string()
-        })?;
-    let _running = Running::claim(id)?;
+) -> RunResult {
+    run_on_board(config_dir, job, client, model, workspace, "scheduled")
+}
+
+/// `execute`, with `why` as the note on the card's start log line.
+fn run_on_board(
+    config_dir: &Path,
+    job: &Automation,
+    client: Arc<dyn ModelClient + Send + Sync>,
+    model: &str,
+    workspace: PathBuf,
+    why: &str,
+) -> RunResult {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
-    let session_id = format!("shell-auto-{id}-{started}");
-    let card = board_run_start(config_dir, &job, &session_id, model, started);
+    let session_id = format!("shell-auto-{}-{started}", job.id);
+    let card = board_run_start(config_dir, job, &session_id, model, started, why);
     let system = crate::agent::system_prompt(&workspace, false, "");
     let done = grokhub_agent::run_unattended(UnattendedRun {
         client,
@@ -247,25 +305,97 @@ pub fn run_now(
         imagine_bearer: String::new(),
         resume: false,
     });
-    let failed = done.stop_reason == "error" || !done.error.is_empty();
-    board_run_end(config_dir, &job, card.as_deref(), failed, &done);
-    change(config_dir, id, |list, at| {
-        let ran = grokhub_core::mark_automation_ran(list[at].clone(), started);
-        list[at] = if failed {
-            grokhub_core::mark_automation_failed(ran, &done.error)
-        } else {
-            grokhub_core::mark_automation_ok(ran)
-        };
-    })?;
-    Ok(RunResult {
+    let result = RunResult {
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
-    })
+    };
+    board_run_end(config_dir, job, card.as_deref(), &result);
+    result
 }
 
-/// KB-02: Run now takes the automation's one board card into Doing, as the
-/// cabin's scheduled run does. A board that cannot be read is left alone and the
+impl RunResult {
+    pub fn failed(&self) -> bool {
+        self.stop == "error" || !self.error.is_empty()
+    }
+}
+
+fn settle(a: Automation, result: &RunResult) -> Automation {
+    if result.failed() {
+        grokhub_core::mark_automation_failed(a, &result.error)
+    } else {
+        grokhub_core::mark_automation_ok(a)
+    }
+}
+
+/// Runs one job now and records the run on its row.
+pub fn run_now(
+    config_dir: &Path,
+    id: &str,
+    client: Arc<dyn ModelClient + Send + Sync>,
+    model: &str,
+    workspace: PathBuf,
+) -> Result<RunResult, String> {
+    let job = load(config_dir)?
+        .into_iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| {
+            "That automation is gone. It may have been removed in the cabin.".to_string()
+        })?;
+    let _running = Running::claim(id)?;
+    let started = grokhub_core::now_ms();
+    let result = run_on_board(config_dir, &job, client, model, workspace, "run now");
+    change(config_dir, id, |list, at| {
+        let ran = grokhub_core::mark_automation_ran(list[at].clone(), started);
+        list[at] = settle(ran, &result);
+    })?;
+    Ok(result)
+}
+
+/// The scheduler's claim: takes the first due job the shell may fire and
+/// saves it as run (last run, count and the next run after `clock`) before it
+/// starts, so a second tick, or the cabin opening, finds it done. However many
+/// slots were missed (the laptop slept), the job runs once and its next run is
+/// the next slot to come. Jobs only the cabin fires, jobs in `skip` and jobs
+/// a Run now holds are left alone. A job with no next run gets one.
+pub fn claim_due(
+    config_dir: &Path,
+    clock: LocalClock,
+    skip: &HashSet<String>,
+) -> Result<Option<Automation>, String> {
+    let _store = store();
+    let mut list = load_unlocked(config_dir)?;
+    let before = list.clone();
+    let pick = grokhub_core::due_automations(&list, clock.now_ms)
+        .into_iter()
+        .find(|a| !cabin_only(a) && !skip.contains(&a.id) && !Running::holds(&a.id))
+        .map(|a| a.id);
+    let mut claimed = None;
+    for a in &mut list {
+        if pick.as_deref() == Some(a.id.as_str()) {
+            let ran = grokhub_core::mark_automation_ran(a.clone(), clock.now_ms);
+            *a = grokhub_core::ensure_automation_schedule(ran, clock);
+            claimed = Some(a.clone());
+        } else if a.enabled && a.next_run.is_none() && !cabin_only(a) {
+            *a = grokhub_core::ensure_automation_schedule(a.clone(), clock);
+        }
+    }
+    if list != before {
+        save(config_dir, &list)?;
+    }
+    Ok(claimed)
+}
+
+/// How a scheduled run ended, on its row. The claim already counted it.
+pub fn settle_run(config_dir: &Path, id: &str, result: &RunResult) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at] = settle(list[at].clone(), result);
+    })
+    .map(drop)
+}
+
+/// KB-02: Run now and a shell scheduled run take the automation's one board
+/// card into Doing, as the cabin's scheduled run does. A board that cannot be read is left alone and the
 /// run still goes. No model is involved.
 fn board_run_start(
     config_dir: &Path,
@@ -273,6 +403,7 @@ fn board_run_start(
     session: &str,
     model: &str,
     now: u64,
+    why: &str,
 ) -> Option<String> {
     use grokhub_core::work_run as wr;
     let id = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
@@ -284,25 +415,20 @@ fn board_run_start(
         &id,
         now,
         wr::LOG_START,
-        "run now",
+        why,
     );
     Some(id)
 }
 
 /// The run's final checkpoint. A reply that needs you files the Follow up card,
 /// as in the cabin; a quiet run lets the agent's untouched card archive itself.
-fn board_run_end(
-    config_dir: &Path,
-    job: &Automation,
-    card: Option<&str>,
-    failed: bool,
-    done: &grokhub_agent::UnattendedDone,
-) {
+fn board_run_end(config_dir: &Path, job: &Automation, card: Option<&str>, done: &RunResult) {
     use grokhub_core::work_run::{self as wr, RunEnd};
     let Some(card) = card else {
         return;
     };
     let now = grokhub_core::now_ms();
+    let failed = done.failed();
     let end = if failed {
         RunEnd::Failed(done.error.clone())
     } else {
@@ -461,6 +587,110 @@ mod tests {
         assert_eq!(
             row.health.as_deref(),
             Some("Failed 2 times in a row — API key rejected")
+        );
+    }
+
+    #[test]
+    fn edit_keeps_the_id_runs_pause_and_health_and_takes_the_new_words() {
+        let dir = temp_dir("edit");
+        let list = add(&dir, "every day at 7am water the plants", tuesday_8am()).expect("a");
+        let id = list[0].id.clone();
+        change(&dir, &id, |list, at| {
+            let ran = grokhub_core::mark_automation_ran(list[at].clone(), 5_000);
+            list[at] = grokhub_core::mark_automation_failed(ran, "API key rejected");
+        })
+        .expect("ran");
+        set_enabled(&dir, &id, false, tuesday_8am()).expect("pause");
+
+        let edited = edit(
+            &dir,
+            &id,
+            "every weekday at 9:30am water the ferns",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        let a = &edited[0];
+        assert_eq!(
+            (
+                a.id.as_str(),
+                a.name.as_str(),
+                a.schedule.as_str(),
+                a.time.as_str(),
+                a.instructions.as_str(),
+            ),
+            (
+                id.as_str(),
+                "water the ferns",
+                "weekdays",
+                "09:30",
+                "every weekday at 9:30am water the ferns",
+            )
+        );
+        assert_eq!(
+            (a.enabled, a.run_count, a.last_run, a.next_run),
+            (false, 1, Some(5_000), None)
+        );
+        assert_eq!(
+            grokhub_core::automation_health_line(a).as_deref(),
+            Some("Last run failed — API key rejected")
+        );
+        assert_eq!(load(&dir).expect("reload"), edited);
+
+        let resumed = set_enabled(&dir, &id, true, tuesday_8am()).expect("resume");
+        let row = &rows(&resumed, tuesday_8am())[0];
+        assert_eq!(
+            row.summary,
+            "weekdays at 09:30 · next today 9:30 AM · 1 run"
+        );
+        assert_eq!(
+            row.describe.as_deref(),
+            Some("every weekday at 9:30am water the ferns")
+        );
+        assert!(!row.cabin_only);
+    }
+
+    #[test]
+    fn edit_without_a_time_is_refused_and_writes_nothing() {
+        let dir = temp_dir("edit-nowhen");
+        let id = add(&dir, "every day at 7am water the plants", tuesday_8am()).expect("a")[0]
+            .id
+            .clone();
+        let before = std::fs::read_to_string(path(&dir)).expect("before");
+        assert_eq!(
+            edit(&dir, &id, "water the ferns", tuesday_8am()),
+            Err(ADD_HINT.to_string())
+        );
+        assert_eq!(
+            edit(&dir, "auto-gone", "every day at 8am x", tuesday_8am()),
+            Err("That automation is gone. It may have been removed in the cabin.".to_string())
+        );
+        assert_eq!(std::fs::read_to_string(path(&dir)).expect("after"), before);
+    }
+
+    #[test]
+    fn edit_keeps_a_cabin_check_command() {
+        let dir = temp_dir("edit-check");
+        std::fs::write(
+            path(&dir),
+            r#"[{"id":"auto-9","name":"tidy","schedule":"daily","time":"09:00","instructions":"tidy downloads","checkCommand":"test -d ~/Downloads","enabled":true}]"#,
+        )
+        .expect("seed");
+        let row = &rows(&load(&dir).expect("load"), tuesday_8am())[0];
+        assert!(row.cabin_only);
+        assert_eq!(
+            row.describe.as_deref(),
+            Some("every day at 9am tidy downloads")
+        );
+        let edited = edit(
+            &dir,
+            "auto-9",
+            "every day at 6pm tidy downloads",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        assert_eq!(
+            (edited[0].check_command.as_str(), edited[0].time.as_str()),
+            ("test -d ~/Downloads", "18:00")
         );
     }
 
