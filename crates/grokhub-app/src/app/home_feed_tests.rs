@@ -1893,6 +1893,17 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Stardew Valley",
     ));
     rows.push((
+        "end_eso_session",
+        grokhub_core::eso_addon::session_card(
+            &grokhub_core::eso_addon::EsoSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "The Elder Scrolls Online",
+    ));
+    rows.push((
         "tick_rl",
         grokhub_core::game_watch_rl::match_card(&Default::default(), now),
         "Rocket League",

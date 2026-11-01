@@ -5446,6 +5446,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "Stardew Valley",
         ));
         rows.push((
+            "session_card",
+            crate::eso_addon::session_card(
+                &crate::eso_addon::EsoSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "The Elder Scrolls Online",
+        ));
+        rows.push((
             "match_card",
             crate::game_watch_rl::match_card(&Default::default(), at),
             "Rocket League",

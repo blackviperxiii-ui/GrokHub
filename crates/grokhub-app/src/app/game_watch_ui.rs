@@ -321,6 +321,7 @@ impl Cabin {
                 }
             }
         });
+        self.ui_eso(ui);
     }
 }
 
