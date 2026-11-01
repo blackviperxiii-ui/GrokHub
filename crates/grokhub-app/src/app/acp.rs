@@ -266,6 +266,14 @@ impl Cabin {
                     }
                     self.running = false;
                     self.acp = None;
+                    // xAI turned the sign-in away: with Local AI ready, the
+                    // same turn runs again on the device instead of failing.
+                    if self.note_cloud_rejection(&e) && !self.turn_retried {
+                        self.turn_retried = true;
+                        self.kick_model(false);
+                        self.status = super::native_engine::LOCAL_FALLBACK_NOTE.into();
+                        continue;
+                    }
                     if grokhub_core::proc_util::is_sigterm_status(&e) && !self.turn_retried {
                         self.turn_retried = true;
                         self.status = "Retrying…".into();
