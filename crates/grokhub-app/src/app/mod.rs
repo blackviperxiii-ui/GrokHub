@@ -229,6 +229,7 @@ mod proactive_ui;
 mod projects;
 mod provider_ui;
 mod pulse;
+mod pulse_fix_ui;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
