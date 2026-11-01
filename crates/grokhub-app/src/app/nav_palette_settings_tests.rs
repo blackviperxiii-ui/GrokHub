@@ -566,7 +566,7 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
         .collect();
     assert_eq!(copied.len(), 1, "{copied:?}");
     assert!(
-        copied[0].starts_with("app GrokHub\nversion "),
+        copied[0].starts_with("app Loadout\nversion "),
         "{}",
         copied[0]
     );
