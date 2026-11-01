@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   clearApiKey: vi.fn<() => Promise<Shape>>(),
   setTheme: vi.fn<(theme: string) => Promise<Shape>>(),
   listModels: vi.fn(),
+  setModel: vi.fn<(id: string) => Promise<Shape>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -47,7 +48,7 @@ vi.mock("./Privacy", () => ({
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
-import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+import { ABOUT_NOTE, DESKTOP_NOTE, GENERAL_EMPTY, REMOTE_NOTE, Settings } from "./Settings";
 
 async function openSection(name: string) {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -78,26 +79,40 @@ describe("Settings", () => {
     api.getSettings.mockResolvedValue(shape({}));
   });
 
-  it("loads and saves the model, keeping what Defaults and Behavior saved", async () => {
-    api.saveDefaults.mockResolvedValue(
-      shape({ workspace: "/work", workspacePath: "/work", approvals: "always" }),
-    );
-    api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
-    render(<Settings caps={DESKTOP} />);
-
+  it("General saves desktop control, keeping what Defaults and Behavior saved", async () => {
     api.listModels.mockResolvedValue({
       current: "grok-4.7",
       options: [{ id: "grok-4.7", label: "Grok 4.7", source: "catalog" }],
       note: null,
     });
-    const model = await screen.findByLabelText("Model");
-    expect(model).toHaveTextContent("grok-4.7");
-    // The folder, approvals and tray moved out of General.
+    api.setModel.mockResolvedValue(shape({ model: "grok-5" }));
+    api.saveDefaults.mockResolvedValue(
+      shape({ model: "grok-5", workspace: "/work", workspacePath: "/work", approvals: "always" }),
+    );
+    api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
+    render(<Settings caps={DESKTOP} />);
+
+    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
+    // The model, folder, approvals and tray moved out of General.
+    expect(screen.queryByLabelText("Model")).toBeNull();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
     expect(screen.queryByLabelText("Approvals")).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
 
     await openSection("Defaults");
+    const model = screen.getByLabelText("Model");
+    expect(model).toHaveTextContent("grok-4.7");
+    await userEvent.click(model);
+    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
+    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
+    await userEvent.click(screen.getByRole("button", { name: "Use" }));
+    expect(api.setModel).toHaveBeenCalledWith("grok-5");
+    expect(await screen.findByText("New messages use grok-5.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
     await userEvent.type(screen.getByLabelText("Work folder"), "/work");
     await userEvent.selectOptions(screen.getByLabelText("Approvals"), "always");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -106,17 +121,9 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
 
     await openSection("General");
-    await userEvent.click(screen.getByLabelText("Model"));
-    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
-    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
-    await userEvent.click(screen.getByRole("button", { name: "Use" }));
-    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
+    await userEvent.click(screen.getByLabelText("Let Grok control the desktop"));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", false);
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
   });
 
@@ -170,7 +177,8 @@ describe("Settings", () => {
     api.saveSettings.mockResolvedValue(shape({}));
     render(<Settings caps={PHONE} />);
 
-    expect(await screen.findByLabelText("Model")).toBeInTheDocument();
+    expect(await screen.findByText(GENERAL_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
     expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
@@ -214,16 +222,17 @@ describe("Settings", () => {
 
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
-    expect(await screen.findByLabelText("Model")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "true");
 
     await openSection("Account");
     expect(screen.getByLabelText("API key")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
 
     await openSection("Defaults");
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-4.7");
     expect(screen.getByLabelText("Work folder")).toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).toBeNull();
 

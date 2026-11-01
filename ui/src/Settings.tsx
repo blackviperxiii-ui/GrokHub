@@ -13,7 +13,6 @@ import { Background } from "./Background";
 import { Behavior } from "./Behavior";
 import { Defaults } from "./Defaults";
 import { Labs } from "./Labs";
-import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
@@ -31,6 +30,9 @@ import { StatusLine, useNote } from "./ui";
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
+export const GENERAL_EMPTY =
+  "Nothing here on this device. The model, work folder and approvals are in Defaults.";
+
 /** `goTo`: a section the command palette picked. A new `n` opens it. */
 export function Settings({
   caps,
@@ -43,7 +45,6 @@ export function Settings({
   onClose?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
-  const [model, setModel] = useState("");
   const [desktopControl, setDesktopControl] = useState(false);
   const [key, setKey] = useState("");
   const { note, ok, fail, clear } = useNote();
@@ -63,7 +64,6 @@ export function Settings({
 
   function show(next: Shape) {
     setSettings(next);
-    setModel(next.model);
     setDesktopControl(next.desktopControl);
   }
 
@@ -93,10 +93,10 @@ export function Settings({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!settings) return;
-    // Defaults and Behavior save the tray, folder and approvals themselves.
-    const { closeToTray, workspace, approvals } = settings;
+    // Defaults and Behavior save the model, tray, folder and approvals themselves.
+    const { model, closeToTray, workspace, approvals } = settings;
     try {
-      show(await saveSettings(model.trim(), closeToTray, workspace, approvals, desktopControl));
+      show(await saveSettings(model, closeToTray, workspace, approvals, desktopControl));
       ok("Settings saved.");
     } catch (err) {
       fail(err);
@@ -194,12 +194,9 @@ export function Settings({
   );
 
   function general() {
+    if (!caps.desktopControl) return <p className="note">{GENERAL_EMPTY}</p>;
     return (
       <form onSubmit={save}>
-        <div className="field">
-          <span id="model-label">Model</span>
-          <ModelPicker value={model} onPick={setModel} labelledBy="model-label" />
-        </div>
         {caps.desktopControl && (
           <Toggle checked={desktopControl} onChange={setDesktopControl}>
             Let Grok control the desktop
@@ -264,8 +261,6 @@ function RemoteSettings({ settings }: { settings: Shape }) {
     <section className="settings" aria-label="Settings">
       <p className="note">{REMOTE_NOTE}</p>
       <dl>
-        <dt>Model</dt>
-        <dd>{settings.model}</dd>
         <dt>xAI API key</dt>
         <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
       </dl>

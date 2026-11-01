@@ -149,7 +149,7 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     Ok(view(&next))
 }
 
-/// Settings → General and the composer chip: the models to pick from.
+/// Settings → Defaults and the composer chip: the models to pick from.
 /// `refresh` reads the account's list again instead of the 10-minute cache.
 #[tauri::command]
 async fn list_models(

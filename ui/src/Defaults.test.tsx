@@ -5,6 +5,8 @@ import type { Settings } from "./api";
 
 const api = vi.hoisted(() => ({
   saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Settings>>(),
+  setModel: vi.fn<(id: string) => Promise<Settings>>(),
+  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -28,7 +30,29 @@ function shape(over: Partial<Settings> = {}): Settings {
 
 describe("Defaults", () => {
   beforeEach(() => {
-    api.saveDefaults.mockReset();
+    for (const fn of Object.values(api)) fn.mockReset();
+    api.listModels.mockResolvedValue({
+      current: "grok-4.7",
+      options: [
+        { id: "grok-4.7", label: "Grok 4.7", source: "catalog" },
+        { id: "grok-5", label: "Grok 5", source: "catalog" },
+      ],
+      note: null,
+    });
+  });
+
+  it("a model pick saves at once with the picker from the composer", async () => {
+    const onSaved = vi.fn();
+    const saved = shape({ model: "grok-5" });
+    api.setModel.mockResolvedValue(saved);
+    render(<Defaults settings={shape()} onSaved={onSaved} />);
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-4.7");
+    await userEvent.click(screen.getByLabelText("Model"));
+    await userEvent.click(await screen.findByRole("button", { name: /Grok 5/ }));
+    expect(api.setModel).toHaveBeenCalledWith("grok-5");
+    expect(onSaved).toHaveBeenCalledWith(saved);
+    expect(await screen.findByText("New messages use grok-5.")).toBeInTheDocument();
+    expect(api.saveDefaults).not.toHaveBeenCalled();
   });
 
   it("saves the work folder and approvals, and Always says what still asks", async () => {
@@ -64,6 +88,7 @@ describe("Defaults", () => {
 
   it("the web app sees them with nothing to change them", () => {
     render(<Defaults settings={shape({ approvals: "auto" })} readOnly />);
+    expect(screen.getByText("grok-4.7")).toBeInTheDocument();
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     expect(screen.getByText("Auto")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
