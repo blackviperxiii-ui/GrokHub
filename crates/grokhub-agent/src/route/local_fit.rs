@@ -114,13 +114,43 @@ pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
         let agents = agents_tokens(&out.input);
         done.agents_cut |= cap_agents(&mut out.input, agents.saturating_sub(over));
     }
-    // One message alone longer than the window (a pasted log): keep its start
-    // and end and say what was left out, instead of the device refusing it.
+    // One message alone longer than the window (a pasted log): its cabin
+    // notes go first (the next turn brings fresh ones), then its middle, so
+    // its start and end reach the device instead of a refusal.
+    if request_tokens(&out) > budget && drop_newest_notes(&mut out.input) {
+        done.notes_cut = true;
+    }
     let over = request_tokens(&out).saturating_sub(budget);
     if over > 0 {
         done.newest_clipped = clip_newest_user(&mut out.input, over);
     }
     (out, done)
+}
+
+/// The newest user message's text, when it has one.
+fn newest_user_text(input: &mut [InputItem]) -> Option<&mut String> {
+    input.iter_mut().rev().find_map(|item| match item {
+        InputItem::Message { role, content } if role == "user" => {
+            content.iter_mut().find_map(|c| match c {
+                ContentPart::InputText(t) => Some(t),
+                _ => None,
+            })
+        }
+        _ => None,
+    })
+}
+
+/// Drop the cabin-notes wrapper from the newest user message.
+fn drop_newest_notes(input: &mut [InputItem]) -> bool {
+    let Some(text) = newest_user_text(input) else {
+        return false;
+    };
+    let typed = without_notes(text);
+    if typed.len() == text.len() {
+        return false;
+    }
+    *text = typed.to_string();
+    true
 }
 
 /// Stands in for the middle [`clip_newest_user`] cut.
@@ -129,21 +159,17 @@ pub const CLIPPED_NOTE: &str =
 
 /// Cut about `over_tokens` from the middle of the newest user message.
 fn clip_newest_user(input: &mut [InputItem], over_tokens: u64) -> bool {
-    let Some(text) = input.iter_mut().rev().find_map(|item| match item {
-        InputItem::Message { role, content } if role == "user" => {
-            content.iter_mut().find_map(|c| match c {
-                ContentPart::InputText(t) => Some(t),
-                _ => None,
-            })
-        }
-        _ => None,
-    }) else {
+    let Some(text) = newest_user_text(input) else {
         return false;
     };
     // About 4 bytes a token, with room for the note.
     let cut = (over_tokens.saturating_add(64) as usize).saturating_mul(4);
     let len = text.len();
     let keep = len.saturating_sub(cut).max(len.min(512));
+    if keep >= len {
+        // Nothing to cut from a short message: leave it whole.
+        return false;
+    }
     let mut head = keep / 2;
     while !text.is_char_boundary(head) {
         head -= 1;

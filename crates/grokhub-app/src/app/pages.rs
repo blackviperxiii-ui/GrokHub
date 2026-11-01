@@ -751,16 +751,25 @@ impl Cabin {
         if want == self.notices.auth_note {
             return;
         }
-        self.notices.auth_note = want;
-        if let Some(text) = want {
-            self.notify(
-                super::notices::NoticeKind::Info,
-                text.to_string(),
-                Some(super::notices::NoticeAction::OpenSettings(
-                    SettingsSec::AiModels,
-                )),
-            );
+        let before = std::mem::replace(&mut self.notices.auth_note, want);
+        let Some(text) = want else {
+            return;
+        };
+        // Still signed out, new wording (Local AI got ready): the one note
+        // says the new thing instead of a second note piling up.
+        if let Some(item) =
+            before.and_then(|old| self.notices.items.iter_mut().find(|n| n.text == old))
+        {
+            item.text = text.to_string();
+            return;
         }
+        self.notify(
+            super::notices::NoticeKind::Info,
+            text.to_string(),
+            Some(super::notices::NoticeAction::OpenSettings(
+                SettingsSec::AiModels,
+            )),
+        );
     }
 
     /// Shown after a send was refused for want of a sign-in. The typed text

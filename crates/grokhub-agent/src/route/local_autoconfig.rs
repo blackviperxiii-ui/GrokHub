@@ -559,6 +559,14 @@ pub fn mark_resident() {
     }
 }
 
+/// A launch is starting (or the model left): no baseline until the new
+/// model is resident, so the last model's reading never judges this one.
+pub fn clear_resident() {
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+    }
+}
+
 /// Under Throttle: free VRAM now is well under what was free once the model
 /// was resident, so the governor should restart the model into the smaller room.
 pub fn vram_dropped_since_launch() -> bool {

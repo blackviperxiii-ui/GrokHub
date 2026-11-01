@@ -305,6 +305,19 @@ fn with_no_sign_in_hard_chat_goes_to_the_device_but_prepare_hard_does_not() {
         "{:?}",
         r.rule_ids
     );
+    // "Never" in Models Auto may use keeps the device out of that fallback too.
+    let mut never = super::prefs::ModelPrefs::default();
+    never.set_use("local:small", super::prefs::ModelUse::Never);
+    let mut kept_out = ask("chat:default", online());
+    kept_out.d = 0.8;
+    kept_out.prefs = Arc::new(never);
+    let r = Router::choose(&kept_out, &no_keys, &profiles, &table, 10);
+    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:no_keys"),
+        "{:?}",
+        r.rule_ids
+    );
     // prepare:hard still never runs on the device.
     let r = Router::choose(
         &ask("prepare:hard", online()),

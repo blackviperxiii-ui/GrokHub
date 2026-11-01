@@ -382,6 +382,7 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         ));
     }
     let host = "127.0.0.1".to_string();
+    autoconfig::clear_resident();
     let planned = autoconfig::launch_for(&paths.binary, &paths.model);
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;

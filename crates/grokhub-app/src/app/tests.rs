@@ -140,8 +140,7 @@ fn cabin_src() -> String {
         include_str!("ideas_ui.rs"),
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
-        // Last: `fn_src` on its final fn runs to the end of the text.
-        include_str!("window_geom.rs"),
+        include_str!("window_geom.rs"), // last: its final fn runs to the end
     )
     .replace("\r\n", "\n")
     .replace("pub(super) ", "")
@@ -2195,6 +2194,7 @@ fn quiet_cabin() -> Cabin {
         geom_dirty: false,
         geom_applied: false,
         geom_apply_frames: 0,
+        #[cfg(windows)]
         native_maximize_due: false,
         imagine_want_focus: false,
         composer_want_focus: false,

@@ -84,26 +84,32 @@ fn sample_loop(config_dir: &Path) {
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
-        if reader.tick.is_multiple_of(SLOW_EVERY) {
+        let slow = reader.tick.is_multiple_of(SLOW_EVERY);
+        if slow {
             reader.rules = std::fs::read_to_string(&rules_path)
                 .map(|t| Rules::from_json(&t))
                 .unwrap_or_default();
-            // Sharing the GPU with a game: when the game takes much more VRAM
-            // than was free with the model loaded, relaunch into what is left
-            // (between requests, like a level change). Battery or heat alone
-            // never restarts it.
-            let why = local_gov::reason();
-            if local_gov::level() == Level::Throttle
-                && (g::game_reason(why) || why == "another app is keeping the GPU busy")
-                && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
-            {
-                local_gov::request_restart();
-            }
         }
         let s = reader.sample(local_sidecar::global_pid());
         let want = g::target(&s, &reader.rules);
         if let Some(level) = gov.observe(want.map(|w| w.level), now_ms()) {
             local_gov::apply(level, want.map_or("normal use", |w| w.reason));
+        }
+        // Sharing the GPU with a game: when the game takes much more VRAM than
+        // was free with the model loaded, relaunch into what is left (between
+        // requests, like a level change). What this sample sees decides, not
+        // the reason the level last changed for: battery or heat alone never
+        // restarts it.
+        if slow
+            && local_gov::level() == Level::Throttle
+            && want.is_some_and(|w| {
+                w.level == Level::Throttle
+                    && (g::game_reason(w.reason)
+                        || w.reason == "another app is keeping the GPU busy")
+            })
+            && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
+        {
+            local_gov::request_restart();
         }
         local_sidecar::tick_governor();
         // Offline or with the cloud down, have the model loaded before it's asked.

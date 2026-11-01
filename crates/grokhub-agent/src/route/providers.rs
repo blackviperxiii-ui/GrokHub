@@ -1163,7 +1163,8 @@ pub fn set_routing(r: Routing) {
     *ROUTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
 }
 
-fn routing() -> Routing {
+/// The OpenRouter routing as last set.
+pub fn routing() -> Routing {
     ROUTING
         .lock()
         .unwrap_or_else(|e| e.into_inner())

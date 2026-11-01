@@ -312,3 +312,22 @@ fn one_message_longer_than_the_window_keeps_its_start_and_end() {
     let (_, small) = fit(&real_request(vec![text("user", "hi")]), n_ctx);
     assert!(!small.newest_clipped);
 }
+
+#[test]
+fn a_clip_drops_the_newest_notes_first_and_never_cuts_a_short_message() {
+    use crate::prefix_cache::{WRAPPER_END, WRAPPER_START};
+    let typed = format!("TYPED START {} TYPED END", "word ".repeat(6_000));
+    let notes = "cabin note line\n".repeat(200);
+    let body = format!("{WRAPPER_START}{notes}{WRAPPER_END}\n\n{typed}");
+    let req = real_request(vec![text("user", &body)]);
+    let (out, done) = fit(&req, 4_096);
+    let sent = first_text(out.input.last().unwrap());
+    assert!(done.notes_cut && done.newest_clipped, "{done:?}");
+    assert!(!sent.contains(WRAPPER_START) && !sent.contains("cabin note line"));
+    assert!(sent.starts_with("TYPED START") && sent.ends_with("TYPED END"));
+    // A short (multibyte) newest message under an oversized system prompt stays whole.
+    let short = format!("a{}", "д".repeat(100));
+    let mut input = vec![text("user", &short)];
+    assert!(!clip_newest_user(&mut input, 50_000));
+    assert_eq!(first_text(&input[0]), short);
+}

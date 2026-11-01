@@ -251,6 +251,15 @@ pub fn call_model(
     }
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
+    if on_provider {
+        // The prompt calls the assistant Grok: say which model really answers.
+        identity::stamp(
+            &mut sent.input,
+            &sent.model,
+            None,
+            providers::routing().fallback,
+        );
+    }
     let out = if on_device {
         local::serve(&call.class, &text, cancel)
     } else if on_provider {
@@ -493,6 +502,7 @@ impl Router {
         table: &RoutingTable,
         e2: bool,
         rules: &mut Vec<String>,
+        now_ms: u64,
     ) -> ModelPick {
         let current = input.current_model.trim();
         let gb = input.provider == live::PROVIDER_GROK_BUILD;
@@ -519,13 +529,16 @@ impl Router {
                     && !m.to_ascii_lowercase().contains("non-reasoning"))
         };
         // A provider model that only "Auto: all models" lets in stays under your
-        // $/M ceiling; its own preference, the pick and a pin reach a pricier one.
+        // $/M ceiling, and an OpenRouter router with no listed price (it may
+        // pick any model, at any price) stays out; its own preference, the
+        // pick and a pin still reach either.
         let over_ceiling = |m: &str| {
             input.prefs.use_of(m) == prefs::ModelUse::Default
-                && reg
-                    .get(m)
-                    .and_then(|r| r.meta.prices.completion)
-                    .is_some_and(|p| usd_per_m(p) > input.spend.settings.ceiling_usd_per_m)
+                && match reg.get(m).and_then(|r| r.meta.prices.completion) {
+                    Some(p) => usd_per_m(p) > input.spend.settings.ceiling_usd_per_m,
+                    None => split_provider_model(m)
+                        .is_some_and(|(_, wire)| providers::is_openrouter_router(wire)),
+                }
         };
         // Auto's own pool is what your model preferences allow for this class
         // (Settings → AI models → Models Auto may use). By default that is xAI
@@ -539,9 +552,23 @@ impl Router {
             (input.pinned && m.trim() == current)
                 || (input.prefs.auto_allows(m, input.class, added) && !(added && over_ceiling(m)))
         };
-        // "Auto: all models" in a tight week: the best model gives way to the
-        // one that answers for the least without a slowdown or a limit.
-        let efficient = input.prefs.all && input.spend.budget_tight;
+        let attn = attention::decide(&attention::AttentionInput {
+            class: input.class,
+            text: input.text,
+            d: input.d,
+            needs_tools: input.needs_tools,
+            ctx_tokens: input.ctx_tokens,
+            hard_tool: input.local.hard_tool,
+            steer: input.steer,
+            escalate_bias: input.escalate_bias,
+            prior_escalated: input.prior_escalated,
+        });
+        // "Auto: all models" in a tight week: the best model gives way to a good
+        // enough one that answers for less, without a slowdown or a limit.
+        // Never for a step attention sent up (hard prepare, host repair, an
+        // escalation): those keep the strongest model.
+        let efficient =
+            input.prefs.all && input.spend.budget_tight && !attn.kind.breaks_episode_sticky();
         if !gb && reg.entitlement.credential == Credential::None {
             // No sign-in: nothing native is included, but a provider you added
             // and picked in Settings still answers on its own key and grant.
@@ -553,6 +580,10 @@ impl Router {
                 rules.push("provider:picked".into());
                 return keep(p);
             }
+            if input.pinned && ids.contains(&current) && policy::is_new_provider(reg, current) {
+                rules.push("pin".into());
+                return keep(current);
+            }
             // Your preferences let Auto use a provider you added: it ranks those
             // models for the step (the next one after a failed answer).
             let theirs: Vec<&str> = ids
@@ -560,6 +591,16 @@ impl Router {
                 .copied()
                 .filter(|m| policy::is_new_provider(reg, m) && allowed(m))
                 .collect();
+            // Mid-episode, the model the episode runs on keeps the next step.
+            if !e2 {
+                if let Some(ep) = input.episode_model.map(str::trim).filter(|m| {
+                    theirs.contains(m)
+                        && reg.get(m).is_some_and(|r| r.state != ModelState::Degraded)
+                }) {
+                    rules.push("episode:keep".into());
+                    return keep(ep);
+                }
+            }
             let fitting: Vec<&str> = theirs.iter().copied().filter(|m| auto_ok(m)).collect();
             let pool = if fitting.is_empty() {
                 &theirs
@@ -568,15 +609,25 @@ impl Router {
             };
             let mut ranked = if efficient {
                 rules.push("auto:efficient".into());
-                policy::rank_efficient(input.class, pool, reg, input.ctx_tokens)
+                policy::rank_efficient(input.class, pool, reg, input.ctx_tokens, now_ms)
             } else {
                 policy::rank(input.class, pool, table, reg, current, input.ctx_tokens)
             };
             if e2 {
                 let away = input.episode_model.unwrap_or(current).trim().to_string();
                 ranked.retain(|m| *m != away);
+                rules.push("model:next".into());
             }
             if let Some(m) = ranked.first() {
+                if input.pinned {
+                    // The pin can't answer without a sign-in: say what stood in.
+                    rules.push("pin:fallback".into());
+                    return ModelPick {
+                        model: m.clone(),
+                        no_route: false,
+                        replaced: Some(current.to_string()),
+                    };
+                }
                 return keep(m);
             }
             // Otherwise the call keeps its own model.
@@ -699,17 +750,6 @@ impl Router {
             }
             return stand_in(current, rules, "pin");
         }
-        let attn = attention::decide(&attention::AttentionInput {
-            class: input.class,
-            text: input.text,
-            d: input.d,
-            needs_tools: input.needs_tools,
-            ctx_tokens: input.ctx_tokens,
-            hard_tool: input.local.hard_tool,
-            steer: input.steer,
-            escalate_bias: input.escalate_bias,
-            prior_escalated: input.prior_escalated,
-        });
         if let Some(ep) = input.episode_model.map(str::trim).filter(|m| !m.is_empty()) {
             if sound(ep) && !e2 {
                 // Mid-flow: break sticky when attention says the ask needs a stronger model.
@@ -740,15 +780,18 @@ impl Router {
             && ids.contains(&current)
             && !e2
             && !attn.kind.breaks_episode_sticky()
+            && !efficient
+            && !own.iter().any(|m| policy::is_new_provider(reg, m))
         {
             // A key has no evals (they spend only the plan pool), so with no table
-            // row the call keeps its own included model instead of the cheapest.
+            // row the call keeps its own included model instead of the cheapest,
+            // unless your preferences put provider models in Auto's pool.
             rules.push("key:keep".into());
             return keep(current);
         }
         let mut ranked = if efficient {
             rules.push("auto:efficient".into());
-            policy::rank_efficient(input.class, &preferred, reg, input.ctx_tokens)
+            policy::rank_efficient(input.class, &preferred, reg, input.ctx_tokens, now_ms)
         } else {
             attention::rank_models(
                 attn.kind,
@@ -937,6 +980,7 @@ impl Router {
         let local_id = reg.models.keys().map(String::as_str).find(|id| {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
+                && (!input.prefs.excluded(id) || keep_despite_prefs(id))
         });
         // "Local AI for chats": the device takes the step although the cloud
         // could. A pinned model, and a device answer that just failed its
@@ -1025,8 +1069,9 @@ impl Router {
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
-            let mut pick =
-                Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+            let mut pick = Self::pick_model(
+                input, reg, profiles, &cloud_ids, table, e2, &mut rules, now_ms,
+            );
             let no_keys = no_cloud_route(&rules, &pick);
             if !pick.no_route && !local::is_local(&pick.model) && !no_keys {
                 rules.push("local:escalate_verify".into());
@@ -1069,7 +1114,8 @@ impl Router {
             } else {
                 &cloud_ids
             };
-            let mut pick = Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules);
+            let mut pick =
+                Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules, now_ms);
             // No sign-in or key and no provider you added took it: no cloud model can answer.
             let no_keys = no_cloud_route(&rules, &pick);
             // Cloud pool empty + local already won: retag as cloud_down.
@@ -1082,7 +1128,9 @@ impl Router {
             if !input.local.offline && !pick.no_route && local::is_local(&pick.model) && too_hard {
                 rules.push("local:escalate_hard".into());
                 let from = pick.model.clone();
-                pick = Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+                pick = Self::pick_model(
+                    input, reg, profiles, &cloud_ids, table, e2, &mut rules, now_ms,
+                );
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
@@ -1205,6 +1253,11 @@ impl Router {
                     .unwrap_or_else(|| e.to_string())
             })
             .filter(|e| takes_effort && menu.as_ref().is_none_or(|m| m.iter().any(|x| x == e)));
+        // The accuracy guard's holdout runs at a fixed effort: a preference
+        // never moves it, or the control arm stops being one.
+        let holdout = pick
+            .as_ref()
+            .is_some_and(|p| p.rules.iter().any(|r| r == "holdout"));
         let mut effort: Option<String> = match (row, band, pick) {
             (Some(row), Some(band), Some(pick)) => {
                 rules.push(format!("class:{}", row.class));
@@ -1249,7 +1302,7 @@ impl Router {
                     .unwrap_or(e)
             });
         }
-        if let Some(e) = pref_effort {
+        if let Some(e) = pref_effort.filter(|_| !holdout) {
             rules.push("prefs:effort".into());
             effort = Some(e);
         }

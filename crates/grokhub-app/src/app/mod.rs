@@ -757,6 +757,7 @@ pub struct Cabin {
     /// Windows: fill the work area natively on the next frame, once eframe has
     /// applied this frame's `Maximized(false)` (viewport commands run at the
     /// end of the frame, so a native maximize in the same frame is undone).
+    #[cfg(windows)]
     native_maximize_due: bool,
     imagine_want_focus: bool,
     composer_want_focus: bool,
@@ -1380,6 +1381,7 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            #[cfg(windows)]
             native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
@@ -1537,6 +1539,9 @@ impl Cabin {
         };
         steps.mark("startup:new:fields");
         if !quiet {
+            // The router hears the saved pin, Local AI switch, provider pick
+            // and model preferences before anything can send.
+            c.sync_router_pin();
             c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
             steps.mark("startup:new:imagine");
             // Registering takes ~50 ms on X11, so a shown window registers
@@ -1858,6 +1863,7 @@ impl Cabin {
             geom_dirty: false,
             geom_applied: false,
             geom_apply_frames: 0,
+            #[cfg(windows)]
             native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
@@ -3563,7 +3569,6 @@ impl Cabin {
                 &LEASE_BEAT,
             );
         }
-        self.sync_auth_notice();
         let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {
@@ -3581,6 +3586,8 @@ impl Cabin {
                 HeartbeatAct::MidThought => self.tick_mid_thought(),
             }
         }
+        // After the beat, so the router state it reads (Local AI on) is current.
+        self.sync_auth_notice();
     }
 
     /// One governor beat: the queue of due jobs, highest priority first. Halt,

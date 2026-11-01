@@ -15,7 +15,7 @@ use grokhub_core::model_registry::Registry;
 use super::*;
 
 pub(super) const SECTION: &str = "Models Auto may use";
-const SECTION_HINT: &str = "Where Auto may send each model on its own. A pinned default model and \"Use for your chats\" always win over these.";
+const SECTION_HINT: &str = "Where Auto may send each model on its own. A pinned default model and a model picked under \"Use for your chats\" always win over these.";
 const XAI_HINT: &str = "Default lets Auto decide from its routing table and your plan.";
 const PROVIDER_HINT: &str =
     "Default is only when you pick it. Allow a class and Auto ranks it with the rest.";
@@ -75,8 +75,13 @@ pub(super) fn pref_title(id: &str) -> String {
     id.to_string()
 }
 
-fn pref_hint(id: &str, new_provider: bool) -> &'static str {
-    if new_provider {
+/// A provider model whose Default means Auto may use it ("Auto: all models").
+const PROVIDER_ALL_HINT: &str = "Default lets Auto rank it with the rest (not a utility model, or one over your $/M ceiling). Pick Never to keep it out.";
+
+fn pref_hint(id: &str, new_provider: bool, auto_all: bool) -> &'static str {
+    if new_provider && auto_all {
+        PROVIDER_ALL_HINT
+    } else if new_provider {
         PROVIDER_HINT
     } else if grokhub_agent::route::local::is_local(id) {
         LOCAL_HINT
@@ -103,18 +108,21 @@ impl Cabin {
         let (reg, _) = grokhub_agent::route::live::snapshot(&dir);
         let rows = pref_rows(&self.cfg.model_prefs, &reg);
         let mut changed = false;
+        let auto_all = self.cfg.auto_all_models;
         for (id, new_provider) in &rows {
+            // With "Auto: all models" on, a provider model's Default is Auto's pool.
+            let opt_in = *new_provider && !auto_all;
             ui.push_id(("model-pref", id.as_str()), |ui| {
                 let labels: Vec<String> = ModelUse::ALL
                     .iter()
-                    .map(|u| u.label(*new_provider).to_string())
+                    .map(|u| u.label(opt_in).to_string())
                     .collect();
                 let current = self.cfg.model_prefs.use_of(id);
-                let picked = current.label(*new_provider).to_string();
+                let picked = current.label(opt_in).to_string();
                 if let Some(i) = crate::cards::settings_dropdown(
                     ui,
                     &pref_title(id),
-                    pref_hint(id, *new_provider),
+                    pref_hint(id, *new_provider, auto_all),
                     &picked,
                     &labels,
                 ) {
@@ -150,7 +158,11 @@ impl Cabin {
                     && crate::cards::settings_action(
                         ui,
                         &format!("Forget {id}"),
-                        "Back to \"only when you pick it\".",
+                        if auto_all {
+                            "Back to Default: Auto may use it."
+                        } else {
+                            "Back to \"only when you pick it\"."
+                        },
                         "Remove",
                     )
                 {

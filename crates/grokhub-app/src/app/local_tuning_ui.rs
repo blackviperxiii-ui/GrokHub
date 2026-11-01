@@ -172,15 +172,20 @@ fn write_rules(rules: &Rules) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let mut file = match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => {
-            serde_json::from_str::<serde_json::Value>(&t).map_err(|e| {
-                format!(
-                    "{} isn't valid JSON ({e}); fix or remove it",
-                    path.display()
-                )
-            })?
+        Ok(t) if t.trim().is_empty() => serde_json::json!({}),
+        Ok(t) => serde_json::from_str::<serde_json::Value>(&t).map_err(|e| {
+            format!(
+                "{} isn't valid JSON ({e}); fix or remove it",
+                path.display()
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => {
+            return Err(format!(
+                "{} couldn't be read ({e}); fix or remove it",
+                path.display()
+            ))
         }
-        _ => serde_json::json!({}),
     };
     let obj = file
         .as_object_mut()
@@ -193,6 +198,14 @@ fn write_rules(rules: &Rules) -> Result<(), String> {
     ] {
         obj.insert(key.into(), serde_json::Value::Bool(on));
     }
+    // A hand edit the governor can't read (`"deny": "game.exe"`) would turn
+    // every rule back to its default: name it instead of saving over it.
+    serde_json::from_value::<Rules>(file.clone()).map_err(|e| {
+        format!(
+            "{} has a value Loadout can't read ({e}); fix or remove it",
+            path.display()
+        )
+    })?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())
 }
@@ -399,6 +412,14 @@ mod tests {
         let err = write_rules(&r).unwrap_err();
         assert!(err.contains("isn't valid JSON"), "{err}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+        // A value the governor can't read is named, and the file stays.
+        std::fs::write(&file, r#"{"deny":"game.exe"}"#).unwrap();
+        let err = write_rules(&r).unwrap_err();
+        assert!(err.contains("can't read"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            r#"{"deny":"game.exe"}"#
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

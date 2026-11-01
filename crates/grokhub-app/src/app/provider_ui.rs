@@ -38,7 +38,7 @@ const KEY_ROW: &str = "Provider key";
 const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the model.";
 pub(super) const PICK_ROW: &str = "Use for your chats";
 const PICK_HINT: &str = "Auto: all models ranks every model you connected for each step: the best one while nothing is tight, the cloud while a game keeps the device busy, the cheapest quick one when the week's budget runs low. Or pick one model for your chats.";
-pub(super) const PICK_OFF: &str = "Auto: xAI and Local AI only";
+pub(super) const PICK_OFF: &str = "Auto: xAI and Local AI";
 pub(super) const PICK_ALL: &str = "Auto: all models (xAI, your providers, Local AI)";
 const ROUTE_ROW: &str = "OpenRouter routing";
 const ROUTE_HINT: &str = "How OpenRouter picks the endpoint for the model you chose. Sent with every call to openrouter.ai only.";
@@ -267,7 +267,7 @@ pub(super) fn provider_label(p: &providers::Provider) -> String {
 /// The hard card's action line.
 pub(super) fn provider_action(p: &providers::Provider) -> String {
     format!(
-        "Send your chats and memory to {} when you pick one of its models",
+        "Send your chats and memory to {} when you pick one of its models or Auto uses one",
         p.dest()
     )
 }
@@ -879,7 +879,7 @@ mod tests {
         assert!(is_provider_card(park.class, &park.source));
         assert_eq!(
             park.action,
-            "Send your chats and memory to openrouter.ai when you pick one of its models"
+            "Send your chats and memory to openrouter.ai when you pick one of its models or Auto uses one"
         );
         // Enter never approves it; Esc denies it, and Deny writes nothing.
         assert_eq!(hx::hard_card_key(true, false, false), None);
@@ -1004,7 +1004,7 @@ mod tests {
             app.harness.router.providers.kind, 0,
             "the pick resets after a save"
         );
-        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when you pick one of its models"));
+        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when you pick one of its models or Auto uses one"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1438,7 +1438,7 @@ mod tests {
             "openrouter/alpha/small"
         );
         assert!(!is_free_model("openrouter/vendor/freeform-7b"));
-        assert_eq!(PICK_OFF, "Auto: xAI and Local AI only");
+        assert_eq!(PICK_OFF, "Auto: xAI and Local AI");
     }
 
     #[test]

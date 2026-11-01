@@ -1211,6 +1211,7 @@ pub fn stream_routed(
         &mut sent.input,
         &model,
         on_device.then(local_name).flatten().as_deref(),
+        super::providers::routing().fallback,
     );
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));
@@ -1312,6 +1313,7 @@ pub fn stream_routed(
                     &mut sent.input,
                     super::local::live_tier(),
                     local_name().as_deref(),
+                    false,
                 );
                 let out = super::local::serve_request(class, &sent, cancel);
                 if let Ok(turn) = &out {

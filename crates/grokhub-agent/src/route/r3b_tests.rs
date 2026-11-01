@@ -2049,3 +2049,128 @@ fn auto_all_models_ranks_every_provider_model_and_gives_way_in_a_tight_week() {
     );
     assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
 }
+
+#[test]
+fn all_models_reaches_key_users_keeps_the_episode_and_leaves_unpriced_routers_out() {
+    use super::prefs::{ModelPrefs, ModelUse};
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let prefs = |all: bool, uses: &[(&str, ModelUse)]| {
+        let mut p = ModelPrefs {
+            all,
+            ..ModelPrefs::default()
+        };
+        for (id, u) in uses {
+            p.set_use(id, *u);
+        }
+        std::sync::Arc::new(p)
+    };
+    let ask = |class: &'static str,
+               current: &'static str,
+               prefs: std::sync::Arc<ModelPrefs>,
+               tight: bool| RouteInput {
+        provider: "xai",
+        class,
+        current_model: current,
+        spend: Spend {
+            providers: vec!["openrouter".into(), "anthropic".into()],
+            budget_tight: tight,
+            ..Spend::default()
+        },
+        prefs,
+        ..RouteInput::default()
+    };
+    // An xAI key with no routing-table rows used to keep the chat's own model.
+    let mut keyed = fleet();
+    keyed.entitlement.credential = Credential::ApiKey;
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(false, &[]), false),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.rule_ids.contains(&"key:keep".into()), "{:?}", r.rule_ids);
+    // With every model in Auto's pool, Auto ranks them instead.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(true, &[]), false),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "key:keep"),
+        "{:?}",
+        r.rule_ids
+    );
+    // A tight week takes the efficient ranking, but never for a step that must
+    // keep the strongest model.
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.3", prefs(true, &[]), true),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        r.rule_ids.contains(&"auto:efficient".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    let r = Router::choose(
+        &ask("prepare:hard", "grok-4.3", prefs(true, &[]), true),
+        &keyed,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "auto:efficient"),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // No sign-in: the model an episode runs on keeps its next step.
+    let mut none = fleet();
+    none.entitlement.credential = Credential::None;
+    let mut mid = ask("chat:default", "grok-4.7", prefs(true, &[]), false);
+    mid.episode_model = Some(AN_MODEL);
+    let r = Router::choose(&mid, &none, &profiles, &table, 10);
+    assert_eq!(r.model, AN_MODEL, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"episode:keep".into()),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // An OpenRouter router with no listed price may pick any model at any
+    // price: "all models" alone leaves it out, its own preference lets it in.
+    let router = "openrouter/openrouter/auto";
+    let mut rec = none.models.get(OR_MODEL).unwrap().clone();
+    rec.meta.id = router.into();
+    rec.meta.prices = Prices::default();
+    none.models.insert(router.into(), rec);
+    let only_router = [(OR_MODEL, ModelUse::Never), (AN_MODEL, ModelUse::Never)];
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", prefs(true, &only_router), false),
+        &none,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_ne!(r.model, router, "{:?}", r.rule_ids);
+    let with_router = [
+        (OR_MODEL, ModelUse::Never),
+        (AN_MODEL, ModelUse::Never),
+        (router, ModelUse::Any),
+    ];
+    let r = Router::choose(
+        &ask("chat:default", "grok-4.7", prefs(true, &with_router), false),
+        &none,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(r.model, router, "{:?}", r.rule_ids);
+}
