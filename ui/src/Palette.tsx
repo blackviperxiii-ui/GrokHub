@@ -25,10 +25,12 @@ export type View =
   | "pulse"
   | "journal"
   | "automations"
+  | "agents"
   | "memory"
   | "connectors"
   | "settings"
   | "library"
+  | "workboard"
   | "devices";
 
 /** What a palette row does. */
@@ -73,9 +75,11 @@ export const VIEW_LABELS: Record<View, string> = {
   pulse: "Pulse",
   journal: "Journal",
   automations: "Automations",
+  agents: "Agents",
   memory: "Memory",
   connectors: "Connectors",
   settings: "Settings",
+  workboard: "Workboard",
   devices: "Devices",
   library: "Library",
 };
@@ -91,8 +95,10 @@ export function views(caps: Capabilities): View[] {
     ...(caps.pulse ? (["pulse"] as const) : []),
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
+    "agents",
     "memory",
     "connectors",
+    "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
     "settings",
