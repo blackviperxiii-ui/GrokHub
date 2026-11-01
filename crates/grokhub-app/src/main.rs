@@ -26,6 +26,7 @@ mod imagine_auth;
 mod lipsync;
 mod loops;
 mod markdown;
+mod mods_fetch;
 mod motion;
 mod native_mcp;
 mod native_plugins;

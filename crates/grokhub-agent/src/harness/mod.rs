@@ -181,8 +181,9 @@ pub use self_improve::{
     SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
-    automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile,
-    McpFile, SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
+    automation_cap_refusal, forget_mod_key, open_connection_token, open_mod_key, seal_mod_key,
+    tool_origin, undo_connection, AutomationsFile, McpFile, SELF_AUTOMATION_WEEK_CAP,
+    SELF_MANAGE_TOOLS, WEEK_MS,
 };
 pub(crate) use self_manage::{
     forget_connection_token, forget_mcp_signin, open_mcp_signin, seal_connection_token,

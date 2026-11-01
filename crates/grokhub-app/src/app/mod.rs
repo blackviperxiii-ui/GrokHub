@@ -212,6 +212,7 @@ mod model_download_ui;
 mod model_drop_ui;
 mod model_prefs_ui;
 mod model_wait_ui;
+mod mods_ui;
 #[cfg(test)]
 mod native_signin_tests;
 mod net_log_ui;
@@ -309,6 +310,7 @@ enum Nav {
     Imagine,
     Skills,
     Library,
+    Mods,
     Objectives,
     Night,
     History,
@@ -5471,6 +5473,7 @@ impl eframe::App for Cabin {
                     Nav::Imagine => self.ui_imagine(ui),
                     Nav::Skills => self.ui_skills(ui),
                     Nav::Library => self.ui_library(ui),
+                    Nav::Mods => self.ui_mods(ui),
                     Nav::Objectives => self.ui_mission_control(ui),
                     Nav::Night => self.ui_night(ui),
                     Nav::History => self.ui_history(ui),

@@ -1139,6 +1139,7 @@ impl Cabin {
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
+            "mods" => Nav::Mods,
             "objectives" | "mission" => Nav::Objectives,
             "night" | "automations" => Nav::Night,
             "agents" | "queue" => Nav::Agents,

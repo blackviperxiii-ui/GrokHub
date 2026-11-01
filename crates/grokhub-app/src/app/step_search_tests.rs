@@ -186,6 +186,7 @@ fn spike3a_adds_no_nav_page() {
         Nav::Imagine,
         Nav::Skills,
         Nav::Library,
+        Nav::Mods,
         Nav::Objectives,
         Nav::Night,
         Nav::History,
@@ -206,6 +207,7 @@ fn spike3a_adds_no_nav_page() {
             Nav::Imagine => "imagine",
             Nav::Skills => "skills",
             Nav::Library => "library",
+            Nav::Mods => "mods",
             Nav::Objectives => "objectives",
             Nav::Night => "night",
             Nav::History => "history",
@@ -215,7 +217,7 @@ fn spike3a_adds_no_nav_page() {
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 16);
+    assert_eq!(named.len(), 17);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     std::env::set_var("GROKHUB_CONFIG", &root);
