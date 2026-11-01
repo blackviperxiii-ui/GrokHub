@@ -2008,3 +2008,36 @@ label.toggle-row {
     scroll-behavior: auto !important;
   }
 }
+
+/* Devices: this computer, Web access and the paired browsers, one column. */
+.devices {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.devices h2 {
+  margin: 8px 0 0;
+  font-size: 1rem;
+}
+
+.devices .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.device {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}

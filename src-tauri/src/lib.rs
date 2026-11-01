@@ -23,6 +23,7 @@ pub mod plugins;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_devices;
 pub mod remote_tls;
 pub mod settings;
 
@@ -959,6 +960,19 @@ fn set_web_access(
     )
 }
 
+/// The Devices page (desktop only; not a web command): this computer, web
+/// access, and the browsers paired right now. Kept in memory only.
+#[tauri::command]
+fn get_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.devices()
+}
+
+/// Devices → Sign out all browsers: a new pairing code ends every pairing.
+#[tauri::command]
+fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.forget_all()
+}
+
 fn arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
     serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null))
         .map_err(|err| format!("{name}: {err}"))
@@ -1374,7 +1388,9 @@ pub fn run() {
             check_model_file,
             run_local_speed_test,
             get_web_access,
-            set_web_access
+            set_web_access,
+            get_devices,
+            forget_all_devices
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

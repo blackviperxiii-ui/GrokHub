@@ -15,12 +15,14 @@ import { applyTheme } from "./theme";
 // idle so that first click does not wait on the network or disk.
 const loaders = {
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
 const Connectors = lazy(loaders.connectors);
+const Devices = lazy(loaders.devices);
 const Journal = lazy(loaders.journal);
 const Memory = lazy(loaders.memory);
 const Pulse = lazy(loaders.pulse);
@@ -191,6 +193,9 @@ export function App() {
         )}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
+        {view === "devices" && caps.webAccess && !caps.remote && (
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+        )}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
       </Suspense>
     </div>

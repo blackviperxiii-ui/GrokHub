@@ -29,6 +29,7 @@ describe("paletteRows", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Devices",
       "Settings",
       "Settings: General",
       "Settings: Account",
