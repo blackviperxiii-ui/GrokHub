@@ -529,6 +529,9 @@ fn local_first_sends_chats_to_the_device_while_online_and_all_covers_background_
     );
     assert!(local::fits_by_trimming("chat:default"));
     assert!(!local::fits_by_trimming("background:summarize"));
+    // A desktop step keeps the cap: trimming would drop its desktop tools.
+    assert!(!local::fits_by_trimming("desktop:soft"));
+    assert!(!local::fits_by_trimming("episode:step"));
 
     // For everything it can run: a background step goes local too.
     gate.first = local::LocalFirst::All;
@@ -626,4 +629,63 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
     // but never streamed is saved to the session and never seen in the chat.
     assert_eq!(shown, "hello offline");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn local_first_gives_way_to_a_usable_pick_and_is_not_kept_warm_while_a_game_throttles() {
+    use grokhub_core::local_governor::Level;
+    let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
+    let picked = "openrouter/vendor/picked";
+    let mut reg = fleet();
+    reg.apply_refresh(
+        &[
+            Listing::new(SourceKind::XaiApi, vec![meta("grok-4.7")]),
+            Listing::new(
+                SourceKind::Local,
+                local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+            ),
+            Listing::new(SourceKind::OpenAiCompatible, vec![meta(picked)]),
+        ],
+        &[],
+        2,
+    );
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut gate = LocalGate::now(false, false, false);
+    gate.offline = false;
+    gate.offline_switch = false;
+    gate.first = local::LocalFirst::Chat;
+    // A model picked under "Use for your chats" that can answer wins.
+    let mut with_pick = ask("chat:default", gate.clone());
+    with_pick.prefer = Some(picked);
+    with_pick.spend.providers = vec!["openrouter".into()];
+    let r = Router::choose(&with_pick, &reg, &profiles, &table, 10);
+    assert_eq!(r.model, picked, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"provider:picked".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // A pick with no grant can't answer: the device still takes the chat.
+    with_pick.spend.providers.clear();
+    let r = Router::choose(&with_pick, &reg, &profiles, &table, 10);
+    assert!(
+        r.rule_ids.contains(&"local:first".into()),
+        "{:?}",
+        r.rule_ids
+    );
+
+    // Kept warm for Local AI first only while the device has room: a game
+    // that throttles it sends chats to the cloud, so the model can unload.
+    local::set_enabled(true);
+    local::set_first(local::LocalFirst::Chat);
+    super::local_gov::apply(Level::Normal, "normal use");
+    let warm_normal = local::warm_wanted();
+    super::local_gov::apply(Level::Throttle, "a game is running");
+    let warm_game = local::warm_wanted();
+    super::local_gov::apply(Level::Normal, "normal use");
+    local::set_first(local::LocalFirst::Fallback);
+    local::set_enabled(false);
+    assert!(warm_normal);
+    assert!(!warm_game);
 }

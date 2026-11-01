@@ -251,15 +251,6 @@ pub fn call_model(
     }
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
-    if on_provider {
-        // The prompt calls the assistant Grok: say which model really answers.
-        identity::stamp(
-            &mut sent.input,
-            &sent.model,
-            None,
-            providers::routing().fallback,
-        );
-    }
     let out = if on_device {
         local::serve(&call.class, &text, cancel)
     } else if on_provider {
@@ -528,17 +519,24 @@ impl Router {
                 || (policy::is_new_provider(reg, m)
                     && !m.to_ascii_lowercase().contains("non-reasoning"))
         };
-        // A provider model that only "Auto: all models" lets in stays under your
-        // $/M ceiling, and an OpenRouter router with no listed price (it may
-        // pick any model, at any price) stays out; its own preference, the
-        // pick and a pin still reach either.
+        // A provider model that only "Auto: all models" lets in must show it
+        // stays under your $/M ceiling: one over it, or with no listed price
+        // (an OpenRouter router may pick any model at any price, and some
+        // providers list no prices at all), stays out, and so does one that
+        // answers in something other than text. Its own preference, the pick
+        // and a pin still reach it.
         let over_ceiling = |m: &str| {
             input.prefs.use_of(m) == prefs::ModelUse::Default
-                && match reg.get(m).and_then(|r| r.meta.prices.completion) {
-                    Some(p) => usd_per_m(p) > input.spend.settings.ceiling_usd_per_m,
-                    None => split_provider_model(m)
-                        .is_some_and(|(_, wire)| providers::is_openrouter_router(wire)),
-                }
+                && reg.get(m).is_some_and(|r| {
+                    r.meta
+                        .prices
+                        .completion
+                        .is_none_or(|p| usd_per_m(p) > input.spend.settings.ceiling_usd_per_m)
+                        || r.meta
+                            .output_modalities
+                            .as_ref()
+                            .is_some_and(|o| !o.iter().any(|x| x == "text"))
+                })
         };
         // Auto's own pool is what your model preferences allow for this class
         // (Settings → AI models → Models Auto may use). By default that is xAI
@@ -628,6 +626,8 @@ impl Router {
                         replaced: Some(current.to_string()),
                     };
                 }
+                // Your model preferences put it in Auto's pool.
+                rules.push("prefs:auto_provider".into());
                 return keep(m);
             }
             // Otherwise the call keeps its own model.
@@ -715,6 +715,9 @@ impl Router {
             }) {
                 Some(m) => {
                     rules.push(format!("{tag}:fallback"));
+                    if policy::is_new_provider(reg, m) {
+                        rules.push("prefs:auto_provider".into());
+                    }
                     ModelPick {
                         model: m.clone(),
                         no_route: false,
@@ -814,11 +817,12 @@ impl Router {
         }
         match ranked.first() {
             Some(m) => {
-                rules.push(if table.row(input.class, m).is_some() {
-                    "table".to_string()
-                } else {
-                    "model:cheapest".to_string()
-                });
+                let row = table.row(input.class, m).is_some();
+                rules.push(if row { "table" } else { "model:cheapest" }.into());
+                if !row && policy::is_new_provider(reg, m) {
+                    // Your model preferences put it in Auto's pool.
+                    rules.push("prefs:auto_provider".into());
+                }
                 keep(m)
             }
             None if e2 => keep(input.episode_model.unwrap_or(current)),
@@ -983,10 +987,15 @@ impl Router {
                 && (!input.prefs.excluded(id) || keep_despite_prefs(id))
         });
         // "Local AI for chats": the device takes the step although the cloud
-        // could. A pinned model, and a device answer that just failed its
-        // check (escalate below), still win over it.
+        // could. A pinned model, a usable model picked under "Use for your
+        // chats", and a device answer that just failed its check (escalate
+        // below) still win over it.
         let first_local = (local::first_takes(&input.local, input.class, input.ctx_tokens)
             && !input.pinned
+            && input
+                .prefer
+                .map(str::trim)
+                .is_none_or(|p| !(ids.contains(&p) && policy::is_new_provider(reg, p)))
             && !local::escalate_after_verify(&input.local))
         .then(|| {
             ids.iter()
@@ -1176,15 +1185,6 @@ impl Router {
             } else {
                 chosen
             };
-        // A provider model Auto took on its own (your preference allowed it).
-        if !chosen.no_route
-            && policy::is_new_provider(reg, &chosen.model)
-            && !rules
-                .iter()
-                .any(|r| r == "provider:picked" || r == "pin" || r.starts_with("pin:"))
-        {
-            rules.push("prefs:auto_provider".into());
-        }
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
             Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,
