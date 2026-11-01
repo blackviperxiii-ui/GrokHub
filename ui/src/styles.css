@@ -2827,19 +2827,17 @@ label.toggle-row {
   min-height: 0;
 }
 
-/* Narrow windows: the tabs fold to their icons so they stay on one row. The
-   label stays for screen readers and the tooltip. A full row of icons, the
-   brand, the Activity dock and Command outgrow the 900px default window, so
-   the row scrolls in place instead of widening the page: a page that scrolls
-   sideways puts a scrollbar along the bottom edge, over the composer. The
-   padding keeps focus rings inside the scroll box. */
+/* Narrow windows: the tabs fold to their icons. The label stays for screen
+   readers and the tooltip. A full set of icons, the brand, the Activity dock
+   and Command outgrow the 900px default window, so the icons wrap to a second
+   row instead of widening the page: a page that scrolls sideways puts a
+   scrollbar along the bottom edge, over the composer. The row must not be a
+   scroll box either: WebKitGTK's hit test misses buttons inside an
+   overflow-x: auto views bar, so no tab would take a click. */
 @media (max-width: 900px) {
   .tabs {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     min-width: 0;
-    overflow-x: auto;
-    padding: 4px;
-    margin: -4px;
   }
 
   .tabs button {

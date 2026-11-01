@@ -90,26 +90,27 @@ describe("styles.css OS-dark fallback", () => {
 
 // The window opens 900px wide (src-tauri/tauri.conf.json), where the tabs fold
 // to icons. Fifteen of them, the brand, the Activity dock and Command are wider
-// than that, so the tab row must shrink and scroll inside the bar: a page that
-// scrolls sideways puts a scrollbar along the window's bottom edge, over the
-// composer's Send (the shell smoke checks the real width).
+// than that, so the icons wrap to a second row: a page that scrolls sideways
+// puts a scrollbar along the window's bottom edge, over the composer's Send,
+// and a views bar that scrolls in place takes no clicks in WebKitGTK. The shell
+// smoke checks the real width and clicks the tabs.
 describe("styles.css views bar in a narrow window", () => {
   const narrow = mediaBlocks(CSS, "(max-width: 900px)").find((b) => b.includes(".tab-label")) ?? "";
 
-  it("scrolls the tab row in place instead of widening the page", () => {
+  it("wraps the icons to another row instead of widening the page", () => {
     const tabs = rule(narrow, ".tabs {");
-    expect(tabs).toContain("flex-wrap: nowrap;");
+    expect(tabs).toContain("flex-wrap: wrap;");
     expect(tabs).toContain("min-width: 0;");
-    expect(tabs).toContain("overflow-x: auto;");
   });
 
-  it("keeps each tab at its own width so the row scrolls rather than squashing icons", () => {
+  it("keeps the tab row out of scroll boxes, where WebKitGTK cannot click its tabs", () => {
+    expect(rule(narrow, ".tabs {")).not.toMatch(/overflow/);
+    const base = rule(CSS, ".tabs {");
+    expect(base).toContain("display: flex;");
+    expect(base).not.toMatch(/overflow/);
+  });
+
+  it("keeps each tab at its own width so a row wraps rather than squashing icons", () => {
     expect(rule(narrow, ".tabs button {")).toContain("flex: none;");
-  });
-
-  it("pads the scroll box by what it pulls back, so focus rings show and the bar keeps its size", () => {
-    const tabs = rule(narrow, ".tabs {");
-    expect(tabs).toContain("padding: 4px;");
-    expect(tabs).toContain("margin: -4px;");
   });
 });
