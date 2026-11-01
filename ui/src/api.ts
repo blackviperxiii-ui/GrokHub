@@ -33,6 +33,8 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** The Library page: this computer's Steam games. */
+  library: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -45,6 +47,7 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
   webAccess: false,
   plugins: false,
+  library: false,
 };
 
 /** The web app gets chat, memory, automations, connectors and Pulse. */
@@ -908,4 +911,40 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
+}
+
+/** One Steam game on this computer (src-tauri/src/library.rs). */
+export interface LibraryGame {
+  appId: number;
+  name: string;
+  /** False while Steam downloads or updates it. */
+  installed: boolean;
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  /** Minutes played, 0 when never played. */
+  playtimeMin: number;
+}
+
+export interface LibraryPage {
+  /** A Steam library folder was found on this computer. */
+  steamFound: boolean;
+  /** Most recently played first. */
+  games: LibraryGame[];
+}
+
+/** Tall box art for the grid, the wide store header for the detail column. */
+export type CoverShape = "tall" | "wide";
+
+export function getLibrary(): Promise<LibraryPage> {
+  return invoke<LibraryPage>("get_library");
+}
+
+/** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
+export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+  return invoke<string | null>("library_cover", { appId, shape });
+}
+
+/** Ask Steam to start the game. Resolves to a line to show. */
+export function libraryPlay(appId: number): Promise<string> {
+  return invoke<string>("library_play", { appId });
 }

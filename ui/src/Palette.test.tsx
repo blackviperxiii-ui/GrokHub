@@ -14,8 +14,9 @@ const DESKTOP: Capabilities = {
   tray: true,
   webAccess: true,
   plugins: true,
+  library: true,
 };
-const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false };
+const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 
 const labels = (caps: Capabilities, q: string) => paletteRows(caps, q).map((r) => r.label);
@@ -29,6 +30,7 @@ describe("paletteRows", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Library",
       "Settings",
       "Settings: General",
       "Settings: Account",

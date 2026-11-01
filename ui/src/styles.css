@@ -2008,3 +2008,132 @@ label.toggle-row {
     scroll-behavior: auto !important;
   }
 }
+
+/* Library: a cover grid with the picked game's details beside it. */
+.library {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.library-head input {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.library-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+
+.library-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+  align-content: start;
+  overflow-y: auto;
+}
+
+.library-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-align: left;
+}
+
+.library-tile:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+}
+
+.library-tile[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.library-name {
+  padding: 0 6px 6px;
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-art {
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+.library-art.tall {
+  aspect-ratio: 2 / 3;
+}
+
+.library-art.wide {
+  aspect-ratio: 460 / 215;
+}
+
+/* No art from Steam: a painted cover, its hue picked from the app id. */
+.library-art.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(
+    160deg,
+    hsl(var(--art-hue) 45% 32%),
+    hsl(calc(var(--art-hue) + 40) 40% 16%)
+  );
+  color: #f2f2f4;
+  font-size: 1.6em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.library-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: start;
+}
+
+.library-detail h2 {
+  margin: 4px 0 0;
+  font-size: 1.15em;
+}
+
+.library-detail .card-status {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .library-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .library-detail {
+    order: -1;
+  }
+}

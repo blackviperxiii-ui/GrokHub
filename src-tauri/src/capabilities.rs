@@ -19,6 +19,8 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// The Library page: this computer's Steam games and Play.
+    pub library: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -33,6 +35,7 @@ pub fn for_os(os: &str) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        library: desktop,
     }
 }
 
@@ -64,6 +67,7 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            library: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -79,6 +83,7 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            library: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(for_os("ios"), none);
@@ -105,6 +110,7 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "library": false,
             })
         );
     }

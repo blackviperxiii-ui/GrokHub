@@ -3,7 +3,7 @@ import type { Capabilities } from "./api";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 
-export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
+export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings" | "library";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -24,6 +24,7 @@ export const VIEW_LABELS: Record<View, string> = {
   memory: "Memory",
   connectors: "Connectors",
   settings: "Settings",
+  library: "Library",
 };
 
 /** The pages this platform shows, in tab order. The journal is this
@@ -36,6 +37,7 @@ export function views(caps: Capabilities): View[] {
     "automations",
     "memory",
     "connectors",
+    ...(caps.library ? (["library"] as const) : []),
     "settings",
   ];
 }

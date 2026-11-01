@@ -847,6 +847,9 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "get_library",
+            "library_cover",
+            "library_play",
         ] {
             assert!(!web_command(name), "{name}");
         }

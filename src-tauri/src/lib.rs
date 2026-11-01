@@ -13,6 +13,7 @@ pub mod connectors;
 pub mod credential;
 pub mod interests;
 pub mod journal;
+pub mod library;
 pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
@@ -762,6 +763,37 @@ async fn fetch_plugin_market(
 }
 
 #[tauri::command]
+async fn get_library() -> Result<library::Page, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(|| library::page(grokhub_core::steam::detect_root().as_deref())).await
+}
+
+#[tauri::command]
+async fn library_cover(
+    state: State<'_, ShellState>,
+    app_id: u32,
+    shape: library::Shape,
+) -> Result<Option<String>, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let root = grokhub_core::steam::detect_root();
+        let net = library::LiveNet {
+            config_dir: dir.clone(),
+        };
+        let now = grokhub_core::now_ms() / 1000;
+        library::cover(&dir, root.as_deref(), app_id, shape, &net, now)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_play(app_id: u32) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
+}
+
+#[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -1374,7 +1406,10 @@ pub fn run() {
             check_model_file,
             run_local_speed_test,
             get_web_access,
-            set_web_access
+            set_web_access,
+            get_library,
+            library_cover,
+            library_play
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
