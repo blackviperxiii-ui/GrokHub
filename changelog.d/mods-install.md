@@ -1,0 +1,3 @@
+### Added
+
+- Mods: Install, Update and Uninstall for Stardew Valley, Skyrim, Fallout 4, Starfield, Cyberpunk 2077, The Witcher 3, Minecraft, WoW addons and the BepInEx games. Nothing downloads until you click Install, and nothing is written until you confirm the sheet that lists every file it adds or replaces. Replaced files are backed up, Uninstall puts the folder back as it was (keeping any file you changed since), and an install cut short is rolled back the next time Mods opens. The game must be closed. Files a site only offers in the browser are picked up from Downloads after you say they're done. Workshop games subscribe in Steam, and games a mod manager already looks after (Vortex, Mod Organizer 2, r2modman) are left to it.

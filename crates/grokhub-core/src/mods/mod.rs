@@ -4,18 +4,26 @@
 //! trait ([`source::ModSource`]), with a cache and per-source rate limits
 //! ([`client::ModClient`]).
 //!
-//! Nothing here downloads a mod or writes to a game folder, and nothing here
-//! dials the network: the app hands in a [`source::Fetch`] that runs every
-//! request through the egress guard (refused while Offline only is on, public
-//! addresses only, no redirect off the source's own hosts).
+//! Installing ([`install`]) takes a download the app fetched after the
+//! user's click, checks it ([`archive`]), and writes it into the game with
+//! a journal and backups so uninstall puts the folder back exactly. A game
+//! another mod manager looks after ([`managers`]) is left to it.
+//!
+//! Nothing here dials the network: the app hands in a [`source::Fetch`]
+//! that runs every request through the egress guard (refused while Offline
+//! only is on, public addresses only, no redirect off the source's own hosts).
 
 pub mod allowlist;
+pub mod archive;
 pub mod cache;
 pub mod client;
 pub mod curseforge;
 pub mod ids;
+pub mod install;
+pub mod managers;
 pub mod modrinth;
 pub mod nexus;
+pub mod pickup;
 pub mod source;
 pub mod thunderstore;
 pub mod workshop;
