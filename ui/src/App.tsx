@@ -31,6 +31,7 @@ const loaders = {
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  history: () => import("./History").then((m) => ({ default: m.History })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
@@ -42,6 +43,7 @@ const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
 const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
+const History = lazy(loaders.history);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
@@ -77,6 +79,8 @@ export function App() {
   const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
+  const [open, setOpen] = useState<{ id: string; n: number }>();
+  const [deleted, setDeleted] = useState<{ id: string; n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   // The open chat for the Agents page: the conversation the window last heard from.
   const [openChat, setOpenChat] = useState<string>();
@@ -271,6 +275,8 @@ export function App() {
           onOpenView={setView}
           prefill={prefill}
           notice={notice}
+          open={open}
+          deleted={deleted}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
           grokSignIn={Boolean(caps.grokSignIn)}
@@ -312,6 +318,17 @@ export function App() {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");
             }}
+          />
+        </Page>
+      )}
+      {opened.has("history") && !caps.remote && (
+        <Page shown={view === "history"}>
+          <History
+            onOpen={(id) => {
+              setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+              setView("chat");
+            }}
+            onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
           />
         </Page>
       )}
