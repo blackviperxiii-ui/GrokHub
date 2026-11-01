@@ -15,6 +15,7 @@ import {
 import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
+import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
 import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
@@ -311,26 +312,29 @@ export function Settings({
 
   function account() {
     return (
-      <div className="key">
-        <h2>xAI API key</h2>
-        <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
-        <input
-          type="password"
-          aria-label="API key"
-          placeholder="xai-…"
-          autoComplete="off"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="button" onClick={saveKey} disabled={!key.trim()}>
-          Save key
-        </button>
-        {loaded.hasApiKey && (
-          <button type="button" className="quiet" onClick={removeKey}>
-            Remove key
+      <>
+        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} onChange={show} />}
+        <div className="key">
+          <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
+          <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
+          <input
+            type="password"
+            aria-label="API key"
+            placeholder="xai-…"
+            autoComplete="off"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <button type="button" onClick={saveKey} disabled={!key.trim()}>
+            Save key
           </button>
-        )}
-      </div>
+          {loaded.hasApiKey && (
+            <button type="button" className="quiet" onClick={removeKey}>
+              Remove key
+            </button>
+          )}
+        </div>
+      </>
     );
   }
 }
@@ -372,6 +376,8 @@ function RemoteSettings({ settings }: { settings: Shape }) {
         <dd>{APPROVALS[settings.approvals].label}</dd>
         <dt>xAI API key</dt>
         <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
+        <dt>Grok sign-in</dt>
+        <dd>{settings.signedIn ? "Signed in on your computer." : "Not signed in."}</dd>
       </dl>
     </section>
   );

@@ -429,6 +429,102 @@ fn signed_out_with_local_ai_ready_starts_the_engine_with_no_bearer() {
 }
 
 #[test]
+fn a_stale_grok_sign_in_falls_back_to_local_ai_and_says_so() {
+    let sb = Sandbox::new("native-signin-stale-local");
+    // An expired sign-in with no refresh token is on file: it counts as
+    // "present", but it can't carry a turn.
+    sb.write_signin(r#"{"accessToken":"test-expired-token","expiresAt":1000,"connectedAt":1}"#);
+    let mut cabin = sb.cabin();
+    assert!(cabin.has_key());
+    assert!(!cabin.cloud_cred_usable());
+
+    // Local AI off: the turn still can't start, with the same message.
+    set_local_ready_for_test(Some(false));
+    assert_eq!(
+        cabin.ensure_native_engine().unwrap_err(),
+        "Sign in with Grok or add an API key."
+    );
+    let status = cabin.diagnostics_service_status();
+    assert!(
+        status[0].starts_with("fail — xAI sign-in needs renewing"),
+        "{status:?}"
+    );
+
+    // Local AI on: the chat runs on the device with no bearer, and says why.
+    set_local_ready_for_test(Some(true));
+    cabin
+        .ensure_native_engine()
+        .expect("engine starts on Local AI");
+    let session = cabin
+        .acp
+        .as_ref()
+        .map(|handle| handle.session_id.clone())
+        .expect("engine handle");
+    assert_eq!(published_bearer_for_test(&session).as_deref(), Some(""));
+    assert_eq!(cabin.status, super::native_engine::LOCAL_FALLBACK_NOTE);
+    let status = cabin.diagnostics_service_status();
+    assert!(
+        status[0].contains("Local AI is answering"),
+        "the status agrees with the send: {status:?}"
+    );
+
+    // A key added later wins again.
+    cabin.secrets.api_key = "test-console-key".into();
+    assert!(cabin.cloud_cred_usable());
+    cabin.ensure_native_engine().expect("engine on the key");
+    assert_eq!(
+        published_bearer_for_test(&session).as_deref(),
+        Some("test-console-key")
+    );
+    assert!(cabin.diagnostics_service_status()[0].starts_with("ok — xAI auth present"));
+    set_local_ready_for_test(None);
+    cabin.acp = None;
+}
+
+#[test]
+fn a_sign_in_xai_turns_away_moves_the_chat_to_local_ai() {
+    let sb = Sandbox::new("native-signin-rejected-local");
+    let mut cabin = sb.cabin();
+    cabin.secrets.api_key = "test-revoked-key".into();
+    set_local_ready_for_test(Some(true));
+    assert!(cabin.cloud_cred_usable());
+    // Some other engine error is not a rejection.
+    assert!(!cabin.note_cloud_rejection("HTTP 500: upstream"));
+    assert!(cabin.cloud_cred_usable());
+    // xAI answered 401 for the key: the same key is no longer used while
+    // Local AI is ready.
+    assert!(cabin.note_cloud_rejection("API key rejected (HTTP 401): bad key"));
+    assert!(!cabin.cloud_cred_usable());
+    cabin.ensure_native_engine().expect("engine on Local AI");
+    let session = cabin
+        .acp
+        .as_ref()
+        .map(|handle| handle.session_id.clone())
+        .expect("engine handle");
+    assert_eq!(published_bearer_for_test(&session).as_deref(), Some(""));
+    // A new key is a different bearer and goes back to the cloud.
+    cabin.secrets.api_key = "test-new-key".into();
+    cabin.ensure_native_engine().expect("engine on the new key");
+    assert_eq!(
+        published_bearer_for_test(&session).as_deref(),
+        Some("test-new-key")
+    );
+    // With Local AI off a rejected key is still tried, so xAI's own error shows.
+    cabin.secrets.api_key = "test-revoked-key".into();
+    set_local_ready_for_test(Some(false));
+    assert!(!cabin.note_cloud_rejection("sign-in was rejected (HTTP 403): no"));
+    cabin
+        .ensure_native_engine()
+        .expect("engine on the rejected key");
+    assert_eq!(
+        published_bearer_for_test(&session).as_deref(),
+        Some("test-revoked-key")
+    );
+    set_local_ready_for_test(None);
+    cabin.acp = None;
+}
+
+#[test]
 fn native_signin_failed_refresh_is_not_retried_every_turn() {
     let sb = Sandbox::new("native-signin-refresh-fails");
     let server = FakeXai::start();

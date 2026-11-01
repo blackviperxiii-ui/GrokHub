@@ -1,0 +1,1 @@
+- Library with no games is no longer a dead end: the header and its Skills button stay, and the empty state says what the library reads (games Steam and Battle.net have installed on this PC) with an Open Steam button. With Battle.net games and no Steam, the grid shows them as before.

@@ -125,6 +125,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "stardew",
+        name: "Stardew Valley",
+        steam_app_id: Some(413150),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the farm saves the game writes: day, gold earned and skills, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -237,5 +247,6 @@ mod tests {
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
         assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
+        assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
     }
 }
