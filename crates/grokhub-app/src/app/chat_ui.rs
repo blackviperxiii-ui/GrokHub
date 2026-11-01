@@ -2985,8 +2985,6 @@ impl Cabin {
                         self.paint_session_tools(ui);
                     }
                     ComposerStackSlot::LiveWork => {
-                        self.paint_archive_toast(ui);
-                        self.paint_diagnostics_notice(ui);
                         self.paint_live_work(ui);
                     }
                     ComposerStackSlot::SlashPalette => {
@@ -3291,34 +3289,6 @@ impl Cabin {
                 }
             }
         });
-    }
-
-    // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
-    // and forbids Nav:: in that window. Keep this toast Nav-free.
-    /// Quiet archive / unarchive note with Undo. Idle auto-archive stays off chrome.
-    pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
-        let Some(id) = self.archive_undo.clone() else {
-            return;
-        };
-        let Some(t) = self.threads.iter().find(|t| t.id == id) else {
-            self.archive_undo = None;
-            return;
-        };
-        let title = t.title.clone();
-        let archived = threads::is_archived(t);
-        let verb = if archived { "Archived" } else { "Unarchived" };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                RichText::new(format!("{verb} {title}"))
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-            if crate::cards::ghost_pill(ui, "Undo") {
-                self.undo_archive_toast();
-            }
-        });
-        ui.add_space(4.0);
     }
 
     /// A turn is streaming on this tab: only its last message grows, and the pane

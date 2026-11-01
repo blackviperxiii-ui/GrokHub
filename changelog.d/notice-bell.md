@@ -1,0 +1,1 @@
+- A bell next to Activity in the titlebar now keeps archive Undo, saved diagnostics and status messages, instead of strips above the composer.

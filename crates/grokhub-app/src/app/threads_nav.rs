@@ -221,8 +221,12 @@ impl Cabin {
             self.status = format!("{title} is already archived");
             return;
         }
-        self.archive_undo = Some(id.clone());
         self.status = format!("Archived {title}");
+        self.notify(
+            notices::NoticeKind::Info,
+            self.status.clone(),
+            Some(notices::NoticeAction::Unarchive(id)),
+        );
         self.persist();
     }
 
@@ -237,8 +241,12 @@ impl Cabin {
             return;
         }
         t.last_active_ms = now_ms();
-        self.archive_undo = Some(id);
         self.status = format!("Unarchived {title}");
+        self.notify(
+            notices::NoticeKind::Info,
+            self.status.clone(),
+            Some(notices::NoticeAction::Archive(id)),
+        );
         self.persist();
     }
 
@@ -259,22 +267,6 @@ impl Cabin {
         }
     }
 
-    /// Undo the last archive or unarchive toast (same chat, flip back).
-    pub(super) fn undo_archive_toast(&mut self) {
-        let Some(id) = self.archive_undo.take() else {
-            return;
-        };
-        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
-            return;
-        };
-        if threads::is_archived(&self.threads[idx]) {
-            self.unarchive_thread_at(idx);
-        } else {
-            self.archive_thread_at(idx);
-        }
-        self.archive_undo = None;
-    }
-
     /// Reply in an archived chat restores it to the main list with a quiet note.
     pub(super) fn unarchive_on_reply(&mut self) {
         let idx = self.thread_idx;
@@ -285,11 +277,12 @@ impl Cabin {
             return;
         }
         let title = t.title.clone();
+        let id = t.id.clone();
         if let Some(t) = self.threads.get_mut(idx) {
             let _ = threads::unarchive_thread(t);
             t.last_active_ms = now_ms();
         }
-        self.archive_undo = None;
+        self.notices.drop_actions_for(&id);
         self.status = format!("Restored {title} to chats");
         self.persist();
     }
