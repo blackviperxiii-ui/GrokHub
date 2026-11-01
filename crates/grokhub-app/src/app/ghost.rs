@@ -275,6 +275,9 @@ impl Cabin {
             }
         }
         self.poll_composer_ghost(ui.ctx(), composer_id);
+        // Composer edits also start draft prep (LO-46); kept here so the
+        // Pill arm in chat_ui.rs does not grow.
+        self.draft_prep_touch(ui.ctx(), edit);
     }
 
     pub(super) fn attach_fingerprint(&self) -> u64 {

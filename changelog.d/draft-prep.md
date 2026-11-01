@@ -1,0 +1,1 @@
+- Draft prep (LO-46): once typing pauses for 150 ms, the cabin reads memory recall for the draft on one background thread, so Enter finds it ready. Local reads only; nothing reaches a model before Enter, library asks are never prepared, and sealed memory opens only with a key already in memory. `"draft_prep": false` in `app.json` turns it off.

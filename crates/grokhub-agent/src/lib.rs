@@ -6,6 +6,7 @@ mod checkpoint;
 mod client;
 mod close_check;
 mod compact;
+pub mod draft_prep;
 mod dream_model;
 mod drive;
 pub mod episode;

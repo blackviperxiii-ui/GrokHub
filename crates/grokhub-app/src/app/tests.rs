@@ -2332,6 +2332,7 @@ fn quiet_cabin() -> Cabin {
         scroll_to_hooks: false,
         composer_geom: None,
         composer_ghost: ghost::ComposerGhost::default(),
+        draft_prep: super::draft_prep::DraftPrep::default(),
         dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: Default::default(),

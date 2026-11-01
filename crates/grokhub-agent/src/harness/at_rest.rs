@@ -792,6 +792,54 @@ impl grokhub_core::amr::Sealer for LearnedVault {
     }
 }
 
+/// A read-only vault for work done while you type: it opens a sealed node
+/// only with the key already held in memory and never asks the OS keyring.
+/// [`InMemoryVault::refused`] says whether any node stayed shut, so the caller
+/// can drop a result that would differ from a full read at Enter.
+#[derive(Debug)]
+pub struct InMemoryVault {
+    config_dir: PathBuf,
+    refused: AtomicBool,
+}
+
+impl InMemoryVault {
+    pub fn new(config_dir: &Path) -> Self {
+        Self {
+            config_dir: config_dir.to_path_buf(),
+            refused: AtomicBool::new(false),
+        }
+    }
+
+    /// True once any open was refused or failed.
+    pub fn refused(&self) -> bool {
+        self.refused.load(Ordering::SeqCst)
+    }
+
+    fn refuse(&self, why: String) -> Result<String, String> {
+        self.refused.store(true, Ordering::SeqCst);
+        Err(why)
+    }
+}
+
+impl grokhub_core::amr::Sealer for InMemoryVault {
+    fn seal(&self, _aad: &str, _plain: &str) -> Result<String, String> {
+        self.refuse("this vault only reads".to_string())
+    }
+
+    fn open(&self, aad: &str, sealed: &str) -> Result<String, String> {
+        let KeyCache::Have(key, _) = keys_for(&self.config_dir).cached() else {
+            return self.refuse(Locked::Unavailable.message());
+        };
+        if stored_key_id(&self.config_dir).is_some_and(|id| id != key.id) {
+            return self.refuse(Locked::WrongKey.message());
+        }
+        match open_with(&key, aad, sealed).and_then(|p| String::from_utf8(p.to_vec()).ok()) {
+            Some(plain) => Ok(plain),
+            None => self.refuse("a private memory could not be opened".to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

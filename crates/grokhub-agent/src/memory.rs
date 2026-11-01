@@ -280,6 +280,7 @@ pub fn dream(
 /// installed apps, or similar — even when the memory backend is still legacy.
 /// Those facts live in AMR regardless of `memory_backend`.
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
+    let _lap = crate::timing::lap("turn:memory_recall");
     format_injection(&collect_snippets(workspace, user_text, &[]))
 }
 
@@ -287,6 +288,7 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
 /// `already` (the fenced bodies from earlier turns). `None` when nothing new
 /// matched. Library asks still include sealed installed-app lines.
 pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
+    let _lap = crate::timing::lap("turn:memory_recall");
     let fresh: Vec<String> = collect_snippets(workspace, user_text, already)
         .into_iter()
         .filter(|body| !already_has(already, body))
@@ -319,16 +321,82 @@ fn normalize_hit(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
-/// Sealed library lines, then AMR lines, then index chunks. `already` holds
-/// lines an earlier turn injected, so the index pack fills with new chunks.
-fn collect_snippets(workspace: &Path, user_text: &str, already: &[String]) -> Vec<String> {
+/// What recall reads before it packs: sealed library lines, AMR lines, and
+/// index hits (best first). Nothing here depends on earlier turns, so one
+/// read (made at Enter, or ahead of it by [`crate::draft_prep`]) serves the
+/// first turn and any later one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Gathered {
+    pub(crate) scope: Vec<String>,
+    pub(crate) amr: Vec<String>,
+    /// `None` when there are no memory files or the index won't open.
+    pub(crate) legacy: Option<Vec<Hit>>,
+}
+
+/// Read everything recall needs for `user_text`.
+fn gather(workspace: &Path, user_text: &str) -> Gathered {
     let amr = if amr_enabled() {
-        amr_injection_lines(user_text)
+        amr_injection_lines(&amr_store(), user_text)
     } else {
         Vec::new()
     };
-    let scope = scope_library_lines(user_text);
-    let legacy = legacy_injection_bodies(workspace, user_text, already);
+    Gathered {
+        amr,
+        scope: scope_library_lines(user_text),
+        legacy: legacy_hits(workspace, user_text),
+    }
+}
+
+/// [`gather`] for a draft that is still being typed: no sealed library lines
+/// (the caller keeps library asks out), and AMR read through `sealer`, which
+/// must never ask the OS keyring.
+pub(crate) fn gather_ahead(
+    workspace: &Path,
+    user_text: &str,
+    sealer: std::sync::Arc<dyn grokhub_core::amr::Sealer>,
+) -> Gathered {
+    let amr = if amr_enabled() {
+        let dir = crate::perm::config_dir();
+        let mut store = grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(sealer);
+        store.set_memory_writes(memory_writes_at(&dir));
+        amr_injection_lines(&store, user_text)
+    } else {
+        Vec::new()
+    };
+    Gathered {
+        amr,
+        scope: Vec::new(),
+        legacy: legacy_hits(workspace, user_text),
+    }
+}
+
+/// What a prepared read is only good for while unchanged: the memory files,
+/// `app.json`, and the AMR node folder and edge log. One string per input.
+pub(crate) fn recall_stamps(workspace: &Path) -> Vec<String> {
+    let dir = crate::perm::config_dir();
+    let amr = dir.join("amr");
+    let mut out: Vec<String> = scoped_files(workspace)
+        .iter()
+        .map(|(path, _)| file_stamp(path))
+        .collect();
+    out.push(file_stamp(&dir.join("app.json")));
+    out.push(file_stamp(&amr.join("nodes")));
+    out.push(file_stamp(&amr.join("edges").join("edges.jsonl")));
+    out
+}
+
+/// Sealed library lines, then AMR lines, then index chunks. `already` holds
+/// lines an earlier turn injected, so the index pack fills with new chunks.
+/// A read prepared while the draft was typed is used when it still matches.
+fn collect_snippets(workspace: &Path, user_text: &str, already: &[String]) -> Vec<String> {
+    let gathered = crate::draft_prep::take(workspace, user_text)
+        .unwrap_or_else(|| gather(workspace, user_text));
+    pack_snippets(gathered, already)
+}
+
+fn pack_snippets(gathered: Gathered, already: &[String]) -> Vec<String> {
+    let Gathered { scope, amr, legacy } = gathered;
+    let legacy = legacy.map(|hits| pack_legacy(hits, already));
     let mut seen = std::collections::HashSet::new();
     let source: Vec<String> = if amr.is_empty() && scope.is_empty() {
         match legacy {
@@ -354,6 +422,20 @@ fn collect_snippets(workspace: &Path, user_text: &str, already: &[String]) -> Ve
 /// a claim of empty memory or a `~/.steam` workspace walk.
 pub fn library_intent(user_text: &str) -> bool {
     let q = user_text.to_ascii_lowercase();
+    // Named sealed apps: "do I have ACE COMBAT 8" when the index already knows the title.
+    library_ask_plain(&q) || named_sealed_app_ask(&q)
+}
+
+/// True when recall for `user_text` could open the sealed library index:
+/// a library ask, or have/own/play framing that may name a sealed title.
+/// Reads nothing.
+pub(crate) fn may_read_sealed(user_text: &str) -> bool {
+    let q = user_text.to_ascii_lowercase();
+    library_ask_plain(&q) || sealed_app_framing(&q)
+}
+
+/// [`library_intent`] without the sealed-title lookup. `q` is lowercase.
+fn library_ask_plain(q: &str) -> bool {
     const PHRASES: &[&str] = &[
         "gaming",
         "game library",
@@ -383,7 +465,7 @@ pub fn library_intent(user_text: &str) -> bool {
     }
     // "is the app installed" / "do I have any games installed": needs an
     // app/game noun so "is the patch installed" stays out. A named sealed app
-    // is covered by `named_sealed_app_ask` below.
+    // is covered by `named_sealed_app_ask`.
     const LIBRARY_NOUNS: &[&str] = &[
         "app",
         "apps",
@@ -396,34 +478,34 @@ pub fn library_intent(user_text: &str) -> bool {
         "software",
     ];
     if q.contains("installed")
-        && LIBRARY_NOUNS.iter().any(|n| library_word(&q, n))
-        && (library_word(&q, "is")
-            || library_word(&q, "are")
+        && LIBRARY_NOUNS.iter().any(|n| library_word(q, n))
+        && (library_word(q, "is")
+            || library_word(q, "are")
             || q.contains("do i have")
             || q.contains("do you have")
             || q.contains("have i"))
     {
         return true;
     }
-    // Named sealed apps: "do I have ACE COMBAT 8" when the index already knows the title.
-    if named_sealed_app_ask(&q) {
-        return true;
-    }
     // Whole-word "steam" only — never substring-match `upstream` / `downstream`.
-    library_word(&q, "steam")
+    library_word(q, "steam")
 }
 
-/// True when the ask names a sealed `scope:apps` title (≥4 chars) with have/own/play framing.
-fn named_sealed_app_ask(q: &str) -> bool {
-    let framed = q.contains("do i have")
+/// Have/own/play framing that a sealed title could complete.
+fn sealed_app_framing(q: &str) -> bool {
+    q.contains("do i have")
         || q.contains("do you have")
         || q.contains("have i")
         || library_word(q, "own")
         || library_word(q, "play")
         || (q.contains("installed") && (library_word(q, "is") || library_word(q, "are")))
         || q.contains("on this machine")
-        || q.contains("on my machine");
-    if !framed {
+        || q.contains("on my machine")
+}
+
+/// True when the ask names a sealed `scope:apps` title (≥4 chars) with have/own/play framing.
+fn named_sealed_app_ask(q: &str) -> bool {
+    if !sealed_app_framing(q) {
         return false;
     }
     let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
@@ -502,13 +584,9 @@ fn scope_library_lines(user_text: &str) -> Vec<String> {
     out
 }
 
-/// Index chunks for the pack, or `None` when there are no files or the
-/// index won't open.
-fn legacy_injection_bodies(
-    workspace: &Path,
-    user_text: &str,
-    already: &[String],
-) -> Option<Vec<String>> {
+/// Index hits for the query, best first, or `None` when there are no files
+/// or the index won't open. Stale files are reindexed first.
+fn legacy_hits(workspace: &Path, user_text: &str) -> Option<Vec<Hit>> {
     if !memory_files_present(workspace) {
         return None;
     }
@@ -516,8 +594,7 @@ fn legacy_injection_bodies(
         return None;
     }
     let query = injection_query(user_text);
-    let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
-    Some(pack_legacy(hits, already))
+    recall(&query, now_secs(), &scope_paths(workspace)).ok()
 }
 
 /// At most [`LEGACY_PACK_CAP`] chunks from `hits` (best first), skipping
@@ -678,13 +755,13 @@ pub(crate) fn inject_token_cap_at(dir: &Path) -> u64 {
 /// AMR lines for the message's content words (3+ letters), at most
 /// [`AMR_PACK_CAP`]: lines matching the most distinct words first, then the
 /// newest. Recall never creates the store and skips tombstoned and locked nodes.
-fn amr_injection_lines(user_text: &str) -> Vec<String> {
+fn amr_injection_lines(store: &grokhub_core::amr::AmrStore, user_text: &str) -> Vec<String> {
     let words: Vec<String> = content_words(&injection_query(user_text))
         .into_iter()
         .filter(|w| w.chars().count() >= 3)
         .collect();
     let mut out: Vec<String> = Vec::new();
-    for hit in amr_store().recall_ranked(&words) {
+    for hit in store.recall_ranked(&words) {
         if out.len() >= AMR_PACK_CAP {
             break;
         }
@@ -2125,7 +2202,7 @@ mod tests {
         remember_line(&store, &line("ranked mode off"), 1).unwrap();
         remember_line(&store, &line("Kestrel duo partner ranked"), 1).unwrap();
         assert_eq!(
-            amr_injection_lines("my ranked duo partner"),
+            amr_injection_lines(&amr_store(), "my ranked duo partner"),
             vec![
                 "Kestrel duo partner ranked".to_string(),
                 "ranked mode off".to_string(),

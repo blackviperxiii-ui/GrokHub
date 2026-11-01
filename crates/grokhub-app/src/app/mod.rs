@@ -165,6 +165,7 @@ mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
+mod draft_prep;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
@@ -919,6 +920,7 @@ pub struct Cabin {
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
     composer_ghost: ghost::ComposerGhost,
+    draft_prep: draft_prep::DraftPrep,
     /// U7f: egui_dock layout when `cfg.dock_panels` is on (persisted in dock.json).
     dock_state: egui_dock::DockState<dock_ui::DockTab>,
     /// In-app toasts (egui-notify) for Saved / finished / error status.
@@ -1496,6 +1498,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            draft_prep: draft_prep::DraftPrep::default(),
             dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),
@@ -1968,6 +1971,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            draft_prep: draft_prep::DraftPrep::default(),
             dock_state: dock_ui::default_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: Default::default(),

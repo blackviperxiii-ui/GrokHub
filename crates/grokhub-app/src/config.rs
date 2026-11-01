@@ -649,6 +649,15 @@ pub struct AppConfig {
     /// Omitted from `app.json` while this stays off. `"dream_model": true` turns it on.
     #[serde(default, rename = "dream_model", skip_serializing_if = "is_false")]
     pub dream_model: bool,
+    /// Draft prep (LO-46): read memory recall while you type, so Enter finds
+    /// it ready. Local reads only. Omitted from `app.json` while this stays
+    /// on; `"draft_prep": false` turns it off. No Settings control.
+    #[serde(
+        default = "default_host_on",
+        rename = "draft_prep",
+        skip_serializing_if = "is_true"
+    )]
+    pub draft_prep: bool,
     /// Settings → Models & providers → Web search. Free DuckDuckGo Lite by default;
     /// optional SearXNG URL. Brave API keys stay in the OS keyring, never here.
     #[serde(default, skip_serializing_if = "WebSearchConfig::is_default")]
@@ -911,6 +920,7 @@ impl Default for AppConfig {
             memory_migrated: false,
             memory_writes: true,
             dream_model: false,
+            draft_prep: true,
             web_search: WebSearchConfig::default(),
         }
     }
@@ -1543,6 +1553,18 @@ mod tests {
         assert!(!serde_json::to_string(&on)
             .unwrap()
             .contains("memory_writes"));
+    }
+
+    #[test]
+    fn draft_prep_defaults_on_and_round_trips_off() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!json.contains("draft_prep"), "{json}");
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(missing.draft_prep);
+        let off: AppConfig = serde_json::from_str(r#"{"draft_prep":false}"#).unwrap();
+        assert!(!off.draft_prep);
+        let saved = serde_json::to_string(&off).unwrap();
+        assert!(saved.contains("\"draft_prep\":false"), "{saved}");
     }
 
     #[test]
