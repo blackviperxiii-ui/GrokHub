@@ -369,3 +369,44 @@ fn a_mod_the_chat_asked_for_waits_on_a_card_until_the_user_clicks() {
     }
     assert!(!shown.iter().any(|t| t == "Install"), "{shown:?}");
 }
+
+#[test]
+fn for_you_cards_say_why_and_offer_not_interested() {
+    use grokhub_core::mods::suggest::{Candidate, Suggestion, Why};
+    let rail = mod_rail(&[game(413150, "Stardew Valley", 1, 1)], &[], false);
+    let ranked = vec![Suggestion {
+        c: Candidate {
+            game: "stardew".into(),
+            source: Source::Nexus,
+            m: ModSummary {
+                id: "541".into(),
+                name: "Lookup Anything".into(),
+                ..Default::default()
+            },
+            trending: false,
+        },
+        score: 1.0,
+        why: Why::LikeYours,
+    }];
+    let mut cabin = Cabin::quiet_for_test();
+    let view = ModsView::default();
+    let shown = texts(&mut cabin, |_, ui| {
+        suggest::row(ui, &rail, &mut view.clone(), &ranked)
+    });
+    for want in [
+        "FOR YOU",
+        "Lookup Anything",
+        "Stardew Valley · Like mods you have",
+        "Not interested",
+        "Open",
+    ] {
+        assert!(shown.iter().any(|t| t == want), "{want}: {shown:?}");
+    }
+    let none = texts(&mut cabin, |_, ui| {
+        suggest::row(ui, &rail, &mut view.clone(), &[])
+    });
+    assert!(
+        !none.iter().any(|t| t == "FOR YOU"),
+        "no suggestions, no row"
+    );
+}

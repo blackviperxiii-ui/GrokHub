@@ -13,6 +13,7 @@ pub(super) mod agent;
 mod drawer;
 mod install;
 mod jobs;
+mod suggest;
 
 use std::path::{Path, PathBuf};
 
@@ -325,6 +326,9 @@ impl Cabin {
                 if let Err(e) = requested_card(ui) {
                     self.status = e;
                 }
+                let offline = grokhub_core::offline::enabled();
+                let ranked = suggest::suggestions(ui.ctx(), &rail, self.adult_ok(), offline);
+                suggest::row(ui, &rail, &mut view, &ranked);
                 if view.picked.is_none() {
                     view.picked = rail.games.first().map(|g| g.entry.id.to_string());
                 }
@@ -393,6 +397,9 @@ impl Cabin {
                 .color(crate::theme::amber()),
         );
         install::status(ui);
+        if game.last_played > 0 {
+            suggest::toggle(ui, game);
+        }
         ui.add_space(10.0);
         let offline = grokhub_core::offline::enabled();
         search_row(ui, view, offline);

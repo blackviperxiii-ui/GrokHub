@@ -739,7 +739,7 @@ pub fn next_failover_tier(tier: &str) -> &'static str {
 }
 
 pub fn fill_random(buf: &mut [u8]) {
-    if getrandom::getrandom(buf).is_err() {
+    if getrandom::fill(buf).is_err() {
         panic!("getrandom failed — refusing to mint a zero token");
     }
 }
