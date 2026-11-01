@@ -453,7 +453,7 @@ impl BoardCard {
     }
 
     /// A card the agent filed (a run, an automation, a pin).
-    fn by_agent(mut self) -> Self {
+    pub(crate) fn by_agent(mut self) -> Self {
         self.origin = Some(WorkOrigin::Agent);
         self
     }

@@ -225,6 +225,8 @@ pub fn run_now(
     let _running = Running::claim(id)?;
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
+    let session_id = format!("shell-auto-{id}-{started}");
+    let card = board_run_start(config_dir, &job, &session_id, model, started);
     let system = crate::agent::system_prompt(&workspace, false, "");
     let done = grokhub_agent::run_unattended(UnattendedRun {
         client,
@@ -232,7 +234,7 @@ pub fn run_now(
         model: model.to_string(),
         effort: None,
         system,
-        session_id: format!("shell-auto-{id}-{started}"),
+        session_id,
         auth_kind: AuthKind::ApiKey,
         prompt: job.instructions.clone(),
         image: None,
@@ -246,6 +248,7 @@ pub fn run_now(
         resume: false,
     });
     let failed = done.stop_reason == "error" || !done.error.is_empty();
+    board_run_end(config_dir, &job, card.as_deref(), failed, &done);
     change(config_dir, id, |list, at| {
         let ran = grokhub_core::mark_automation_ran(list[at].clone(), started);
         list[at] = if failed {
@@ -259,6 +262,71 @@ pub fn run_now(
         error: done.error,
         stop: done.stop_reason,
     })
+}
+
+/// KB-02: Run now takes the automation's one board card into Doing, as the
+/// cabin's scheduled run does. A board that cannot be read is left alone and the
+/// run still goes. No model is involved.
+fn board_run_start(
+    config_dir: &Path,
+    job: &Automation,
+    session: &str,
+    model: &str,
+    now: u64,
+) -> Option<String> {
+    use grokhub_core::work_run as wr;
+    let id = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        wr::begin_automation_card(cards, &job.id, &job.name, session, model, now)
+    })
+    .ok()?;
+    let _ = grokhub_core::work_item::append_work_log(
+        &wr::work_dir(config_dir),
+        &id,
+        now,
+        wr::LOG_START,
+        "run now",
+    );
+    Some(id)
+}
+
+/// The run's final checkpoint. A reply that needs you files the Follow up card,
+/// as in the cabin; a quiet run lets the agent's untouched card archive itself.
+fn board_run_end(
+    config_dir: &Path,
+    job: &Automation,
+    card: Option<&str>,
+    failed: bool,
+    done: &grokhub_agent::UnattendedDone,
+) {
+    use grokhub_core::work_run::{self as wr, RunEnd};
+    let Some(card) = card else {
+        return;
+    };
+    let now = grokhub_core::now_ms();
+    let end = if failed {
+        RunEnd::Failed(done.error.clone())
+    } else {
+        RunEnd::Done
+    };
+    let report = !failed && grokhub_core::automation_needs_follow_up(&job.instructions, &done.text);
+    let title = if job.name.trim().is_empty() {
+        &job.instructions
+    } else {
+        &job.name
+    };
+    let _ = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        wr::finish_automation_card(cards, &job.id, &end, report, now);
+        if report {
+            grokhub_core::file_follow_up(cards, &job.id, title, &done.text, now);
+        }
+    });
+    let _ = grokhub_core::work_item::append_work_log(
+        &wr::work_dir(config_dir),
+        card,
+        now,
+        wr::LOG_END,
+        &end.log_text(),
+    );
 }
 
 #[cfg(test)]

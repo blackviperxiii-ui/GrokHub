@@ -707,6 +707,7 @@ impl Cabin {
         }
         self.inflight_open = true;
         if upsert_inflight_card(&mut self.board, &id, &title) {
+            self.begin_run_card(&id);
             self.flush_board();
         }
     }
@@ -714,10 +715,14 @@ impl Cabin {
     /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
     /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
     pub(super) fn settle_turn_card(&mut self, assistant: &str) {
-        self.inflight_open = false;
         let Some(id) = self.chat_job_thread.clone() else {
+            self.inflight_open = false;
             return;
         };
+        if self.inflight_open {
+            self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Done);
+        }
+        self.inflight_open = false;
         let mut changed = settle_inflight_card(&mut self.board, &id);
         if apply_assistant_work_marks(&mut self.board, assistant, &id) {
             changed = true;
@@ -748,6 +753,7 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Stopped);
         if abandon_inflight_card(&mut self.board, &id) {
             self.flush_board();
             if let Some(title) = self
@@ -774,7 +780,7 @@ impl Cabin {
         if !crate::work_store::sweep_due(&path, now) {
             return;
         }
-        let live: Vec<String> = self.chat_job_thread.iter().cloned().collect();
+        let live = self.live_card_ids();
         if !grokhub_core::sweep_work_cards(&mut self.board, now, &live).is_empty() {
             self.flush_board();
         }
