@@ -680,7 +680,7 @@ fn kick_imagine_with_account_oauth_starts_without_second_signin() {
 fn imagine_need_signin_message_points_at_account_settings() {
     assert_eq!(
         grokhub_core::IMAGINE_NEED_SIGNIN,
-        "Sign in with Grok in Settings → Account, or add a console API key."
+        "Sign in with Grok in Settings → AI models, or add a console API key."
     );
     assert!(
         !grokhub_core::IMAGINE_NEED_SIGNIN.contains("for Imagine"),
