@@ -22,17 +22,15 @@ toml = { version = "1", default-features = false, features = ["std", "parse", "s
 quick-xml = { version = "0.41", default-features = false }
 # AMR `index.sqlite` FTS5. Same bundled sqlite as grokhub-agent.
 rusqlite = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "http2",
-    "blocking",
-] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Diagnostics: the real Desktop (Windows known folder / OneDrive, XDG user dirs).
 dirs = ">=6, <8"
 ureq = { workspace = true }
+# The HTTP facade parses each URL as ureq 2 did (WHATWG) before handing it on,
+# so the host it dials is the host the egress checks read.
+url = "2"
 
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
 [target.'cfg(windows)'.dependencies]
