@@ -38,6 +38,8 @@ pub(super) struct FocusState {
     pub watch: super::game_watch_ui::WatchState,
     /// Battle.net games and the WoW combat log follow.
     pub wow: super::wow_ui::WowState,
+    /// Path of Exile's own log, followed while it runs.
+    pub poe: super::poe_ui::PoeState,
     /// New 3D models in Downloads.
     pub models: super::model_drop_ui::ModelDropState,
     /// The screenshot Explain offer's folder scan and image load.
@@ -57,6 +59,7 @@ impl Cabin {
         self.tick_game_companion();
         self.tick_game_watch();
         self.tick_wow();
+        self.tick_poe();
         self.tick_model_drop();
         self.poll_screenshot_offer();
         if self.focus.shot.busy() {

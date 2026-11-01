@@ -216,6 +216,7 @@ mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod poe_ui;
 mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;

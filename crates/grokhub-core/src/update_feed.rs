@@ -5390,6 +5390,14 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             companion.companion_card(at),
             "Deep Rock Galactic",
         ));
+        let mut poe = crate::game_watch_poe::PoeSession::default();
+        poe.character = Some("Testwitch".into());
+        poe.deaths = 2;
+        rows.push((
+            "session_card",
+            crate::game_watch_poe::session_card("Path of Exile", &poe, at),
+            "Path of Exile",
+        ));
         rows.push((
             "recap_card",
             crate::game_watch::recap_card(
