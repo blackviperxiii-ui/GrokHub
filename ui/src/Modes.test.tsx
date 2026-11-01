@@ -41,12 +41,12 @@ describe("ModeChips", () => {
     render(chips());
     const tips = screen.getAllByRole("button").map((b) => [b.textContent, b.title]);
     expect(tips).toEqual([
-      ["Chat", "Normal chat. Grok can edit files and use tools in your work folder. Everyday work."],
+      ["Chat", "Normal chat. Loadout can edit files and use tools in your work folder. Everyday work."],
       [
         "Plan",
-        "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
+        "Loadout writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
       ],
-      ["btw", "A look-only side ask. Grok can read and answer, but changes nothing."],
+      ["btw", "A look-only side ask. Loadout can read and answer, but changes nothing."],
       ["Ask", "It asks before it changes a file or runs a command."],
       ["Auto", "A quick check approves routine steps and asks you about the rest."],
       [
