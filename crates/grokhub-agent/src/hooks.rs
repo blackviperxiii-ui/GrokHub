@@ -271,6 +271,21 @@ pub fn constrain_tool(hook: ToolHook<'_>) -> ToolConstraint {
     apply_tighten(hook.decision, hook.ask_reason, hook.attended, verdict)
 }
 
+/// Whether the session has a hook that sees or steers a whole turn (prompt
+/// submit, stop, after a tool). An instant answer can't honor those, so such a
+/// session's turns go to the model.
+pub fn has_turn_hooks(session: &str) -> bool {
+    const TURN: &[&str] = &[
+        "UserPromptSubmit",
+        "Stop",
+        "PostToolUse",
+        "PostToolUseFailure",
+    ];
+    sessions()
+        .get(session)
+        .is_some_and(|i| i.hooks.iter().any(|h| TURN.contains(&h.event.as_str())))
+}
+
 pub fn on_user_prompt(session: &str, workspace: &Path, text: &str) -> PromptHook {
     let found = hooks_matching(session, "UserPromptSubmit", &[text]);
     if found.is_empty() {
