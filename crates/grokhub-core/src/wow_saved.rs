@@ -237,6 +237,8 @@ pub struct WowCharacter {
     /// The class's display name in the game's language.
     pub class_name: String,
     pub spec: String,
+    /// Points per talent tree on Classic clients before Mists (`31/20/0`).
+    pub talents: String,
     pub level: u32,
     pub zone: String,
     pub guild: String,
@@ -378,6 +380,7 @@ fn character(c: &Value) -> WowCharacter {
         class: s(c, "class"),
         class_name: s(c, "className"),
         spec: s(c, "spec"),
+        talents: s(c, "talents"),
         level: u32_of(c, "level").unwrap_or(0),
         zone: s(c, "zone"),
         guild: s(c, "guild"),
@@ -549,7 +552,12 @@ pub fn character_line(c: &WowCharacter) -> String {
     } else {
         &c.class_name
     };
-    let who = [c.level.to_string(), c.spec.clone(), class.clone()];
+    let spec = if c.talents.is_empty() || c.spec.is_empty() {
+        c.spec.clone()
+    } else {
+        format!("{} ({})", c.spec, c.talents)
+    };
+    let who = [c.level.to_string(), spec, class.clone()];
     parts.push(
         who.iter()
             .filter(|w| !w.is_empty())
@@ -1000,6 +1008,29 @@ LoadoutDB = {
                 "Valorstones 1,500",
             ]
         );
+    }
+
+    #[test]
+    fn a_classic_character_reads_with_its_talent_trees() {
+        let db = parse_saved(
+            r#"LoadoutDB = {
+["characters"] = {
+["Testmage-Area 52"] = {
+["name"] = "Testmage", ["realm"] = "Area 52", ["class"] = "MAGE", ["className"] = "Mage",
+["level"] = 70, ["spec"] = "Arcane", ["talents"] = "40/21/0", ["money"] = 12340000,
+["professions"] = { { ["name"] = "Tailoring", ["skill"] = 375, ["max"] = 375 } },
+["reputations"] = { { ["name"] = "The Aldor", ["standing"] = 6, ["value"] = 4000, ["low"] = 3000, ["high"] = 9000 } },
+},
+},
+}"#,
+        );
+        let c = &from_db(&db["LoadoutDB"]).characters[0];
+        assert_eq!((c.spec.as_str(), c.talents.as_str()), ("Arcane", "40/21/0"));
+        assert_eq!(
+            character_line(c),
+            "Testmage · 70 Arcane (40/21/0) Mage · 1,234g"
+        );
+        assert!(detail_lines(c, 0).contains(&"Tailoring 375/375".to_string()));
     }
 
     #[test]
