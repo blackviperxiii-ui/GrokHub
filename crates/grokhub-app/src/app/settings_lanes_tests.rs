@@ -419,8 +419,8 @@ fn clear_oauth_photo_drops_cached_avatar_state() {
 fn avatar_chrome_returns_menu_fields() {
     let cabin = Cabin::quiet_for_test();
     let chrome = cabin.avatar_chrome();
-    // Quiet cabin: empty display_name, no OAuth name, empty USER.md → fallback "Grok".
-    assert_eq!(chrome.name, "Grok");
+    // Quiet cabin: empty display_name, no OAuth name, empty USER.md → fallback "You".
+    assert_eq!(chrome.name, "You");
     assert!(chrome.picture_path.is_empty());
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
@@ -439,10 +439,10 @@ fn cabin_default_model_id_empty_and_known() {
 
 // Folded from PR #416.
 #[test]
-fn fallback_cabin_name_defaults_to_grok() {
+fn fallback_cabin_name_defaults_to_you() {
     let blank = super::fallback_cabin_name("");
     assert!(!blank.is_empty());
-    assert_eq!(blank, "Grok");
+    assert_eq!(blank, "You");
 
     let from_md = super::fallback_cabin_name("Name: Tester\n");
     assert!(!from_md.is_empty());

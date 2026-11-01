@@ -60,6 +60,11 @@ pub(super) struct WowState {
 }
 
 impl WowState {
+    /// A folder scan is on its thread.
+    pub(super) fn scanning(&self) -> bool {
+        self.scan_rx.is_some()
+    }
+
     pub(super) fn running(&self) -> Option<WowFlavor> {
         self.running.as_ref().map(|(f, _)| *f)
     }
@@ -152,6 +157,23 @@ fn recent_lines(saved: &WowSaved, max: usize) -> Vec<String> {
         })
         .take(max)
         .collect()
+}
+
+/// The tile's name: WoW by its own name for any flavor.
+pub(super) fn bnet_title(game: &BnetGame) -> String {
+    if game.is_wow() {
+        WOW_NAME.to_string()
+    } else {
+        game.name()
+    }
+}
+
+/// What picks a Battle.net game's painted cover; the Library tile uses the
+/// same, so the detail header matches it.
+pub(super) fn cover_seed(game: &BnetGame) -> u32 {
+    game.product
+        .bytes()
+        .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))
 }
 
 /// One entry per install folder for the Library: WoW Retail and Classic
@@ -284,88 +306,69 @@ impl Cabin {
         self.focus.wow.games.clone()
     }
 
-    /// The Library's Battle.net row: one card per install, with what's
-    /// installed and whether it runs. Nothing when none was found.
-    pub(super) fn ui_bnet_games(&mut self, ui: &mut egui::Ui) {
-        let games = self.bnet_games();
-        if self.focus.wow.scan_rx.is_some() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(250));
+    /// The picked Battle.net game's detail column in Library: its name,
+    /// where it lives, Refresh and Open folder, and for WoW each flavor's
+    /// addon and what it saved.
+    pub(super) fn bnet_detail(&mut self, ui: &mut egui::Ui, game: &BnetGame) {
+        ui.spacing_mut().item_spacing.y = 10.0;
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, w * 0.6), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        super::library_ui::paint_cover(&painter, rect, cover_seed(game));
+        painter.text(
+            egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0),
+            egui::Align2::LEFT_BOTTOM,
+            bnet_title(game).to_uppercase(),
+            crate::theme::loadout_font(15.0),
+            crate::theme::fg(),
+        );
+        if game.is_wow() && self.focus.wow.running().is_some() {
+            ui.label(
+                egui::RichText::new("RUNNING")
+                    .size(crate::theme::TYPE_CAPTION)
+                    .strong()
+                    .color(crate::theme::amber()),
+            );
         }
-        let rows = library_rows(&games);
-        if rows.is_empty() {
-            return;
-        }
-        let running = self.focus.wow.running();
-        ui.label(super::loadout_home::caption("Battle.net"));
-        ui.add_space(6.0);
-        for game in rows {
-            super::loadout_home::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let name = if game.is_wow() {
-                        WOW_NAME.to_string()
-                    } else {
-                        game.name()
-                    };
-                    ui.label(
-                        egui::RichText::new(name.to_uppercase())
-                            .font(crate::theme::loadout_font(15.0))
-                            .color(crate::theme::fg()),
-                    );
-                    if game.is_wow() && running.is_some() {
-                        ui.label(
-                            egui::RichText::new("RUNNING")
-                                .size(crate::theme::TYPE_CAPTION)
-                                .strong()
-                                .color(crate::theme::amber()),
-                        );
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Open folder") {
-                            if let Err(err) =
-                                crate::desktop::open_path(&game.install.to_string_lossy())
-                            {
-                                self.status = err;
-                            }
-                        }
-                        if game.is_wow() && crate::cards::ghost_pill(ui, "Refresh") {
-                            self.focus.wow.scanned_ms = 0;
-                            self.refresh_bnet(now_ms());
-                        }
-                    });
-                });
-                let flavors = flavor_line(game);
-                let mut line = if flavors.is_empty() {
-                    String::new()
-                } else {
-                    format!("{flavors} · ")
-                };
-                line.push_str(if game.prefix.is_some() {
-                    "Battle.net in a Wine prefix"
-                } else {
-                    "Battle.net"
-                });
+        let flavors = flavor_line(game);
+        let mut line = if flavors.is_empty() {
+            String::new()
+        } else {
+            format!("{flavors} · ")
+        };
+        line.push_str(if game.prefix.is_some() {
+            "Battle.net in a Wine prefix"
+        } else {
+            "Battle.net"
+        });
+        ui.label(
+            egui::RichText::new(line)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::muted()),
+        );
+        ui.horizontal(|ui| {
+            if crate::cards::ghost_pill(ui, "Open folder") {
+                if let Err(err) = crate::desktop::open_path(&game.install.to_string_lossy()) {
+                    self.status = err;
+                }
+            }
+            if game.is_wow() && crate::cards::ghost_pill(ui, "Refresh") {
+                self.focus.wow.scanned_ms = 0;
+                self.refresh_bnet(now_ms());
+            }
+        });
+        if game.is_wow() {
+            self.ui_wow_flavors(ui, &game.install);
+            if !self.cfg.game_watch {
                 ui.label(
-                    egui::RichText::new(line)
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::muted()),
+                    egui::RichText::new(
+                        "Turn on the game watcher in Settings → Behavior to follow boss pulls from WoW's own combat log (type /combatlog in game).",
+                    )
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::muted()),
                 );
-                if game.is_wow() {
-                    self.ui_wow_flavors(ui, &game.install);
-                }
-                if game.is_wow() && !self.cfg.game_watch {
-                    ui.label(
-                        egui::RichText::new(
-                            "Turn on the game watcher in Settings → Behavior to follow boss pulls from WoW's own combat log (type /combatlog in game).",
-                        )
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::muted()),
-                    );
-                }
-            });
-            ui.add_space(8.0);
+            }
         }
-        ui.add_space(8.0);
     }
 
     /// Per flavor: the addon with its Install, Update or Remove button, and
@@ -413,8 +416,39 @@ impl Cabin {
                         .color(crate::theme::muted()),
                 );
             };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
             for c in info.saved.characters.iter().take(3) {
-                muted(ui, wow_saved::character_line(c));
+                let details = wow_saved::detail_lines(c, now);
+                if details.is_empty() && c.gear.is_empty() {
+                    muted(ui, wow_saved::character_line(c));
+                    continue;
+                }
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(wow_saved::character_line(c))
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::fg()),
+                )
+                .id_salt(("wow-char", &info.dir, &c.name, &c.realm))
+                .show(ui, |ui| {
+                    for line in details {
+                        muted(ui, line);
+                    }
+                    if !c.gear.is_empty() {
+                        egui::CollapsingHeader::new(
+                            egui::RichText::new("Gear").size(crate::theme::TYPE_CAPTION),
+                        )
+                        .id_salt(("wow-gear", &info.dir, &c.name, &c.realm))
+                        .show(ui, |ui| {
+                            for item in &c.gear {
+                                let level =
+                                    item.level.map(|l| format!(" · {l}")).unwrap_or_default();
+                                muted(ui, format!("{}: {}{level}", item.slot, item.name));
+                            }
+                        });
+                    }
+                });
             }
             for line in recent_lines(&info.saved, 3) {
                 muted(ui, line);
@@ -435,7 +469,7 @@ impl Cabin {
         let result = match action {
             AddonAction::Install => wow_addon::install(&info.install, &info.dir).map(|()| {
                 format!(
-                    "Installed the Loadout addon for WoW {}. Type /reload in game or restart WoW to load it.",
+                    "Installed the Loadout addon for WoW {}. Quit and restart WoW to load it: the game only finds new addons when it starts. Then it says hello in chat and sits in the minimap's addon menu.",
                     info.flavor.label()
                 )
             }),

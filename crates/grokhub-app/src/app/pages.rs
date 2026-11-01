@@ -39,6 +39,25 @@ pub(super) fn memory_editor_rows(height: f32, row_h: f32) -> usize {
     (((height - 16.0) / row_h).floor() as usize).clamp(8, 200)
 }
 
+/// A todo's state in words for the Queue tile. The agent stores raw keys
+/// (`in_progress`); the tile showed them as-is, with the row id after them.
+pub(super) fn todo_status_label(status: &str) -> String {
+    match status {
+        "pending" => "To do".into(),
+        "in_progress" => "In progress".into(),
+        "completed" => "Done".into(),
+        "cancelled" => "Cancelled".into(),
+        other => {
+            let words = other.replace('_', " ");
+            let mut c = words.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => "To do".into(),
+            }
+        }
+    }
+}
+
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
 pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
@@ -347,7 +366,7 @@ impl Cabin {
                         .unwrap_or_default();
                     let todos = grokhub_agent::todos_for(&todo_session);
                     if !self.grok_tasks.is_empty() {
-                        crate::cards::section_label(ui, "Grok tasks");
+                        crate::cards::section_label(ui, "Agent tasks");
                         ui.add_space(8.0);
                         for (id, title, done) in &self.grok_tasks {
                             let st = queue_task_label(title, *done);
@@ -372,7 +391,7 @@ impl Cabin {
                                 ui,
                                 crate::icons::TileIcon::List,
                                 &todo.content,
-                                &format!("{} · {}", todo.status, todo.id),
+                                &todo_status_label(&todo.status),
                                 None,
                                 done,
                             );
@@ -663,18 +682,18 @@ impl Cabin {
                             .id_salt("memory_editor")
                             .max_height(editor_h)
                             .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.mem_body)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.mem_body)
                                         .desired_rows(rows)
-                                .desired_width(f32::INFINITY)
+                                        .desired_width(f32::INFINITY)
                                         .frame(egui::Frame::NONE.inner_margin(
                                             egui::Margin::symmetric(4, 2),
                                         ))
-                                .font(egui::TextStyle::Monospace),
-                        );
+                                        .font(egui::TextStyle::Monospace),
+                                );
+                            });
                     });
-            });
                 });
             });
     }
@@ -844,7 +863,7 @@ impl Cabin {
 page_body(ui, "history", |ui| {
             ui.add_space(8.0);
             // Projects + History list (moved off the Chat rail drawer).
-            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            self.ui_projects_section(ui);
             ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {

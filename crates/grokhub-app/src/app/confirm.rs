@@ -342,7 +342,7 @@ impl Cabin {
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
                 format!("Save the key for {label}?"),
-                "Grok never sees it, and the connector's entry only names it. Disconnect deletes it.".to_string(),
+                "The model never sees it, and the connector's entry only names it. Disconnect deletes it.".to_string(),
             ),
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;

@@ -243,6 +243,54 @@ impl Cabin {
         !self.agent_ready() && local_chat_available()
     }
 
+    /// Is this the bearer xAI last turned away?
+    fn bearer_rejected(&self, bearer: &str) -> bool {
+        self.rejected_bearer.as_deref() == Some(bearer)
+    }
+
+    /// Remember that xAI turned away the bearer this chat runs on, when the
+    /// engine error says so. True when it did and Local AI can take the turn.
+    pub(super) fn note_cloud_rejection(&mut self, err: &str) -> bool {
+        if !is_cloud_rejection(err) {
+            return false;
+        }
+        if let Ok((bearer, _)) = self.native_cred() {
+            self.rejected_bearer = Some(bearer);
+        }
+        local_chat_available()
+    }
+
+    /// The Grok sign-in or key can carry a turn right now, as far as the cabin
+    /// can tell without calling xAI: a key, a live token, or a token that can
+    /// still be renewed, and nothing xAI has turned away.
+    pub(super) fn cloud_cred_usable(&self) -> bool {
+        let now = grokhub_core::now_ms();
+        let rejected = |b: &str| self.bearer_rejected(b);
+        let key = self.console_key().trim();
+        if !key.is_empty() && !rejected(key) {
+            return true;
+        }
+        if self.imagine_native.tokens.as_ref().is_some_and(|t| {
+            grokhub_core::imagine_access_usable(t, now) && !rejected(&t.access_token)
+        }) {
+            return true;
+        }
+        let Some(t) = self.secrets.oauth.as_ref() else {
+            return false;
+        };
+        if t.access_token.trim().is_empty() || rejected(&t.access_token) {
+            return false;
+        }
+        if grokhub_core::oauth_access_live(t, now) {
+            return true;
+        }
+        let renewable = t
+            .refresh_token
+            .as_deref()
+            .is_some_and(|r| !r.trim().is_empty());
+        renewable && !crate::oauth::cabin_refresh_failed()
+    }
+
     /// Why a turn did not start, naming the engine's own missing piece.
     pub(super) fn no_agent_note(&self) -> &'static str {
         grokhub_core::XAI_NEED_SIGNIN
@@ -350,10 +398,17 @@ impl Cabin {
 
     fn publish_native_cfg_for(&mut self, session_id: &str) -> Result<(), String> {
         let (bearer, auth_kind) = match self.native_cred() {
+            Ok(cred) if !self.bearer_rejected(&cred.0) || !local_chat_available() => cred,
+            // No usable sign-in or key (none, expired, its renewal failed, or
+            // xAI turned it away): with Local AI ready the router answers on
+            // the device, so the engine starts with no bearer at all.
+            _ if local_chat_available() => {
+                if self.agent_ready() {
+                    self.status = LOCAL_FALLBACK_NOTE.into();
+                }
+                (String::new(), AuthKind::ApiKey)
+            }
             Ok(cred) => cred,
-            // No sign-in or key: with Local AI ready the router answers on the
-            // device, so the engine starts with no bearer at all.
-            Err(_) if self.local_only_chat() => (String::new(), AuthKind::ApiKey),
             Err(err) => return Err(err),
         };
         crate::desktop_mcp::sync_native_cua(&self.cfg);
@@ -752,6 +807,16 @@ fn serve_native(
 }
 
 /// Local AI is on, installed and not paused, so a chat can answer on the device.
+/// Shown when a sign-in or key is on file but can't be used and Local AI
+/// takes the chat instead of the turn failing.
+pub(super) const LOCAL_FALLBACK_NOTE: &str =
+    "Your Grok sign-in needs renewing, so Local AI is answering. Sign in again in Settings → Account to use Grok.";
+
+/// xAI turned the bearer away (`client::ClientError` 401/403 wording).
+fn is_cloud_rejection(err: &str) -> bool {
+    err.contains("sign-in was rejected (HTTP") || err.contains("API key rejected (HTTP")
+}
+
 fn local_chat_available() -> bool {
     #[cfg(test)]
     if let Some(on) = LOCAL_READY_TEST.with(std::cell::Cell::get) {
