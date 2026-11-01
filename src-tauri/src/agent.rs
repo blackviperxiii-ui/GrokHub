@@ -254,6 +254,8 @@ pub struct Route {
 
 struct Job {
     text: String,
+    /// Files from the composer (`crate::attach`), in order.
+    attachments: Vec<crate::attach::Staged>,
     route: Route,
     /// When the person sent it: a Halt after this stops the turn.
     asked_ms: u64,
@@ -330,10 +332,11 @@ impl Session {
     pub fn prompt(
         &self,
         text: &str,
+        attachments: Vec<crate::attach::Staged>,
         route: Route,
         emit: Box<dyn FnMut(UiEvent) + Send>,
     ) -> Result<String, String> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && attachments.is_empty() {
             return Err("Type a message first.".into());
         }
         let (done, wait) = channel();
@@ -343,6 +346,7 @@ impl Session {
             .jobs
             .send(Job {
                 text: text.to_string(),
+                attachments,
                 route,
                 asked_ms: grokhub_core::now_ms(),
                 emit,
@@ -473,11 +477,22 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     while let Ok(job) = jobs.recv() {
         let Job {
             text,
+            attachments,
             route,
             asked_ms,
             mut emit,
             done,
         } = job;
+        // The first picture goes as image input; a file the model can't
+        // read stops the send with the cabin's note.
+        let mods = crate::attach::modalities(&config_dir, &route.model);
+        let message = match crate::attach::compose(&text, &attachments, &mods) {
+            Ok(message) => message,
+            Err(err) => {
+                let _ = done.send(Err(err));
+                continue;
+            }
+        };
         let system = system_prompt_for(
             &route.workspace,
             route.desktop,
@@ -535,7 +550,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         let mut stop = String::new();
         let mut error = None;
         let mut reply = String::new();
-        let ran = engine.prompt(&text, None, &mut |event| {
+        let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
             let Some(mut ui) = ui_event(event) else {
                 return;
             };
@@ -576,7 +591,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
 mod tests {
     use super::*;
     use grokhub_agent::{
-        ClientError, FunctionCall, InputItem, ResponsesRequest, StreamEvent, TurnOutput,
+        ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest, StreamEvent,
+        TurnOutput,
     };
     use std::sync::Mutex;
     use std::time::Duration;
@@ -740,6 +756,7 @@ mod tests {
         let result = std::thread::spawn(move || {
             runner.prompt(
                 "do the thing",
+                Vec::new(),
                 route,
                 Box::new(move |event| sink.lock().expect("events").push(event)),
             )
@@ -1387,5 +1404,147 @@ mod tests {
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
         assert!(desk_ran("type after halt"));
         assert_eq!(client.tool_output().as_deref(), Some("typed"));
+    }
+
+    /// Answers every turn with one line and keeps each request.
+    struct Answers {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Answers {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            sink(StreamEvent::TextDelta("Seen.".into()));
+            Ok(TurnOutput {
+                text: "Seen.".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    /// Sends `text` with `files` through a fresh chat and returns the user
+    /// message the model got.
+    fn send_with(
+        name: &str,
+        text: &str,
+        files: Vec<crate::attach::Staged>,
+    ) -> (Result<String, String>, Vec<ContentPart>) {
+        let (workspace, config) = (temp_dir(&format!("{name}-ws")), temp_dir(name));
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let session = Session::spawn_with(name, config, fake_desktop);
+        let route = Route {
+            client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            model: "grok-4.7".into(),
+            workspace,
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+        };
+        let result = session.prompt(text, files, route, Box::new(|_| {}));
+        let requests = client.requests.lock().expect("requests");
+        let user = requests
+            .first()
+            .and_then(|r| {
+                r.input.iter().rev().find_map(|item| match item {
+                    InputItem::Message { role, content } if role == "user" => Some(content.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        (result, user)
+    }
+
+    fn png_bytes() -> Vec<u8> {
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(b"IHDR");
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        out
+    }
+
+    fn texts(parts: &[ContentPart]) -> String {
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::InputText(t) => Some(t.as_str()),
+                ContentPart::InputImage(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_text_file_reaches_the_model_as_its_send_line() {
+        let config = temp_dir("attach-text-stage");
+        let trays = crate::attach::Trays::default();
+        let notes = trays
+            .stage(
+                &config,
+                "attach-text",
+                "notes.md",
+                b"# plan",
+                &["text", "image"],
+            )
+            .expect("staged");
+        let line = format!(
+            "File notes.md is on this computer at {}. Read it yourself. Do not ask for the contents to be pasted.",
+            notes.path
+        );
+        let (result, user) = send_with("attach-text", "summarize this", vec![notes]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        assert!(
+            texts(&user).contains(&format!("summarize this\n{line}")),
+            "{user:?}"
+        );
+        assert!(!user.iter().any(|p| matches!(p, ContentPart::InputImage(_))));
+    }
+
+    #[test]
+    fn a_picture_reaches_the_model_as_image_input() {
+        use base64::Engine as _;
+        let config = temp_dir("attach-image-stage");
+        let trays = crate::attach::Trays::default();
+        let shot = trays
+            .stage(
+                &config,
+                "attach-image",
+                "shot.png",
+                &png_bytes(),
+                &["text", "image"],
+            )
+            .expect("staged");
+        let (result, user) = send_with("attach-image", "what is this", vec![shot]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        let url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png_bytes())
+        );
+        assert!(user.contains(&ContentPart::InputImage(url)), "{user:?}");
+        assert!(texts(&user).contains("what is this\nfrom reference shot.png"));
+    }
+
+    #[test]
+    fn files_alone_send_and_an_empty_message_does_not() {
+        let config = temp_dir("attach-alone-stage");
+        let trays = crate::attach::Trays::default();
+        let notes = trays
+            .stage(&config, "attach-alone", "a.txt", b"x", &["text"])
+            .expect("staged");
+        let (result, user) = send_with("attach-alone", "  ", vec![notes]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        assert!(texts(&user).contains("File a.txt is on this computer"));
+        let (empty, _) = send_with("attach-none", "  ", Vec::new());
+        assert_eq!(empty, Err("Type a message first.".to_string()));
     }
 }

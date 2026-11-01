@@ -1183,3 +1183,301 @@ fn workboard_flo_card_progress_labels_and_presence_chips() {
         vec!['C', 'N', 'A']
     );
 }
+
+fn work_card(id: &str, status: grokhub_core::BoardStatus) -> grokhub_core::BoardCard {
+    let mut c = grokhub_core::BoardCard::new(id, "", "");
+    c.id = id.into();
+    c.status = status;
+    c
+}
+
+fn steps(marks: &[grokhub_core::StepStatus]) -> Vec<grokhub_core::WorkStep> {
+    marks
+        .iter()
+        .enumerate()
+        .map(|(i, s)| grokhub_core::WorkStep {
+            text: format!("Step {}", i + 1),
+            status: *s,
+        })
+        .collect()
+}
+
+#[test]
+fn card_meta_line_shows_left_off_badge_and_kind() {
+    use super::board_ui::{card_badges, card_left_off, card_meta_line};
+    use crate::ui_kit::BadgeTone;
+    use grokhub_core::{BoardStatus, Checkpoint, StepStatus, WorkKind, WorkOrigin};
+    let mut c = work_card("meta", BoardStatus::InProgress);
+    c.updated_ms = 0;
+    assert_eq!(card_meta_line(&c, 0), "", "a bare card says nothing");
+    assert_eq!(card_badges(&c), vec![("You", BadgeTone::Neutral)]);
+
+    // A step in flight is where it left off.
+    c.steps = steps(&[StepStatus::Done, StepStatus::Doing, StepStatus::Planned]);
+    assert_eq!(card_left_off(&c).as_deref(), Some("Step 2"));
+    assert!(card_meta_line(&c, 0).starts_with("Left off: Step 2"));
+
+    // The checkpoint's next step wins, and is clipped on the compact card.
+    c.checkpoint = Some(Checkpoint {
+        next: "Wire the tray menu to the new store and then re-run the whole app test suite".into(),
+        ..Default::default()
+    });
+    let meta = card_meta_line(&c, 0);
+    assert!(meta.starts_with("Left off: Wire the tray menu"), "{meta}");
+    assert!(meta.len() <= "Left off: ".len() + 60, "{meta}");
+
+    c.origin = Some(WorkOrigin::Agent);
+    c.kind = WorkKind::Background;
+    assert_eq!(
+        card_badges(&c),
+        vec![
+            ("Agent", BadgeTone::Accent),
+            ("Background", BadgeTone::Neutral)
+        ]
+    );
+
+    // Finished work has nowhere left to pick up.
+    c.status = BoardStatus::Done;
+    assert_eq!(card_left_off(&c), None);
+    assert!(!card_meta_line(&c, 0).contains("Left off"));
+}
+
+#[test]
+fn ring_fraction_matches_the_steps() {
+    use super::board_ui::card_progress;
+    use grokhub_core::{BoardStatus, StepStatus};
+    let mut c = work_card("ring", BoardStatus::InProgress);
+    assert_eq!(card_progress(&c), (2, 4), "no steps: the column's ring");
+    c.steps = steps(&[
+        StepStatus::Done,
+        StepStatus::Skipped,
+        StepStatus::Doing,
+        StepStatus::Failed,
+        StepStatus::Planned,
+    ]);
+    assert_eq!(card_progress(&c), (2, 5), "done and skipped fill a segment");
+    c.status = BoardStatus::Done;
+    assert_eq!(card_progress(&c), (5, 5), "a Done card is full");
+}
+
+#[test]
+fn resume_shows_only_on_interrupted_or_paused_cards() {
+    use super::board_ui::{board_counts, card_can_resume, BoardCounts};
+    use grokhub_core::{BoardStatus, Checkpoint};
+    let mut paused_run = work_card("paused", BoardStatus::Blocked);
+    paused_run.run = true;
+    let mut interrupted = work_card("cut", BoardStatus::Blocked);
+    interrupted.checkpoint = Some(Checkpoint {
+        next: "Re-run the build".into(),
+        ..Default::default()
+    });
+    let blocked_on_you = work_card("ask", BoardStatus::Blocked);
+    assert!(card_can_resume(&paused_run));
+    assert!(card_can_resume(&interrupted));
+    assert!(
+        !card_can_resume(&blocked_on_you),
+        "plain Blocked waits on you"
+    );
+    for status in [
+        BoardStatus::Todo,
+        BoardStatus::InProgress,
+        BoardStatus::Done,
+        BoardStatus::FollowUp,
+        BoardStatus::Dismissed,
+    ] {
+        let mut c = work_card("other", status);
+        c.run = true;
+        assert!(!card_can_resume(&c), "{status:?} shows no Resume");
+    }
+    let mut doing = work_card("doing", BoardStatus::InProgress);
+    doing.run = true;
+    let follow = work_card("follow", BoardStatus::FollowUp);
+    assert_eq!(
+        board_counts(&[paused_run, interrupted, blocked_on_you, doing, follow]),
+        BoardCounts {
+            doing: 1,
+            interrupted: 2,
+            needs_you: 2,
+        }
+    );
+}
+
+#[test]
+fn open_paused_card_paints_steps_checkpoint_resume_and_log() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-work-open");
+    let mut c = work_card("card-p", grokhub_core::BoardStatus::Blocked);
+    c.title = "Port the tray".into();
+    c.run = true;
+    c.origin = Some(grokhub_core::WorkOrigin::Agent);
+    c.steps = steps(&[
+        grokhub_core::StepStatus::Done,
+        grokhub_core::StepStatus::Doing,
+    ]);
+    c.checkpoint = Some(grokhub_core::Checkpoint {
+        goal: "Tray uses the new store".into(),
+        next: "Step 2".into(),
+        blocker: "Needs a rebuild".into(),
+        refs: vec!["tray.rs".into()],
+        ..Default::default()
+    });
+    cabin.board = vec![c];
+    let dir = crate::work_store::work_dir();
+    for i in 0..30 {
+        grokhub_core::work_item::append_work_log(
+            &dir,
+            "card-p",
+            1_000 + i,
+            "step",
+            &format!("line {i}"),
+        )
+        .unwrap();
+    }
+    let mut page = BoardPage::new();
+    page.step(&mut cabin, Vec::new());
+    page.step(&mut cabin, Vec::new());
+    let card = page.rect(("board-card", "card-p")).center();
+    page.click(&mut cabin, card);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-p"));
+    assert!(
+        cabin.board_view.log.is_none(),
+        "the log is not read until asked"
+    );
+
+    // The drawer reads the tail once, on open: the newest 20 lines.
+    assert!(!cabin.apply_board_act(Some(super::pages::BoardAct::ToggleLog("card-p".into()))));
+    let (id, lines) = cabin.board_view.log.clone().expect("drawer open");
+    assert_eq!(id, "card-p");
+    assert_eq!(lines.len(), super::board_ui::LOG_DRAWER_LINES);
+    assert_eq!(lines.first().unwrap().text, "line 10");
+    assert_eq!(lines.last().unwrap().text, "line 29");
+    page.step(&mut cabin, Vec::new());
+    page.step(&mut cabin, Vec::new());
+    assert!(!cabin.apply_board_act(Some(super::pages::BoardAct::ToggleLog("card-p".into()))));
+    assert!(cabin.board_view.log.is_none(), "a second press closes it");
+
+    // Resume (KB-03 stub) with no agent: the bell says it failed, with a way back.
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Resume("card-p".into()))));
+    let n = cabin.notices.items.first().expect("a bell notice");
+    assert!(
+        n.text.starts_with("Resume failed: Port the tray"),
+        "{}",
+        n.text
+    );
+    assert_eq!(
+        n.action,
+        Some(super::notices::NoticeAction::OpenCard("card-p".into()))
+    );
+    assert!(cabin.board[0].touched, "Resume is your hand on the card");
+
+    // Hand back: the card is yours, in To do.
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::HandBack("card-p".into()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(cabin.board[0].origin, Some(grokhub_core::WorkOrigin::User));
+    page.step(&mut cabin, Vec::new());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn log_tail_reads_only_the_end_of_a_big_log() {
+    use super::board_ui::read_log_tail;
+    let root = crate::config::test_config_root("board-log-tail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    for i in 0..40 {
+        grokhub_core::work_item::append_work_log(&root, "big", i, "note", &format!("event {i}"))
+            .unwrap();
+    }
+    // 200 bytes holds a cut line and a few whole ones; the cut one is dropped.
+    let tail = read_log_tail(&root, "big", 200, 20);
+    assert!(!tail.is_empty() && tail.len() < 6, "{}", tail.len());
+    assert_eq!(tail.last().unwrap().text, "event 39");
+    assert!(read_log_tail(&root, "../escape", 200, 20).is_empty());
+    assert!(read_log_tail(&root, "none-yet", 200, 20).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_user_move_or_chat_sets_touched() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-touched");
+    let mut c = work_card("t1", grokhub_core::BoardStatus::Done);
+    c.origin = Some(grokhub_core::WorkOrigin::Agent);
+    cabin.board = vec![c, work_card("t2", grokhub_core::BoardStatus::Todo)];
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Move {
+        id: "t1".into(),
+        status: grokhub_core::BoardStatus::InProgress,
+    })));
+    assert!(cabin.board[0].touched);
+    cabin.apply_board_act(Some(super::pages::BoardAct::Say {
+        id: "t2".into(),
+        text: "hello".into(),
+    }));
+    assert!(cabin.board[1].touched, "a line to the agent is yours too");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn bell_sweep_undo_restores_the_cards_and_paused_runs_ring_once() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-bell");
+    let mut done = work_card("d1", grokhub_core::BoardStatus::Done);
+    done.origin = Some(grokhub_core::WorkOrigin::Agent);
+    done.created_ms = 1;
+    cabin.board = vec![done];
+    let day = 24 * 60 * 60 * 1000;
+    let report = grokhub_core::sweep_work_cards(&mut cabin.board, 2 * day, &[]);
+    assert_eq!(report.archived_done, vec!["d1".to_string()]);
+    cabin.note_board_sweep(&report);
+    assert_eq!(cabin.notices.items[0].text, "Archived 1 finished card");
+    assert_eq!(
+        cabin.notices.items[0].action.as_ref().unwrap().label(),
+        "Undo"
+    );
+    cabin.run_notice_action(0);
+    assert_eq!(
+        cabin.board[0].status,
+        grokhub_core::BoardStatus::Todo,
+        "Undo puts the card back"
+    );
+    assert_eq!(cabin.notices.items[0].action, None, "Undo runs once");
+
+    // A run already paused when the session starts stays quiet; a new one rings once.
+    let mut old = work_card("old", grokhub_core::BoardStatus::Blocked);
+    old.run = true;
+    cabin.board.push(old);
+    let before = cabin.notices.items.len();
+    cabin.tick_board_notices();
+    assert_eq!(cabin.notices.items.len(), before);
+    let mut fresh = work_card("new", grokhub_core::BoardStatus::Blocked);
+    fresh.run = true;
+    fresh.title = "Sort downloads".into();
+    cabin.board.push(fresh);
+    cabin.tick_board_notices();
+    cabin.tick_board_notices();
+    assert_eq!(cabin.notices.items.len(), before + 1);
+    assert!(cabin.notices.items[0]
+        .text
+        .starts_with("Interrupted: Sort downloads"));
+    cabin.run_notice_action(0);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("new"));
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn activity_row_finds_the_card_for_its_chat() {
+    use super::board_ui::board_card_for_chat;
+    let mut a = work_card("a", grokhub_core::BoardStatus::InProgress);
+    a.thread_id = Some("chat-1".into());
+    let mut gone = work_card("gone", grokhub_core::BoardStatus::Dismissed);
+    gone.thread_id = Some("chat-2".into());
+    let cards = vec![a, gone];
+    assert_eq!(board_card_for_chat(&cards, "chat-1").as_deref(), Some("a"));
+    assert_eq!(
+        board_card_for_chat(&cards, "chat-2"),
+        None,
+        "archived cards stay off"
+    );
+    assert_eq!(board_card_for_chat(&cards, ""), None);
+}

@@ -336,7 +336,7 @@ mod tests {
             voice: String::new(),
         };
         assert_eq!(
-            session.prompt(text, route, Box::new(|_| {})),
+            session.prompt(text, Vec::new(), route, Box::new(|_| {})),
             Ok("end_turn".to_string())
         );
     }

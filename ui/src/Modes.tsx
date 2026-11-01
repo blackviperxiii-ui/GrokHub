@@ -11,17 +11,17 @@ export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] 
   {
     mode: "chat",
     label: "Chat",
-    tip: "Normal chat. Grok can edit files and use tools in your work folder. Everyday work.",
+    tip: `Normal chat. ${PRODUCT_NAME} can edit files and use tools in your work folder. Everyday work.`,
   },
   {
     mode: "plan",
     label: "Plan",
-    tip: "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
+    tip: `${PRODUCT_NAME} writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.`,
   },
   {
     mode: "btw",
     label: "btw",
-    tip: "A look-only side ask. Grok can read and answer, but changes nothing.",
+    tip: `A look-only side ask. ${PRODUCT_NAME} can read and answer, but changes nothing.`,
   },
 ];
 
@@ -31,7 +31,7 @@ export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
   { value: "always", label: "Always" },
 ];
 
-export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard Grok thinks for each step.`;
+export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard the model thinks for each step.`;
 export const REMOTE_APPROVALS_TIP = `Set in ${PRODUCT_NAME} on your computer.`;
 
 export const REMOTE_MODEL_TIP = `The model is set in ${PRODUCT_NAME} on your computer.`;
@@ -121,7 +121,7 @@ export type ElicitItem = {
 };
 
 const PLAN_ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
-  accept: "Approved. Grok can make the changes now.",
+  accept: `Approved. ${PRODUCT_NAME} can make the changes now.`,
   decline: "Kept in plan mode.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
@@ -136,7 +136,7 @@ const ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
   halted: "Not answered: halted.",
 };
 
-/** A plan to approve, Grok's question, or a connector's form or link. */
+/** A plan to approve, the agent's question, or a connector's form or link. */
 export function ElicitCard({
   item,
   onAnswer,
@@ -157,9 +157,9 @@ export function ElicitCard({
         .trim()
     : item.message;
   const title = plan
-    ? "Grok's plan"
+    ? "The plan"
     : item.server === "Question"
-      ? "Grok asks"
+      ? `${PRODUCT_NAME} asks`
       : `${item.server} needs something from you`;
 
   function send(event: FormEvent) {

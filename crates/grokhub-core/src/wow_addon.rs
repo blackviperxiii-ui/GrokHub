@@ -238,6 +238,18 @@ pub fn sync(install_root: &Path, flavor_dir: &Path) -> Result<bool, String> {
     }
 }
 
+/// Install or update the addon in every flavor of an install that lacks
+/// it or has an older copy, on the user's one click. Each flavor's result
+/// comes back; a flavor already current, or holding someone else's
+/// `Loadout` folder, is left alone and not listed.
+pub fn install_all(install_root: &Path) -> Vec<(WowFlavor, Result<(), String>)> {
+    states(install_root)
+        .into_iter()
+        .filter(|(_, s)| matches!(s, AddonState::NotInstalled | AddonState::Outdated { .. }))
+        .map(|(f, _)| (f, install(install_root, &f.dir(install_root))))
+        .collect()
+}
+
 /// The flavors of an install and each one's addon state.
 pub fn states(install: &Path) -> Vec<(WowFlavor, AddonState)> {
     crate::battlenet::wow_flavors(install)
@@ -269,7 +281,7 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
     #[test]
     fn the_built_in_addon_declares_its_saved_variable_and_version() {
         assert_eq!(toc_field(TOC, "## SavedVariables:"), Some("LoadoutDB"));
-        assert_eq!(bundled_version(), "1.1.0");
+        assert_eq!(bundled_version(), "1.2.0");
         assert!(toc_field(TOC, MARK).is_some());
         assert!(LUA.contains("LoadoutDB"));
         // Read-only: no protected or automation calls.
@@ -310,7 +322,8 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
         .unwrap();
         let toc = toc_for(&root);
         assert!(
-            toc.contains("## Interface: 120105, 120100, 120007, 120005, 120000, 110207, 50501, 40402, 11508\n"),
+            toc.contains("## Interface: 120107, 120105, 120100, 120007, 120005, 120001, 120000, 110207, 50504, 50501, 40402, 38002, 20506, 16001, 11509, 11508
+"),
             "{toc}"
         );
         assert!(toc.contains("## SavedVariables: LoadoutDB\n"));
@@ -400,6 +413,41 @@ us|1|def|1.15.8.63829|wow_classic_era\n";
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn one_click_installs_into_every_flavor_and_the_toc_loads_on_each() {
+        let root = tmp("all");
+        for f in ["_retail_", "_classic_", "_anniversary_", "_classic_era_"] {
+            std::fs::create_dir_all(root.join(f).join("WTF")).unwrap();
+        }
+        // Someone else's Loadout folder in Classic Era stays as it is.
+        let foreign = root.join("_classic_era_/Interface/AddOns/Loadout");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("Loadout.toc"), "## Interface: 11509\n").unwrap();
+        let done = install_all(&root);
+        assert_eq!(
+            done.iter()
+                .map(|(f, r)| (*f, r.is_ok()))
+                .collect::<Vec<_>>(),
+            vec![
+                (WowFlavor::Retail, true),
+                (WowFlavor::Classic, true),
+                (WowFlavor::Anniversary, true),
+            ]
+        );
+        assert_eq!(state(&root.join("_classic_era_")), AddonState::Foreign);
+        // A second click has nothing left to do.
+        assert!(install_all(&root).is_empty());
+        // The live clients each find their own number in the one toc.
+        let ifaces: Vec<u32> = toc_field(TOC, "## Interface:")
+            .unwrap()
+            .split(',')
+            .map(|n| n.trim().parse().unwrap())
+            .collect();
+        for live in [120105, 50504, 20506, 11509] {
+            assert!(ifaces.contains(&live), "{live} missing from {ifaces:?}");
+        }
     }
 
     #[test]

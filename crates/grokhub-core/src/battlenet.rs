@@ -480,21 +480,32 @@ pub fn detect() -> Vec<BnetGame> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WowFlavor {
     Retail,
+    /// Mists of Pandaria Classic, in `_classic_`.
     Classic,
+    /// Burning Crusade Classic Anniversary, in `_anniversary_`.
+    Anniversary,
     ClassicEra,
     Ptr,
+    /// The experimental PTR.
+    Xptr,
     ClassicPtr,
+    ClassicEraPtr,
     Beta,
+    ClassicBeta,
 }
 
 impl WowFlavor {
-    pub const ALL: [WowFlavor; 6] = [
+    pub const ALL: [WowFlavor; 10] = [
         WowFlavor::Retail,
         WowFlavor::Classic,
+        WowFlavor::Anniversary,
         WowFlavor::ClassicEra,
         WowFlavor::Ptr,
+        WowFlavor::Xptr,
         WowFlavor::ClassicPtr,
+        WowFlavor::ClassicEraPtr,
         WowFlavor::Beta,
+        WowFlavor::ClassicBeta,
     ];
 
     /// The folder under the install root.
@@ -502,10 +513,14 @@ impl WowFlavor {
         match self {
             WowFlavor::Retail => "_retail_",
             WowFlavor::Classic => "_classic_",
+            WowFlavor::Anniversary => "_anniversary_",
             WowFlavor::ClassicEra => "_classic_era_",
             WowFlavor::Ptr => "_ptr_",
+            WowFlavor::Xptr => "_xptr_",
             WowFlavor::ClassicPtr => "_classic_ptr_",
+            WowFlavor::ClassicEraPtr => "_classic_era_ptr_",
             WowFlavor::Beta => "_beta_",
+            WowFlavor::ClassicBeta => "_classic_beta_",
         }
     }
 
@@ -513,10 +528,14 @@ impl WowFlavor {
         match self {
             WowFlavor::Retail => "Retail",
             WowFlavor::Classic => "Classic",
+            WowFlavor::Anniversary => "Anniversary",
             WowFlavor::ClassicEra => "Classic Era",
             WowFlavor::Ptr => "PTR",
+            WowFlavor::Xptr => "Experimental PTR",
             WowFlavor::ClassicPtr => "Classic PTR",
+            WowFlavor::ClassicEraPtr => "Classic Era PTR",
             WowFlavor::Beta => "Beta",
+            WowFlavor::ClassicBeta => "Classic Beta",
         }
     }
 
@@ -524,11 +543,14 @@ impl WowFlavor {
     pub fn exes(self) -> &'static [&'static str] {
         match self {
             WowFlavor::Retail => &["wow.exe", "wow-64.exe"],
-            WowFlavor::Classic | WowFlavor::ClassicEra | WowFlavor::ClassicPtr => {
-                &["wowclassic.exe", "wowclassict.exe"]
-            }
-            WowFlavor::Ptr => &["wowt.exe"],
+            WowFlavor::Classic
+            | WowFlavor::Anniversary
+            | WowFlavor::ClassicEra
+            | WowFlavor::ClassicPtr
+            | WowFlavor::ClassicEraPtr => &["wowclassic.exe", "wowclassict.exe"],
+            WowFlavor::Ptr | WowFlavor::Xptr => &["wowt.exe"],
             WowFlavor::Beta => &["wowb.exe"],
+            WowFlavor::ClassicBeta => &["wowclassicb.exe"],
         }
     }
 
@@ -579,41 +601,57 @@ fn cmdline_runs(cmdline: &str, exe: &str) -> bool {
 /// The WoW flavor a process list shows running, from each process's name
 /// and command line. Wine and Proton cut a process name to 15 bytes and run
 /// the game as `<path>\Wow.exe`, so both are checked. Classic flavors share
-/// one exe name and report as Classic; [`running_flavor_dir`] picks the
-/// folder.
+/// one exe name; when the command line shows the flavor folder
+/// (`\_anniversary_\WowClassic.exe`) that flavor is the one, otherwise
+/// it reports as Classic and [`running_flavor_dir`] picks the folder.
 pub fn wow_running(procs: &[(String, String)]) -> Option<WowFlavor> {
     [
         WowFlavor::Retail,
         WowFlavor::Classic,
         WowFlavor::Ptr,
         WowFlavor::Beta,
+        WowFlavor::ClassicBeta,
     ]
     .into_iter()
-    .find(|f| {
-        f.exes().iter().any(|exe| {
-            procs
+    .find_map(|f| {
+        let (_, cmdline) = procs.iter().find(|(comm, cmdline)| {
+            f.exes()
                 .iter()
-                .any(|(comm, cmdline)| comm.eq_ignore_ascii_case(exe) || cmdline_runs(cmdline, exe))
-        })
+                .any(|exe| comm.eq_ignore_ascii_case(exe) || cmdline_runs(cmdline, exe))
+        })?;
+        let line = cmdline.to_ascii_lowercase().replace('\\', "/");
+        let by_folder = WowFlavor::ALL
+            .into_iter()
+            .find(|g| g.exes() == f.exes() && line.contains(&format!("/{}/", g.folder())));
+        Some(by_folder.unwrap_or(f))
     })
 }
 
 /// The installed flavor folder a running exe belongs to. A Classic exe
-/// matches Classic, then Classic Era, then Classic PTR, whichever exists.
+/// matches Classic, then Anniversary, Classic Era and the Classic PTRs,
+/// whichever exists.
 pub fn running_flavor_dir(install: &Path, running: WowFlavor) -> Option<(WowFlavor, PathBuf)> {
     let installed = wow_flavors(install);
     let order: &[WowFlavor] = match running {
-        WowFlavor::Classic | WowFlavor::ClassicEra | WowFlavor::ClassicPtr => &[
+        WowFlavor::Classic
+        | WowFlavor::Anniversary
+        | WowFlavor::ClassicEra
+        | WowFlavor::ClassicPtr
+        | WowFlavor::ClassicEraPtr => &[
             WowFlavor::Classic,
+            WowFlavor::Anniversary,
             WowFlavor::ClassicEra,
             WowFlavor::ClassicPtr,
+            WowFlavor::ClassicEraPtr,
         ],
         WowFlavor::Retail => &[WowFlavor::Retail],
-        WowFlavor::Ptr => &[WowFlavor::Ptr],
+        WowFlavor::Ptr | WowFlavor::Xptr => &[WowFlavor::Ptr, WowFlavor::Xptr],
         WowFlavor::Beta => &[WowFlavor::Beta],
+        WowFlavor::ClassicBeta => &[WowFlavor::ClassicBeta],
     };
-    order
-        .iter()
+    // The exact flavor first, when the command line named its folder.
+    std::iter::once(&running)
+        .chain(order)
         .find(|f| installed.contains(f))
         .map(|f| (*f, f.dir(install)))
 }
@@ -923,6 +961,46 @@ mod tests {
 
     fn proc(comm: &str, cmdline: &str) -> (String, String) {
         (comm.into(), cmdline.into())
+    }
+
+    #[test]
+    fn a_classic_exe_is_placed_by_the_folder_it_runs_from() {
+        let proc = |comm: &str, cmd: &str| (comm.to_owned(), cmd.to_owned());
+        let anniversary = proc(
+            "WowClassic.exe",
+            r"C:\Program Files (x86)\World of Warcraft\_anniversary_\WowClassic.exe -launch",
+        );
+        assert_eq!(wow_running(&[anniversary]), Some(WowFlavor::Anniversary));
+        assert_eq!(
+            wow_running(&[proc("WowClassic.exe", "")]),
+            Some(WowFlavor::Classic)
+        );
+        assert_eq!(
+            wow_running(&[proc("WowT.exe", "/games/wow/_xptr_/WowT.exe")]),
+            Some(WowFlavor::Xptr)
+        );
+
+        let root = tmp("anniversary");
+        for f in ["_classic_", "_anniversary_", "_classic_era_"] {
+            std::fs::create_dir_all(root.join(f).join("Interface")).unwrap();
+        }
+        assert_eq!(
+            wow_flavors(&root),
+            vec![
+                WowFlavor::Classic,
+                WowFlavor::Anniversary,
+                WowFlavor::ClassicEra
+            ]
+        );
+        assert_eq!(
+            running_flavor_dir(&root, WowFlavor::Anniversary),
+            Some((WowFlavor::Anniversary, root.join("_anniversary_")))
+        );
+        // A bare Classic exe still lands on the first Classic folder there.
+        assert_eq!(
+            running_flavor_dir(&root, WowFlavor::Classic).map(|(f, _)| f),
+            Some(WowFlavor::Classic)
+        );
     }
 
     #[test]
