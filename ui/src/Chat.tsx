@@ -33,6 +33,8 @@ import {
 } from "./api";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import type { RunNotice } from "./Automations";
+import { Markdown } from "./Markdown";
+import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
@@ -222,9 +224,10 @@ const AssistantBubble = memo(function AssistantBubble({
   text: string;
   streaming: boolean;
 }) {
+  // Capped like the cabin's bubble, so a runaway stream can't stall the page.
   return (
     <div className={`bubble assistant${streaming ? " streaming" : ""}`} data-role="assistant">
-      {text}
+      <Markdown text={displayText(text)} />
     </div>
   );
 });

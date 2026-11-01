@@ -291,6 +291,14 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** Opens a reply's http(s) link in the default browser (`open_url`, which
+ * refuses anything else). Shell only: in the web app links open in a new tab
+ * and never reach the computer. */
+export function openUrl(url: string): Promise<void> {
+  if (!inShell()) return Promise.reject(new Error("Links open in this browser's own tabs."));
+  return invoke<void>("open_url", { url });
+}
+
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
@@ -307,6 +315,10 @@ export interface AutomationRow {
   enabled: boolean;
   summary: string;
   health: string | null;
+  /** The words for the Edit box; null when words can't say the schedule. */
+  describe: string | null;
+  /** It has a check command, so only the cabin runs it. */
+  cabinOnly: boolean;
 }
 
 export interface RunResult {
@@ -338,6 +350,30 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+export function editAutomation(id: string, text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("edit_automation", { id, text, clock: wallClock() });
+}
+
+/** A scheduled run the shell fired, from `automations://ran`. */
+export interface ScheduledRun {
+  id: string;
+  name: string;
+  result: RunResult;
+}
+
+export const AUTOMATION_RAN_EVENT = "automations://ran";
+
+export function onAutomationRan(handler: (run: ScheduledRun) => void): Promise<UnlistenFn> {
+  return subscribe<ScheduledRun>(AUTOMATION_RAN_EVENT, handler);
+}
+
+/** Tells the shell's scheduler the local time, so jobs fire at local times.
+ * Only the desktop window sends it; a paired browser may be elsewhere. */
+export function shareSchedulerClock(): Promise<void> {
+  if (!inShell()) return Promise.resolve();
+  return invoke<void>("set_scheduler_clock", { clock: wallClock() });
 }
 
 export interface MemoryRow {
@@ -478,6 +514,8 @@ export interface ConnectorRow {
   account: string;
   needsSignIn: boolean;
   canDisconnect: boolean;
+  /** False once its switch turned it off. */
+  enabled: boolean;
 }
 
 export interface ConnectorsChanged {
@@ -505,6 +543,64 @@ export function signOutConnector(name: string): Promise<ConnectorsChanged> {
 /** Only after the person confirmed it on the page. */
 export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
+}
+
+/** One connector in the Add sheet's catalog. */
+export interface CatalogRow {
+  id: string;
+  name: string;
+  publisher: string;
+  category: string;
+  description: string;
+  auth: "none" | "oauth" | "key" | "google" | "own";
+  keyHint: string;
+  target: string;
+  installed: boolean;
+}
+
+export interface CatalogView {
+  rows: CatalogRow[];
+  /** What Refresh did, when it ran. */
+  note: string | null;
+}
+
+/** A key waiting on its approval card. */
+export interface KeyCard {
+  id: string;
+  name: string;
+  action: string;
+}
+
+/** `refresh` reads the official registry; only from the Refresh click. */
+export function connectorCatalog(refresh = false): Promise<CatalogView> {
+  return invoke<CatalogView>("connector_catalog", { refresh });
+}
+
+export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+}
+
+/** A pasted `mcpServers` config; names already set up are kept. */
+export function addConnectorConfig(text: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_connector_config", { text });
+}
+
+export function setConnectorEnabled(name: string, on: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Opens the server's sign-in page in the browser and waits for it. */
+export function signInConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("sign_in_connector", { name });
+}
+
+/** Posts the approval card; nothing is saved until `answerConnectorKey`. */
+export function saveConnectorKey(name: string, key: string): Promise<KeyCard> {
+  return invoke<KeyCard>("save_connector_key", { name, key });
+}
+
+export function answerConnectorKey(id: string, approve: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("answer_connector_key", { id, approve });
 }
 
 /** One Feed post: something that happened or was found. */
@@ -658,6 +754,64 @@ export function journalAct(id: string, act: JournalAct): Promise<JournalPage> {
 
 export function journalToMission(id: string, conversationId: string): Promise<JournalMission> {
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
+}
+
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
+export interface BoardCard {
+  id: string;
+  title: string;
+  detail: string;
+  /** Your notes for the agent; Work hands them over. */
+  notes: string;
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
+}
+
+export interface BoardColumn {
+  lane: BoardLane;
+  label: string;
+  cards: BoardCard[];
+}
+
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
+}
+
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" };
+
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
+}
+
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
@@ -862,6 +1016,39 @@ export function getWebAccess(): Promise<WebAccess> {
 
 export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
+}
+
+/** A browser paired with Web access right now (src-tauri/src/remote_devices.rs). */
+export interface PairedBrowser {
+  /** The browser and its system, like "Firefox on Android". */
+  name: string;
+  /** Unix ms. */
+  firstSeen: number;
+  /** Unix ms. */
+  lastCall: number;
+  /** Chats it sent a message in. */
+  chats: number;
+}
+
+/** The Devices page; desktop only, kept in memory only. */
+export interface Devices {
+  /** This computer's name. */
+  computer: string;
+  /** Whether web access is on. */
+  on: boolean;
+  /** The web app's LAN address without the code; empty while off. */
+  lan: string;
+  /** The most recently used first. */
+  browsers: PairedBrowser[];
+}
+
+export function getDevices(): Promise<Devices> {
+  return invoke<Devices>("get_devices");
+}
+
+/** Signs out every browser: a new pairing code ends every pairing. */
+export function forgetAllDevices(): Promise<Devices> {
+  return invoke<Devices>("forget_all_devices");
 }
 
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */

@@ -167,13 +167,40 @@ app shows in both.
   and the page stays mounted so a run in flight is not lost on a tab change.
 - Edits take a lock and reload the file first, and a cabin row with no id gets
   one written back, so Pause or Remove always finds the row it showed.
-- The cabin's pulse still fires jobs on schedule. The shell runs no second
-  scheduler, so a job never fires twice. Firing from the shell waits until
-  the shell replaces the cabin.
-- Tests: Rust tests for add, refusing text with no time, pause, resume,
+- Edit opens a box on the row with the job's words (`describe_automation`,
+  the parser's inverse) and saves new words in place: the id, pause state,
+  run count, health and any cabin check command stay. Words with no time are
+  refused and nothing is written. Weekly, monthly, one-off and several-times
+  jobs have no Edit, since the words cannot say their schedule.
+- Scheduled jobs fire from the shell (`src-tauri/src/scheduler.rs`, desktop
+  only) with the window open or in the tray, but only while the cabin is
+  closed. The cabin writes a beat to `{config}/scheduler-lease.json`
+  (`{owner, pid, beat_ms}`, `grokhub_core::scheduler_lease`) every 30 s from
+  its pulse. A beat under 90 s old keeps the shell from firing, so the cabin
+  keeps priority while it is open. Otherwise the shell beats as `shell` (a
+  second shell process defers to it) and checks for due jobs every 30 s.
+- A due job is claimed before it runs: its last run, run count and next run
+  are saved first, so a second tick, or a cabin that opens, finds it done.
+  After a laptop sleep each job runs once, for its latest missed slot, and
+  its next run is the next slot to come. The run is the same unattended,
+  read-only Ask run as Run now, whatever the approvals setting, and its end
+  goes to the window as `automations://ran` (the chat notice, the Activity
+  Dock and the row's reply).
+- A job with a check command is left to the cabin, which runs the command
+  first. Its row says "Runs in the cabin".
+- The scheduler needs the local time. The window reports its clock at start
+  and every 5 minutes (`set_scheduler_clock`); a paired browser does not,
+  since it may be in another time zone. Until the window reports, nothing
+  fires.
+- Tests: Rust tests for add, edit, refusing text with no time, pause, resume,
   remove, a broken file, rows the cabin wrote, and a Run now whose write is
-  refused. vitest covers the page. The smoke test adds a job through the UI,
-  checks `automations.json`, runs it and waits for the reply.
+  refused; for the scheduler, a claim saved before the run, no second fire on
+  the next tick, a fresh cabin lease holding every job, a stale one letting
+  the shell fire, missed slots firing once, a check-command job left alone
+  and a scheduled run whose write is refused. Core tests cover the lease and
+  the `describe_automation` round trip. vitest covers the page. The smoke
+  test adds a job through the UI, checks `automations.json`, runs it and
+  waits for the reply.
 
 **3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
 cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the
@@ -222,8 +249,19 @@ approve, the cabin's three permission modes.
   entry out of `mcp.json`, through the same change ledger the cabin uses, and
   deletes its sign-in and saved token. Computer-use servers can't be
   disconnected here.
-- Not yet: signing in to an HTTP server and adding new connectors. The shell
-  has no browser opener, so the page points to the cabin for both.
+- Add… opens a sheet with the catalog the cabin ships (search, Add) and
+  Paste config for an `mcpServers` block. Refresh reads newer names and
+  descriptions from the official MCP registry, only when clicked. New entries
+  are written enabled through the change ledger and start on Check or first
+  use. Names already set up are kept as they are.
+- A key connector shows a password field once added. Save key posts a
+  credentials card through the harness park; only Save on that card seals the
+  key and names it in `mcp.json`, and Deny or a timeout saves nothing.
+- Sign in opens an HTTP server's https sign-in page in the browser and
+  reconnects it with the new token. The switch on each row writes `enabled`
+  through the change ledger; a server that is off is listed and never started.
+- The web remote lists, checks, reconnects, signs out and disconnects. Adding,
+  signing in, keys and the switch stay on the computer.
 - Rust tests run a real stdio server (`ui/e2e/fake-mcp.mjs` under node) and a
   missing command. The smoke test writes an entry for that server, checks it
   connects with one tool, and checks the entry leaves `mcp.json` only after

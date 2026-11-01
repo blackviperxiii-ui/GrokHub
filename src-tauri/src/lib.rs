@@ -18,6 +18,8 @@ pub mod journal;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
+#[cfg(test)]
+mod md_fixtures;
 pub mod memory;
 pub mod models;
 pub mod oauth;
@@ -32,11 +34,15 @@ pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
+pub mod remote_devices;
 pub mod remote_tls;
+#[cfg(desktop)]
+pub mod scheduler;
 pub mod settings;
 pub mod shell_update;
 pub mod slash;
 pub mod voice;
+pub mod workboard;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -641,6 +647,29 @@ fn set_automation_enabled(
     Ok(automations::rows(&list, clock))
 }
 
+/// Edit in place from the row's Edit box. Words with no time are refused.
+#[tauri::command]
+fn edit_automation(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = automations::edit(&state.config_dir, &id, &text, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+/// The window's wall clock, so the scheduler fires jobs at local times. Only
+/// this window reports it: a paired browser may be in another time zone.
+#[tauri::command]
+fn set_scheduler_clock(clock: automations::Clock) {
+    #[cfg(desktop)]
+    scheduler::note_ui_clock(clock, grokhub_core::now_ms());
+    #[cfg(not(desktop))]
+    let _ = clock;
+}
+
 #[tauri::command]
 fn remove_automation(
     state: State<'_, ShellState>,
@@ -828,6 +857,70 @@ async fn disconnect_connector(
     off_main(move || connectors::disconnect(&workspace, &name)).await?
 }
 
+/// The Add sheet's catalog; `refresh` only from the Refresh click.
+#[tauri::command]
+async fn connector_catalog(
+    state: State<'_, ShellState>,
+    refresh: bool,
+) -> Result<connectors::CatalogView, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::catalog(&workspace, refresh)).await
+}
+
+#[tauri::command]
+async fn add_catalog_connector(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_catalog(&workspace, &id)).await?
+}
+
+#[tauri::command]
+async fn add_connector_config(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_config(&workspace, &text)).await?
+}
+
+#[tauri::command]
+async fn set_connector_enabled(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::set_enabled(&workspace, &name, on)).await?
+}
+
+/// Opens the server's https sign-in page and waits for the browser to come back.
+#[tauri::command]
+async fn sign_in_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::sign_in(&workspace, &name, &opener::open)).await?
+}
+
+/// Posts the key's approval card; the page answers it with `answer_connector_key`.
+#[tauri::command]
+async fn save_connector_key(
+    state: State<'_, ShellState>,
+    name: String,
+    key: String,
+) -> Result<connectors::KeyCard, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::start_key(&workspace, &name, key)).await?
+}
+
+#[tauri::command]
+async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::Changed, String> {
+    off_main(move || connectors::answer_key(&id, approve)).await?
+}
+
 /// What this platform runs; the UI hides the rest.
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
@@ -867,6 +960,41 @@ async fn journal_to_mission(
 ) -> Result<journal::Mission, String> {
     let dir = state.config_dir.clone();
     off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
+}
+
+#[tauri::command]
+async fn get_workboard(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn workboard_add(
+    state: State<'_, ShellState>,
+    title: String,
+    detail: String,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::add(&dir, &title, &detail)).await?
+}
+
+#[tauri::command]
+async fn workboard_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: workboard::Act,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::act(&dir, &id, act)).await?
+}
+
+#[tauri::command]
+async fn workboard_work(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::work(&dir, &id)).await?
 }
 
 #[tauri::command]
@@ -1294,6 +1422,19 @@ fn set_web_access(
     )
 }
 
+/// The Devices page (desktop only; not a web command): this computer, web
+/// access, and the browsers paired right now. Kept in memory only.
+#[tauri::command]
+fn get_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.devices()
+}
+
+/// Devices → Sign out all browsers: a new pairing code ends every pairing.
+#[tauri::command]
+fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices::DevicesView {
+    web.forget_all()
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -1494,6 +1635,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
+        "edit_automation" => out(edit_automation(
+            state,
+            arg(args, "id")?,
+            arg(args, "text")?,
+            arg(args, "clock")?,
+        )?),
         "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
@@ -1532,11 +1679,42 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_workboard" => out(block_on(get_workboard(state))?),
+        "workboard_add" => out(block_on(workboard_add(
+            state,
+            arg(args, "title")?,
+            arg(args, "detail")?,
+        ))?),
+        "workboard_act" => out(block_on(workboard_act(
+            state,
+            arg(args, "id")?,
+            arg(args, "act")?,
+        ))?),
+        "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
         _ => Err(remote::refused()),
     }
+}
+
+/// Scheduled automations fire from here while the cabin is closed, with the
+/// settings as they are at each run.
+#[cfg(desktop)]
+fn start_scheduler(app: &tauri::App) {
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    let handle = app.handle().clone();
+    scheduler::start(
+        config_dir.clone(),
+        move || {
+            let settings = settings::load(&config_dir);
+            let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
+            Ok((route.client, route.model, route.workspace))
+        },
+        move |fired| {
+            let _ = handle.emit(scheduler::RAN_EVENT, fired);
+        },
+    );
 }
 
 #[tauri::command]
@@ -1837,9 +2015,31 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The reply links `open_url` will hand to the default browser: http(s) only,
+/// by the same rule the cabin and the chat page use (`md_link_ok`).
+fn openable_url(url: &str) -> Result<&str, String> {
+    let url = url.trim();
+    if grokhub_core::md_link_ok(url) {
+        Ok(url)
+    } else {
+        Err("Only web links (https:// or http://) open from a reply.".into())
+    }
+}
+
+/// A reply's link, opened in the default browser. The web app never calls
+/// this (it is not in `remote::WEB_COMMANDS`); its links open in a new tab.
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = openable_url(&url)?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
@@ -1884,6 +2084,8 @@ pub fn run() {
             app.listen_any(CHAT_EVENT, move |event| {
                 web.broadcast(CHAT_EVENT, event.payload())
             });
+            #[cfg(desktop)]
+            start_scheduler(app);
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
@@ -1930,6 +2132,8 @@ pub fn run() {
             add_automation,
             set_automation_enabled,
             remove_automation,
+            edit_automation,
+            set_scheduler_clock,
             run_automation,
             get_memory,
             save_memory,
@@ -1945,6 +2149,13 @@ pub fn run() {
             restart_connector,
             sign_out_connector,
             disconnect_connector,
+            connector_catalog,
+            add_catalog_connector,
+            add_connector_config,
+            set_connector_enabled,
+            sign_in_connector,
+            save_connector_key,
+            answer_connector_key,
             get_journal,
             journal_add,
             journal_act,
@@ -1989,6 +2200,8 @@ pub fn run() {
             run_local_speed_test,
             get_web_access,
             set_web_access,
+            get_devices,
+            forget_all_devices,
             get_update_status,
             set_update_channel,
             check_shell_update,
@@ -2001,6 +2214,10 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            get_workboard,
+            workboard_add,
+            workboard_act,
+            workboard_work,
             get_behavior,
             save_behavior,
             save_defaults,
@@ -2010,7 +2227,8 @@ pub fn run() {
             get_background,
             get_library,
             library_cover,
-            library_play
+            library_play,
+            open_url
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
@@ -2019,5 +2237,29 @@ pub fn run() {
             grokhub_core::brand::product_name()
         );
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::openable_url;
+
+    #[test]
+    fn opens_only_web_links() {
+        assert_eq!(openable_url(" https://x.ai/docs "), Ok("https://x.ai/docs"));
+        assert_eq!(openable_url("http://example.com"), Ok("http://example.com"));
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<b>x</b>",
+            "not a url",
+            "",
+            "https://",
+            "https:///etc",
+            "mailto:a@b.c",
+            "https://a b",
+        ] {
+            assert!(openable_url(bad).is_err(), "{bad} must be refused");
+        }
     }
 }

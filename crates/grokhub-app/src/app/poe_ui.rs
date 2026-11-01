@@ -39,10 +39,13 @@ impl Cabin {
             return;
         }
         self.end_poe_session(now);
-        let logs = running.and_then(|game| self.poe_logs_dir(game));
+        let watcher = running.and_then(|game| {
+            self.poe_logs_dir(game)
+                .map(|logs| PoeWatcher::new(logs, game))
+        });
         let p = &mut self.focus.poe;
         p.running = running;
-        p.watcher = logs.map(PoeWatcher::new);
+        p.watcher = watcher;
         p.polled_ms = 0;
     }
 
