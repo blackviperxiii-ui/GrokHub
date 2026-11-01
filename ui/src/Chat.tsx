@@ -37,6 +37,9 @@ import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { NyxDock } from "./NyxDock";
+import { NyxFace } from "./NyxFace";
+import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
@@ -295,9 +298,12 @@ function LogItem({
   onPick,
   onDraft,
   onOpenAutomations,
+  nyxUrl,
 }: {
   item: Item;
   busy: boolean;
+  /** Nyx's face beside each reply, when Nyx is on. */
+  nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
   onPick: (prompt: string) => void;
@@ -309,6 +315,13 @@ function LogItem({
     case "user":
       return <UserBubble text={item.text} />;
     case "assistant":
+      if (nyxUrl)
+        return (
+          <div className="nyx-row">
+            <NyxFace url={nyxUrl} size={32} />
+            <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />
+          </div>
+        );
       return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />;
     case "tool":
       return (
@@ -424,6 +437,8 @@ export function Chat({
   const [slashShut, setSlashShut] = useState<string | null>(null);
   const slashOpen = slashRows.length > 0 && slashShut !== draft;
   const slashPick = Math.min(slashAt, slashRows.length - 1);
+  // Nyx's pose follows what the chat does, not each chunk of text.
+  const nyx = useNyx(activityOf(items, busy), active);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -692,19 +707,32 @@ export function Chat({
     !(last?.kind === "elicit" && last.answer === null);
 
   return (
-    <section className="chat" aria-label="Chat" onDragOver={attach.onDragOver} onDrop={attach.onDrop}>
+    <section
+      className={nyx ? "chat has-nyx" : "chat"}
+      aria-label="Chat"
+      onDragOver={attach.onDragOver}
+      onDrop={attach.onDrop}
+    >
+      {nyx && <NyxDock url={nyx.url} mood={nyx.mood} />}
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
-          items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
+          items.length === 0 &&
+          !busy && (
+            <div className="nyx-empty">
+              {nyx && <NyxFace url={nyx.url} size={96} />}
+              <p className="empty">{CHAT_EMPTY}</p>
+            </div>
+          )
         )}
         {items.map((item, i) => (
           <LogItem
             key={i}
             item={item}
             busy={busy}
+            nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
             onPick={pick}
