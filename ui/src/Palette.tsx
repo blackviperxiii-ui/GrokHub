@@ -20,6 +20,8 @@ import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
 export type View =
+  | "home"
+  | "objectives"
   | "chat"
   | "history"
   | "pulse"
@@ -72,6 +74,8 @@ export interface PaletteExtras {
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
 
 export const VIEW_LABELS: Record<View, string> = {
+  home: "Home",
+  objectives: "Objectives",
   chat: "Chat",
   history: "History",
   pulse: "Pulse",
@@ -94,6 +98,7 @@ export const VIEW_LABELS: Record<View, string> = {
  * Web access, so only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
+    "home",
     "chat",
     ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
@@ -111,13 +116,21 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
+/** Every page the palette opens: the tabs, and Objectives right after Home.
+ * Objectives has no tab of its own; Home's objectives tiles open it too. */
+export function pageViews(caps: Capabilities): View[] {
+  const tabs = views(caps);
+  const at = tabs.indexOf("home") + 1;
+  return [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
+}
+
 /** The rows for `query`, in order: pages, commands, slash commands (for a
  * query that starts with `/`), recent chats, Settings sections, then Ask
  * with the typed text, which puts it in the chat box like the cabin's palette. */
 export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
   const slash = q.startsWith("/");
-  const pages: PaletteRow[] = views(caps).map((view) => ({
+  const pages: PaletteRow[] = pageViews(caps).map((view) => ({
     label: VIEW_LABELS[view],
     action: { kind: "view", view },
     ...(view === "settings" ? { keys: SETTINGS_KEYS } : {}),
