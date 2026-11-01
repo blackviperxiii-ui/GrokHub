@@ -850,6 +850,8 @@ impl Cabin {
     pub(super) fn delete_all_history(&mut self) {
         let thread_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
         self.halt_in_flight();
+        // Every chat is going: stop every chat's engine and tasks, not just this one.
+        grokhub_agent::halt_all_sessions();
         for id in &thread_ids {
             self.drop_bg_runs_for(id);
         }

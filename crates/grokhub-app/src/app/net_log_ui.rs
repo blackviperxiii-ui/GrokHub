@@ -19,6 +19,37 @@ pub(super) struct NetState {
     probe_rx: Option<mpsc::Receiver<Option<u32>>>,
     speed_rx: Option<mpsc::Receiver<Result<(u64, u64), String>>>,
     note: String,
+    /// The last few connect times, newest last, for Home's ping and jitter.
+    /// In memory only.
+    recent: std::collections::VecDeque<u32>,
+}
+
+/// Samples kept for jitter.
+const RECENT_MAX: usize = 20;
+
+/// What Home's Speeds tile shows, from the opt-in internet log.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::app) struct NetTileFacts {
+    pub on: bool,
+    pub down: bool,
+    pub ping_ms: Option<u32>,
+    pub jitter_ms: Option<u32>,
+    /// Last download test: Mbps and when.
+    pub last_speed: Option<(f64, u64)>,
+    pub testing: bool,
+    pub note: String,
+}
+
+/// Mean change between back-to-back connect times.
+pub(in crate::app) fn jitter_ms(samples: &[u32]) -> Option<u32> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let total: u64 = samples
+        .windows(2)
+        .map(|w| u64::from(w[0].abs_diff(w[1])))
+        .sum();
+    Some((total / (samples.len() as u64 - 1)) as u32)
 }
 
 /// The connect time to the first resolver that answers, or `None`.
@@ -141,6 +172,13 @@ impl Cabin {
     /// One probe's result: log it, say when the connection comes back, and
     /// post the daily card when the last day had drops.
     pub(super) fn note_probe(&mut self, latency: Option<u32>, now: u64, offset_min: i32) {
+        if let Some(ms) = latency {
+            let recent = &mut self.focus.net.recent;
+            recent.push_back(ms);
+            while recent.len() > RECENT_MAX {
+                recent.pop_front();
+            }
+        }
         let slow_before = self.net_now().slow.len();
         let change = self.net_now().note(latency, now, offset_min);
         match change {
@@ -191,6 +229,47 @@ impl Cabin {
         };
     }
 
+    /// One 10 MB download from the test server, off the UI thread. Only on a tap.
+    pub(super) fn start_speed_test(&mut self) {
+        if !self.cfg.net_log || self.focus.net.speed_rx.is_some() {
+            return;
+        }
+        self.focus.net.note = "Testing download speed…".into();
+        let (tx, rx) = mpsc::channel();
+        self.focus.net.speed_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(speed_test());
+        });
+    }
+
+    /// Home's Speeds tile: nothing new is measured here, it reads the log.
+    pub(super) fn net_tile_facts(&mut self) -> NetTileFacts {
+        if !self.cfg.net_log {
+            return NetTileFacts {
+                on: false,
+                down: false,
+                ping_ms: None,
+                jitter_ms: None,
+                last_speed: None,
+                testing: false,
+                note: String::new(),
+            };
+        }
+        let samples: Vec<u32> = self.focus.net.recent.iter().copied().collect();
+        let testing = self.focus.net.speed_rx.is_some();
+        let note = self.focus.net.note.clone();
+        let log = self.net_now();
+        NetTileFacts {
+            on: true,
+            down: log.down(),
+            ping_ms: samples.last().copied(),
+            jitter_ms: jitter_ms(&samples),
+            last_speed: log.speed.last().map(|s| (s.mbps, s.at_ms)),
+            testing,
+            note,
+        }
+    }
+
     fn export_net_csv(&mut self, now: u64) {
         let name = format!("internet-log-{}.csv", &nl::iso_utc(now)[..10]);
         let path = downloads().join(&name);
@@ -234,12 +313,7 @@ impl Cabin {
             ui.horizontal(|ui| {
                 let testing = self.focus.net.speed_rx.is_some();
                 if !testing && crate::cards::ghost_pill(ui, "Test speed now") {
-                    self.focus.net.note = "Testing download speed…".into();
-                    let (tx, rx) = mpsc::channel();
-                    self.focus.net.speed_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let _ = tx.send(speed_test());
-                    });
+                    self.start_speed_test();
                 }
                 if crate::cards::ghost_pill(ui, "Export CSV") {
                     self.export_net_csv(now_ms());

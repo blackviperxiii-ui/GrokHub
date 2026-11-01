@@ -1,3 +1,41 @@
+@font-face {
+  font-family: "Inter";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Inter-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Inter-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Inter-SemiBold.woff2") format("woff2");
+}
+
+/* Shared shape, depth and focus tokens. Colors come from the theme blocks below. */
+:root {
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
+  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
+  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t-base: 200ms;
+}
+
 :root {
   /* Light (classic) defaults; dark OS / data-theme swaps to Loadout. */
   --bg: #f6f6f4;
@@ -16,7 +54,7 @@
   --danger: #a3261c;
   --signal: #d7263d;
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 /* Ops Dark — Loadout baseline (slides 07–08). Also the OS-dark default. */
@@ -136,21 +174,74 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Thin themed scrollbars instead of the platform's chunky ones. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--selected) transparent;
 }
 
 button {
   font: inherit;
+  font-weight: 500;
   border: 1px solid var(--accent);
   background: var(--accent);
   color: var(--accent-text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 6px 14px;
   cursor: pointer;
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out),
+    filter var(--t-fast) var(--ease-out);
 }
 
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* A disabled button goes quiet and neutral; fading the accent fill turns amber to mud. */
 button:disabled {
+  background: var(--hover);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* Outlined and link-style controls keep their look and just fade. */
+button.quiet:disabled,
+button.link:disabled,
+.chip:disabled,
+.tabs button:disabled,
+.switch button:disabled,
+.settings-nav button:disabled {
+  background: transparent;
+  color: var(--text);
   opacity: 0.5;
-  cursor: default;
+}
+
+.chip:disabled {
+  border-color: var(--border);
 }
 
 button.quiet,
@@ -162,10 +253,19 @@ button.quiet,
   border-color: var(--border);
 }
 
+button.quiet:hover:not(:disabled),
+.tabs button:hover:not(:disabled),
+.switch button:hover:not(:disabled),
+.settings-nav button:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+}
+
 .tabs button[aria-pressed="true"],
 .switch button[aria-pressed="true"],
 .settings-nav button[aria-pressed="true"] {
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 button.link {
@@ -182,8 +282,28 @@ textarea {
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+
+input:hover:not(:disabled):not(:focus),
+textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--selected);
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
 }
 
 .app {
@@ -282,7 +402,9 @@ textarea {
 .palette-backdrop {
   position: fixed;
   inset: 0;
-  background: rgb(0 0 0 / 0.25);
+  background: rgb(0 0 0 / 0.35);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -293,7 +415,8 @@ textarea {
 .palette {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
   padding: 12px;
   width: min(420px, 100%);
   display: flex;
@@ -313,9 +436,14 @@ textarea {
 }
 
 .palette li {
-  padding: 8px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+
+.palette li:hover {
+  background: var(--hover);
 }
 
 .palette li[aria-selected="true"] {
@@ -339,7 +467,12 @@ textarea {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+
+.log:focus-visible {
+  outline: none;
 }
 
 .empty {
@@ -348,22 +481,26 @@ textarea {
 }
 
 .bubble {
-  max-width: 80%;
-  padding: 8px 12px;
-  border-radius: 12px;
+  max-width: min(80%, 70ch);
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--panel);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
 }
 
 .bubble.assistant {
   align-self: flex-start;
+  border-bottom-left-radius: 6px;
 }
 
 .bubble.user {
   align-self: flex-end;
   background: var(--user);
+  border-bottom-right-radius: 6px;
 }
 
 .bubble.streaming {
@@ -382,6 +519,9 @@ textarea {
 
 .composer textarea {
   flex: 1;
+  min-height: 52px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
   /* flex: 1 sizes it; its default width (cols) would hold the row wider than a phone. */
   width: 0;
   resize: none;
@@ -471,9 +611,10 @@ textarea {
   align-self: flex-start;
   max-width: 80%;
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
@@ -546,8 +687,17 @@ button.danger {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   overflow-y: auto;
+}
+
+/* Form-like screens read better in one centered column than edge to edge. */
+.automations,
+.memory,
+.connectors {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
 }
 
 .automations .add,
@@ -567,7 +717,10 @@ button.danger {
 .memory-file label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--steel);
 }
 
 .memory-file textarea {

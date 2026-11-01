@@ -49,6 +49,7 @@ pub mod focus_app;
 pub mod frame;
 pub mod game_companion;
 pub mod game_guard;
+pub mod game_integrations;
 pub mod game_watch;
 pub mod game_watch_dota;
 pub mod game_watch_gsi;
