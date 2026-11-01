@@ -25,6 +25,11 @@ const XP_W: f32 = 360.0;
 const OBJECTIVES_MAX_W: f32 = 760.0;
 const OBJECTIVES_TITLE: &str = "Objectives";
 
+/// Left inset that centers the Objectives column on a page `page_w` wide.
+pub(super) fn objectives_inset(page_w: f32, column_w: f32) -> f32 {
+    ((page_w - column_w) / 2.0).max(0.0).floor()
+}
+
 /// "Ready up, Sam." from the first word of the name, or "Ready up." without one.
 pub(super) fn greeting(name: &str) -> String {
     match name.split_whitespace().next() {
@@ -116,19 +121,30 @@ impl Cabin {
                     .as_ref()
                     .map_or(0, |m| objective_progress(&m.checklist).0);
                 // Same width as the checklist, so the XP bar sits above its right edge.
+                // The column is centered on wide windows, and its scroll area is the
+                // column's own width, so no stray scrollbar sits at the window edge.
                 let width = ui.available_width().min(OBJECTIVES_MAX_W);
-                ui.scope(|ui| {
-                    ui.set_max_width(width);
-                    self.mission_header(ui, done);
+                let inset = objectives_inset(ui.available_width(), width);
+                let page_h = ui.available_height();
+                ui.horizontal_top(|ui| {
+                    ui.add_space(inset);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, page_h),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(width);
+                            self.mission_header(ui, done);
+                            ui.add_space(GAP);
+                            egui::ScrollArea::vertical()
+                                .id_salt("mission-control-body")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_max_width(width);
+                                    self.mission_objectives(ui, mission.as_ref(), now)
+                                });
+                        },
+                    );
                 });
-                ui.add_space(GAP);
-                egui::ScrollArea::vertical()
-                    .id_salt("mission-control-body")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_max_width(width);
-                        self.mission_objectives(ui, mission.as_ref(), now)
-                    });
             });
     }
 
@@ -468,5 +484,12 @@ mod tests {
         assert_eq!(cabin.nav_id(), "objectives");
         cabin.set_nav_id("workboard");
         assert_eq!(cabin.nav, Nav::Workboard);
+    }
+
+    #[test]
+    fn objectives_column_centers_on_wide_pages_and_hugs_the_edge_on_narrow() {
+        assert_eq!(super::objectives_inset(1336.0, 760.0), 288.0);
+        assert_eq!(super::objectives_inset(700.0, 700.0), 0.0);
+        assert_eq!(super::objectives_inset(500.0, 760.0), 0.0);
     }
 }
