@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, Settings as Shape } from "./api";
@@ -18,6 +18,10 @@ const api = vi.hoisted(() => ({
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
   setTheme: vi.fn<(theme: string) => Promise<Shape>>(),
+  getAutostart: vi.fn<() => Promise<boolean>>(),
+  setAutostart: vi.fn<(on: boolean) => Promise<boolean>>(),
+  setSummonHotkey: vi.fn<(on: boolean) => Promise<Shape>>(),
+  setNotifications: vi.fn<(on: boolean) => Promise<Shape>>(),
   listModels: vi.fn(),
 }));
 
@@ -40,6 +44,8 @@ async function openSection(name: string) {
 const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true };
 const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
+/** A desktop with start at login, the summon hotkey and notifications. */
+const BASICS: Capabilities = { ...DESKTOP, autostart: true, summonHotkey: true, notifications: true };
 
 function shape(over: Partial<Shape>): Shape {
   return {
@@ -52,6 +58,8 @@ function shape(over: Partial<Shape>): Shape {
     desktopControl: false,
     theme: "system",
     version: "3.1.0",
+    summonHotkey: false,
+    notifications: true,
     ...over,
   };
 }
@@ -60,6 +68,7 @@ describe("Settings", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.getSettings.mockResolvedValue(shape({}));
+    api.getAutostart.mockResolvedValue(false);
   });
 
   it("loads and saves the model, work folder and tray choice", async () => {
@@ -153,6 +162,58 @@ describe("Settings", () => {
     expect(await screen.findByText("No key saved yet.")).toBeInTheDocument();
   });
 
+  it("start at login starts off and turns on at once", async () => {
+    api.setAutostart.mockResolvedValue(true);
+    render(<Settings caps={BASICS} />);
+
+    const login = await screen.findByLabelText("Start Loadout when you sign in");
+    await waitFor(() => expect(login).toBeEnabled());
+    expect(login).not.toBeChecked();
+    await userEvent.click(login);
+
+    expect(api.setAutostart).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(login).toBeChecked());
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("the hotkey and notifications apply at once and keep an unsaved edit", async () => {
+    api.setSummonHotkey.mockResolvedValue(shape({ summonHotkey: true }));
+    api.setNotifications.mockResolvedValue(shape({ summonHotkey: true, notifications: false }));
+    render(<Settings caps={BASICS} />);
+
+    const folder = await screen.findByLabelText("Work folder");
+    await userEvent.clear(folder);
+    await userEvent.type(folder, "/home/user/scratch");
+    const hotkey = screen.getByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
+    const notify = screen.getByLabelText(/Notify me when Grok needs an OK/);
+    expect(hotkey).not.toBeChecked();
+    expect(notify).toBeChecked();
+
+    await userEvent.click(hotkey);
+    expect(api.setSummonHotkey).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(hotkey).toBeChecked());
+    await userEvent.click(notify);
+    expect(api.setNotifications).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(notify).not.toBeChecked());
+    expect(folder).toHaveValue("/home/user/scratch");
+  });
+
+  it("says why the hotkey couldn't be set and leaves it off", async () => {
+    api.setSummonHotkey.mockRejectedValue("Couldn't set the hotkey: already registered");
+    render(<Settings caps={BASICS} />);
+    const hotkey = await screen.findByLabelText(/from anywhere with/);
+    await userEvent.click(hotkey);
+    expect(await screen.findByText("Couldn't set the hotkey: already registered")).toBeVisible();
+    expect(hotkey).not.toBeChecked();
+  });
+
+  it("hides each switch its capability leaves off", async () => {
+    render(<Settings caps={{ ...BASICS, summonHotkey: false }} />);
+    expect(await screen.findByLabelText("Start Loadout when you sign in")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/from anywhere with/)).toBeNull();
+    expect(screen.getByLabelText(/Notify me when Grok needs an OK/)).toBeInTheDocument();
+  });
+
   it("shows a keychain error instead of hanging", async () => {
     api.setApiKey.mockRejectedValue("No system keychain is available.");
     render(<Settings caps={DESKTOP} />);
@@ -171,6 +232,8 @@ describe("Settings", () => {
     expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "On this computer" })).toBeNull();
+    expect(api.getAutostart).not.toHaveBeenCalled();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",

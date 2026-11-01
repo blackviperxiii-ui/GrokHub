@@ -1,8 +1,9 @@
 //! Pinned llama.cpp `llama-server` download for this OS/arch into `{config}/bin`.
 //! Starts when the user turns Local AI on (or presses Get engine): resumable
-//! `.part` files, SHA-256 check, safe archive extract. x86_64 gets the Vulkan
-//! build, which uses an AMD, Intel or NVIDIA GPU and falls back to the CPU
-//! backend when no Vulkan driver loads.
+//! `.part` files, SHA-256 check, safe archive extract. Linux and Windows get
+//! the Vulkan build (x86_64 and ARM64), which uses the GPU and falls back to
+//! the CPU backend when no Vulkan driver loads. Apple Silicon gets the Metal
+//! build; Intel Macs get llama.cpp's CPU build.
 
 use crate::model_download::{self, sha256_file, Control, Progress};
 use crate::ssrf::runtime_download_url_ok;
@@ -73,6 +74,8 @@ pub fn platform_key() -> Option<&'static str> {
         ("linux", "aarch64") => Some("linux-aarch64"),
         ("windows", "x86_64") => Some("windows-x86_64"),
         ("windows", "aarch64") => Some("windows-aarch64"),
+        ("macos", "aarch64") => Some("macos-aarch64"),
+        ("macos", "x86_64") => Some("macos-x86_64"),
         _ => None,
     }
 }
@@ -323,10 +326,16 @@ fn install_server_and_libs(server_src: &Path, dest_new: &Path) -> Result<(), Str
 
 fn is_runtime_lib(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if cfg!(windows) {
-        name.ends_with(".dll")
-    } else {
-        name.contains(".so")
+    lib_for_os(name, std::env::consts::OS)
+}
+
+/// The engine's shared libraries: `.dll` on Windows, `.dylib` on macOS
+/// (the server finds them through `@loader_path`), `.so*` elsewhere.
+fn lib_for_os(name: &str, os: &str) -> bool {
+    match os {
+        "windows" => name.ends_with(".dll"),
+        "macos" => name.ends_with(".dylib"),
+        _ => name.contains(".so"),
     }
 }
 
@@ -492,18 +501,57 @@ mod tests {
             "llama-b12017-bin-win-vulkan-x64.zip"
         );
         assert_eq!(w.asset.size, 37_514_219);
-        // Arm gets the CPU builds.
-        let names: Vec<String> = ["linux-aarch64", "windows-aarch64"]
-            .iter()
-            .map(|k| manifest_for_key(k).expect(k).asset.archive_file_name())
-            .collect();
+        // Arm gets the Vulkan builds too; Macs get Metal (Apple Silicon) or CPU (Intel).
+        let names: Vec<String> = [
+            "linux-aarch64",
+            "windows-aarch64",
+            "macos-aarch64",
+            "macos-x86_64",
+        ]
+        .iter()
+        .map(|k| manifest_for_key(k).expect(k).asset.archive_file_name())
+        .collect();
         assert_eq!(
             names,
             [
-                "llama-b12017-bin-ubuntu-arm64.tar.gz",
-                "llama-b12017-bin-win-cpu-arm64.zip"
+                "llama-b12017-bin-ubuntu-vulkan-arm64.tar.gz",
+                "llama-b12017-bin-win-vulkan-arm64.zip",
+                "llama-b12017-bin-macos-arm64.tar.gz",
+                "llama-b12017-bin-macos-x64.tar.gz",
             ]
         );
+    }
+
+    #[test]
+    fn every_supported_os_and_arch_has_a_pinned_engine() {
+        let file = parse_manifest().expect("manifest");
+        for key in [
+            "linux-x86_64",
+            "linux-aarch64",
+            "windows-x86_64",
+            "windows-aarch64",
+            "macos-aarch64",
+            "macos-x86_64",
+        ] {
+            assert!(file.platforms.contains_key(key), "{key} has no engine");
+            assert!(manifest_for_key(key).is_some(), "{key} is not usable");
+        }
+        if let Some(key) = platform_key() {
+            assert!(manifest_for_key(key).is_some(), "this host: {key}");
+        }
+    }
+
+    #[test]
+    fn each_os_installs_its_own_kind_of_library() {
+        assert!(lib_for_os("libggml-metal.0.28.0.dylib", "macos"));
+        assert!(lib_for_os("libllama.0.dylib", "macos"));
+        assert!(!lib_for_os("llama-server", "macos"));
+        assert!(!lib_for_os("LICENSE", "macos"));
+        assert!(lib_for_os("ggml-vulkan.dll", "windows"));
+        assert!(!lib_for_os("libggml.dylib", "windows"));
+        assert!(lib_for_os("libggml-vulkan.so", "linux"));
+        assert!(lib_for_os("libllama.so.0.8.0", "linux"));
+        assert!(!lib_for_os("ggml.dll", "linux"));
     }
 
     struct FakeServer {

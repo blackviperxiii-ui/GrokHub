@@ -8,9 +8,9 @@
       "format": "tar.gz"
     },
     "linux-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-arm64.tar.gz",
-      "size": 18571024,
-      "sha256": "676e8f99db67fbecd7854b948ed50d0bf5d7db463613fc8fcd8f4491a7709bec",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-ubuntu-vulkan-arm64.tar.gz",
+      "size": 28987180,
+      "sha256": "095da6719ba1ea85fbb528ca64b9834206c4bd61ad2944eff399c3257d47bb0e",
       "format": "tar.gz"
     },
     "windows-x86_64": {
@@ -20,10 +20,22 @@
       "format": "zip"
     },
     "windows-aarch64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-cpu-arm64.zip",
-      "size": 13068809,
-      "sha256": "602a97c5bbf770713c6ef15ca395ef0ae27e19022735b8c2eeec3ec4bc29c549",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-win-vulkan-arm64.zip",
+      "size": 25594289,
+      "sha256": "7587b451281ff73272d188acc82a1814c5810d138d1a38ba54bb58f1dd4b506b",
       "format": "zip"
+    },
+    "macos-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-macos-arm64.tar.gz",
+      "size": 16508951,
+      "sha256": "4cfa51501cc3c602b404f43682e713405b4b946847876c5081d0a3f93ff26914",
+      "format": "tar.gz"
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12017/llama-b12017-bin-macos-x64.tar.gz",
+      "size": 12248734,
+      "sha256": "f51371545526a8655f30bdf2e2f157d00d7ed9bddf1939106b09ac76148e59e5",
+      "format": "tar.gz"
     }
   }
 }

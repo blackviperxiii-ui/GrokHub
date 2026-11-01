@@ -1,0 +1,2 @@
+- Cross-platform app: opening Loadout again brings up the running window instead of a second copy, and the window comes back where you left it and at the same size.
+- Cross-platform app: Settings → General → On this computer can start Loadout when you sign in (in the tray when closing keeps it there), bring it up from anywhere with Ctrl+Shift+Space (⌘+Shift+Space on a Mac; not on Wayland), and notify you while it's in the background when Grok needs an OK or a reply or Run now finishes. A notification offers Deny and Open only; allowing a step always happens on its card.

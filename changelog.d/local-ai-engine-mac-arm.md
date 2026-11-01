@@ -1,0 +1,2 @@
+- Local AI now downloads its engine on Macs too: Apple Silicon gets the Metal build, Intel Macs the CPU build.
+- ARM PCs (Windows on Snapdragon, ARM Linux) now get the GPU (Vulkan) engine instead of CPU only, and still fall back to the CPU when no GPU driver loads.
