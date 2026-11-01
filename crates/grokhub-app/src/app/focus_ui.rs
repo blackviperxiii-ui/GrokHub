@@ -42,6 +42,8 @@ pub(super) struct FocusState {
     pub models: super::model_drop_ui::ModelDropState,
     /// The screenshot Explain offer's folder scan and image load.
     pub shot: super::screenshot_offer_ui::ShotState,
+    /// Elite Dangerous's Player Journal, followed while it runs.
+    pub elite: super::elite_ui::EliteState,
 }
 
 impl Cabin {
@@ -59,6 +61,7 @@ impl Cabin {
         self.tick_wow();
         self.tick_model_drop();
         self.poll_screenshot_offer();
+        self.tick_elite();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

@@ -1855,6 +1855,15 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::hobby_path_card(grokhub_core::HobbyId::Rust, rust_step, now),
         "Rust",
     ));
+    let elite = grokhub_core::game_watch_elite::EliteSession {
+        deaths: 1,
+        ..Default::default()
+    };
+    rows.push((
+        "end_elite_session",
+        grokhub_core::game_watch_elite::session_card(&elite, now),
+        "Elite Dangerous",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
