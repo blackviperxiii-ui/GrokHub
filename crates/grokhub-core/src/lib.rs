@@ -54,6 +54,7 @@ pub mod game_watch;
 pub mod game_watch_dota;
 pub mod game_watch_gsi;
 pub mod game_watch_league;
+pub mod game_watch_minecraft;
 pub mod game_watch_pick;
 pub mod game_watch_poe;
 pub mod game_watch_store;
@@ -252,9 +253,9 @@ pub use card_signals::{
 };
 pub use channel::{
     auto_off_step, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint,
-    channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint,
-    version_line, AutoOffStep, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE,
-    CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
+    channel_switch_preflight, channel_switch_shell, parse_version_line, strip_product_prefix,
+    update_fail_hint, version_line, AutoOffStep, BuildVersion, Channel, ChannelTips,
+    CHANNEL_AUTO_OFF_NOTE, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
 };
 pub use chat::{
     accepts_reasoning_effort, agent_reasoning_effort_for_mode, cabin_spawn_model,
@@ -522,11 +523,11 @@ pub use proactive_auto::{
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
     expand_project_root, folder_choices, host_cmd_leaves_project, host_hour_blocked,
-    is_under_project, normalize_host_path, project_menu_acts, project_menu_label,
-    project_name_from_path, project_slug, project_work_path, refund_host_reserved, rename_node,
-    resolve_acp_cwd, resolve_bind_path, restore_bound_path, seed_from_bound, settle_project_path,
-    should_seed_sidebar, stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome,
-    ProjectKind, ProjectMenuAct, ProjectNode,
+    is_under_project, normalize_host_path, project_display_name, project_menu_acts,
+    project_menu_label, project_name_from_path, project_slug, project_work_path,
+    refund_host_reserved, rename_node, resolve_acp_cwd, resolve_bind_path, restore_bound_path,
+    seed_from_bound, settle_project_path, should_seed_sidebar, stage_project, toggle_folder,
+    upsert_bound, visible_tree, DropOutcome, ProjectKind, ProjectMenuAct, ProjectNode,
 };
 pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for,

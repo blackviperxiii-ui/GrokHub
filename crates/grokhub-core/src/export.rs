@@ -274,7 +274,7 @@ pub fn chat_export_json<'a>(
         .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
         .collect();
     let doc = serde_json::json!({
-        "app": "GrokHub",
+        "app": crate::brand::product_name(),
         "version": env!("CARGO_PKG_VERSION"),
         "title": title,
         "threadId": thread_id,

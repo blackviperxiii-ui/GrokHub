@@ -8,7 +8,6 @@ use super::recipe::{Part, State};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CardVariant {
     Default,
-    Subtle,
     Outlined,
     Interactive,
     /// Loadout card: raised fill with a dim red rim.
@@ -23,7 +22,7 @@ fn card_stroke(variant: CardVariant) -> Stroke {
         CardVariant::Outlined => Stroke::new(1.0, crate::theme::border()),
         CardVariant::Signal => super::recipe::look(Part::Card, State::Default).stroke,
         CardVariant::SignalHot => super::recipe::look(Part::Card, State::Hover).stroke,
-        CardVariant::Default | CardVariant::Subtle | CardVariant::Interactive => Stroke::NONE,
+        CardVariant::Default | CardVariant::Interactive => Stroke::NONE,
     }
 }
 
@@ -39,10 +38,9 @@ pub fn card_frame(
     let shadow = match variant {
         CardVariant::Default => crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
         CardVariant::Interactive => crate::theme::kit_shadow(crate::theme::ShadowLevel::Soft),
-        CardVariant::Subtle
-        | CardVariant::Outlined
-        | CardVariant::Signal
-        | CardVariant::SignalHot => crate::theme::kit_shadow(crate::theme::ShadowLevel::None),
+        CardVariant::Outlined | CardVariant::Signal | CardVariant::SignalHot => {
+            crate::theme::kit_shadow(crate::theme::ShadowLevel::None)
+        }
     };
     let radius = match variant {
         CardVariant::Signal | CardVariant::SignalHot => super::recipe::CARD_RADIUS,
@@ -89,7 +87,6 @@ pub fn card_frame(
 fn card_fill(variant: CardVariant, enabled: bool) -> Color32 {
     let base = match variant {
         CardVariant::Default | CardVariant::Interactive => crate::theme::elevated(),
-        CardVariant::Subtle => crate::theme::surface(),
         CardVariant::Outlined => crate::theme::elevated(),
         CardVariant::Signal => super::recipe::look(Part::Card, State::Default).fill,
         CardVariant::SignalHot => super::recipe::look(Part::Card, State::Hover).fill,
@@ -114,7 +111,6 @@ mod tests {
     fn card_variants_allocate_minimum_height() {
         for variant in [
             CardVariant::Default,
-            CardVariant::Subtle,
             CardVariant::Outlined,
             CardVariant::Interactive,
             CardVariant::Signal,

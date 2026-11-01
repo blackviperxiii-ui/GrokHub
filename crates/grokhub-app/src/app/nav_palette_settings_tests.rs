@@ -566,7 +566,7 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
         .collect();
     assert_eq!(copied.len(), 1, "{copied:?}");
     assert!(
-        copied[0].starts_with("app GrokHub\nversion "),
+        copied[0].starts_with("app Loadout\nversion "),
         "{}",
         copied[0]
     );
@@ -738,7 +738,7 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     for want in [
         "Search pages and commands",
         "Automations",
-        "Skills and Connectors",
+        "Objectives",
         "Pulse",
     ] {
         assert!(
@@ -1048,4 +1048,45 @@ fn labs_beta_channel_toggle_is_wired() {
             && update.contains("write_installed_channel"),
         "Update helper must build the install.sh --channel plan with rollback and auto-off"
     );
+}
+
+/// LO-12: Classic Dark and Light keep their colours inside the Loadout frame:
+/// the titlebar shows the Loadout mark name and the personality pill.
+#[test]
+fn classic_themes_wear_the_loadout_titlebar() {
+    let mut quiet = QuietCabin::boot("classic-chrome");
+    let cabin = &mut quiet.cabin;
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    use crate::theme::{set_paint_palette, PaintPalette};
+    for (dark, palette) in [
+        (true, PaintPalette::ClassicDark),
+        (false, PaintPalette::Light),
+    ] {
+        set_paint_palette(palette);
+        assert!(!crate::theme::is_loadout_paint());
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            texts.clear();
+            let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_titlebar(ui));
+            for clipped in &out.shapes {
+                collect_shape_text(&clipped.shape, &mut texts);
+            }
+        }
+        let brand = grokhub_core::brand::product_name().to_ascii_uppercase();
+        assert!(texts.contains(&brand), "dark={dark}: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t.starts_with("PERSONALITY · ")),
+            "dark={dark}: {texts:?}"
+        );
+    }
+    set_paint_palette(PaintPalette::ClassicDark);
 }

@@ -155,6 +155,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "minecraft",
+        name: "Minecraft: Java Edition",
+        steam_app_id: None,
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the game's own logs/latest.log, vanilla launcher and Prism or MultiMC instances: deaths and advancements, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "eso",
         name: "The Elder Scrolls Online",
         steam_app_id: Some(306130),
@@ -162,14 +172,6 @@ pub const ALL: &[Integration] = &[
         channels: &[Channel::OfficialAddon(
             "a Loadout addon through ZeniMax's Lua addon API and saved variables",
         )],
-        status: Status::Planned,
-    },
-    Integration {
-        id: "minecraft",
-        name: "Minecraft: Java Edition",
-        steam_app_id: None,
-        protection: Protection::None,
-        channels: &[Channel::GameFile("the game's own logs/latest.log")],
         status: Status::Planned,
     },
 ];
