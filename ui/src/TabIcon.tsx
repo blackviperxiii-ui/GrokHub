@@ -4,7 +4,9 @@ import type { View } from "./Palette";
 
 const PATHS: Record<View, string> = {
   chat: "M4 5h16v11H9l-5 4z",
+  history: "M3 12a9 9 0 1 0 2.6-6.4M3 4v4h4M12 7v5l3 2",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
+  imagine: "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9.5h0",
   journal: "M6 3h11a1 1 0 0 1 1 1v17H7a2 2 0 0 1-2-2V4a1 1 0 0 1 1-1zM5 18a2 2 0 0 1 2-2h11",
   automations: "M13 3 5 14h6l-1 7 8-11h-6z",
   agents: "M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1",

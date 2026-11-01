@@ -96,7 +96,7 @@ fn background_run_gets_its_own_card() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("kb02-bg");
     cabin.board.clear();
-    cabin.open_bg_card(7, "Check the backups", "");
+    cabin.open_bg_card(7, "Check the backups", "", false);
     let id = cabin.bg_card_id(7).expect("mapped");
     assert!(cabin.live_card_ids().contains(&id), "the sweep spares it");
     cabin.log_bg_tools(vec![
@@ -110,7 +110,16 @@ fn background_run_gets_its_own_card() {
     assert_eq!(c.kind, WorkKind::Background);
     assert_eq!(c.status, BoardStatus::Blocked);
     assert_eq!(c.checkpoint.as_ref().unwrap().blocker, "Failed: exit 2");
-    assert_eq!(log_texts(&id), ["attempt 1", "shell ok", "failed: exit 2"]);
+    // KB-03: a failed run is Interrupted, so it can resume from here.
+    assert_eq!(
+        c.run_state.interrupted.map(|i| i.cause),
+        Some(grokhub_core::work_resume::InterruptCause::ProviderError)
+    );
+    assert_eq!(c.run_state.host, "cabin");
+    assert_eq!(
+        log_texts(&id),
+        ["attempt 1", "shell ok", "interrupted: exit 2"]
+    );
     release_isolated(&root, cabin);
 }
 
@@ -149,5 +158,7 @@ fn automation_reuses_one_card_across_runs() {
         .unwrap();
     assert_eq!(c.status, BoardStatus::Blocked);
     assert_eq!(c.checkpoint.as_ref().unwrap().attempt, 3);
+    assert_eq!(c.checkpoint.as_ref().unwrap().blocker, "Failed: timed out");
+    assert!(c.run_state.interrupted.is_some());
     release_isolated(&root, cabin);
 }

@@ -29,9 +29,11 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
+  history: () => import("./History").then((m) => ({ default: m.History })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
@@ -40,7 +42,9 @@ const loaders = {
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
+const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
+const History = lazy(loaders.history);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
@@ -76,6 +80,8 @@ export function App() {
   const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
+  const [open, setOpen] = useState<{ id: string; n: number }>();
+  const [deleted, setDeleted] = useState<{ id: string; n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   // Which work card each chat works, from the Workboard's last load.
   const [cardChats, setCardChats] = useState<Record<string, string>>({});
@@ -283,6 +289,8 @@ export function App() {
           onOpenView={setView}
           prefill={prefill}
           notice={notice}
+          open={open}
+          deleted={deleted}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
           grokSignIn={Boolean(caps.grokSignIn)}
@@ -341,6 +349,17 @@ export function App() {
           />
         </Page>
       )}
+      {opened.has("history") && !caps.remote && (
+        <Page shown={view === "history"}>
+          <History
+            onOpen={(id) => {
+              setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+              setView("chat");
+            }}
+            onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
+          />
+        </Page>
+      )}
       {opened.has("memory") && (
         <Page shown={view === "memory"}>
           <Memory />
@@ -369,6 +388,11 @@ export function App() {
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
           <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+        </Page>
+      )}
+      {opened.has("imagine") && (
+        <Page shown={view === "imagine"}>
+          <Imagine />
         </Page>
       )}
       {opened.has("agents") && (

@@ -181,6 +181,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "osrs",
+        name: "Old School RuneScape",
+        steam_app_id: Some(1343370),
+        protection: Protection::None,
+        channels: &[Channel::OfficialWebApi(
+            "Jagex's official hiscores by your display name; no plugin or client",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -294,6 +304,7 @@ mod tests {
         let d2 = by_id("destiny2").unwrap();
         assert!(d2.follows_the_rules());
         assert!(d2.how().contains("so Loadout adds nothing to the game"));
+        assert_eq!(by_id("osrs").unwrap().steam_app_id, Some(1343370));
         let gw2 = by_id("gw2").unwrap();
         assert!(!gw2.channels[0].is_addon());
         assert!(gw2.how().contains("read-only key"));

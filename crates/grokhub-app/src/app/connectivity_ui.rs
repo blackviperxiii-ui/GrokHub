@@ -73,10 +73,8 @@ mod live {
             grokhub_agent::route::connectivity::sync_from_core();
         }
         if g.probe_due(now_ms) {
-            if let Ok(client) = default_http_client() {
-                let _ = g.run_probe_if_due(&client, now_ms);
-                grokhub_agent::route::connectivity::sync_from_core();
-            }
+            let _ = g.run_probe_if_due(&default_http_client(), now_ms);
+            grokhub_agent::route::connectivity::sync_from_core();
         }
     }
 }

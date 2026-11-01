@@ -15,6 +15,9 @@ const seen = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  // No chat saved from an earlier launch.
+  getLastChat: () => Promise.resolve(null),
+  loadChat: vi.fn(),
   // The turn stays open, so every event below lands in it.
   sendChat: (conversationId: string) => {
     seen.sentTo.push(conversationId);

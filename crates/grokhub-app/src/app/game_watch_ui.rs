@@ -325,6 +325,7 @@ impl Cabin {
         self.ui_factorio(ui);
         self.ui_gw2(ui);
         self.ui_destiny(ui);
+        self.ui_osrs(ui);
     }
 }
 

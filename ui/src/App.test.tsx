@@ -42,13 +42,19 @@ vi.mock("./Chat", () => ({
   newConversationId: () => "shell-new",
   Chat: ({
     prefill,
+    open,
+    deleted,
     onSignIn,
   }: {
     prefill?: { text: string; n: number; conversationId?: string };
+    open?: { id: string; n: number };
+    deleted?: { id: string; n: number };
     onSignIn: () => void;
   }) => (
     <div>
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
+      {open && <p>Opened {open.id}</p>}
+      {deleted && <p>Deleted {deleted.id}</p>}
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -60,6 +66,18 @@ vi.mock("./Journal", () => ({
     <button type="button" onClick={() => onMission({ conversationId: "shell-m1", title: "Q", prompt: "Mission: Q" })}>
       To mission
     </button>
+  ),
+}));
+vi.mock("./History", () => ({
+  History: ({ onOpen, onDeleted }: { onOpen: (id: string) => void; onDeleted: (id: string) => void }) => (
+    <div>
+      <button type="button" onClick={() => onOpen("shell-old")}>
+        Open old chat
+      </button>
+      <button type="button" onClick={() => onDeleted("shell-gone")}>
+        Delete a chat
+      </button>
+    </div>
   ),
 }));
 vi.mock("./Workboard", () => ({
@@ -116,6 +134,7 @@ vi.mock("./Skills", () => ({
   ),
 }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
@@ -153,7 +172,9 @@ describe("App", () => {
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
     expect(tabs()).toEqual([
       "Chat",
+      "History",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
       "Agents",
@@ -206,14 +227,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
-  it("leaves the Journal off the web app and keeps Resume on the desktop", async () => {
+  it("leaves the Journal and History off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
@@ -233,6 +254,17 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a chat picked in History opens in Chat, and a deleted one is passed on", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete a chat" }));
+    expect(screen.getByText("Deleted shell-gone")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open old chat" }));
+    expect(screen.getByText("Opened shell-old")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
