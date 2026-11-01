@@ -339,6 +339,29 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
 
+**3h, chat history.** Chats now survive New chat, a reload and quitting
+(`src-tauri/src/history.rs`, `ui/src/History.tsx`).
+
+- The engine already saved every turn to `sessions/<id>.jsonl` in the config
+  folder. The History page lists the shell's own chats (ids starting
+  `shell-`) under Today, This week and Older, newest first, with a search
+  over titles and words in the chat (250 ms after typing stops, at most 200
+  rows). A row's menu renames it or deletes it; Delete asks first and stops a
+  reply still running in that chat.
+- A click opens the chat in Chat: its newest 200 lines, with Show earlier for
+  the rest. Tool steps come back as one muted "Tools ran" line, not cards.
+  The next message carries the chat on: a new worker resumes the engine from
+  the saved turns, as the cabin does.
+- The chat open at the last close comes back at launch (`lastChat` in
+  `shell.json`); New chat clears it.
+- Cabin threads stay on the cabin's own History page, so no session file has
+  two writers. History is desktop-only: it isn't in `WEB_COMMANDS`, and a
+  browser sees only the chats it started.
+- Rust tests cover listing, the transcript with folded tool steps, a second
+  worker sending the first turn again, search, rename, delete and that cabin
+  sessions stay out. vitest covers the page, its search and delete prompt,
+  and Chat reopening the last chat. Not yet: the smoke test does not walk
+  History.
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
@@ -432,7 +455,8 @@ The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
 automations, memory, connectors and Pulse (`get_pulse`, `pulse_act`,
 `pulse_discuss`, `pulse_why`, `get_feed_prompt`, `save_feed_prompt`,
-`pulse_image`). Everything else gets `ok: false`: the key, settings changes,
+`pulse_image`) and Nyx's picture (`nyx_look`, gated by the desktop's
+Adults-only setting). Everything else gets `ok: false`: the key, settings changes,
 Local AI and desktop control.
 
 **5b, the desktop side.** Settings → Web access in the shell

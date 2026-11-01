@@ -29,6 +29,13 @@ const EXITS: &[&str] = &[
     "ureq::builder(",
     "ureq::AgentBuilder::new(",
     "ureq::Agent::new(",
+    // ureq 3 (behind the facade since LU-12 stage 5): its agent constructors,
+    // bare so a `use ureq::Agent;` import is caught too, and `ureq::run`.
+    "Agent::new_with_defaults(",
+    "Agent::new_with_config(",
+    "Agent::with_parts(",
+    ".new_agent(",
+    "ureq::run(",
     // The app's own client (`grokhub_core::http`): each agent counts where it's built.
     "http::agent(",
     "reqwest::blocking::Client::builder(",
@@ -59,14 +66,14 @@ const EXITS: &[&str] = &[
 /// switch is on. "loopback" and "LAN" sites stay allowed by design.
 const GUARDED: &[(&str, usize, &str)] = &[
     // The HTTP facade: a factory, counted again at every caller listed here.
-    ("crates/grokhub-core/src/http.rs", 1, "agent factory (LU-12): no guard of its own; each caller below runs its guard first, and public_only dials public_only_resolve (refuses all while on)"),
+    ("crates/grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; each caller below runs its guard first, and public_only dials public_only_resolve (refuses all while on)"),
     // Model providers.
     ("crates/grokhub-agent/src/client.rs", 1, "XaiClient::once: egress guard (api.x.ai); a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
     ("crates/grokhub-app/src/xai.rs", 1, "cabin Grok calls (STT, TTS, Imagine): egress_ok"),
     // Model registry, probes, connectivity.
     ("crates/grokhub-agent/src/route/sources.rs", 1, "model listing: egress guard; token probe: offline::check_url"),
-    ("crates/grokhub-core/src/connectivity.rs", 1, "reqwest client for the re-probe: run_probe_if_due sends nothing while on"),
+    ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
     ("crates/grokhub-app/src/app/net_log_ui.rs", 1, "resolver connect probe and speed test: offline::refuse first"),
     // Web tools, Pulse, GitHub, plugins.
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
@@ -81,6 +88,9 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
+    ("crates/grokhub-app/src/app/gw2_ui.rs", 1, "Guild Wars 2 API: egress_ok"),
+    ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
+    ("crates/grokhub-app/src/app/osrs_ui.rs", 1, "OSRS hiscores: egress_ok"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
@@ -106,13 +116,14 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/remote.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).
-    ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1"),
+    ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1 (facade agent, loopback-only resolver)"),
     ("crates/grokhub-core/src/game_watch_rl.rs", 1, "Rocket League Stats API on 127.0.0.1, read only"),
     ("crates/grokhub-core/src/game_watch_gsi.rs", 1, "game state integration listener's self-wake on 127.0.0.1"),
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
     ("crates/grokhub-app/src/app/loadout_home.rs", 1, "home feed word list"),
+    ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
 ];
 
 /// Scanners name every exit pattern themselves.
@@ -236,6 +247,25 @@ fn every_network_exit_obeys_offline_only() {
         "the walk found too little: {found:?}"
     );
     assert_eq!(unguarded(&found, GUARDED), Vec::<String>::new());
+}
+
+#[test]
+fn a_direct_ureq_3_client_counts_as_an_exit() {
+    let root = std::env::temp_dir().join(format!("offline-guard-ureq3-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let src = root.join("crates").join("demo").join("src");
+    fs::create_dir_all(&src).unwrap();
+    let fixture = "use ureq::Agent;\n\
+                   pub fn a() { let _ = Agent::new_with_defaults(); }\n\
+                   pub fn b() { let _ = ureq::Agent::with_parts(c, k, r); }\n\
+                   pub fn c() { let _ = ureq::config::Config::builder().build().new_agent(); }\n\
+                   pub fn d() { let _ = ureq::run(req); }\n";
+    fs::write(src.join("feed.rs"), fixture).unwrap();
+    assert_eq!(
+        scan(&root, &["crates"]),
+        BTreeMap::from([("crates/demo/src/feed.rs".to_string(), 4)])
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

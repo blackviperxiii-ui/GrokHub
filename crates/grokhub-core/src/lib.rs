@@ -37,6 +37,7 @@ pub mod cursor_motion;
 pub mod daily_drop;
 pub mod desktop_entry;
 pub mod desktop_mcp;
+pub mod destiny_api;
 pub mod diagnostics;
 pub mod doctor;
 pub mod downloads_tidy;
@@ -89,6 +90,7 @@ pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
 pub mod ask_offers;
 pub mod day_brief;
+pub mod gw2_api;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
@@ -115,11 +117,13 @@ pub mod oauth;
 pub mod offline;
 pub mod openclaw;
 pub mod organs;
+pub mod osrs_hiscores;
 pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
 pub mod paths;
 pub mod pc_health;
+pub mod pc_health_advice;
 pub mod personality;
 pub mod pii;
 pub mod pkce;
@@ -184,6 +188,8 @@ pub mod wind_down;
 pub mod windshield;
 pub mod wire;
 pub mod work_item;
+pub mod work_resume;
+pub mod work_run;
 pub mod workboard;
 pub mod wow_addon;
 pub mod wow_saved;
@@ -705,9 +711,10 @@ pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,
     automation_needs_follow_up, card_notes_hash, card_work_prompt, clean_card_notes,
     extract_work_pins, extract_work_updates, file_follow_up, file_idea_todo, follow_up_title,
-    idea_todo_title, inflight_card_title, parse_work_pin, parse_work_update, release_inflight_card,
-    settle_inflight_card, take_card_notes_block, todo_task_line, upsert_inflight_card, BoardCard,
-    BoardStatus, KanbanColumn, CARD_NOTES_MAX, FOLLOW_UP_REPORT_MAX,
+    idea_todo_title, inflight_card_title, interrupt_inflight_card, parse_work_pin,
+    parse_work_update, release_inflight_card, resume_inflight_card, settle_inflight_card,
+    take_card_notes_block, todo_task_line, upsert_inflight_card, BoardCard, BoardStatus,
+    KanbanColumn, CARD_NOTES_MAX, FOLLOW_UP_REPORT_MAX,
 };
 pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 

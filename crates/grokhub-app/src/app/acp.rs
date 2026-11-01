@@ -2,6 +2,7 @@
 //! unattended receivers.
 
 use super::*;
+use grokhub_core::work_resume::InterruptCause;
 
 impl Cabin {
     pub(super) fn fail_turn_start(&mut self, detail: &str) {
@@ -124,6 +125,7 @@ impl Cabin {
                         self.store_hub_frame(url);
                     }
                     self.ingest_tool_card(&card);
+                    self.log_run_tool(&card);
                     let watched = card.clone();
                     if self.stream_here() {
                         self.scrub_live_blocks();
@@ -285,7 +287,7 @@ impl Cabin {
                     }
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();
                     self.maybe_continue_ptt();
@@ -563,7 +565,7 @@ impl Cabin {
                             self.status.clear();
                         }
                         self.post_turn_crash();
-                        self.abandon_turn_card();
+                        self.interrupt_turn_card(InterruptCause::WorkerGone);
                         self.chat_job_thread = None;
                         self.persist();
                     }
@@ -574,7 +576,7 @@ impl Cabin {
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();
                 }
@@ -604,7 +606,7 @@ impl Cabin {
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::WorkerGone);
                     self.chat_job_thread = None;
                     self.persist();
                 }

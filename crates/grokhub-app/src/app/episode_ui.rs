@@ -190,6 +190,7 @@ impl Cabin {
             let _ = hx::append_span(&crate::config::config_dir(), &span);
             self.deny_episode_parks(&e);
         }
+        self.log_episode_end(&e.chat_id, why.as_str());
         self.harness.episode = None;
     }
 

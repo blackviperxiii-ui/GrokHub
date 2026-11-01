@@ -1008,40 +1008,27 @@ impl Cabin {
         )
     }
 
-    /// Resume a paused or interrupted card.
-    ///
-    /// Stub for KB-03, which replaces the body with the capped resume block
-    /// (KB-04: at most `RESUME_BLOCK_MAX` bytes, sent once in the turn input and
-    /// never in the system prompt). Until then it carries on in the card's chat
-    /// the way "Work on it" does, so it adds no new board text to any turn. A
-    /// refusal (a chat already running, no agent) lands in the bell as "Resume
-    /// failed" with a way back to the card.
+    /// Resume a paused or interrupted card from its checkpoint (KB-03): the
+    /// capped resume block goes once in the resume turn's input, never in the
+    /// system prompt. A refusal (a chat already running, no agent, a game
+    /// running for a desktop step) lands in the bell as "Resume failed" with a
+    /// way back to the card.
     pub(super) fn resume_work_card(&mut self, id: &str) -> bool {
         self.board_view.open = Some(id.to_string());
-        if self.say_on_card(id, "") {
-            return true;
-        }
+        let why = match self.resume_card_now(id, false) {
+            Ok(()) => return true,
+            Err(why) => why,
+        };
+        self.board_view.note = Some((id.to_string(), why.clone()));
         let title = self
             .board
             .iter()
             .find(|c| c.id == id)
             .map(|c| c.title.trim().to_string())
             .unwrap_or_default();
-        let why = self
-            .board_view
-            .note
-            .as_ref()
-            .filter(|(n, _)| n == id)
-            .map(|(_, t)| t.clone())
-            .unwrap_or_default();
-        let text = if why.is_empty() {
-            format!("Resume failed: {title}")
-        } else {
-            format!("Resume failed: {title}. {why}")
-        };
         self.notify(
             super::notices::NoticeKind::Error,
-            text,
+            format!("Resume failed: {title}. {why}"),
             Some(super::notices::NoticeAction::OpenCard(id.to_string())),
         );
         false
@@ -1051,10 +1038,14 @@ impl Cabin {
     /// goes to the bell once, with a way to its card. Cards already paused when
     /// this session first looked stay quiet, and so do cards you touched.
     pub(super) fn tick_board_notices(&mut self) {
+        let now = now_ms();
         let paused: Vec<(String, String)> = self
             .board
             .iter()
             .filter(|c| card_can_resume(c) && !c.touched)
+            // The agent's own interrupted work resumes on its own first; the
+            // bell speaks only if that is used up (KB-03).
+            .filter(|c| grokhub_core::work_resume::auto_resume_decision(c, now).is_none())
             .map(|c| (c.id.clone(), c.title.trim().to_string()))
             .collect();
         let Some(seen) = self.board_view.paused_seen.as_mut() else {
@@ -1393,6 +1384,7 @@ impl Cabin {
         } else {
             text.trim().to_string()
         };
+        self.work_resume.follow = None;
         // Notes and a Follow up card's newest report go with this message, once each.
         self.card_notes_follow = grokhub_core::take_card_notes_block(&mut self.board, &thread_id);
         self.bg.results_follow = None;

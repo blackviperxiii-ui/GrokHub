@@ -1,0 +1,1 @@
+- Shell Pulse: PC health cards now show a one-line read of their numbers and a Fix it / Options window with things to try. Every card has the same two buttons: the main one, filled, and a second one, outlined.

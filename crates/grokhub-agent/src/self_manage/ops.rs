@@ -81,6 +81,9 @@ pub fn run(
         ),
         "automation_delete" => control::delete_automation(&arg(args, "id")),
         "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
+        "work_get" | "work_list" | "work_update" | "work_add" | "work_archive" => {
+            super::work::run(ctx, tool, args)
+        }
         "know_me_tags" => Ok(grokhub_core::know_me::load(
             &ctx.config_dir.join(grokhub_core::know_me::FILE_NAME),
         )

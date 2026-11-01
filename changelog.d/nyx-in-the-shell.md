@@ -1,0 +1,1 @@
+- Shell: Nyx shows in the chat, with a face by Grok's replies and in the empty chat, and a docked card on wide windows whose pose follows what the chat is doing. Settings → Personality shows each voice's picture. Explicit art shows only with Adults-only personalities on.

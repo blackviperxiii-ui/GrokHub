@@ -56,6 +56,12 @@ pub(super) struct FocusState {
     pub rl: super::rl_ui::RlUi,
     /// The Loadout Factorio mod and what it wrote.
     pub factorio: super::factorio_ui::FactorioUi,
+    /// Guild Wars 2 through ArenaNet's web API.
+    pub gw2: super::gw2_ui::Gw2Ui,
+    /// Destiny 2 through Bungie.net's web API.
+    pub destiny: super::destiny_ui::DestinyUi,
+    /// Old School RuneScape through Jagex's hiscores.
+    pub osrs: super::osrs_ui::OsrsUi,
 }
 
 impl Cabin {
@@ -69,6 +75,7 @@ impl Cabin {
         self.tick_backup();
         self.tick_board_store();
         self.tick_board_notices();
+        self.tick_work_resume();
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();
@@ -82,6 +89,9 @@ impl Cabin {
         self.tick_eso();
         self.tick_rl();
         self.tick_factorio();
+        self.tick_gw2();
+        self.tick_destiny();
+        self.tick_osrs();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

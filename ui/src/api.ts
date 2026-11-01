@@ -291,6 +291,61 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** A saved chat on the History page (src-tauri/src/history.rs). */
+export interface ChatRow {
+  id: string;
+  title: string;
+  /** Unix ms the chat started. */
+  created: number;
+  /** Unix ms of its last saved turn. */
+  updated: number;
+  model: string;
+}
+
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
+export type LineRole = "user" | "assistant" | "tools";
+
+export interface TranscriptLine {
+  role: LineRole;
+  text: string;
+}
+
+/** A saved chat as Chat shows it: the newest lines, and how many older ones were left out. */
+export interface Transcript {
+  id: string;
+  title: string;
+  lines: TranscriptLine[];
+  earlier: number;
+}
+
+/** History is this computer's; the web app never calls these. */
+export function listChats(): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("list_chats");
+}
+
+export function searchChats(query: string): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("search_chats", { query });
+}
+
+/** Opens a saved chat; the next message in it carries on from its saved turns. */
+export function loadChat(id: string, limit?: number): Promise<Transcript> {
+  return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
+}
+
+/** The chat open when the app last closed, if it is still saved. */
+export function getLastChat(): Promise<Transcript | null> {
+  return invoke<Transcript | null>("get_last_chat");
+}
+
+export function renameChat(id: string, title: string): Promise<void> {
+  return invoke<void>("rename_chat", { id, title });
+}
+
+/** Deletes the saved chat; a reply still running in it stops. */
+export function deleteChat(id: string): Promise<void> {
+  return invoke<void>("delete_chat", { id });
+}
+
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
@@ -623,6 +678,14 @@ export interface PulsePost {
   /** The first source link, empty when there is none. */
   link: string;
   loved: boolean;
+  /** What the card's numbers mean, when it has a read of them. */
+  verdict: PulseVerdict | null;
+}
+
+/** A card's one-line read of its own numbers, and how worried to be. */
+export interface PulseVerdict {
+  tone: "fine" | "watch" | "act";
+  line: string;
 }
 
 /** One Ideas row: something GrokHub could do next. */
@@ -637,6 +700,46 @@ export interface PulseIdea {
   kind: string;
   /** What Let's do it puts in the chat box. */
   action: string;
+  verdict: PulseVerdict | null;
+  /** "Fix it" or "Options" on a PC health card: its main button opens the
+   * options window. Empty on other ideas. */
+  fix: string;
+}
+
+export type FixKind =
+  | "compare"
+  | "fpsCap"
+  | "upscale"
+  | "airflow"
+  | "fanCurve"
+  | "repaste"
+  | "quietWhenNormal"
+  | "warnLines"
+  | "pause"
+  | "ask";
+
+export interface FixOption {
+  kind: FixKind;
+  title: string;
+  why: string;
+  /** Steps the person follows; empty for rows that act in the app. */
+  steps: string[];
+}
+
+export interface CompareRow {
+  session: string;
+  time: string;
+  gpuPeak: string;
+  cpuPeak: string;
+  gpuBusy: string;
+}
+
+/** A PC health card's options window. */
+export interface FixView {
+  title: string;
+  verdict: PulseVerdict | null;
+  options: FixOption[];
+  compare: CompareRow[];
 }
 
 export interface PulsePage {
@@ -683,6 +786,11 @@ export function pulseWhy(id: string): Promise<string> {
   return invoke<string>("pulse_why", { id });
 }
 
+/** A PC health card's options window. Read only. */
+export function pulseFix(id: string): Promise<FixView> {
+  return invoke<FixView>("pulse_fix", { id });
+}
+
 /** The Feed prompt the writer follows, and what its last run did. */
 export interface FeedPrompt {
   text: string;
@@ -702,6 +810,57 @@ export function saveFeedPrompt(text: string): Promise<FeedPrompt> {
 /** A cached gallery image as a data URL; pages never load it from its site. */
 export function pulseImage(name: string): Promise<string> {
   return invoke<string>("pulse_image", { name });
+}
+
+/** The Imagine page (src-tauri/src/imagine.rs). Its gallery is the cabin's wall. */
+export type ImagineKind = "image" | "video";
+
+export interface ImagineTile {
+  id: string;
+  /** Read it with `imagineImage`. */
+  name: string;
+  title: string;
+  prompt: string;
+  createdMs: number;
+  video: boolean;
+  tall: boolean;
+}
+
+export interface ImaginePage {
+  /** Newest first. */
+  tiles: ImagineTile[];
+  /** A Grok sign-in or a key is there, so Make can run. */
+  ready: boolean;
+}
+
+export interface ImagineMade {
+  page: ImaginePage;
+  made: number;
+  /** Empty, or which results could not be saved. */
+  note: string;
+}
+
+export function getImagine(): Promise<ImaginePage> {
+  return invoke<ImaginePage>("get_imagine");
+}
+
+/** Resolves once the results are saved; `imagineCancel` ends it early. */
+export function imagineGenerate(
+  prompt: string,
+  aspect: string,
+  count: number,
+  kind: ImagineKind,
+): Promise<ImagineMade> {
+  return invoke<ImagineMade>("imagine_generate", { prompt, aspect, count, kind });
+}
+
+export function imagineCancel(): Promise<boolean> {
+  return invoke<boolean>("imagine_cancel");
+}
+
+/** A gallery file as a data URL, by its bare name. */
+export function imagineImage(name: string): Promise<string> {
+  return invoke<string>("imagine_image", { name });
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */
@@ -754,6 +913,64 @@ export function journalAct(id: string, act: JournalAct): Promise<JournalPage> {
 
 export function journalToMission(id: string, conversationId: string): Promise<JournalMission> {
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
+}
+
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
+export interface BoardCard {
+  id: string;
+  title: string;
+  detail: string;
+  /** Your notes for the agent; Work hands them over. */
+  notes: string;
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
+}
+
+export interface BoardColumn {
+  lane: BoardLane;
+  label: string;
+  cards: BoardCard[];
+}
+
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
+}
+
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" };
+
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
+}
+
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
@@ -1246,6 +1463,65 @@ export function installShellUpdate(): Promise<void> {
 
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** The Skills page (src-tauri/src/skills.rs). Read only. */
+export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** What Use puts in the chat box. */
+  trigger: string;
+  source: SkillSource;
+  /** The skill's folder, empty for a built-in. */
+  folder: string;
+}
+
+export interface SkillPage {
+  rows: SkillRow[];
+}
+
+export function getSkills(): Promise<SkillPage> {
+  return invoke<SkillPage>("get_skills");
+}
+
+/** The shell finds the folder from the source and name itself. */
+export function openSkillFolder(source: SkillSource, name: string): Promise<void> {
+  return invoke<void>("open_skill_folder", { source, name });
+}
+
+/** A background task's status on the Agents page (src-tauri/src/queue.rs). */
+export type TaskStatus = "running" | "failed" | "done" | "stopped";
+
+/** A background command, subagent or monitor of the open chat. */
+export interface QueueTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Still going, so Stop has something to stop. */
+  live: boolean;
+}
+
+/** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
+export interface QueueTodo {
+  id: string;
+  content: string;
+  status: string;
+}
+
+export interface Queue {
+  todos: QueueTodo[];
+  tasks: QueueTask[];
+}
+
+export function getQueue(conversationId: string): Promise<Queue> {
+  return invoke<Queue>("get_queue", { conversationId });
+}
+
+/** Stops one task, or every task of the chat when `taskId` is left out. */
+export function stopTask(conversationId: string, taskId?: string): Promise<Queue> {
+  return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
 }
 
 /** Settings → Behavior, saved in shell.json. Everything starts off. */

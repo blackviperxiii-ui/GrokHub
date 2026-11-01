@@ -257,9 +257,11 @@ impl Drop for Running {
     }
 }
 
-/// One unattended run of `job` in Ask mode. It records nothing on the row.
-/// The session is read-only, as the cabin's scheduled Ask jobs are, so an
-/// allow rule cannot turn a refused write into one that runs.
+/// One unattended run of `job` in Ask mode, as the shell's scheduler fires it.
+/// It records nothing on the row. The session is read-only, as the cabin's
+/// scheduled Ask jobs are, so an allow rule cannot turn a refused write into
+/// one that runs. Like the cabin's scheduled run, it takes the automation's
+/// board card into Doing and logs the start and end on it.
 pub fn execute(
     config_dir: &Path,
     job: &Automation,
@@ -267,8 +269,22 @@ pub fn execute(
     model: &str,
     workspace: PathBuf,
 ) -> RunResult {
+    run_on_board(config_dir, job, client, model, workspace, "scheduled")
+}
+
+/// `execute`, with `why` as the note on the card's start log line.
+fn run_on_board(
+    config_dir: &Path,
+    job: &Automation,
+    client: Arc<dyn ModelClient + Send + Sync>,
+    model: &str,
+    workspace: PathBuf,
+    why: &str,
+) -> RunResult {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
+    let session_id = format!("shell-auto-{}-{started}", job.id);
+    let card = board_run_start(config_dir, job, &session_id, model, started, why);
     let system = crate::agent::system_prompt(&workspace, false, "");
     let done = grokhub_agent::run_unattended(UnattendedRun {
         client,
@@ -276,7 +292,7 @@ pub fn execute(
         model: model.to_string(),
         effort: None,
         system,
-        session_id: format!("shell-auto-{}-{started}", job.id),
+        session_id,
         auth_kind: AuthKind::ApiKey,
         prompt: job.instructions.clone(),
         image: None,
@@ -289,11 +305,13 @@ pub fn execute(
         imagine_bearer: String::new(),
         resume: false,
     });
-    RunResult {
+    let result = RunResult {
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
-    }
+    };
+    board_run_end(config_dir, job, card.as_deref(), &result);
+    result
 }
 
 impl RunResult {
@@ -326,7 +344,7 @@ pub fn run_now(
         })?;
     let _running = Running::claim(id)?;
     let started = grokhub_core::now_ms();
-    let result = execute(config_dir, &job, client, model, workspace);
+    let result = run_on_board(config_dir, &job, client, model, workspace, "run now");
     change(config_dir, id, |list, at| {
         let ran = grokhub_core::mark_automation_ran(list[at].clone(), started);
         list[at] = settle(ran, &result);
@@ -374,6 +392,114 @@ pub fn settle_run(config_dir: &Path, id: &str, result: &RunResult) -> Result<(),
         list[at] = settle(list[at].clone(), result);
     })
     .map(drop)
+}
+
+/// KB-02: Run now and a shell scheduled run take the automation's one board
+/// card into Doing, as the cabin's scheduled run does. A board that cannot be read is left alone and the
+/// run still goes. No model is involved.
+fn board_run_start(
+    config_dir: &Path,
+    job: &Automation,
+    session: &str,
+    model: &str,
+    now: u64,
+    why: &str,
+) -> Option<String> {
+    use grokhub_core::{work_resume as res, work_run as wr};
+    let id = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        let id = wr::begin_automation_card(cards, &job.id, &job.name, session, model, now);
+        // KB-03: the shell runs it unattended in Ask, and a shell restart
+        // interrupts it, not the cabin's.
+        if let Some(c) = cards.iter_mut().find(|c| c.id == id) {
+            res::claim_run(c, res::HOST_SHELL, grokhub_core::wire::PermissionMode::Ask);
+        }
+        id
+    })
+    .ok()?;
+    let _ = grokhub_core::work_item::append_work_log(
+        &wr::work_dir(config_dir),
+        &id,
+        now,
+        wr::LOG_START,
+        why,
+    );
+    Some(id)
+}
+
+/// The run's final checkpoint. A reply that needs you files the Follow up card,
+/// as in the cabin; a quiet run lets the agent's untouched card archive itself.
+fn board_run_end(config_dir: &Path, job: &Automation, card: Option<&str>, done: &RunResult) {
+    use grokhub_core::work_resume as res;
+    use grokhub_core::work_run::{self as wr, RunEnd};
+    let Some(card) = card else {
+        return;
+    };
+    let now = grokhub_core::now_ms();
+    let failed = done.failed();
+    let end = if failed {
+        RunEnd::Failed(done.error.clone())
+    } else {
+        RunEnd::Done
+    };
+    let report = !failed && grokhub_core::automation_needs_follow_up(&job.instructions, &done.text);
+    let title = if job.name.trim().is_empty() {
+        &job.instructions
+    } else {
+        &job.name
+    };
+    // KB-03: a failed run is Interrupted (Blocked with its checkpoint), so the
+    // cabin can resume it from there.
+    let cut = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        let cut = cards
+            .iter_mut()
+            .rev()
+            .find(|c| {
+                c.automation.as_deref() == Some(job.id.as_str())
+                    && c.status == grokhub_core::BoardStatus::InProgress
+            })
+            .is_some_and(|c| res::interrupt_failed(c, &end, now));
+        if !cut {
+            wr::finish_automation_card(cards, &job.id, &end, report, now);
+            if report {
+                grokhub_core::file_follow_up(cards, &job.id, title, &done.text, now);
+            }
+        }
+        cut
+    })
+    .unwrap_or(false);
+    let line = if cut {
+        format!("interrupted: {}", done.error.trim())
+    } else {
+        end.log_text()
+    };
+    let _ = grokhub_core::work_item::append_work_log(
+        &wr::work_dir(config_dir),
+        card,
+        now,
+        wr::LOG_END,
+        &line,
+    );
+}
+
+/// KB-03: at shell startup no shell run is live, so every Doing card a shell
+/// run left behind is Interrupted, with a log line. Cabin runs are left alone.
+pub fn interrupt_board_orphans(config_dir: &Path) -> Vec<String> {
+    use grokhub_core::{work_resume as res, work_run as wr};
+    let now = grokhub_core::now_ms();
+    let cut = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+        res::interrupt_orphans(cards, res::HOST_SHELL, &[], now)
+    })
+    .unwrap_or_default();
+    for id in &cut {
+        let _ = grokhub_core::work_item::append_work_log(
+            &wr::work_dir(config_dir),
+            id,
+            now,
+            wr::LOG_END,
+            &format!("interrupted: {}", res::InterruptCause::Restart.text()),
+        );
+    }
+    cut
 }
 
 #[cfg(test)]
@@ -728,5 +854,96 @@ mod tests {
         assert_eq!(row.run_count, 1);
         assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);
         assert!(row.last_run.is_some());
+        // KB-02: the run checkpointed one automation card, with start and end lines.
+        let board =
+            grokhub_core::work_run::read_board_file(&dir.join("workboard.json")).expect("board");
+        let card = board
+            .iter()
+            .find(|c| c.automation.as_deref() == Some(row.id.as_str()))
+            .expect("automation card");
+        assert_eq!(card.kind, grokhub_core::WorkKind::Automation);
+        assert_eq!(card.checkpoint.as_ref().map(|c| c.attempt), Some(1));
+        let log: Vec<String> = grokhub_core::work_item::read_work_log(&dir.join("work"), &card.id)
+            .into_iter()
+            .map(|e| e.text)
+            .collect();
+        assert_eq!(log, ["run now", "done"]);
+    }
+    struct Stalls;
+
+    impl ModelClient for Stalls {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            Err(ClientError::IdleTimeout)
+        }
+    }
+
+    /// KB-03: a failed shell run is Interrupted on its card, and a shell
+    /// restart interrupts the shell's orphaned Doing cards but not the cabin's.
+    #[test]
+    fn a_failed_run_and_a_shell_restart_interrupt_the_shells_cards_only() {
+        use grokhub_core::work_resume::{InterruptCause, HOST_CABIN, HOST_SHELL};
+        use grokhub_core::work_run as wr;
+        use grokhub_core::BoardStatus;
+        let (dir, workspace) = (temp_dir("cut-cfg"), temp_dir("cut-ws"));
+        let id = add(&dir, "every day at 7am check the build", tuesday_8am()).expect("a")[0]
+            .id
+            .clone();
+        let result = run_now(&dir, &id, Arc::new(Stalls), "grok-4.7", workspace).expect("ran");
+        assert!(result.failed(), "{result:?}");
+
+        let board = wr::read_board_file(&wr::board_path(&dir)).expect("board");
+        let card = board
+            .iter()
+            .find(|c| c.automation.as_deref() == Some(id.as_str()))
+            .expect("card");
+        assert_eq!(card.status, BoardStatus::Blocked);
+        assert_eq!(
+            (card.run_state.host.as_str(), card.run_state.mode.as_str()),
+            (HOST_SHELL, "ask")
+        );
+        let cut = card.run_state.interrupted.as_ref().expect("interrupted");
+        assert_eq!(cut.cause, InterruptCause::from_failure(&result.error));
+        let log: Vec<String> =
+            grokhub_core::work_item::read_work_log(&wr::work_dir(&dir), &card.id)
+                .into_iter()
+                .map(|e| e.text)
+                .collect();
+        assert_eq!(log[0], "run now");
+        assert!(log[1].starts_with("interrupted: "), "{log:?}");
+
+        // The shell quit with one of its runs and one of the cabin's in Doing.
+        let mut board = board;
+        for (host, title) in [(HOST_SHELL, "shell run"), (HOST_CABIN, "cabin run")] {
+            let mut c = grokhub_core::BoardCard::new(title, "", "");
+            c.status = BoardStatus::InProgress;
+            wr::begin_run(
+                &mut c,
+                grokhub_core::WorkKind::Automation,
+                "s",
+                "grok-4.7",
+                1,
+            );
+            c.run_state.host = host.to_string();
+            board.push(c);
+        }
+        let (shell_id, cabin_id) = (board[1].id.clone(), board[2].id.clone());
+        wr::edit_board_file(&wr::board_path(&dir), 2, |cards| *cards = board).expect("seed");
+
+        assert_eq!(interrupt_board_orphans(&dir), vec![shell_id.clone()]);
+        let board = wr::read_board_file(&wr::board_path(&dir)).expect("board");
+        let status = |id: &str| board.iter().find(|c| c.id == id).map(|c| c.status);
+        assert_eq!(status(&shell_id), Some(BoardStatus::Blocked));
+        assert_eq!(status(&cabin_id), Some(BoardStatus::InProgress));
+        let shell = board.iter().find(|c| c.id == shell_id).expect("shell card");
+        assert_eq!(
+            shell.run_state.interrupted.as_ref().map(|i| i.cause),
+            Some(InterruptCause::Restart)
+        );
+        assert!(interrupt_board_orphans(&dir).is_empty());
     }
 }

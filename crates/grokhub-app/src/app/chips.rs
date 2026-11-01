@@ -690,6 +690,13 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        // KB-03: a resume turn runs on the card it resumes, already in Doing.
+        if self.work_resume.pending.take().is_some() {
+            self.inflight_open = true;
+            self.begin_run_card(&id);
+            self.flush_board();
+            return;
+        }
         // A reply in a Follow up card's chat is that card's work, not a new Doing card.
         if self
             .board
@@ -707,6 +714,7 @@ impl Cabin {
         }
         self.inflight_open = true;
         if upsert_inflight_card(&mut self.board, &id, &title) {
+            self.begin_run_card(&id);
             self.flush_board();
         }
     }
@@ -714,10 +722,15 @@ impl Cabin {
     /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
     /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
     pub(super) fn settle_turn_card(&mut self, assistant: &str) {
-        self.inflight_open = false;
+        self.work_resume.follow = None;
         let Some(id) = self.chat_job_thread.clone() else {
+            self.inflight_open = false;
             return;
         };
+        if self.inflight_open {
+            self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Done);
+        }
+        self.inflight_open = false;
         let mut changed = settle_inflight_card(&mut self.board, &id);
         if apply_assistant_work_marks(&mut self.board, assistant, &id) {
             changed = true;
@@ -741,6 +754,7 @@ impl Cabin {
 
     /// The turn never finished. Undoes the Doing card this attempt filed.
     pub(super) fn abandon_turn_card(&mut self) {
+        self.drop_pending_resume();
         if !self.inflight_open {
             return;
         }
@@ -748,6 +762,7 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        self.end_run_card(&id, &grokhub_core::work_run::RunEnd::Stopped);
         if abandon_inflight_card(&mut self.board, &id) {
             self.flush_board();
             if let Some(title) = self
@@ -774,7 +789,7 @@ impl Cabin {
         if !crate::work_store::sweep_due(&path, now) {
             return;
         }
-        let live: Vec<String> = self.chat_job_thread.iter().cloned().collect();
+        let live = self.live_card_ids();
         let report = grokhub_core::sweep_work_cards(&mut self.board, now, &live);
         if !report.is_empty() {
             self.note_board_sweep(&report);

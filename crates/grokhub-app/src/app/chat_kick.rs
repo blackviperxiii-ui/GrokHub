@@ -8,6 +8,8 @@ impl Cabin {
         // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
         let queue_asked = std::mem::take(&mut self.bg.queue_next);
         self.turn_retried = false;
+        // A typed turn is never a resume turn: the resume block went once (KB-03).
+        self.work_resume.follow = None;
         let mut text = text.trim().to_string();
         if text.is_empty() {
             return;
@@ -295,7 +297,9 @@ impl Cabin {
                     })
             }
         };
-        let with_notes = apply_skill_follow(&raw_ask, self.card_notes_follow.as_deref());
+        // KB-03: the resume block rides in this turn's input only, never the system prompt.
+        let with_resume = apply_skill_follow(&raw_ask, self.work_resume.follow.as_deref());
+        let with_notes = apply_skill_follow(&with_resume, self.card_notes_follow.as_deref());
         let with_bg = apply_skill_follow(&with_notes, self.bg.results_follow.as_deref());
         let with_skill = apply_skill_follow(&with_bg, self.active_skill_follow.as_deref());
         let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());

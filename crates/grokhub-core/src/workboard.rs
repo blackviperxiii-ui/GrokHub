@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::uid;
 use crate::work_item::{Checkpoint, WorkKind, WorkOrigin, WorkStep};
+use crate::work_resume::{interrupt_card, InterruptCause, RunState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +166,9 @@ pub struct BoardCard {
     /// Bumped on every change. When two writers save, the higher rev wins per card.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rev: u64,
+    /// KB-03: who runs it, in which mode, and how its last run was interrupted.
+    #[serde(default, skip_serializing_if = "RunState::is_empty")]
+    pub run_state: RunState,
     /// How this hook put the card in Doing. Cleared on settle. Not persisted.
     #[serde(skip)]
     undo: Option<InflightUndo>,
@@ -448,12 +452,18 @@ impl BoardCard {
             active_ms: 0,
             archived_ms: 0,
             rev: 0,
+            run_state: RunState::default(),
             undo: None,
         }
     }
 
+    /// A run no longer owns the undo of how it entered Doing.
+    pub(crate) fn clear_inflight_undo(&mut self) {
+        self.undo = None;
+    }
+
     /// A card the agent filed (a run, an automation, a pin).
-    fn by_agent(mut self) -> Self {
+    pub(crate) fn by_agent(mut self) -> Self {
         self.origin = Some(WorkOrigin::Agent);
         self
     }
@@ -848,6 +858,46 @@ pub fn abandon_inflight_card(cards: &mut [BoardCard], thread_id: &str) -> bool {
     }
 }
 
+/// The turn was cut short, not stopped: the in-flight run card for this thread
+/// is Interrupted with its checkpoint (KB-03), whether the hook made it or
+/// reused it. True when it was in Doing.
+pub fn interrupt_inflight_card(
+    cards: &mut [BoardCard],
+    thread_id: &str,
+    cause: InterruptCause,
+    now: u64,
+) -> bool {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return false;
+    }
+    let Some(c) = cards.iter_mut().rev().find(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::InProgress
+    }) else {
+        return false;
+    };
+    interrupt_card(c, cause, now)
+}
+
+/// Resume moves the card `id` back into Doing as this thread's run card. A Stop
+/// on the resumed turn puts it back in Blocked, where it was.
+pub fn resume_inflight_card(cards: &mut [BoardCard], id: &str, thread_id: &str) -> bool {
+    let Some(c) = cards.iter_mut().find(|c| c.id == id) else {
+        return false;
+    };
+    if c.status != BoardStatus::Blocked {
+        return false;
+    }
+    c.undo = Some(InflightUndo::Reused {
+        title: c.title.clone(),
+        status: BoardStatus::Blocked,
+    });
+    c.status = BoardStatus::InProgress;
+    c.run = true;
+    c.thread_id = Some(thread_id.to_string());
+    true
+}
+
 /// `WORK_PIN:` adds a card. `WORK_UPDATE:` moves one. Pins inherit `thread_id` when set.
 pub fn apply_assistant_work_marks(cards: &mut Vec<BoardCard>, text: &str, thread_id: &str) -> bool {
     let mut changed = false;
@@ -1147,6 +1197,43 @@ mod tests {
         assert!(!abandon_inflight_card(&mut cards, "thr-1"));
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::InProgress);
+    }
+
+    #[test]
+    fn a_cut_turn_is_interrupted_and_a_stopped_resume_goes_back_to_blocked() {
+        let mut cards = Vec::new();
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
+        assert!(settle_inflight_card(&mut cards, "thr-1"));
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Verify boot"));
+        // A reused card is not rolled back on a cut: the new run keeps its card.
+        assert!(interrupt_inflight_card(
+            &mut cards,
+            "thr-1",
+            InterruptCause::WorkerGone,
+            9
+        ));
+        assert_eq!(cards[0].title, "Verify boot");
+        assert_eq!(cards[0].status, BoardStatus::Blocked);
+        assert!(cards[0].run_state.interrupted.is_some());
+        assert!(!abandon_inflight_card(&mut cards, "thr-1"), "undo is spent");
+        assert!(!interrupt_inflight_card(
+            &mut cards,
+            "thr-1",
+            InterruptCause::WorkerGone,
+            9
+        ));
+
+        let id = cards[0].id.clone();
+        assert!(resume_inflight_card(&mut cards, &id, "thr-2"));
+        assert_eq!(cards[0].status, BoardStatus::InProgress);
+        assert_eq!(cards[0].thread_id.as_deref(), Some("thr-2"));
+        assert!(
+            !resume_inflight_card(&mut cards, &id, "thr-2"),
+            "not Blocked"
+        );
+        assert!(abandon_inflight_card(&mut cards, "thr-2"));
+        assert_eq!(cards[0].status, BoardStatus::Blocked);
+        assert_eq!(cards[0].title, "Verify boot");
     }
 
     #[test]

@@ -13,6 +13,8 @@ mod brand_guard;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
+pub mod history;
+pub mod imagine;
 pub mod interests;
 pub mod journal;
 pub mod library;
@@ -22,6 +24,7 @@ pub mod local_engine;
 mod md_fixtures;
 pub mod memory;
 pub mod models;
+pub mod nyx;
 pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
@@ -33,6 +36,7 @@ pub mod plugins;
 pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
+pub mod queue;
 pub mod remote;
 pub mod remote_devices;
 pub mod remote_tls;
@@ -40,8 +44,10 @@ pub mod remote_tls;
 pub mod scheduler;
 pub mod settings;
 pub mod shell_update;
+pub mod skills;
 pub mod slash;
 pub mod voice;
+pub mod workboard;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -367,6 +373,7 @@ async fn send_chat(
     attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
+    set_last_chat(&state, &conversation_id);
     let turn = Turn {
         text,
         mode,
@@ -381,6 +388,22 @@ struct Turn {
     text: String,
     mode: agent::SessionMode,
     attachments: Vec<String>,
+}
+
+/// The chat the window has open, reopened at the next launch; empty for none.
+/// A failed write only loses that, so chat goes on.
+fn set_last_chat(state: &ShellState, conversation_id: &str) {
+    let now = current(state);
+    if now.last_chat == conversation_id {
+        return;
+    }
+    let next = ShellSettings {
+        last_chat: conversation_id.to_string(),
+        ..now
+    };
+    if settings::save(&state.config_dir, &next).is_ok() {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
 }
 
 async fn chat_turn(
@@ -512,18 +535,26 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     }
 }
 
-/// New chat: the old conversation's worker ends.
+/// New chat: the old conversation's worker ends. Its saved turns stay, so
+/// History can open it again.
 #[tauri::command]
 fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
+    end_chat(&state, &conversation_id);
+}
+
+fn end_chat(state: &ShellState, conversation_id: &str) {
     let removed = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&conversation_id);
+        .remove(conversation_id);
     if let Some(session) = removed {
         session.cancel();
     }
-    state.trays.forget(&conversation_id);
+    if current(state).last_chat == conversation_id {
+        set_last_chat(state, "");
+    }
+    state.trays.forget(conversation_id);
 }
 
 /// The chat model's input kinds, for the chips' notes.
@@ -608,6 +639,94 @@ async fn pick_attachments(
 #[tauri::command]
 fn remove_attachment(state: State<'_, ShellState>, conversation_id: String, path: String) {
     state.trays.remove(&conversation_id, &path);
+}
+
+/// History: the shell's saved chats, newest first.
+#[tauri::command]
+async fn list_chats(state: State<'_, ShellState>) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::list(&dir)).await
+}
+
+#[tauri::command]
+async fn search_chats(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::search(&dir, &query)).await
+}
+
+/// Opens a saved chat: its newest `limit` lines, and it becomes the chat the
+/// next launch reopens. The next message resumes it (`agent::serve`).
+#[tauri::command]
+async fn load_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    limit: Option<usize>,
+) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    let shown =
+        off_main(move || history::load(&dir, &id, limit.unwrap_or(history::LOAD_CAP))).await??;
+    set_last_chat(&state, &shown.id);
+    Ok(shown)
+}
+
+/// The chat open when the window last closed, if it is still saved.
+#[tauri::command]
+async fn get_last_chat(
+    state: State<'_, ShellState>,
+) -> Result<Option<history::Transcript>, String> {
+    let (dir, id) = (state.config_dir.clone(), current(&state).last_chat);
+    if id.is_empty() {
+        return Ok(None);
+    }
+    off_main(move || history::load(&dir, &id, history::LOAD_CAP).ok()).await
+}
+
+#[tauri::command]
+async fn rename_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::rename(&dir, &id, &title)).await?
+}
+
+/// The page asks "Delete {title}?" first. A reply still running stops.
+#[tauri::command]
+async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    let doomed = id.clone();
+    off_main(move || history::delete(&dir, &doomed)).await??;
+    end_chat(&state, &id);
+    Ok(())
+}
+
+/// Agents: the open chat's to-dos and background tasks.
+#[tauri::command]
+async fn get_queue(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || queue::queue(&dir, &conversation_id)).await
+}
+
+/// Agents → Stop: one task by id, or every task of the chat without one.
+#[tauri::command]
+async fn stop_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: Option<String>,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::stop(&conversation_id, task_id.as_deref())?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -962,6 +1081,41 @@ async fn journal_to_mission(
 }
 
 #[tauri::command]
+async fn get_workboard(state: State<'_, ShellState>) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn workboard_add(
+    state: State<'_, ShellState>,
+    title: String,
+    detail: String,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::add(&dir, &title, &detail)).await?
+}
+
+#[tauri::command]
+async fn workboard_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: workboard::Act,
+) -> Result<workboard::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::act(&dir, &id, act)).await?
+}
+
+#[tauri::command]
+async fn workboard_work(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || workboard::work(&dir, &id)).await?
+}
+
+#[tauri::command]
 async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     off_main(move || permissions::load(&dir, &workspace)).await
@@ -1087,6 +1241,31 @@ fn delete_personality(
     Ok(personalities(&state))
 }
 
+/// The chat's Nyx for the voice in use (or `voice`) and what the chat is
+/// doing: a running tool's title, else `mood`. Explicit art only with
+/// Adults-only personalities on.
+#[tauri::command]
+fn nyx_look(
+    state: State<'_, ShellState>,
+    voice: Option<String>,
+    mood: Option<grokhub_core::companion::Mood>,
+    tool: Option<String>,
+) -> Option<nyx::NyxLook> {
+    let now = current(&state);
+    nyx::look(
+        &state.config_dir,
+        voice.as_deref().unwrap_or(&now.personality),
+        now.explicit_personalities,
+        nyx::activity(mood, tool.as_deref()),
+    )
+}
+
+/// Settings → Personality's pictures, by preset id.
+#[tauri::command]
+fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
+    nyx::tiles(&ids, current(&state).explicit_personalities)
+}
+
 #[tauri::command]
 async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
     let dir = state.config_dir.clone();
@@ -1155,6 +1334,29 @@ async fn fetch_plugin_market(
     capabilities::needs(capabilities::current().plugins, "Plugins")?;
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     off_main(move || plugins::fetch_market(&dir, &workspace, &url)).await
+}
+
+#[tauri::command]
+async fn get_skills(state: State<'_, ShellState>) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::load(&dir, &workspace, home.as_deref())).await
+}
+
+/// The page names the skill; the shell finds its folder itself.
+#[tauri::command]
+async fn open_skill_folder(
+    state: State<'_, ShellState>,
+    source: skills::Source,
+    name: String,
+) -> Result<(), String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        skills::folder(&dir, &workspace, home.as_deref(), source, &name)
+            .and_then(|folder| skills::open_folder(&folder))
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -1241,6 +1443,14 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
     off_main(move || pulse::why(&dir, &id)).await?
 }
 
+/// A PC health card's options window. Read only.
+#[tauri::command]
+async fn pulse_fix(state: State<'_, ShellState>, id: String) -> Result<pulse::FixView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::fix(&dir, &id)).await?
+}
+
 #[tauri::command]
 async fn get_feed_prompt(state: State<'_, ShellState>) -> Result<pulse::Prompt, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -1276,6 +1486,56 @@ async fn pulse_act(
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
+}
+
+/// The Imagine page: the gallery (the cabin's wall) and whether chat can sign a call.
+#[tauri::command]
+async fn get_imagine(state: State<'_, ShellState>) -> Result<imagine::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::load(&dir, imagine::ready())).await?
+}
+
+/// Makes images, or one video, through chat's guarded media tool. Resolves
+/// once the results are saved and pinned; Stop ends it early.
+#[tauri::command]
+async fn imagine_generate(
+    state: State<'_, ShellState>,
+    prompt: String,
+    aspect: String,
+    count: u32,
+    kind: imagine::Kind,
+) -> Result<imagine::Made, String> {
+    let dir = state.config_dir.clone();
+    let req = imagine::Request {
+        prompt,
+        aspect,
+        count,
+        kind,
+    };
+    off_main(move || {
+        let bearer = imagine::bearer()?;
+        let run = imagine::start()?;
+        let api = grokhub_agent::imagine_client(&bearer);
+        imagine::generate(
+            &dir,
+            &req,
+            api.as_ref(),
+            &|| run.stopped(),
+            grokhub_core::now_ms(),
+        )
+    })
+    .await?
+}
+
+#[tauri::command]
+fn imagine_cancel() -> bool {
+    imagine::cancel()
+}
+
+#[tauri::command]
+async fn imagine_image(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::image(&dir, &name)).await?
 }
 
 #[tauri::command]
@@ -1582,6 +1842,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             close_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "get_queue" => out(block_on(get_queue(state, own(args)?))?),
+        "stop_task" => out(block_on(stop_task(
+            state,
+            own(args)?,
+            arg(args, "taskId")?,
+        ))?),
         "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
         "add_automation" => out(add_automation(
             state,
@@ -1640,9 +1906,39 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
         "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "pulse_fix" => out(block_on(pulse_fix(state, arg(args, "id")?))?),
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_imagine" => out(block_on(get_imagine(state))?),
+        "imagine_generate" => out(block_on(imagine_generate(
+            state,
+            arg(args, "prompt")?,
+            arg(args, "aspect")?,
+            arg(args, "count")?,
+            arg(args, "kind")?,
+        ))?),
+        "imagine_cancel" => out(imagine_cancel()),
+        "imagine_image" => out(block_on(imagine_image(state, arg(args, "name")?))?),
+        "get_skills" => out(block_on(get_skills(state))?),
+        "nyx_look" => out(nyx_look(
+            state,
+            arg(args, "voice")?,
+            arg(args, "mood")?,
+            arg(args, "tool")?,
+        )),
+        "get_workboard" => out(block_on(get_workboard(state))?),
+        "workboard_add" => out(block_on(workboard_add(
+            state,
+            arg(args, "title")?,
+            arg(args, "detail")?,
+        ))?),
+        "workboard_act" => out(block_on(workboard_act(
+            state,
+            arg(args, "id")?,
+            arg(args, "act")?,
+        ))?),
+        "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2076,6 +2372,12 @@ pub fn run() {
             answer_elicit,
             cancel_chat,
             close_chat,
+            list_chats,
+            search_chats,
+            load_chat,
+            get_last_chat,
+            rename_chat,
+            delete_chat,
             stage_attachment,
             stage_attachment_paths,
             pick_attachments,
@@ -2131,6 +2433,8 @@ pub fn run() {
             plugin_act,
             install_plugin,
             fetch_plugin_market,
+            get_skills,
+            open_skill_folder,
             get_interests,
             add_interest,
             interest_act,
@@ -2138,9 +2442,14 @@ pub fn run() {
             pulse_act,
             pulse_discuss,
             pulse_why,
+            pulse_fix,
             get_feed_prompt,
             save_feed_prompt,
             pulse_image,
+            get_imagine,
+            imagine_generate,
+            imagine_cancel,
+            imagine_image,
             get_local_ai,
             save_local_ai,
             start_local_engine_download,
@@ -2166,6 +2475,14 @@ pub fn run() {
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
             os_extras::set_notifications,
+            nyx_look,
+            nyx_tiles,
+            get_queue,
+            stop_task,
+            get_workboard,
+            workboard_add,
+            workboard_act,
+            workboard_work,
             get_behavior,
             save_behavior,
             save_defaults,

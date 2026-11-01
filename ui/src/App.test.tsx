@@ -34,13 +34,19 @@ vi.mock("./Chat", () => ({
   newConversationId: () => "shell-new",
   Chat: ({
     prefill,
+    open,
+    deleted,
     onSignIn,
   }: {
     prefill?: { text: string; n: number; conversationId?: string };
+    open?: { id: string; n: number };
+    deleted?: { id: string; n: number };
     onSignIn: () => void;
   }) => (
     <div>
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
+      {open && <p>Opened {open.id}</p>}
+      {deleted && <p>Deleted {deleted.id}</p>}
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -54,11 +60,37 @@ vi.mock("./Journal", () => ({
     </button>
   ),
 }));
+vi.mock("./History", () => ({
+  History: ({ onOpen, onDeleted }: { onOpen: (id: string) => void; onDeleted: (id: string) => void }) => (
+    <div>
+      <button type="button" onClick={() => onOpen("shell-old")}>
+        Open old chat
+      </button>
+      <button type="button" onClick={() => onDeleted("shell-gone")}>
+        Delete a chat
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./Workboard", () => ({
+  Workboard: ({ onWork }: { onWork: (prompt: string) => void }) => (
+    <button type="button" onClick={() => onWork("Work on this workboard card: Ship it")}>
+      Work
+    </button>
+  ),
+}));
 vi.mock("./Automations", () => ({
   Automations: () => null,
   resultLine: (r: { text: string; error: string }) => r.error || r.text,
 }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
+vi.mock("./Agents", () => ({
+  Agents: ({ conversationId, onOpenChat }: { conversationId?: string; onOpenChat: () => void }) => (
+    <button type="button" onClick={onOpenChat}>
+      Agents for {conversationId ?? "no chat"}
+    </button>
+  ),
+}));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Devices", () => ({
   Devices: ({ onOpenWebAccess }: { onOpenWebAccess: () => void }) => (
@@ -67,7 +99,15 @@ vi.mock("./Devices", () => ({
     </button>
   ),
 }));
+vi.mock("./Skills", () => ({
+  Skills: ({ onUse }: { onUse: (text: string) => void }) => (
+    <button type="button" onClick={() => onUse("deploy the site")}>
+      Use
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
@@ -105,11 +145,16 @@ describe("App", () => {
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
     expect(tabs()).toEqual([
       "Chat",
+      "History",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
+      "Agents",
       "Memory",
+      "Skills",
       "Connectors",
+      "Workboard",
       "Devices",
       "Library",
       "Settings",
@@ -155,14 +200,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
-  it("leaves the Journal off the web app", async () => {
+  it("leaves the Journal and History off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -171,6 +216,38 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a chat picked in History opens in Chat, and a deleted one is passed on", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete a chat" }));
+    expect(screen.getByText("Deleted shell-gone")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open old chat" }));
+    expect(screen.getByText("Opened shell-old")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Agents follows the chat the window last heard from and links back to Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    expect(await screen.findByRole("button", { name: "Agents for no chat" })).toBeVisible();
+    act(() => {
+      for (const handler of chatHandlers) handler({ conversationId: "shell-c7", event: { kind: "text", text: "hi" } });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Agents for shell-c7" }));
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Work puts the card's prompt in the chat box and opens Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Work" }));
+    expect(screen.getByText("Chat page: Work on this workboard card: Ship it in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -205,6 +282,15 @@ describe("App", () => {
     await userEvent.keyboard("tidy the board");
     await userEvent.click(screen.getByRole("option", { name: "Ask Loadout: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a skill's Use puts its trigger in the chat box and opens Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Skills" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Use" }));
+    expect(screen.getByText("Chat page: deploy the site in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
