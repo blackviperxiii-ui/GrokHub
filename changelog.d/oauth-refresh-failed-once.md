@@ -1,0 +1,1 @@
+- Beta builds again: two sign-in fixes had each added the same sign-in renewal check.
