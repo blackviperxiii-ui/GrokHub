@@ -1444,9 +1444,12 @@ fn edit_puts_your_message_back_without_dropping_a_draft() {
     );
     assert_eq!(
         super::chat_ui::msg_act_labels(true),
-        &["Copy", "Edit", "Reply"]
+        &["Copy", "Edit", "Reply", super::chat_ui::MSG_MORE_LABEL]
     );
-    assert_eq!(super::chat_ui::msg_act_labels(false), &["Copy", "Reply"]);
+    assert_eq!(
+        super::chat_ui::msg_act_labels(false),
+        &["Copy", "Reply", super::chat_ui::MSG_MORE_LABEL]
+    );
     let src = cabin_src();
     let chat = fn_src(&src, "ui_chat");
     assert!(chat.contains("ChatBlockAct::Edit(body)"), "{chat}");
@@ -1987,5 +1990,120 @@ fn main_tab_clear_chat_asks_first_then_wipes_only_main_for_good() {
         assert!(!text.contains("kumquat"), "{file} still holds Main: {text}");
         assert!(text.contains("bring the lamp"), "{file} lost another chat");
     }
+    drop(cfg);
+}
+
+fn seed_turns(id: &str, turns: &[(&str, &str)]) {
+    for pair in turns.chunks(2) {
+        let items: Vec<grokhub_agent::InputItem> = pair
+            .iter()
+            .map(|(role, text)| grokhub_agent::InputItem::Message {
+                role: (*role).into(),
+                content: vec![grokhub_agent::ContentPart::InputText((*text).into())],
+            })
+            .collect();
+        grokhub_agent::record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &grokhub_agent::Usage::default(),
+            "",
+            pair[0].1,
+        )
+        .expect("seed turn");
+    }
+}
+
+#[test]
+fn delete_message_asks_first_then_takes_it_out_of_the_chat_and_the_saved_history() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("delete-message");
+    let mut cabin = Cabin::quiet_for_test();
+    let turns = [
+        ("user", "hi"),
+        ("assistant", "hello"),
+        ("user", "the code is kumquat"),
+        ("assistant", "noted the fruit"),
+        ("user", "bye"),
+        ("assistant", "later"),
+    ];
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    for (role, text) in turns {
+        main.messages_mut().push((role.into(), text.into()));
+    }
+    main.grok_session = Some("native-delete-one".into());
+    seed_turns("native-delete-one", &turns);
+    let main_id = main.id.clone();
+    cabin.threads = vec![main];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let row = |cabin: &mut Cabin, kind: grokhub_core::ChatKind, body: &str| {
+        cabin
+            .cached_chat_views()
+            .iter()
+            .position(|v| v.kind == kind && v.body == body)
+            .expect(body)
+    };
+    let confirm = |cabin: &mut Cabin| match cabin.confirm.take() {
+        Some(super::confirm::ConfirmKind::DeleteMessage { thread, mark, cut }) => {
+            cabin.delete_bubble_confirmed(&thread, mark, cut)
+        }
+        other => panic!("expected the delete question, got {other:?}"),
+    };
+    let said =
+        |cabin: &Cabin| -> Vec<String> { cabin.messages.iter().map(|m| m.1.clone()).collect() };
+    let saved = || grokhub_agent::export_markdown("native-delete-one").expect("export");
+
+    // A reply still running can't be cut.
+    cabin.running = true;
+    cabin.chat_job_thread = Some(main_id.clone());
+    let i = row(&mut cabin, grokhub_core::ChatKind::User, "bye");
+    cabin.ask_delete_bubble(i);
+    assert_eq!(cabin.confirm, None);
+    assert_eq!(cabin.status, grokhub_agent::FORGET_BUSY);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+
+    // The ask only: its reply stays, in the chat and in what the model reads.
+    let i = row(
+        &mut cabin,
+        grokhub_core::ChatKind::User,
+        "the code is kumquat",
+    );
+    cabin.ask_delete_bubble(i);
+    assert_eq!(said(&cabin).len(), 6, "nothing goes before the yes");
+    confirm(&mut cabin);
+    assert_eq!(cabin.status, super::threads_nav::DELETED);
+    assert!(!said(&cabin).iter().any(|m| m.contains("kumquat")));
+    assert!(!saved().contains("kumquat"), "{}", saved());
+    assert!(saved().contains("noted the fruit"));
+    assert!(!cabin.threads[0]
+        .messages
+        .iter()
+        .any(|m| m.1.contains("kumquat")));
+
+    // A reply goes whole: with the ask gone, "hi" is answered by both replies.
+    let i = row(
+        &mut cabin,
+        grokhub_core::ChatKind::Assistant,
+        "noted the fruit",
+    );
+    cabin.ask_delete_bubble(i);
+    confirm(&mut cabin);
+    assert_eq!(said(&cabin), vec!["hi", "bye", "later"]);
+    assert!(!saved().contains("noted the fruit") && !saved().contains("hello"));
+    assert!(saved().contains("later"));
+
+    // The chat moved on between the question and the yes: nothing goes.
+    let i = row(&mut cabin, grokhub_core::ChatKind::User, "bye");
+    cabin.ask_delete_bubble(i);
+    cabin.live_mut().push(("user".into(), "one more".into()));
+    confirm(&mut cabin);
+    assert_eq!(cabin.status, super::threads_nav::DELETE_MOVED_ON);
+    assert_eq!(said(&cabin), vec!["hi", "bye", "later", "one more"]);
+    assert!(saved().contains("bye"));
+    join_persist(&cabin.persist_svc);
     drop(cfg);
 }

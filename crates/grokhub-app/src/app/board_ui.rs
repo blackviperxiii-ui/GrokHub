@@ -1543,6 +1543,7 @@ impl Cabin {
             views.extend(visible_chat_refs([("assistant", turn.as_str())]));
         }
         let mut act = ChatBlockAct::None;
+        let mut delete_view: Option<usize> = None;
         egui::ScrollArea::vertical()
             .id_salt(("board-chat", thread_id))
             .stick_to_bottom(true)
@@ -1575,8 +1576,10 @@ impl Cabin {
                     if view.kind == ChatKind::Thought && painted.thought_fold != fold {
                         write_thought_fold(ui.ctx(), fold_id, painted.thought_fold);
                     }
-                    if !matches!(painted.act, ChatBlockAct::None) {
-                        act = painted.act;
+                    match painted.act {
+                        ChatBlockAct::None => {}
+                        ChatBlockAct::Delete => delete_view = Some(i),
+                        other => act = other,
                     }
                     if painted.drawn {
                         ui.add_space(grokhub_core::CHAT_BLOCK_GAP);
@@ -1606,7 +1609,10 @@ impl Cabin {
                 ui.memory_mut(|m| m.request_focus(board_chat_edit_id(card_id)));
             }
             ChatBlockAct::SaveDiagnostics(_) => {}
-            ChatBlockAct::None => {}
+            ChatBlockAct::Delete | ChatBlockAct::None => {}
+        }
+        if let Some(view) = delete_view {
+            self.ask_delete_bubble_in(thread_id, &views, view);
         }
     }
 
