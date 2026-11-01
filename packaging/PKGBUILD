@@ -2,7 +2,7 @@
 pkgname=grokhub
 pkgver=3.5.0
 pkgrel=1
-pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
+pkgdesc="Loadout: gaming and PC companion, Rust binary, no Electron"
 arch=('x86_64')
 url="https://github.com/blackviperxiii-ui/GrokHub"
 license=('MIT')

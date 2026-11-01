@@ -351,7 +351,7 @@ fn a_third_party_file_needs_the_notice_once() {
     let catalog = file_row(
         Path::new("/m/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf"),
         5 * 1_024 * 1_024 * 1_024,
-        "GrokHub models",
+        "Loadout models",
         &[],
     );
     assert_eq!(

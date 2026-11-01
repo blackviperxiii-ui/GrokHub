@@ -781,7 +781,13 @@ impl Cabin {
                             if kind == ProjectKind::Folder {
                                 crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
                             }
-                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                            Self::nav_row(
+                                ui,
+                                active,
+                                icon,
+                                grokhub_core::project_display_name(&self.projects[idx].name),
+                                false,
+                            )
                         });
                         let row = painted.inner;
                         if row.double_clicked() {
