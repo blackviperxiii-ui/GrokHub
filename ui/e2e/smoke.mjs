@@ -1133,51 +1133,25 @@ async function appearance(s, config) {
   );
 }
 
-// DIAG (temporary): what the window looks like around the first Send.
-async function probe(s, label) {
-  const out = await wd("POST", `${s}/execute/sync`, {
-    script: `
-      const d = (el) => el ? (el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().replace(/\\s+/g, '.') : '') + (el.getAttribute && el.getAttribute('aria-label') ? '[' + el.getAttribute('aria-label') + ']' : '') + ':' + (el.textContent || '').trim().slice(0, 20)) : null;
-      if (!window.__diag) {
-        window.__diag = [];
-        const t0 = performance.now();
-        const ids = new WeakMap(); let next = 1;
-        const id = (n) => { if (!n) return 0; if (!ids.has(n)) ids.set(n, next++); return ids.get(n); };
-        for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu', 'submit', 'focusin', 'focusout', 'selectstart', 'dragstart', 'gotpointercapture', 'lostpointercapture']) {
-          window.addEventListener(type, (e) => window.__diag.push([Math.round(performance.now() - t0), type, d(e.target), id(e.target), e.clientX, e.clientY, e.detail, e.button, e.buttons, e.defaultPrevented, e.isTrusted]), true);
-          window.addEventListener(type, (e) => { if (e.defaultPrevented) window.__diag.push([Math.round(performance.now() - t0), type + ':prevented-at-bubble', d(e.target)]); }, false);
-        }
-        new MutationObserver((list) => { for (const m of list) for (const n of m.removedNodes) window.__diag.push([Math.round(performance.now() - t0), 'removed', d(n.nodeType === 1 ? n : n.parentElement) || String(n.nodeName), d(m.target)]); }).observe(document.body, { childList: true, subtree: true });
-        let frames = 0; const tick = () => { frames++; window.__frames = frames; requestAnimationFrame(tick); }; requestAnimationFrame(tick);
-        const de = document.documentElement;
-        new ResizeObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'resize', innerWidth, innerHeight, de.scrollWidth, de.scrollHeight])).observe(de);
-        const tabs = document.querySelector('nav.tabs');
-        if (tabs) new MutationObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'tabs', tabs.children.length])).observe(tabs, { childList: true });
-        const chat = document.querySelector('section.chat');
-        if (chat) new MutationObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'chat-class', chat.className])).observe(chat, { attributes: true, attributeFilter: ['class'] });
-        const form = document.querySelector('form.composer');
-        if (form) new ResizeObserver(() => { const r = form.getBoundingClientRect(); window.__diag.push([Math.round(performance.now() - t0), 'form', Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]); }).observe(form);
-      }
-      const send = document.querySelector("form.composer button[type='submit']");
-      const r = send ? send.getBoundingClientRect() : null;
-      const cx = r ? r.x + r.width / 2 : 0, cy = r ? r.y + r.height / 2 : 0;
-      const de = document.documentElement;
-      return JSON.stringify({
-        win: [innerWidth, innerHeight, de.clientWidth, de.clientHeight, de.scrollWidth, de.scrollHeight, scrollX, scrollY, devicePixelRatio],
-        wide: matchMedia('(min-width: 900px)').matches,
-        narrow: matchMedia('(max-width: 900px)').matches,
-        tabs: document.querySelectorAll('nav.tabs > button').length,
-        chat: document.querySelector('section.chat')?.className,
-        send: send ? { text: send.textContent, disabled: send.disabled, rect: [r.x, r.y, r.width, r.height], hit: d(document.elementFromPoint(cx, cy)) } : null,
-        box: document.querySelector("textarea[aria-label='Message']")?.value,
-        active: d(document.activeElement),
-        vt: 'activeViewTransition' in document ? String(document.activeViewTransition) : 'n/a',
-        focus: document.hasFocus(), frames: window.__frames || 0, ready: document.readyState, now: Math.round(performance.now()), paint: performance.getEntriesByType('paint').map((e) => e.name + '@' + Math.round(e.startTime)), nav: (() => { const n = performance.getEntriesByType('navigation')[0]; return n ? [Math.round(n.domContentLoadedEventEnd), Math.round(n.loadEventEnd)] : null; })(), res: performance.getEntriesByType('resource').filter((e) => e.responseEnd > 500).map((e) => e.name.slice(-40) + '@' + Math.round(e.startTime) + '-' + Math.round(e.responseEnd)).slice(0, 20), ua: navigator.userAgent.slice(-60),
-        log: window.__diag.slice(-120),
-      });`,
+/** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
+ * Activity dock and Command must fit it without the page scrolling sideways:
+ * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
+ * a WebDriver click on Send, just above it, for a scrollbar press (mousedown
+ * and mouseup, no click, nothing sent). Checked once the capability report
+ * has added every tab (Pulse is the last to arrive) and the dock shows. */
+async function noSidewaysScroll(s, when) {
+  await waitFor("the Pulse tab", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Pulse']",
+    }),
+  );
+  const [wide, fits] = await wd("POST", `${s}/execute/sync`, {
+    script: "const r = document.documentElement; return [r.scrollWidth, r.clientWidth];",
     args: [],
-  }).catch((e) => `(probe failed: ${e.message})`);
-  console.log(`DIAG ${label}: ${out}`);
+  });
+  if (wide > fits) throw new Error(`the page scrolls sideways ${when}: ${wide}px wide in a ${fits}px window`);
+  console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
 }
 
 async function main() {
@@ -1212,28 +1186,12 @@ async function main() {
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
     );
-    await probe(s, "loaded");
     await wd("POST", `${s}/element/${box[ELEMENT]}/value`, { text: PROMPT });
     const send = await wd("POST", `${s}/element`, {
       using: "css selector",
       value: "form.composer button[type='submit']",
     });
-    await probe(s, "before click");
     await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
-    await probe(s, "after click");
-    await sleep(1500);
-    await probe(s, "1.5s later");
-    if (mock.seen.length === 0) {
-      await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
-      await sleep(1500);
-      await probe(s, "second click");
-    }
-    await wd("GET", `${s}/screenshot`)
-      .then((png) => {
-        mkdirSync("smoke-shots", { recursive: true });
-        writeFileSync(join("smoke-shots", "diag-after-send.png"), Buffer.from(png, "base64"));
-      })
-      .catch(() => {});
 
     const card = await waitFor("the permission card", async () => {
       const el = await wd("POST", `${s}/element`, {
@@ -1248,6 +1206,7 @@ async function main() {
     }
     await shot(s, "chat-permission-card");
     console.log(`permission card shown: ${JSON.stringify(asked.split("\n")[0])}`);
+    await noSidewaysScroll(s, "with the permission card waiting");
 
     // Without an answer the write must not run and the turn must not go on.
     await sleep(1500);
