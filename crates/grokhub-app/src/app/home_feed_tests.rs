@@ -1585,6 +1585,15 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::game_watch_poe::session_card("Path of Exile 2", &poe, now),
         "Path of Exile 2",
     ));
+    let mc = grokhub_core::game_watch_minecraft::McSession {
+        deaths: 1,
+        ..Default::default()
+    };
+    rows.push((
+        "tick_minecraft",
+        grokhub_core::game_watch_minecraft::session_card(&mc, now),
+        "Minecraft",
+    ));
     rows.push((
         "finish_local_models",
         grokhub_core::local_model_news::Suggestion::Release {
