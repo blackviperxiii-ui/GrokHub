@@ -1,0 +1,1 @@
+- Right after a reply that failed or names a next move ("Fix the cause"), its one-tap follow-up now leads the quick chips. Chips never ask a model, cloud or local; the unused model-chip code is gone.

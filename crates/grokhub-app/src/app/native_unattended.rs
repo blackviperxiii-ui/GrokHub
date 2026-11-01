@@ -372,12 +372,10 @@ impl Cabin {
         grokhub_agent::mcp::shutdown_all();
         self.grok_loop_rx = None;
         self.review_rx = None;
-        self.chip_rx = None;
         self.greeting_rx = None;
         self.ideas_rx = None;
         self.digest_rx = None;
         self.review_busy = false;
-        self.chip_busy = false;
         self.greeting_busy = false;
         self.digest_busy = false;
     }
@@ -545,42 +543,6 @@ impl Cabin {
                 Ok(done.text)
             };
             let _ = tx.send(out);
-        });
-    }
-
-    /// Test-only Fast-model chip ask. Composer paint no longer calls this.
-    #[cfg(test)]
-    pub(super) fn spawn_native_chips(&mut self) {
-        let chat = self.chip_chat_pairs();
-        let title = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| t.title.clone())
-            .unwrap_or_default();
-        let habits = top_habit_labels(&self.chip_memory, 6);
-        let others = self.other_chip_threads();
-        let mut dismissed = self.chip_dismissed.clone();
-        for hit in &self.chip_memory.hits {
-            if hit.dismisses >= 1 {
-                dismissed.push(hit.value.clone());
-                dismissed.push(hit.label.clone());
-            }
-        }
-        let prompt =
-            chip_suggest_prompt(&chat, &title, &self.composer, &habits, &dismissed, &others);
-        let ready = match unattended_model(self) {
-            Ok(ready) => ready,
-            Err(err) => {
-                self.status = err;
-                return;
-            }
-        };
-        let (tx, rx) = mpsc::channel();
-        self.chip_rx = Some(rx);
-        self.chip_busy = true;
-        std::thread::spawn(move || {
-            let text = fast_text(&ready, &prompt, None, None).unwrap_or_default();
-            let _ = tx.send(parse_llm_chips(&text));
         });
     }
 
@@ -779,7 +741,6 @@ mod tests {
                 "follow_feed_lookup",
                 "native_digest",
             ),
-            (include_str!("chips.rs"), "spawn_chip_llm", "native_chips"),
             (
                 include_str!("chips.rs"),
                 "spawn_greeting_llm",
@@ -855,9 +816,6 @@ mod tests {
         );
         assert_eq!(ideas.len(), 1);
         assert_eq!(ideas[0].title, "Standup note");
-        let chips = parse_llm_chips(r#"[{"label":"Check status","value":"status please"}]"#);
-        assert_eq!(chips.len(), 1);
-        assert_eq!(chips[0].label, "Check status");
         let greet = pick_greeting_against("", Some("Good to see you today"), &[]);
         assert_eq!(greet, "Good to see you today");
         let review = parse_suggest_lines(
@@ -1024,20 +982,6 @@ mod tests {
                 .all(|info| !info.id.starts_with("native-fast-")),
             "one-shot runs don't fill History"
         );
-
-        say.text
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone_from(&r#"[{"label":"Check status","value":"status please"}]"#.to_string());
-        cabin.spawn_chip_llm();
-        wait_until(|| {
-            cabin.poll_chips();
-            !cabin.chip_busy
-        });
-        assert!(cabin
-            .llm_chips
-            .iter()
-            .any(|chip| chip.label == "Check status"));
 
         say.text
             .lock()
