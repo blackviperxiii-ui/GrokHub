@@ -48,6 +48,7 @@ pub(super) fn paint_module(
         "storage" => paint_storage(ui, size, &mut actions),
         "game_mode" => paint_game_mode(cabin, ui, size, &mut actions),
         "connection" => paint_connection(ui, size, &mut actions),
+        "updates" => paint_updates(cabin, ui, size, &mut actions),
         "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
         _ if data == DataStatus::New => coming_soon_card(ui, name, purpose),
@@ -704,6 +705,89 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             actions.push(ModuleAction::OpenChat("Free up storage on this PC.".into()));
         }
     });
+}
+
+/// The Updates & Drivers tile in words: Loadout first, then games, the OS
+/// and the GPU driver.
+pub(super) fn updates_text(
+    loadout_update: bool,
+    f: &super::updates::UpdateFacts,
+    gpu_driver: Option<&str>,
+) -> TileText {
+    use super::updates::OsUpdates;
+    let mut waiting = Vec::new();
+    if loadout_update {
+        waiting.push("Loadout".to_string());
+    }
+    match f.steam.len() {
+        0 => {}
+        1 => waiting.push(f.steam[0].clone()),
+        n => waiting.push(format!("{n} Steam games")),
+    }
+    if let OsUpdates::Pending(n) = f.os {
+        if n > 0 {
+            waiting.push(format!(
+                "{n} system package{}",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
+    }
+    let big = match waiting.len() {
+        0 => "Up to date".to_string(),
+        n => format!("{n} waiting"),
+    };
+    let caption = if waiting.is_empty() {
+        match f.os {
+            OsUpdates::NotAllowed => "Loadout and Steam checked · system checks off".into(),
+            OsUpdates::Unknown | OsUpdates::NoChecker => "Loadout and Steam checked".into(),
+            OsUpdates::Pending(_) => "Loadout, Steam and system checked".into(),
+        }
+    } else {
+        waiting.join(" · ")
+    };
+    let detail = gpu_driver
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| format!("GPU driver {d}"));
+    TileText {
+        big,
+        caption,
+        detail,
+        tone: if loadout_update || !f.steam.is_empty() {
+            Tone::Warn
+        } else {
+            Tone::Normal
+        },
+    }
+}
+
+fn paint_updates(
+    cabin: &mut Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    actions: &mut Vec<ModuleAction>,
+) {
+    let facts = super::updates::update_facts();
+    let loadout = cabin.update_pending_now() != UpdatePending::None;
+    let driver = pc_profile().and_then(|p| p.main_gpu().map(|g| g.driver.clone()));
+    let t = updates_text(loadout, &facts, driver.as_deref());
+    let resp = card(ui, |ui| {
+        header(ui, false, "Updates & Drivers", "", crate::theme::fg());
+        paint_tile_text(ui, &t, size);
+        if size != ModuleSize::Small {
+            ui.horizontal(|ui| {
+                if crate::cards::ghost_pill(ui, "Loadout update") {
+                    actions.push(ModuleAction::Settings(SettingsSec::Update));
+                }
+                if !facts.steam.is_empty() && crate::cards::ghost_pill(ui, "Library") {
+                    actions.push(ModuleAction::Nav("library"));
+                }
+            });
+        }
+    });
+    if card_clicked(ui, &resp, "home-updates", "Loadout updates") {
+        actions.push(ModuleAction::Settings(SettingsSec::Update));
+    }
 }
 
 fn paint_game_mode(

@@ -120,7 +120,8 @@ impl NativeEngine {
         }
     }
 
-    /// Let an unclear ask's Brief come from one fast-model call.
+    /// Let an ask that neither the rules nor the local scorer can sort get its
+    /// Brief from one fast-model call (the app's opt-in `briefModelFallback`).
     pub fn set_brief_model(&mut self, on: bool) {
         self.brief_model = on;
     }
@@ -173,13 +174,20 @@ impl NativeEngine {
         self.auth_kind = auth_kind;
     }
 
+    /// The model's window in tokens, when the caller knows it better than the
+    /// built-in default (a local model's context size). [`Self::set_route`] resets it.
+    pub fn set_context_length(&mut self, tokens: u64) {
+        self.context_length = tokens;
+    }
+
     pub fn set_halt(&mut self, halt: Box<dyn HaltCheck + Send>) {
         self.halt = halt;
     }
 
     /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
-    /// The Brief changes nothing about the run or its reply.
-    fn write_brief(&self, text: &str, has_image: bool) {
+    /// The Brief changes nothing about the run or its reply. It is returned so
+    /// the turn's router can read its intent, care, domain and confidence.
+    fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
         use crate::harness::Origin;
         let recent: Vec<String> = self
             .history
@@ -292,6 +300,7 @@ impl NativeEngine {
             playbook_id,
         };
         let _ = crate::brain::record_brief(&dir, &line);
+        line.brief
     }
 
     /// Replace the in-memory transcript with a session file. The next prompt continues it.

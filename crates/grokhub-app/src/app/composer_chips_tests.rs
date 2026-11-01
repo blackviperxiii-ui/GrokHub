@@ -7,19 +7,17 @@ use super::*;
 use eframe::egui;
 
 #[test]
-fn greeting_and_chips_use_the_native_fast_model() {
+fn greeting_uses_the_native_fast_model() {
     let src = cabin_src();
     let native = include_str!("native_unattended.rs").replace("\r\n", "\n");
     let greet = fn_src(&src, "spawn_greeting_llm");
     assert!(greet.contains("spawn_native_greeting"), "{greet}");
-    let chips = fn_src(&src, "spawn_chip_llm");
-    assert!(chips.contains("spawn_native_chips"), "{chips}");
     let fast = fn_src(&native, "fast_text");
     assert!(
         fast.contains("CABIN_FAST_MODEL") && fast.contains("CABIN_FAST_FALLBACK"),
-        "chips/greeting use the fast model and fall back if it is empty: {fast}"
+        "the greeting uses the fast model and fall back if it is empty: {fast}"
     );
-    for body in [greet, chips, fast] {
+    for body in [greet, fast] {
         assert!(
             !body.contains("find_grok") && !body.contains("grok_cli_key"),
             "{body}"
@@ -49,13 +47,49 @@ fn greeting_and_chips_use_the_native_fast_model() {
     );
 }
 
+/// Quick chips never ask a model, cloud or local (LO-28): the row is built
+/// from the chat, habits and the PC's own state.
+#[test]
+fn no_chip_path_calls_a_model() {
+    let src = cabin_src();
+    for name in ["refresh_chips", "composer_chips", "apply_chip"] {
+        let body = src
+            .split(&format!("fn {name}("))
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing fn {name}"));
+        let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
+        for call in [
+            "fast_text",
+            "fast_once",
+            "unattended_model",
+            "stream_routed",
+            "spawn_native",
+            "chip_suggest_prompt",
+            "route::local",
+        ] {
+            assert!(!body.contains(call), "{name} must not call {call}: {body}");
+        }
+    }
+    let native = include_str!("native_unattended.rs");
+    for gone in [
+        "fn spawn_chip_llm(",
+        "fn spawn_native_chips(",
+        "fn poll_chips(",
+    ] {
+        assert!(
+            !src.contains(gone) && !native.contains(gone),
+            "the model chip path is gone: {gone}"
+        );
+    }
+}
+
 #[test]
 fn refresh_chips_does_not_rebuild_every_frame() {
     let src = cabin_src();
     let chips = src
         .split("fn refresh_chips(")
         .nth(1)
-        .and_then(|s| s.split("fn spawn_chip_llm(").next())
+        .and_then(|s| s.split("fn composer_chips(").next())
         .expect("refresh_chips");
     assert!(
         chips.contains("chip_paint_key") && chips.contains("return;"),
@@ -831,7 +865,6 @@ fn take_chip_act_nav_and_dismiss() {
         hint: String::new(),
         primary: false,
     };
-    cabin.chip_busy = true;
     cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &[dismiss]);
     assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
     assert!(cabin.chip_dismissed.iter().any(|d| d == "__nav:ideas"));
