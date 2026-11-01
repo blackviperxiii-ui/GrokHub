@@ -45,11 +45,11 @@ pub(super) struct WatchState {
     toast_gate: ToastGate,
     /// Tests listen on a free port and use a temp Steam folder.
     port: Option<u16>,
-    steam_root: Option<PathBuf>,
+    pub(super) steam_root: Option<PathBuf>,
 }
 
 impl WatchState {
-    fn steam_root(&self) -> Option<PathBuf> {
+    pub(super) fn steam_root(&self) -> Option<PathBuf> {
         self.steam_root
             .clone()
             .or_else(grokhub_core::steam::detect_root)
@@ -289,6 +289,10 @@ impl Cabin {
             _ => String::new(),
         };
         let note = w.note.clone();
+        let games: Vec<String> = [self.poe_line(), self.minecraft_line()]
+            .into_iter()
+            .flatten()
+            .collect();
         ui.indent("game-watch", |ui| {
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
@@ -296,6 +300,9 @@ impl Cabin {
             crate::cards::help_text(ui, &listening);
             if !heard.is_empty() {
                 crate::cards::help_text(ui, &heard);
+            }
+            for line in &games {
+                crate::cards::help_text(ui, line);
             }
         });
     }

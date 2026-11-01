@@ -1,0 +1,1 @@
+- The shell smoke test now waits for a new chat card to finish fading in before reading it, so it stops failing at random on an empty card.
