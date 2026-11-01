@@ -60,6 +60,8 @@ pub(super) struct FocusState {
     pub gw2: super::gw2_ui::Gw2Ui,
     /// Destiny 2 through Bungie.net's web API.
     pub destiny: super::destiny_ui::DestinyUi,
+    /// Old School RuneScape through Jagex's hiscores.
+    pub osrs: super::osrs_ui::OsrsUi,
 }
 
 impl Cabin {
@@ -89,6 +91,7 @@ impl Cabin {
         self.tick_factorio();
         self.tick_gw2();
         self.tick_destiny();
+        self.tick_osrs();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

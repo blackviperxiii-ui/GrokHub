@@ -19,7 +19,7 @@ import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
-export type View = "chat" | "pulse" | "journal" | "automations" | "agents" | "memory" | "skills" | "connectors" | "settings" | "library" | "workboard" | "devices";
+export type View = "chat" | "pulse" | "imagine" | "journal" | "automations" | "agents" | "memory" | "skills" | "connectors" | "settings" | "library" | "workboard" | "devices";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -60,6 +60,7 @@ const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], sla
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
   pulse: "Pulse",
+  imagine: "Imagine",
   journal: "Journal",
   automations: "Automations",
   agents: "Agents",
@@ -79,6 +80,7 @@ export function views(caps: Capabilities): View[] {
   return [
     "chat",
     ...(caps.pulse ? (["pulse"] as const) : []),
+    "imagine",
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
     "agents",

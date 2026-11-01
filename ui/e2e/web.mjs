@@ -300,9 +300,11 @@ async function main() {
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
     await idea.getByRole("button", { name: "More" }).click();
     const items = await idea.getByRole("menuitem").allTextContents();
+    check(items.join("|") === "More like this", `the idea menu says ${JSON.stringify(items)}`);
+    const buttons = await idea.locator(".idea-buttons button").allTextContents();
     check(
-      items.join("|") === "Let's do it|More like this|Not interested",
-      `the idea menu says ${JSON.stringify(items)}`,
+      buttons.join("|") === "Let's do it|Not interested",
+      `the idea buttons say ${JSON.stringify(buttons)}`,
     );
     await idea.getByRole("button", { name: "More" }).click();
     await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
@@ -310,7 +312,7 @@ async function main() {
     const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
     check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
     check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
-    console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
+    console.log(`pulse: idea buttons ${buttons.join(", ")}, menu ${items.join(", ")}; the row filled the chat box`);
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.

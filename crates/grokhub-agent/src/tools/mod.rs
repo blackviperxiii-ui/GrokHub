@@ -365,7 +365,7 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
     Ok(media::build_media_call("image_generate", args)?.body)
 }
 
-pub(crate) use media::ImagineApi;
+pub use media::{imagine_client, run_media_tool, ImagineApi};
 
 /// Install fetch and Imagine clients for this thread. An empty bearer installs
 /// adapters that refuse without dialing. The guard restores the previous ports.

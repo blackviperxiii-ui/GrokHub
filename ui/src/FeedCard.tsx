@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { pulseImage, type PulseIdea, type PulsePost } from "./api";
+import { VerdictLine } from "./PulseFix";
 import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
@@ -89,7 +90,18 @@ function useImages(names: string[]): string[] {
   return urls;
 }
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+/** One picture full size, with Download; `video` plays a clip instead. */
+export function Lightbox({
+  src,
+  name,
+  video = false,
+  onClose,
+}: {
+  src: string;
+  name: string;
+  video?: boolean;
+  onClose: () => void;
+}) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     close.current?.focus();
@@ -101,7 +113,11 @@ function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: 
   }, [onClose]);
   return (
     <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
-      <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      {video ? (
+        <video src={src} controls autoPlay loop onClick={(e) => e.stopPropagation()} />
+      ) : (
+        <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      )}
       <div className="lightbox-buttons" onClick={(e) => e.stopPropagation()}>
         <a className="button quiet" href={src} download={name}>
           Download
@@ -164,7 +180,8 @@ export interface FeedCardProps {
   onNotThis?: () => void;
 }
 
-/** One Feed post: icon, title, cited snippet, media; Love and Discuss below;
+/** One Feed post: icon, title, verdict, cited snippet, media; its two buttons
+ * below, Discuss (the main one) and Love;
  * time and a menu (date, why, snooze, dismiss, not this, delete) top right.
  * Delete asks first. */
 export function FeedCard({
@@ -245,6 +262,7 @@ export function FeedCard({
           )}
         </div>
       </div>
+      <VerdictLine verdict={post.verdict} />
       {post.summary && <Snippet text={post.summary} />}
       <Media post={post} />
       {why && (
@@ -266,6 +284,9 @@ export function FeedCard({
         />
       )}
       <div className="card-buttons feed-foot">
+        <button type="button" disabled={busy} onClick={onDiscuss}>
+          Discuss
+        </button>
         <button
           type="button"
           className="quiet"
@@ -276,9 +297,6 @@ export function FeedCard({
         >
           <span aria-hidden="true">{post.loved ? "♥" : "♡"}</span> Love
         </button>
-        <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
-          Discuss
-        </button>
       </div>
     </li>
   );
@@ -288,29 +306,48 @@ export interface IdeaRowProps {
   idea: PulseIdea;
   busy: boolean;
   onDo: () => void;
+  /** A PC health card's main button: open its options window. */
+  onFix?: () => void;
   onMoreLike: () => void;
   onNotInterested: () => void;
 }
 
-/** One Ideas row: a clay icon, the title and its grey "I can …" line. A
- * click on the row is Let's do it; the menu also holds More like this and
- * Not interested. */
-export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaRowProps) {
+/** One Ideas row: a clay icon, the title, its verdict and its grey "I can …"
+ * line, then the same two buttons every card has. The main one is Let's do
+ * it, or Fix it / Options on a PC health card; the second is Not interested.
+ * A click on the row is the main button. More like this waits in the menu. */
+export function IdeaRow({ idea, busy, onDo, onFix, onMoreLike, onNotInterested }: IdeaRowProps) {
   const [menu, setMenu] = useState(false);
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   const pick = (f: () => void) => () => {
     setMenu(false);
     f();
   };
+  const fix = idea.fix && onFix ? onFix : null;
+  const main = fix ?? onDo;
   return (
     <li className="idea-row" aria-label={idea.title}>
-      <button type="button" className="idea-main" disabled={busy} onClick={onDo}>
+      <button type="button" className="idea-main" disabled={busy} onClick={main}>
         <TopicIcon icon={idea.icon} fallback={IDEA_ICON} className="idea-icon" />
         <span className="idea-text">
           <span className="idea-title">{idea.title}</span>
+          {idea.verdict && (
+            <span className={`verdict ${idea.verdict.tone}`}>
+              <span className="verdict-dot" aria-hidden="true" />
+              {idea.verdict.line}
+            </span>
+          )}
           {idea.summary && <span className="idea-summary">{idea.summary}</span>}
         </span>
       </button>
+      <div className="card-buttons idea-buttons">
+        <button type="button" disabled={busy} onClick={main}>
+          {fix ? idea.fix : "Let's do it"}
+        </button>
+        <button type="button" className="quiet" disabled={busy} onClick={onNotInterested}>
+          Not interested
+        </button>
+      </div>
       <div className="feed-corner" ref={corner}>
         <button
           type="button"
@@ -324,14 +361,13 @@ export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaR
         </button>
         {menu && (
           <div className="feed-menu" role="menu">
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onDo)}>
-              Let's do it
-            </button>
+            {fix && (
+              <button type="button" role="menuitem" disabled={busy} onClick={pick(onDo)}>
+                Ask about it
+              </button>
+            )}
             <button type="button" role="menuitem" disabled={busy} onClick={pick(onMoreLike)}>
               More like this
-            </button>
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotInterested)}>
-              Not interested
             </button>
           </div>
         )}

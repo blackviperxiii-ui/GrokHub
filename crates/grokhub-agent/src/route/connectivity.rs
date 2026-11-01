@@ -118,17 +118,7 @@ pub fn cloud_queue_note(class: &str) -> String {
 pub fn classify_http_error(
     err: &grokhub_core::http::Error,
 ) -> grokhub_core::connectivity::TransportHint {
-    use grokhub_core::connectivity::{classify_http_status, TransportHint};
-    use grokhub_core::http::{Error, TransportKind};
-    match err {
-        Error::Status { code, .. } => classify_http_status(*code),
-        Error::Transport { kind, .. } => match kind {
-            TransportKind::Dns | TransportKind::Connect | TransportKind::Io => {
-                TransportHint::OfflineCandidate
-            }
-            TransportKind::Other => TransportHint::Inconclusive,
-        },
-    }
+    grokhub_core::connectivity::classify_http_error(err)
 }
 
 /// Feed HTTP transport failures into the cabin connectivity engine.
@@ -300,16 +290,15 @@ mod tests {
         assert!(!state().prefer_local(), "router stays online after 401");
     }
 
-    fn synthetic_connect_error() -> reqwest::Error {
-        reqwest::blocking::Client::builder()
-            .build()
-            .unwrap()
+    fn synthetic_connect_error() -> grokhub_core::http::Error {
+        grokhub_core::http::agent(grokhub_core::http::Opts::default())
             .get("http://127.0.0.1:1/")
-            .send()
-            .unwrap_err()
+            .call()
+            .err()
+            .unwrap()
     }
 
-    fn synthetic_status_error(status: u16) -> reqwest::Error {
+    fn synthetic_status_error(status: u16) -> grokhub_core::http::Error {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -325,12 +314,10 @@ mod tests {
                 let _ = stream.write_all(resp.as_bytes());
             }
         });
-        reqwest::blocking::Client::builder()
-            .build()
+        grokhub_core::http::agent(grokhub_core::http::Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .call()
+            .err()
             .unwrap()
-            .get(format!("http://127.0.0.1:{port}/"))
-            .send()
-            .and_then(|r| r.error_for_status())
-            .unwrap_err()
     }
 }

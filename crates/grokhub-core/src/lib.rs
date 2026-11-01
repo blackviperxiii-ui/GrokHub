@@ -117,6 +117,7 @@ pub mod oauth;
 pub mod offline;
 pub mod openclaw;
 pub mod organs;
+pub mod osrs_hiscores;
 pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
