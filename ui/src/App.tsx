@@ -25,6 +25,7 @@ import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
+import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -89,6 +90,10 @@ export function App() {
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [open, setOpen] = useState<{ id: string; n: number }>();
   const [deleted, setDeleted] = useState<{ id: string; n: number }>();
+  /** The Chat tab's right-click menu, at the pointer; then its confirm; then the clear. */
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
+  const [askClear, setAskClear] = useState(false);
+  const [clear, setClear] = useState<{ n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   // Which work card each chat works, from the Workboard's last load.
   const [cardChats, setCardChats] = useState<Record<string, string>>({});
@@ -293,6 +298,9 @@ export function App() {
           <span>{PRODUCT_NAME}</span>
         </div>
         <nav className="tabs" aria-label="Views">
+          {tabMenu && (
+            <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />
+          )}
           {views(caps).map((name) => (
             <button
               key={name}
@@ -300,6 +308,14 @@ export function App() {
               aria-pressed={view === name}
               title={VIEW_LABELS[name]}
               onClick={() => setView(name)}
+              onContextMenu={
+                name === "chat" && !caps.remote
+                  ? (event) => {
+                      event.preventDefault();
+                      setTabMenu({ x: event.clientX, y: event.clientY });
+                    }
+                  : undefined
+              }
             >
               <TabIcon view={name} />
               <span className="tab-label">{VIEW_LABELS[name]}</span>
@@ -338,6 +354,16 @@ export function App() {
       {sheet && <Shortcuts keys={shellKeys(caps, runners)} onClose={() => setSheet(false)} />}
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}
+      {askClear && (
+        <ClearChatDialog
+          onConfirm={() => {
+            setAskClear(false);
+            setView("chat");
+            setClear((now) => ({ n: (now?.n ?? 0) + 1 }));
+          }}
+          onClose={() => setAskClear(false)}
+        />
+      )}
       <div hidden={view !== "chat"}>
         <Chat
           onOpenSettings={() => setView("settings")}
@@ -348,6 +374,7 @@ export function App() {
           notice={notice}
           open={open}
           deleted={deleted}
+          clear={clear}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
           grokSignIn={Boolean(caps.grokSignIn)}

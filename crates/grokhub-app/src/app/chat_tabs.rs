@@ -361,6 +361,13 @@ impl Cabin {
             act = Some(TabAct::Switch(i));
         }
         if main {
+            // Main can't be renamed, pinned or deleted; its menu only clears it.
+            resp.context_menu(|ui| {
+                if ui.button(super::confirm::CLEAR_MAIN_LABEL).clicked() {
+                    act = Some(TabAct::ClearMain);
+                    ui.close();
+                }
+            });
             return act;
         }
         if resp.double_clicked() {
@@ -514,6 +521,19 @@ fn paint_tab_close(ui: &egui::Ui, rect: egui::Rect, hovered: bool) {
 #[cfg(test)]
 mod chat_tabs_source_tests {
     use super::{split_visible_tabs, TAB_MIN_W};
+
+    #[test]
+    fn main_tab_right_click_offers_only_clear_chat() {
+        // A Windows checkout has CRLF line ends.
+        let src = include_str!("chat_tabs.rs").replace("\r\n", "\n");
+        let main = src
+            .split("if main {\n            // Main can't be renamed")
+            .nth(1)
+            .and_then(|s| s.split("return act;").next())
+            .expect("Main's menu");
+        assert!(main.contains("CLEAR_MAIN_LABEL") && main.contains("TabAct::ClearMain"));
+        assert!(!main.contains("TabAct::Delete") && !main.contains("TabAct::Pin"));
+    }
 
     #[test]
     fn tab_strip_offers_pin_archive_delete_and_far_right_tools() {

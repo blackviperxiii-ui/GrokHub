@@ -961,6 +961,7 @@ impl Cabin {
                 self.rename_lock = None;
             }
             TabAct::Delete(i) => self.delete_thread_at(i),
+            TabAct::ClearMain => self.confirm = Some(ConfirmKind::ClearMainChat),
         }
     }
 }
