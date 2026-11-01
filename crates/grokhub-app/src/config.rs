@@ -340,6 +340,11 @@ pub struct AppConfig {
     /// It routes nothing until a local runtime is installed.
     #[serde(default)]
     pub local_model: bool,
+    /// LO-48 (`promptCleanup`): the on-device model fixes typos in a chat ask
+    /// before the model reads it. Off by default: it can change wording and
+    /// adds up to 300 ms. Works only while `local_model` is on.
+    #[serde(default)]
+    pub prompt_cleanup: bool,
     /// `app.json` only (`briefModelFallback`). Off by default: an ask that
     /// neither the Brief rules nor the local scorer can sort gets the default
     /// Brief. On, it costs one fast-model call instead.
@@ -824,6 +829,7 @@ impl Default for AppConfig {
             mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
+            prompt_cleanup: false,
             brief_model_fallback: false,
             provider_model: String::new(),
             session_mode: default_session_mode(),
@@ -1836,6 +1842,12 @@ mod tests {
         );
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        // LO-48: the typo tidy is opt-in; `promptCleanup` turns it on.
+        assert!(!loaded.prompt_cleanup && !old.prompt_cleanup);
+        assert!(body.contains("\"promptCleanup\": false"), "{body}");
+        let tidy: AppConfig =
+            serde_json::from_str(r#"{"promptCleanup":true}"#).expect("promptCleanup on");
+        assert!(tidy.prompt_cleanup);
         // Brain 1: the Brief's model fallback is opt-in; `briefModelFallback` turns it on.
         assert!(!loaded.brief_model_fallback && !old.brief_model_fallback);
         let fallback: AppConfig =

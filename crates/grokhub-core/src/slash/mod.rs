@@ -348,7 +348,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/compact",
-        hint: "Compact Grok context",
+        hint: "Compact the chat context",
         insert: "/compact",
         run_on_pick: true,
     },
@@ -516,7 +516,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/undo",
-        hint: "Rewind Grok conversation",
+        hint: "Rewind the conversation",
         insert: "/undo",
         run_on_pick: true,
     },
@@ -594,7 +594,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/rewind",
-        hint: "Rewind Grok conversation",
+        hint: "Rewind the conversation",
         insert: "/rewind",
         run_on_pick: true,
     },
@@ -654,7 +654,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/inhabit",
-        hint: "Hand this Grok to another box",
+        hint: "Hand this chat to another box",
         insert: "/inhabit ",
         run_on_pick: false,
     },
@@ -678,13 +678,13 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/usage",
-        hint: "Today's usage + Grok spend",
+        hint: "Today's usage + model spend",
         insert: "/usage",
         run_on_pick: true,
     },
     SlashDef {
         cmd: "/models",
-        hint: "Grok catalog",
+        hint: "Model catalog",
         insert: "/models",
         run_on_pick: true,
     },
@@ -702,7 +702,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/always-approve",
-        hint: "Skip Grok tool prompts",
+        hint: "Skip tool prompts",
         insert: "/always-approve",
         run_on_pick: true,
     },
@@ -726,7 +726,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/loop",
-        hint: "Schedule a Grok /loop…",
+        hint: "Schedule a /loop…",
         insert: "/loop ",
         run_on_pick: false,
     },
@@ -798,7 +798,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/goal",
-        hint: "Pin a Grok goal…",
+        hint: "Pin a goal…",
         insert: "/goal ",
         run_on_pick: false,
     },
@@ -928,8 +928,8 @@ pub fn slash_help() -> String {
         "/new — new chat (reuse empty draft; new session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
-        "/compact — compact Grok context (also trims the painted pane)",
-        "/undo — rewind Grok conversation (alias /rewind)",
+        "/compact — compact the chat context (also trims the painted pane)",
+        "/undo — rewind the conversation (alias /rewind)",
         "/retry — re-send last user prompt",
         "/stop — halt the current turn",
         "/sh <cmd> — run a local shell (you, not the agent)",
@@ -953,7 +953,7 @@ pub fn slash_help() -> String {
         "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — chat model for {product}",
         "/imagine-video <prompt> — Imagine video",
-        "/goal <objective> — pin a Grok goal",
+        "/goal <objective> — pin a goal",
         "Skill slashes such as /create-skill run that skill in chat.",
         "/project bind <path> — bound tree is the world (the engine's working folder)",
         "/project new <name> — create a chat folder (stays on chat)",
@@ -984,8 +984,8 @@ pub fn slash_help() -> String {
         "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Defaults",
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
-        "/inhabit <peer> — hand this Grok to another paired computer",
-        "/rewind — rewind Grok conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
+        "/inhabit <peer> — hand this chat to another paired computer",
+        "/rewind — rewind the conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
         "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
         "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
         "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
@@ -1009,7 +1009,7 @@ pub fn slash_help() -> String {
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
         "/usage — today's {product} buckets, tokens spent today, and the last turn",
-        "/models — Grok catalog",
+        "/models — model catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
@@ -1381,7 +1381,7 @@ mod tests {
         assert!(slash_help().contains("leaves the rewind snapshot out"));
         assert!(slash_help().contains("History is the cabin's own chats"));
         assert!(slash_help().contains("Idle Stop and the idle mic sit still"));
-        assert!(slash_help().contains("compact Grok context"));
+        assert!(slash_help().contains("compact the chat context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
         assert!(slash_help().contains("/learn — reflect this chat into MEMORY.md"));
         assert!(slash_help().contains("/skill <name> — run a skill"));

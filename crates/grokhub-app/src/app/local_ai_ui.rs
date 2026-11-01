@@ -65,6 +65,20 @@ pub(super) fn local_model_hint(
     }
 }
 
+/// LO-48: the typo tidy switch's title.
+pub(super) const PROMPT_CLEANUP_TITLE: &str = "Tidy typos on this computer (can change wording)";
+
+/// The typo tidy switch's hint, by state. It leads with On or Off (SB-07).
+pub(super) fn prompt_cleanup_hint(local_on: bool, on: bool) -> String {
+    match (local_on, on) {
+        (false, _) => "Off. Turn on the on-device model first.".into(),
+        (true, false) => "Off. Your messages go to the model exactly as you type them.".into(),
+        (true, true) => "On. The on-device model fixes typos first (up to 0.3 s). \
+Your chat keeps what you typed; numbers, names, paths and links are never changed."
+            .into(),
+    }
+}
+
 /// The quiet status line after a flip, naming the live tier when the route is live.
 pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> String {
     match (on, installed) {
@@ -245,6 +259,7 @@ impl Cabin {
         }
         self.persist_cfg();
         local::set_enabled(on);
+        local::set_prompt_cleanup(on && self.cfg.prompt_cleanup);
         if on {
             local_sidecar::cancel_pending_stop();
         } else {
@@ -274,6 +289,7 @@ impl Cabin {
         ) {
             self.set_local_model(on);
         }
+        self.ui_prompt_cleanup_row(ui);
         if !installed
             && crate::cards::settings_action(
                 ui,
@@ -313,6 +329,32 @@ impl Cabin {
         {
             self.run_local_speed_test();
         }
+    }
+
+    /// LO-48: the typo tidy switch, off by default and greyed out while
+    /// Local AI is off.
+    fn ui_prompt_cleanup_row(&mut self, ui: &mut egui::Ui) {
+        let local_on = self.cfg.local_model;
+        let mut on = self.cfg.prompt_cleanup;
+        let hint = prompt_cleanup_hint(local_on, on);
+        let hit = ui
+            .add_enabled_ui(local_on, |ui| {
+                crate::cards::settings_toggle(ui, PROMPT_CLEANUP_TITLE, &hint, &mut on)
+            })
+            .inner;
+        if hit && local_on {
+            self.set_prompt_cleanup(on);
+        }
+    }
+
+    /// Save the typo tidy switch and hand it to the agent now.
+    pub(super) fn set_prompt_cleanup(&mut self, on: bool) {
+        if self.cfg.prompt_cleanup == on {
+            return;
+        }
+        self.cfg.prompt_cleanup = on;
+        self.persist_cfg();
+        local::set_prompt_cleanup(self.cfg.local_model && on);
     }
 
     fn runtime_engine_row_hint(&self, manifest: &Manifest) -> String {
@@ -660,6 +702,33 @@ mod tests {
             local_model_status(true, false, "local:small"),
             "On-device model for background tasks: on, no local model installed"
         );
+    }
+
+    #[test]
+    fn the_typo_tidy_is_off_by_default_and_needs_local_ai() {
+        let root = std::env::temp_dir().join(format!("grokhub-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("dir");
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        assert!(!app.cfg.prompt_cleanup);
+        assert_eq!(
+            prompt_cleanup_hint(false, false),
+            "Off. Turn on the on-device model first."
+        );
+        assert!(prompt_cleanup_hint(true, true).starts_with("On. "));
+        // On with Local AI off: saved, but the agent keeps it off.
+        app.set_prompt_cleanup(true);
+        assert!(app.cfg.prompt_cleanup);
+        assert!(!local::prompt_cleanup());
+        app.cfg.local_model = true;
+        app.set_prompt_cleanup(false);
+        app.set_prompt_cleanup(true);
+        assert!(local::prompt_cleanup());
+        app.set_prompt_cleanup(false);
+        assert!(!local::prompt_cleanup());
+        local::set_enabled(false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

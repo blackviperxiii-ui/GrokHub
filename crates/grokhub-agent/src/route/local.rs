@@ -91,6 +91,20 @@ pub fn set_enabled(on: bool) {
     }
 }
 
+static PROMPT_CLEANUP: AtomicBool = AtomicBool::new(false);
+
+/// LO-48: the cabin sets this from `app.json` `promptCleanup` (default
+/// `false`) next to [`set_enabled`]. [`super::cleanup::tidy`] runs only while
+/// it is on.
+pub fn set_prompt_cleanup(on: bool) {
+    PROMPT_CLEANUP.store(on, Ordering::SeqCst);
+}
+
+/// The "Tidy typos on this computer" switch, as last set.
+pub fn prompt_cleanup() -> bool {
+    PROMPT_CLEANUP.load(Ordering::SeqCst)
+}
+
 /// The Settings toggle alone, for the governor's sampler.
 pub fn switched_on() -> bool {
     ENABLED.load(Ordering::SeqCst)
@@ -169,7 +183,9 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
     };
     let takes = match gov {
         Level::Unload => "nothing until the machine frees up",
-        Level::Throttle => "offline work and cloud outages only; background work goes to Grok",
+        Level::Throttle => {
+            "offline work and cloud outages only; background work goes to the cloud model"
+        }
         Level::Normal => {
             "background work, offline work and cloud outages; heavy steps wait for idle time"
         }
@@ -643,6 +659,20 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     }
     let busy = ensure_production_runtime()?;
     super::local_http::from_global_sidecar(busy)
+}
+
+/// [`runtime`], but only while the model is already loaded (a test fake, or a
+/// running sidecar). It never starts or restarts the sidecar, so it returns at
+/// once; a cold start could not answer a short call in time anyway.
+pub fn warm_runtime() -> Option<Arc<dyn LocalRuntime>> {
+    if !available() {
+        return None;
+    }
+    if let Some(rt) = test_runtime() {
+        return Some(rt);
+    }
+    super::local_sidecar::global_endpoint()?;
+    super::local_http::from_global_sidecar(super::local_sidecar::busy())
 }
 
 /// Start the sidecar if needed; the guard marks this caller's request in

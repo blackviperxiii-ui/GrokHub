@@ -298,7 +298,7 @@ impl Cabin {
         self.confirm = None;
         self.perm_ask = Some(p);
         if self.chrome_here() {
-            self.status = "Grok wants permission".into();
+            self.status = format!("{} wants permission", grokhub_core::brand::product_name());
         }
     }
 

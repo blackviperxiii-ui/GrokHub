@@ -94,6 +94,9 @@ pub struct LaunchArgs {
     pub tensor_split: Option<Vec<u64>>,
     /// Speculative decoding, when [`local_spec::plan`] turned it on.
     pub draft: Option<Box<DraftArgs>>,
+    /// Keep every GPU out of it (`--device none`): set after the GPU backend
+    /// crashed the engine at start. See [`on_cpu`].
+    pub cpu_only: bool,
 }
 
 impl LaunchArgs {
@@ -130,8 +133,27 @@ impl LaunchArgs {
         if let Some(d) = &self.draft {
             a.extend(d.to_args());
         }
+        if self.cpu_only {
+            // `-ngl 0` alone still lets the GPU take big matmuls; this keeps
+            // the engine off every GPU device.
+            a.extend(["--device".into(), "none".into()]);
+        }
         a.push("--cache-prompt".into());
         a
+    }
+}
+
+/// `prev` with every GPU left out: no layers or experts on a GPU, no split,
+/// no drafter (it would run on the GPU too).
+pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
+    LaunchArgs {
+        backend: Backend::Cpu,
+        ngl: 0,
+        n_cpu_moe: None,
+        tensor_split: None,
+        draft: None,
+        cpu_only: true,
+        ..prev.clone()
     }
 }
 
@@ -281,6 +303,7 @@ pub fn autoconfig(
         mlock: p.free_ram_mb.is_some_and(|free| free > 2 * meta.file_mb),
         tensor_split: p.device_plan().tensor_split,
         draft: None,
+        cpu_only: false,
     }
 }
 
@@ -382,6 +405,9 @@ pub struct Tuned {
     pub n_cpu_moe: Option<u32>,
     pub ctx: u32,
     pub kv: KvType,
+    /// The GPU backend crashed the engine here, so it runs on the CPU.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cpu_only: bool,
 }
 
 pub const AUTOTUNE_FILE: &str = "autotune.json";
@@ -433,6 +459,12 @@ pub fn save_tuned(dir: &Path, key: &str, t: &Tuned) -> Result<(), String> {
 
 /// A stored launch caps the fresh plan: never more layers or context than ran.
 pub fn apply_tuned(args: LaunchArgs, t: &Tuned) -> LaunchArgs {
+    if t.cpu_only {
+        return on_cpu(&LaunchArgs {
+            ctx: args.ctx.min(t.ctx),
+            ..args
+        });
+    }
     LaunchArgs {
         ngl: args.ngl.min(t.ngl),
         ctx: args.ctx.min(t.ctx),

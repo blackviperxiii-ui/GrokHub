@@ -63,6 +63,12 @@ pub struct ShellSettings {
     /// explicit presets, and a stored pick of one speaks in the default voice.
     pub explicit_personalities: bool,
     pub theme: Theme,
+    /// Settings → General → the summon hotkey (`os_extras::SUMMON_HOTKEY`).
+    /// Off until the person turns it on.
+    pub summon_hotkey: bool,
+    /// Settings → General → notifications while the window is in the
+    /// background: an OK to give, a reply or an automation that finished.
+    pub notifications: bool,
 }
 
 impl Default for ShellSettings {
@@ -76,6 +82,8 @@ impl Default for ShellSettings {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            summon_hotkey: false,
+            notifications: true,
         }
     }
 }
@@ -152,6 +160,8 @@ mod tests {
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                summon_hotkey: false,
+                notifications: true,
             }
         );
     }
@@ -197,6 +207,8 @@ mod tests {
             personality: "pirate".into(),
             explicit_personalities: true,
             theme: Theme::Dark,
+            summon_hotkey: true,
+            notifications: false,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -208,6 +220,8 @@ mod tests {
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
+        assert!(raw.contains("\"summonHotkey\": true"), "{raw}");
+        assert!(raw.contains("\"notifications\": false"), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -230,6 +244,8 @@ mod tests {
                 personality: String::new(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                summon_hotkey: false,
+                notifications: true,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -247,6 +263,8 @@ mod tests {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            summon_hotkey: false,
+            notifications: true,
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
@@ -275,6 +293,26 @@ mod tests {
         assert_eq!(load(&dir).theme, Theme::System);
         std::fs::write(path(&dir), r#"{"theme":"light"}"#).expect("write");
         assert_eq!(load(&dir).theme, Theme::Light);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hotkey_starts_off_and_notifications_on() {
+        let fresh = ShellSettings::default();
+        assert_eq!((fresh.summon_hotkey, fresh.notifications), (false, true));
+        // A shell.json from before these switches keeps both defaults.
+        let dir = temp_dir("basics");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"model":"grok-5","closeToTray":false}"#).expect("write");
+        let old = load(&dir);
+        assert_eq!(
+            (old.model.as_str(), old.summon_hotkey, old.notifications),
+            ("grok-5", false, true)
+        );
+        std::fs::write(path(&dir), r#"{"summonHotkey":true,"notifications":false}"#)
+            .expect("write");
+        let set = load(&dir);
+        assert_eq!((set.summon_hotkey, set.notifications), (true, false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

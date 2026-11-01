@@ -1,0 +1,1 @@
+- Loadout now follows Elite Dangerous while the game watcher is on: it reads the game's own Player Journal for your jumps, dockings, mission and bounty earnings, promotions and deaths, shows the session in Settings, and posts a recap to Pulse when the game closes. It works with the Proton install on Linux too. Nothing reads the game's memory, touches the game or uploads anything.
