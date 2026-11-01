@@ -185,9 +185,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_night(&mut self, ui: &mut egui::Ui) {
-        let frame = egui::Frame::NONE
-            .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(24));
+        let frame = crate::theme::page_frame();
         super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Automations", "New job") {
                 self.auto_compose = true;
@@ -269,13 +267,13 @@ impl Cabin {
                                     ui.add(
                                         egui::Label::new(
                                             RichText::new(&title)
-                                                .size(15.0)
+                                                .size(crate::theme::TYPE_UI)
                                                 .color(crate::theme::fg()),
                                         )
                                         .wrap(),
                                     );
                                     ui.label(
-                                        RichText::new(&body).size(12.0).color(crate::theme::muted()),
+                                        RichText::new(&body).size(crate::theme::TYPE_CAPTION).color(crate::theme::muted()),
                                     );
                                     if grokhub_core::source_hidden(
                                         &self.cfg.feed_pulse,
@@ -301,7 +299,7 @@ impl Cabin {
             crate::cards::section_label(ui, "Suggested");
             ui.label(
                 RichText::new("Suggested from your recent work")
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );
             ui.add_space(8.0);
@@ -381,16 +379,22 @@ impl Cabin {
                         ui.vertical(|ui| {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(&title).size(15.0).color(crate::theme::fg()),
+                                    RichText::new(&title)
+                                        .size(crate::theme::TYPE_UI)
+                                        .color(crate::theme::fg()),
                                 )
                                 .wrap(),
                             );
-                            ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                            ui.label(
+                                RichText::new(&body)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(crate::theme::muted()),
+                            );
                             if let Some(line) = &health {
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(line)
-                                            .size(12.0)
+                                            .size(crate::theme::TYPE_CAPTION)
                                             .color(crate::theme::offline()),
                                     )
                                     .wrap(),
@@ -399,7 +403,7 @@ impl Cabin {
                                 let link = ui.add(
                                     egui::Label::new(
                                         RichText::new("View last run")
-                                            .size(12.0)
+                                            .size(crate::theme::TYPE_CAPTION)
                                             .underline()
                                             .color(crate::theme::link()),
                                     )

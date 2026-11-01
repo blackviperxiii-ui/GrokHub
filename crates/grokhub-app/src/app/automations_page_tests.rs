@@ -484,7 +484,10 @@ fn automations_rows_keep_Remove_behind_the_dots_menu() {
         health_at < view_at,
         "View last run is painted after the health line"
     );
-    assert!(sched[view_at..].contains(".size(12.0)"), "{sched}");
+    assert!(
+        sched[view_at..].contains(".size(crate::theme::TYPE_CAPTION)"),
+        "{sched}"
+    );
 
     let _hold = crate::config::hold_test_config();
     let _paint = crate::theme::hold_paint_test();

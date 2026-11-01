@@ -731,17 +731,30 @@ pub const RADIUS_MD: f32 = 10.0;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const RADIUS_LG: f32 = 14.0;
 
-/// UI kit type scale (Inter). Maps to existing body/chrome tokens where they overlap.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The one type scale (Inter). Every text size in the app is one of these
+/// steps; the `FONT_*` names below are older spellings of the same steps.
+/// Captions, tips and meta lines.
 pub const TYPE_CAPTION: f32 = 12.0;
-#[cfg_attr(not(test), allow(dead_code))]
+/// Body text and card bodies.
 pub const TYPE_BODY: f32 = 13.0;
-#[cfg_attr(not(test), allow(dead_code))]
+/// Labels, chrome and list rows.
 pub const TYPE_LABEL: f32 = 14.0;
-#[cfg_attr(not(test), allow(dead_code))]
+/// Inputs and row titles in settings lists.
+pub const TYPE_UI: f32 = 15.0;
+/// Card and section titles.
 pub const TYPE_TITLE: f32 = 16.0;
-#[cfg_attr(not(test), allow(dead_code))]
+/// Page titles.
 pub const TYPE_HEADLINE: f32 = 22.0;
+
+/// The margin every full page keeps from the window edge.
+pub const PAGE_MARGIN: f32 = SPACING_24;
+
+/// The frame a full page draws in: the app background with [`PAGE_MARGIN`].
+pub fn page_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .fill(bg())
+        .inner_margin(egui::Margin::same(PAGE_MARGIN as i8))
+}
 
 /// Minimum interactive target for kit controls (settings rows, chips).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -833,17 +846,18 @@ pub const QUERY_RADIUS: f32 = 160.0;
 pub const HIT: f32 = 40.0;
 /// Rail / chrome row (`h-10`, `--font-size-chrome`)
 pub const NAV_ROW_H: f32 = 40.0;
-pub const FONT_UI: f32 = 15.0;
-pub const FONT_CHROME: f32 = 14.0;
-pub const FONT_META: f32 = 13.0;
+/// Older names for steps of the one type scale ([`TYPE_BODY`] and friends).
+pub const FONT_UI: f32 = TYPE_UI;
+pub const FONT_CHROME: f32 = TYPE_LABEL;
+pub const FONT_META: f32 = TYPE_BODY;
 /// Card / section title — Inter SemiBold.
-pub const FONT_SECTION: f32 = 16.0;
+pub const FONT_SECTION: f32 = TYPE_TITLE;
 /// Card body / quieter session chrome.
-pub const FONT_BODY: f32 = 13.0;
+pub const FONT_BODY: f32 = TYPE_BODY;
 /// Tips and meta.
-pub const FONT_TIP: f32 = 12.0;
+pub const FONT_TIP: f32 = TYPE_CAPTION;
 /// Settings / pane titles — larger than Body.
-pub const FONT_HEADING: f32 = 22.0;
+pub const FONT_HEADING: f32 = TYPE_HEADLINE;
 /// grok.com/imagine `h1.text-[22px].leading-7`
 pub const IMAGINE_TITLE: f32 = 22.0;
 /// gap from h1 to `.query-bar` on /imagine
@@ -1907,6 +1921,22 @@ mod tests {
         assert_eq!(TYPE_LABEL, FONT_CHROME);
         assert_eq!(TYPE_TITLE, FONT_SECTION);
         assert_eq!(TYPE_HEADLINE, FONT_HEADING);
+        assert_eq!(TYPE_UI, FONT_UI);
+        assert_eq!(TYPE_BODY, FONT_META);
+        // One scale, smallest to largest, with no repeated step.
+        let scale = [
+            TYPE_CAPTION,
+            TYPE_BODY,
+            TYPE_LABEL,
+            TYPE_UI,
+            TYPE_TITLE,
+            TYPE_HEADLINE,
+        ];
+        assert!(scale.windows(2).all(|w| w[0] < w[1]), "{scale:?}");
+        assert_eq!(
+            page_frame().inner_margin,
+            egui::Margin::same(PAGE_MARGIN as i8)
+        );
         assert_eq!(MIN_HIT, TILE_ICON);
         assert!(kit_shadow(ShadowLevel::None).blur == 0);
         assert!(kit_shadow(ShadowLevel::Soft).blur > 0);
