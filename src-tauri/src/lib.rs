@@ -27,8 +27,8 @@ pub mod pulse_feed;
 pub mod remote;
 pub mod remote_tls;
 pub mod settings;
-pub mod slash;
 pub mod shell_update;
+pub mod slash;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
