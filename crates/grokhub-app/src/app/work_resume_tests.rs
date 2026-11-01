@@ -3,7 +3,7 @@
 //! the test model client.
 
 use super::*;
-use grokhub_core::work_item::{read_work_log, Checkpoint, StepStatus, WorkKind, WorkStep};
+use grokhub_core::work_item::{read_work_log, Checkpoint, StepStatus, WorkStep};
 use grokhub_core::work_resume::{
     self as res, InterruptCause, Interruption, HOST_CABIN, RESUME_BLOCK_MAX,
 };
@@ -258,7 +258,7 @@ fn a_cut_turn_is_interrupted_and_a_swap_cut_halts_the_turn() {
 fn agent_bg_card(cabin: &mut Cabin, mode: grokhub_core::wire::PermissionMode) -> String {
     let mut c = BoardCard::new("Check the backups", "", "");
     c.origin = Some(grokhub_core::WorkOrigin::Agent);
-    c.kind = WorkKind::Background;
+    c.kind = grokhub_core::work_item::WorkKind::Background;
     c.status = BoardStatus::InProgress;
     c.checkpoint = Some(Checkpoint {
         goal: "Check the backups".into(),
