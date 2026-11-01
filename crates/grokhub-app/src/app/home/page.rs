@@ -16,7 +16,8 @@ const COMPOSE_H: f32 = 140.0;
 const DRAFT_ID: &str = "home-mission-draft";
 const COMPOSE_H_ID: &str = "home-mission-compose-h";
 
-/// Default Home chips (Mission Control preset).
+/// Home chips in deck screenshots only (Mission Control preset). Real Home
+/// paints the ranked row from the chip engine (`Cabin::home_chips`).
 pub(in crate::app) const HOME_CHIPS: [&str; 4] = [
     "Fix my stutter",
     "Find a duo tonight",
@@ -204,13 +205,20 @@ impl Cabin {
         let id = egui::Id::new(DRAFT_ID);
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         ui.add_space(GAP);
-        ui.horizontal_wrapped(|ui| {
-            for s in HOME_CHIPS {
-                if crate::ui_kit::chip(ui, s, true, true).clicked() {
-                    actions.push(ModuleAction::OpenChat(s.to_string()));
+        if super::super::loadout_home::deck_shot_requested() {
+            ui.horizontal_wrapped(|ui| {
+                for s in HOME_CHIPS {
+                    if crate::ui_kit::chip(ui, s, true, true).clicked() {
+                        actions.push(ModuleAction::OpenChat(s.to_string()));
+                    }
                 }
+            });
+        } else {
+            let chips = self.home_chips.clone();
+            if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
+                self.take_home_chip_act(act, &chips);
             }
-        });
+        }
         ui.add_space(10.0);
         let mut send = false;
         egui::Frame::NONE

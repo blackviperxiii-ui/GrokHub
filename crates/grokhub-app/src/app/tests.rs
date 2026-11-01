@@ -2159,6 +2159,7 @@ fn quiet_cabin() -> Cabin {
         board_view: Default::default(),
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
+        home_chips: Vec::new(),
         chip_rx: None,
         chip_busy: false,
         chip_fp: String::new(),

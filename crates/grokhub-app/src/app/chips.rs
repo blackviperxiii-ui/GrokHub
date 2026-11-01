@@ -3,6 +3,9 @@
 use super::*;
 use grokhub_core::ChipSignals;
 
+/// Chips on Home's row.
+pub(super) const HOME_CHIP_MAX: usize = 4;
+
 /// The plain chip signals, kept apart so they join the paint key: chips
 /// redraw when a game starts or the day turns, not every frame.
 #[derive(Debug, Clone, Copy)]
@@ -518,6 +521,17 @@ impl Cabin {
             pace,
             grokhub_core::CabinPace::With | grokhub_core::CabinPace::Quiet
         );
+        // Home starts a new chat, so its row is the same engine for an empty
+        // one: no transcript, no draft, the PC's signals, seeds to fill.
+        let home = ChipInput {
+            chat: &[],
+            draft: "",
+            thread_title: "",
+            last_failed: false,
+            max: HOME_CHIP_MAX,
+            ..input.clone()
+        };
+        self.home_chips = build_quick_chips(home);
         // Habit / stage / draft / skill-offer chips are enough; a fast-model
         // garnish is not required for composer chrome (offline / weak model).
         self.visible_chips = build_quick_chips(input);
@@ -600,6 +614,24 @@ impl Cabin {
             chips.insert(0, c);
         }
         chips
+    }
+
+    /// Home's row. A chat chip starts its own chat, like an ask typed on
+    /// Home; a page or mode chip acts as it does under the composer. Both
+    /// are learned, and the × dismisses for Home and the composer alike.
+    pub(super) fn take_home_chip_act(
+        &mut self,
+        act: crate::cards::ChipRowAct,
+        chips: &[QuickChip],
+    ) {
+        if let crate::cards::ChipRowAct::Apply(i) = act {
+            if chips.get(i).is_some_and(|c| c.kind == ChipKind::Chat) {
+                self.new_thread(false);
+                self.nav = Nav::Chat;
+                self.composer.clear();
+            }
+        }
+        self.take_chip_act(act, chips);
     }
 
     pub(super) fn take_chip_act(&mut self, act: crate::cards::ChipRowAct, chips: &[QuickChip]) {
