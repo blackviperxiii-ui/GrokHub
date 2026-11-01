@@ -10,6 +10,12 @@ const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
+  slashHits: vi.fn(async (draft: string) =>
+    [
+      { cmd: "/plan", hint: "Plan first", insert: "/plan ", runOnPick: false, disabled: null },
+      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
+    ].filter((hit) => hit.cmd.startsWith(draft)),
+  ),
   onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
     chatHandlers.push(handler);
     return Promise.resolve(() => {});
@@ -213,6 +219,19 @@ describe("App", () => {
     await userEvent.keyboard("{Control>}k{/Control}");
     await userEvent.keyboard("new chat{Enter}");
     expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
+  });
+
+  it("a slash query lists the composer's commands, and a pick fills the chat box", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await userEvent.keyboard("/pl");
+    expect(await screen.findByRole("option", { name: "/plan" })).toBeInTheDocument();
+    // A command that can't run in this shell has no row.
+    expect(screen.queryByRole("option", { name: "/play" })).toBeNull();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByText("Chat page: /plan in this chat")).toBeVisible();
   });
 
   it("the Sign in row goes once the key is in", async () => {

@@ -24,7 +24,7 @@ const labels = (caps: Capabilities, q: string) => paletteRows(caps, q).map((r) =
 const run = () => {};
 /** Every command has a runner, as once the shell can halt. */
 const ALL_RUNNERS: CommandRunners = { "new-chat": run, halt: run, "sign-in": run, shortcuts: run };
-const EXTRAS: PaletteExtras = { runners: ALL_RUNNERS, signedOut: true, chats: [], slash: () => [] };
+const EXTRAS: PaletteExtras = { runners: ALL_RUNNERS, signedOut: true, chats: [], slash: [] };
 const withExtras = (caps: Capabilities, q: string, extras = EXTRAS) =>
   paletteRows(caps, q, extras).map((r) => r.label);
 
@@ -132,8 +132,7 @@ describe("paletteRows", () => {
   });
 
   it("lists slash commands for a query that starts with a slash", () => {
-    const slash = (q: string) =>
-      ["/plan", "/btw", "/new"].filter((name) => name.startsWith(q)).map((name) => ({ name }));
+    const slash = [{ name: "/plan", insert: "/plan " }];
     const chats = [{ id: "c1", title: "plans" }];
     expect(paletteRows(DESKTOP, "/pl", { ...EXTRAS, slash, chats })).toEqual([
       { label: "/plan", action: { kind: "ask", text: "/plan " } },
@@ -192,6 +191,27 @@ describe("Palette", () => {
     await userEvent.keyboard("{Enter}");
     expect(onPick).toHaveBeenCalledWith({ kind: "chat", id: "shell-c1" });
     expect(chats).toHaveBeenCalledWith("budget");
+  });
+
+  it("asks the slash source for a slash query, and a pick fills the chat box", async () => {
+    const onPick = vi.fn();
+    const slash = vi.fn(async (q: string) =>
+      [
+        { name: "/plan", insert: "/plan " },
+        { name: "/new", insert: "/new" },
+      ].filter((hit) => hit.name.startsWith(q)),
+    );
+    const chats = vi.fn(async () => [{ id: "c1", title: "plans" }]);
+    const sources: PaletteSources = { ...NO_SOURCES, chats, slash };
+    render(<Palette caps={PHONE} sources={sources} onPick={onPick} onClose={vi.fn()} />);
+    expect(await screen.findByRole("option", { name: "Chat: plans" })).toBeInTheDocument();
+    await userEvent.keyboard("/pl");
+    expect(await screen.findByRole("option", { name: "/plan" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("option", { name: "/new" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Chat: plans" })).toBeNull();
+    await userEvent.keyboard("{Enter}");
+    expect(onPick).toHaveBeenCalledWith({ kind: "ask", text: "/plan " });
+    expect(slash).toHaveBeenLastCalledWith("/pl");
   });
 
   it("shows a row's key beside it and names it for screen readers", () => {

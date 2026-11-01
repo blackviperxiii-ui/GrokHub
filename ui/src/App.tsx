@@ -5,7 +5,7 @@ import { ActivityDock } from "./ActivityDock";
 import { Automations, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
-import { shellKeys, type CommandRunners } from "./paletteCommands";
+import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
@@ -183,7 +183,7 @@ export function App() {
       {palette && (
         <Palette
           caps={caps}
-          sources={{ ...NO_SOURCES, runners, signedOut }}
+          sources={{ ...NO_SOURCES, runners, signedOut, slash: COMPOSER_SLASH }}
           onPick={run}
           onClose={() => setPalette(false)}
         />

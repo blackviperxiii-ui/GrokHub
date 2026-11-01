@@ -1,7 +1,7 @@
 // The palette's rows beyond pages and Settings sections: commands, slash
 // commands and recent chats. Each comes from a source the shell hands the
 // palette, so a row shows only once the shell can do what it says.
-import type { Capabilities } from "./api";
+import { slashHits, type Capabilities } from "./api";
 import type { PaletteRow } from "./Palette";
 import SYNONYMS from "./paletteSynonyms.json";
 
@@ -62,19 +62,28 @@ export interface ChatHit {
 /** Chats whose titles match the query (recent ones for an empty query). */
 export type ChatSource = (query: string) => Promise<ChatHit[]>;
 
-/** One slash command the composer knows, such as `/plan`. */
+/** One slash command the composer can run, such as `/plan`, and what a pick
+ * puts in the chat box (`/plan ` for one that takes text). */
 export interface SlashHit {
   name: string;
+  insert: string;
 }
 
 /** Slash commands that start with the typed `/` text. */
-export type SlashSource = (query: string) => SlashHit[];
+export type SlashSource = (query: string) => Promise<SlashHit[]>;
 
 /** Until the shell keeps a chat history, no chat rows. */
 export const NO_CHATS: ChatSource = () => Promise.resolve([]);
 
-/** Until the shell's composer has slash commands, no slash rows. */
-export const NO_SLASH: SlashSource = () => [];
+/** No slash rows. */
+export const NO_SLASH: SlashSource = () => Promise.resolve([]);
+
+/** The composer's slash commands. Ones that can't run here (the cabin's own)
+ * stay out, since a pick would only fill the box with a command that fails. */
+export const COMPOSER_SLASH: SlashSource = (query) =>
+  slashHits(query).then((hits) =>
+    hits.filter((hit) => !hit.disabled).map((hit) => ({ name: hit.cmd, insert: hit.insert })),
+  );
 
 /** Rows of recent chats the palette lists at most. */
 export const CHAT_ROWS = 5;
@@ -86,9 +95,9 @@ export function chatRows(hits: readonly ChatHit[]): PaletteRow[] {
   }));
 }
 
-/** A slash pick puts the command in the chat box, ready for its text. */
+/** A slash pick puts the command in the chat box, where Enter runs it. */
 export function slashRows(hits: readonly SlashHit[]): PaletteRow[] {
-  return hits.map((hit) => ({ label: hit.name, action: { kind: "ask", text: `${hit.name} ` } }));
+  return hits.map((hit) => ({ label: hit.name, action: { kind: "ask", text: hit.insert } }));
 }
 
 /** The older words the cabin's palette also answers to, by the row they find.

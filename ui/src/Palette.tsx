@@ -12,6 +12,7 @@ import {
   type ChatSource,
   type CommandId,
   type CommandRunners,
+  type SlashHit,
   type SlashSource,
 } from "./paletteCommands";
 import { revealItem, usePeek } from "./peek";
@@ -50,10 +51,10 @@ export interface PaletteExtras {
   runners: CommandRunners;
   signedOut: boolean;
   chats: readonly ChatHit[];
-  slash: SlashSource;
+  slash: readonly SlashHit[];
 }
 
-const NO_EXTRAS: PaletteExtras = { ...NO_SOURCES, chats: [] };
+const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
 
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
@@ -99,13 +100,15 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
   const all = [
     ...named(pages),
     ...named(commandRows(caps, extras)),
-    ...(slash ? slashRows(extras.slash(q)) : []),
+    ...(slash ? slashRows(extras.slash) : []),
     ...(slash ? [] : chatRows(extras.chats)),
     ...named(settings),
   ];
   if (!q) return all;
   return [...all, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
 }
+
+const NOTHING_FOUND = { chats: [], slash: [] };
 
 /** Rows can share a label (two chats with one title), so keys use the action. */
 function rowKey(row: PaletteRow): string {
@@ -135,13 +138,13 @@ export function Palette({
 }) {
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
-  const [chats, setChats] = useState<readonly ChatHit[]>([]);
+  const [found, setFound] = useState<{ chats: readonly ChatHit[]; slash: readonly SlashHit[] }>(NOTHING_FOUND);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
-  const rows = paletteRows(caps, query, { ...sources, chats });
-  const { chats: findChats } = sources;
+  const rows = paletteRows(caps, query, { ...sources, ...found });
+  const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);
   usePeek(list, "y", rows.length, paletteRoom);
 
@@ -149,19 +152,22 @@ export function Palette({
     input.current?.focus();
   }, []);
 
-  // Chats come from the history on disk, so they arrive a moment later.
+  // Chats and slash commands come from the desktop, so they arrive a moment
+  // later; an answer for an older query is dropped.
   useEffect(() => {
     let live = true;
     const q = query.trim();
-    const keep = (hits: readonly ChatHit[]) => {
-      if (live) setChats((now) => (now.length === 0 && hits.length === 0 ? now : hits));
+    const keep = (next: typeof found) => {
+      if (!live) return;
+      setFound((now) => (now.chats.length + now.slash.length + next.chats.length + next.slash.length === 0 ? now : next));
     };
-    if (q.startsWith("/")) keep([]);
-    else findChats(q).then(keep, () => keep([]));
+    const lost = () => keep(NOTHING_FOUND);
+    if (q.startsWith("/")) findSlash(q).then((slash) => keep({ chats: [], slash }), lost);
+    else findChats(q).then((chats) => keep({ chats, slash: [] }), lost);
     return () => {
       live = false;
     };
-  }, [query, findChats]);
+  }, [query, findChats, findSlash]);
 
   useEffect(() => {
     const dir = moved.current;
