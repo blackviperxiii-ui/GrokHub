@@ -1,19 +1,23 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BoardAct, BoardCard, BoardLane, BoardPage, BoardWork } from "./api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardAct, BoardCard, BoardLane, BoardPage, BoardResume, BoardWork, WorkLogLine } from "./api";
 
 const api = vi.hoisted(() => ({
   getWorkboard: vi.fn<() => Promise<BoardPage>>(),
+  workboardStamp: vi.fn<() => Promise<number>>(),
+  workboardLog: vi.fn<(id: string) => Promise<WorkLogLine[]>>(),
   workboardAdd: vi.fn<(title: string, detail: string) => Promise<BoardPage>>(),
   workboardAct: vi.fn<(id: string, act: BoardAct) => Promise<BoardPage>>(),
   workboardWork: vi.fn<(id: string) => Promise<BoardWork>>(),
+  workboardResume: vi.fn<(id: string, conversationId: string) => Promise<BoardResume>>(),
 }));
 
 vi.mock("./api", () => api);
+vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 
-import { BOARD_EMPTY, Workboard } from "./Workboard";
+import { BOARD_EMPTY, STAMP_EVERY_MS, Workboard } from "./Workboard";
 
 const LABELS: Record<BoardLane, string> = {
   followUp: "Follow up",
@@ -32,11 +36,20 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     priority: "",
     fresh: false,
     report: "",
+    owner: "You",
+    kind: null,
+    leftOff: null,
+    steps: [],
+    checkpoint: null,
+    progress: [0, 4],
+    canResume: false,
+    chat: null,
+    updatedMs: 0,
     ...over,
   };
 }
 
-function board(cards: Partial<Record<BoardLane, BoardCard[]>>, archived: BoardCard[] = []): BoardPage {
+function board(cards: Partial<Record<BoardLane, BoardCard[]>>, archived: BoardCard[] = [], stamp = 1): BoardPage {
   return {
     columns: (Object.keys(LABELS) as BoardLane[]).map((lane) => ({
       lane,
@@ -44,11 +57,29 @@ function board(cards: Partial<Record<BoardLane, BoardCard[]>>, archived: BoardCa
       cards: cards[lane] ?? [],
     })),
     archived,
+    stamp,
   };
 }
 
 const TODO = board({ todo: [card()], doing: [card({ id: "w-2", title: "Fix the build" })] });
 const MOVED = board({ doing: [card({ id: "w-2", title: "Fix the build" }), card()] });
+
+const PAUSED = card({
+  id: "p1",
+  title: "Port the lexer",
+  owner: "Agent",
+  kind: "Background",
+  leftOff: "Finish the lexer",
+  canResume: true,
+  chat: "chat-p1",
+  progress: [1, 3],
+  steps: [
+    { text: "Read the spec", status: "done" },
+    { text: "Write the lexer", status: "doing" },
+    { text: "Test it", status: "planned" },
+  ],
+  checkpoint: { goal: "Parse .tsa files", next: "Finish the lexer", blocker: "Which grammar?", refs: [] },
+});
 
 function column(name: string) {
   return screen.getByRole("region", { name });
@@ -61,6 +92,10 @@ function inCard(name: string) {
 describe("Workboard", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.workboardStamp.mockResolvedValue(1);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("says what to do on an empty board, and adds a card to Todo", async () => {
@@ -240,5 +275,118 @@ describe("Workboard", () => {
     render(<Workboard onWork={() => {}} />);
     expect(await screen.findByRole("status")).toHaveTextContent("workboard.json: expected value");
     expect(screen.queryByText(BOARD_EMPTY)).toBeNull();
+  });
+
+  it("shows each card's badge, left off and progress", async () => {
+    api.getWorkboard.mockResolvedValue(board({ todo: [card()], blocked: [PAUSED] }));
+    render(<Workboard onWork={() => {}} />);
+    await screen.findByRole("region", { name: "Todo" });
+    for (const name of ["Todo", "Doing", "Blocked", "Done"]) expect(within(column(name)).getByRole("heading")).toBeVisible();
+    const paused = inCard("Port the lexer");
+    expect(paused.getByText("Agent")).toBeVisible();
+    expect(paused.getByText("Background")).toBeVisible();
+    expect(paused.getByText(/Left off: Finish the lexer/)).toBeVisible();
+    expect(paused.getByRole("img", { name: "1 of 3" })).toBeInTheDocument();
+    expect(inCard("Write release notes").getByText("You")).toBeVisible();
+  });
+
+  it("opens a card to its steps and where it left off, and reads the log only when asked", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    api.workboardLog.mockResolvedValue([{ at: Date.now(), kind: "step", text: "Wrote the reader" }]);
+    render(<Workboard onWork={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Port the lexer/ }));
+    const open = inCard("Port the lexer");
+    const steps = within(open.getByRole("list", { name: "Steps" })).getAllByRole("listitem");
+    expect(steps.map((s) => s.textContent)).toEqual([
+      "✓ Read the spec (done)",
+      "→ Write the lexer (doing)",
+      "· Test it (planned)",
+    ]);
+    expect(open.getByText("Which grammar?")).toBeVisible();
+    expect(api.workboardLog).not.toHaveBeenCalled();
+
+    await userEvent.click(open.getByRole("button", { name: "Log" }));
+    expect(api.workboardLog).toHaveBeenCalledWith("p1");
+    expect(await open.findByText("just now · step · Wrote the reader")).toBeVisible();
+    await userEvent.click(open.getByRole("button", { name: "Log" }));
+    expect(open.queryByText("just now · step · Wrote the reader")).toBeNull();
+  });
+
+  it("Resume calls the resume command and hands the draft to the chat", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    api.workboardResume.mockResolvedValue({
+      conversationId: "chat-p1",
+      prompt: "Resume the work card",
+      page: board({ blocked: [PAUSED] }),
+    });
+    const onResume = vi.fn();
+    render(<Workboard onWork={() => {}} onResume={onResume} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Port the lexer/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(api.workboardResume).toHaveBeenCalledWith("p1", "chat-p1");
+    expect(onResume).toHaveBeenCalledWith({ conversationId: "chat-p1", prompt: "Resume the work card" });
+  });
+
+  it("Hand back, Move up and Move down go through act", async () => {
+    const mine = { ...PAUSED, owner: "You" as const, canResume: false };
+    const other = card({ id: "w-9", title: "Other" });
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    api.workboardAct
+      .mockResolvedValueOnce(board({ todo: [other, mine] }))
+      .mockResolvedValueOnce(board({ todo: [mine, other] }))
+      .mockResolvedValueOnce(board({ todo: [other, mine] }));
+    render(<Workboard onWork={() => {}} onResume={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Port the lexer/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Hand back" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("p1", { kind: "handBack" });
+    expect(inCard("Port the lexer").getByText("You")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+    expect(inCard("Port the lexer").getByRole("button", { name: "Move down" })).toBeDisabled();
+
+    await userEvent.click(inCard("Port the lexer").getByRole("button", { name: "Move up" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("p1", { kind: "rank", up: true });
+    expect(inCard("Port the lexer").getByRole("button", { name: "Move up" })).toBeDisabled();
+
+    await userEvent.click(inCard("Port the lexer").getByRole("button", { name: "Move down" }));
+    expect(api.workboardAct).toHaveBeenLastCalledWith("p1", { kind: "rank", up: false });
+  });
+
+  it("leaves Resume out in the web app, and keeps Hand back and the log", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    render(<Workboard onWork={() => {}} onResume={() => {}} resumable={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Port the lexer/ }));
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Hand back" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Log" })).toBeVisible();
+  });
+
+  it("opens the card the Activity dock asks for", async () => {
+    api.getWorkboard.mockResolvedValue(board({ blocked: [PAUSED] }));
+    const onCards = vi.fn();
+    render(<Workboard onWork={() => {}} onCards={onCards} openCard={{ id: "p1", n: 1 }} />);
+    await screen.findByRole("listitem", { name: "Port the lexer" });
+    expect(inCard("Port the lexer").getByRole("list", { name: "Steps" })).toBeVisible();
+    expect(onCards).toHaveBeenCalledWith({ "chat-p1": "p1" });
+  });
+
+  it("reloads when the cabin saves the board", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.getWorkboard
+      .mockResolvedValueOnce(board({ todo: [card()] }))
+      .mockResolvedValueOnce(board({ doing: [card()] }, [], 2));
+    render(<Workboard onWork={() => {}} />);
+    await screen.findByRole("region", { name: "Todo" });
+    expect(within(column("Todo")).getByText("Write release notes")).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STAMP_EVERY_MS);
+    });
+    expect(api.getWorkboard).toHaveBeenCalledTimes(1);
+    api.workboardStamp.mockResolvedValue(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STAMP_EVERY_MS);
+    });
+    await waitFor(() => expect(within(column("Doing")).getByText("Write release notes")).toBeVisible());
+    expect(api.getWorkboard).toHaveBeenCalledTimes(2);
   });
 });

@@ -943,6 +943,11 @@ export function journalToMission(id: string, conversationId: string): Promise<Jo
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
 export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
 
+export interface WorkStepView {
+  text: string;
+  status: "planned" | "doing" | "done" | "skipped" | "failed";
+}
+
 export interface BoardCard {
   id: string;
   title: string;
@@ -954,6 +959,21 @@ export interface BoardCard {
   fresh: boolean;
   /** A Follow up card's latest report. */
   report: string;
+  /** Who owns it, as the cabin's badge reads. */
+  owner: "Agent" | "You";
+  /** Automation, Background, Episode or Flow; a plain task has none. */
+  kind: string | null;
+  /** Where the work left off. */
+  leftOff: string | null;
+  steps: WorkStepView[];
+  checkpoint: { goal: string; next: string; blocker: string; refs: string[] } | null;
+  /** Steps done and in all. */
+  progress: [number, number];
+  /** A paused or interrupted run: Resume and Hand back apply. */
+  canResume: boolean;
+  /** The cabin chat that works it. */
+  chat: string | null;
+  updatedMs: number;
 }
 
 export interface BoardColumn {
@@ -966,15 +986,25 @@ export interface BoardPage {
   /** Follow up, then Todo, Doing, Blocked, Done. */
   columns: BoardColumn[];
   archived: BoardCard[];
+  /** The file's mtime, for the change check. */
+  stamp: number;
 }
 
 export type BoardAct =
   | { kind: "edit"; title: string; detail: string }
   | { kind: "notes"; notes: string }
   | { kind: "move"; to: BoardLane }
+  | { kind: "rank"; up: boolean }
+  | { kind: "handBack" }
   | { kind: "archive" }
   | { kind: "restore" }
   | { kind: "delete" };
+
+export interface WorkLogLine {
+  at: number;
+  kind: string;
+  text: string;
+}
 
 /** What Work puts in the chat box, and the board after the card moved. */
 export interface BoardWork {
@@ -982,8 +1012,25 @@ export interface BoardWork {
   page: BoardPage;
 }
 
+/** What Resume puts in the chat box, and the chat it goes to. */
+export interface BoardResume {
+  conversationId: string;
+  prompt: string;
+  page: BoardPage;
+}
+
 export function getWorkboard(): Promise<BoardPage> {
   return invoke<BoardPage>("get_workboard");
+}
+
+/** The board file's mtime; cheap enough to poll. */
+export function workboardStamp(): Promise<number> {
+  return invoke<number>("workboard_stamp");
+}
+
+/** A card's progress log tail. Read only when you open its log. */
+export function workboardLog(id: string): Promise<WorkLogLine[]> {
+  return invoke<WorkLogLine[]>("workboard_log", { id });
 }
 
 export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
@@ -996,6 +1043,11 @@ export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
 
 export function workboardWork(id: string): Promise<BoardWork> {
   return invoke<BoardWork>("workboard_work", { id });
+}
+
+/** Resume a paused run. A stub until KB-03 fills in the real resume. */
+export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
+  return invoke<BoardResume>("workboard_resume", { id, conversationId });
 }
 
 /** Home and Objectives (src-tauri/src/home.rs): the cabin's tiles from

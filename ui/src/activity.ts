@@ -1,7 +1,7 @@
 // The Activity Dock's model. It keeps no store of its own: it reads the chat
 // event stream and the Automations runs the shell already reports, and keeps
 // the latest state of each one.
-import type { ChatEnvelope } from "./api";
+import type { BoardPage, ChatEnvelope } from "./api";
 
 export type ActivityStatus = "running" | "waiting" | "done" | "failed";
 
@@ -155,4 +155,13 @@ export function dockSummary(items: ActivityItem[]): string {
 export function stepsLine(item: ActivityItem): string {
   if (item.kind !== "chat" || item.steps === 0) return "";
   return item.steps === 1 ? "1 step done" : `${item.steps} steps done`;
+}
+
+/** Which work card each chat works, so a chat's dock item can open its card. */
+export function cardsByChat(board: BoardPage): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const card of board.columns.flatMap((c) => c.cards)) {
+    if (card.chat) out[card.chat] = card.id;
+  }
+  return out;
 }

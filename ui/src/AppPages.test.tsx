@@ -29,6 +29,7 @@ vi.mock("./api", () => ({
   getCapabilities: api.getCapabilities,
   getSettings: api.getSettings,
   getMemory: api.getMemory,
+  getWorkboard: () => Promise.resolve({ followUp: [], columns: [], archived: [], stamp: 0 }),
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.chatHandlers.push(handler);
     return Promise.resolve(() => {});
