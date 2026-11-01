@@ -545,6 +545,89 @@ select:focus-visible {
   color: var(--muted);
 }
 
+/* Nyx in the chat (NyxFace.tsx, NyxDock.tsx): a face by Grok's replies and in
+   the empty chat, and a docked card at the right on wide windows only. */
+.nyx-face {
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center top;
+  border: 1px solid var(--border);
+}
+
+.nyx-face-32 {
+  width: 32px;
+  height: 32px;
+}
+
+.nyx-face-96 {
+  width: 96px;
+  height: 96px;
+}
+
+.nyx-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  align-self: stretch;
+  animation: rise-in var(--t-base) var(--ease-out) backwards;
+}
+
+.nyx-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.nyx-empty > .empty {
+  margin: 0;
+}
+
+.chat > .nyx-dock {
+  display: none;
+}
+
+/* Keep the width in step with DOCK_MIN_WIDTH in NyxDock.tsx. */
+@media (min-width: 900px) {
+  .chat.has-nyx {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    grid-template-rows: minmax(0, 1fr);
+    column-gap: 12px;
+  }
+
+  .chat.has-nyx > :not(.nyx-dock) {
+    grid-column: 1;
+  }
+
+  .chat.has-nyx > .nyx-dock {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    align-self: start;
+    max-width: none;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .nyx-dock img {
+    width: 100%;
+    aspect-ratio: 448 / 350;
+    object-fit: cover;
+    border-radius: var(--radius-md);
+    animation: fade-in var(--t-base) var(--ease-out) backwards;
+  }
+
+  .nyx-dock .note {
+    margin: 0;
+    text-align: center;
+  }
+}
+
 .error {
   color: var(--danger-text);
 }
@@ -1130,6 +1213,16 @@ button.danger {
 
 .card-detail-line.sample {
   font-style: italic;
+}
+
+/* Settings → Personality: each voice's picture across the top of its card. */
+.persona-thumb {
+  flex-basis: 100%;
+  width: 100%;
+  height: 112px;
+  object-fit: cover;
+  object-position: center 20%;
+  border-radius: var(--radius-md);
 }
 
 .permissions {

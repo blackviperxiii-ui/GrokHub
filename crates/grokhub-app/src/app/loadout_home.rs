@@ -15,6 +15,8 @@ use super::*;
 
 mod chat_first;
 pub(super) mod nyx_wardrobe;
+#[cfg(test)]
+mod wardrobe_parity;
 
 /// The companion cutout the chat header's round face is cropped from.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");

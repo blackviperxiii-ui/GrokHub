@@ -19,6 +19,9 @@ import {
 } from "./api";
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { NyxDock } from "./NyxDock";
+import { NyxFace } from "./NyxFace";
+import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
 
@@ -276,6 +279,8 @@ export function Chat({
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [settings, setSettings] = useState<Settings | null>(null);
+  // Nyx's pose follows what the chat does, not each chunk of text.
+  const nyx = useNyx(activityOf(items, busy), active);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -423,19 +428,33 @@ export function Chat({
     !(last?.kind === "elicit" && last.answer === null);
 
   return (
-    <section className="chat" aria-label="Chat">
+    <section className={nyx ? "chat has-nyx" : "chat"} aria-label="Chat">
+      {nyx && <NyxDock url={nyx.url} mood={nyx.mood} />}
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
           <SignedOut remote={remote} onSignIn={onSignIn} />
         ) : (
-          items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
+          items.length === 0 &&
+          !busy && (
+            <div className="nyx-empty">
+              {nyx && <NyxFace url={nyx.url} size={96} />}
+              <p className="empty">{CHAT_EMPTY}</p>
+            </div>
+          )
         )}
         {items.map((item, i) => {
           switch (item.kind) {
             case "user":
               return <UserBubble key={i} text={item.text} />;
             case "assistant":
+              if (nyx)
+                return (
+                  <div key={i} className="nyx-row">
+                    <NyxFace url={nyx.url} size={32} />
+                    <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />
+                  </div>
+                );
               return <AssistantBubble key={i} text={item.text} streaming={Boolean(item.streaming)} />;
             case "tool":
               return (

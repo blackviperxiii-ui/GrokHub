@@ -54,7 +54,7 @@ pub fn refused() -> String {
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
 /// The web app's commands: chat with approvals, automations, memory,
-/// connectors and Pulse, and reading the settings.
+/// connectors and Pulse, reading the settings, and which Nyx picture shows.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
@@ -88,6 +88,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_feed_prompt",
     "save_feed_prompt",
     "pulse_image",
+    "nyx_look",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -803,6 +804,7 @@ mod tests {
             "get_feed_prompt",
             "save_feed_prompt",
             "pulse_image",
+            "nyx_look",
         ] {
             assert!(web_command(name), "{name}");
         }
@@ -847,6 +849,7 @@ mod tests {
             "get_web_access",
             "set_web_access",
             "phone_smoke_report",
+            "nyx_tiles",
         ] {
             assert!(!web_command(name), "{name}");
         }
