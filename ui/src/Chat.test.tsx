@@ -851,6 +851,10 @@ describe("Chat history", () => {
     });
     await waitFor(() => expect(screen.queryByText("and the trim?")).toBeNull());
 
+    // The ··· adds nothing to a bubble's text, so copying or reading it
+    // gives the message alone.
+    expect(screen.getByText("White.").closest(".bubble")?.textContent).toBe("White.");
+
     // Right-click on a reply: the whole reply to "pick a paint colour" goes,
     // its tools line included, now that "White." answers it too.
     fireEvent.contextMenu(screen.getByText("White."));

@@ -270,7 +270,8 @@ function contextMenuAt(onMenu?: MenuAt) {
   };
 }
 
-/** The quiet ··· on a bubble; its menu opens under it. */
+/** The quiet ··· on a bubble; its menu opens under it. The dots come from
+ *  CSS so the bubble's text stays the message alone (copy, smoke checks). */
 function MoreButton({ onMenu }: { onMenu: MenuAt }) {
   return (
     <button
@@ -282,9 +283,7 @@ function MoreButton({ onMenu }: { onMenu: MenuAt }) {
         const box = event.currentTarget.getBoundingClientRect();
         onMenu(box.left, box.bottom);
       }}
-    >
-      ···
-    </button>
+    />
   );
 }
 
