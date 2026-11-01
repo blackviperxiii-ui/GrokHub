@@ -150,7 +150,7 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
 pub fn imagine_network_hint(err: &str) -> String {
     let e = err.to_ascii_lowercase();
     if e.contains("http 401") || e.contains("bad credentials") || e.contains("unauthenticated") {
-        return "Imagine auth failed (HTTP 401). Sign in with Grok in Settings → Account, or add an xAI console API key.".into();
+        return "Imagine auth failed (HTTP 401). Sign in with Grok in Settings → AI models, or add an xAI console API key.".into();
     }
     if e.contains("http 403") {
         return format!(
