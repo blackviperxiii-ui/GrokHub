@@ -1,4 +1,14 @@
-import { memo, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  memo,
+  startTransition,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  ViewTransition,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   answerElicit,
   answerPermission,
@@ -21,7 +31,9 @@ import {
   type SlashHit,
   type Suggestion,
 } from "./api";
+import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import type { RunNotice } from "./Automations";
+import { appendDraft, Mic } from "./Mic";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
 import { onArrowFocus, usePeek } from "./peek";
@@ -93,28 +105,39 @@ export interface Prefill {
 }
 
 const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: "Message Grok",
+  chat: `Message ${PRODUCT_NAME}`,
   plan: "Describe what to plan",
   btw: "Ask on the side",
 };
 
-export const CHAT_EMPTY = "Ask Grok anything.";
+export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
   `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
+export const SIGNED_OUT_GROK =
+  `Sign in with your Grok account, or add an xAI API key. Either one is kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";
 export const SIGNED_OUT_REMOTE =
-  `${PRODUCT_NAME} on your computer has no API key yet. Add one there, then chat here.`;
+  `${PRODUCT_NAME} on your computer isn't signed in yet. Sign in there, then chat here.`;
 
 /** One primary sign-in button and one hint, on every platform. The web app
  * signs in on the computer, so it only says so. */
-function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void }) {
+function SignedOut({
+  remote,
+  grok,
+  onSignIn,
+}: {
+  remote: boolean;
+  /** This device offers Sign in with Grok. */
+  grok: boolean;
+  onSignIn: () => void;
+}) {
   if (remote) return <p className="empty">{SIGNED_OUT_REMOTE}</p>;
   return (
     <div className="signed-out" role="region" aria-label="Sign in">
       <h2>Sign in to start</h2>
-      <p>{SIGNED_OUT}</p>
+      <p>{grok ? SIGNED_OUT_GROK : SIGNED_OUT}</p>
       <button type="button" onClick={onSignIn}>
-        Add your API key
+        {grok ? "Sign in with Grok" : "Add your API key"}
       </button>
       <p className="note">{SIGNED_OUT_KEY_HINT}</p>
     </div>
@@ -257,6 +280,99 @@ function PermissionCard({
   );
 }
 
+/** One entry in the log. It and Chat are compiled ("use memo"), and Chat passes
+ * the same handlers every render, so a reply streaming in redraws only the
+ * bubble it changes; a card above it is not drawn again. Cards come in as a
+ * transition and fade in where the webview has view transitions. */
+function LogItem({
+  item,
+  busy,
+  onAnswer,
+  onAnswerCard,
+  onPick,
+  onDraft,
+  onOpenAutomations,
+}: {
+  item: Item;
+  busy: boolean;
+  onAnswer: (id: string, answer: Answer) => void;
+  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  onPick: (prompt: string) => void;
+  onDraft: (text: string) => void;
+  onOpenAutomations?: () => void;
+}) {
+  "use memo";
+  switch (item.kind) {
+    case "user":
+      return <UserBubble text={item.text} />;
+    case "assistant":
+      return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} />;
+    case "tool":
+      return (
+        <ViewTransition>
+          <ToolCard title={item.title} status={item.status} detail={item.detail} />
+        </ViewTransition>
+      );
+    case "permission":
+      return (
+        <ViewTransition>
+          <PermissionCard item={item} onAnswer={(a) => onAnswer(item.id, a)} />
+        </ViewTransition>
+      );
+    case "elicit":
+      return (
+        <ViewTransition>
+          <ElicitCard item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
+        </ViewTransition>
+      );
+    case "notice":
+      return (
+        <div
+          className={item.ok ? "card notice" : "card notice warn"}
+          role="status"
+          aria-label={`${item.name} finished`}
+        >
+          <span className="card-title">{item.name}</span>
+          <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
+          <p className="card-detail-line plain">
+            {item.text.length > NOTICE_CHARS
+              ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
+              : item.text}
+          </p>
+          <div className="card-buttons">
+            <button
+              type="button"
+              className="quiet"
+              onClick={() =>
+                onDraft(
+                  item.ok
+                    ? `About the "${item.name}" automation run: `
+                    : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
+                )
+              }
+            >
+              {item.ok ? "Ask about it" : "Find the cause"}
+            </button>
+            {onOpenAutomations && (
+              <button type="button" className="link" onClick={onOpenAutomations}>
+                Open Automations
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    case "slash":
+      return (
+        <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
+          <span className="card-title">{item.command}</span>
+          <p className="card-detail-line plain">{item.text}</p>
+        </div>
+      );
+    case "suggest":
+      return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
+  }
+}
+
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
@@ -273,6 +389,7 @@ export function Chat({
   notice,
   active = true,
   remote = false,
+  grokSignIn = false,
 }: {
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
@@ -284,7 +401,10 @@ export function Chat({
   notice?: RunNotice & { n: number };
   active?: boolean;
   remote?: boolean;
+  /** Settings → Account offers Sign in with Grok here. */
+  grokSignIn?: boolean;
 }) {
+  "use memo";
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
@@ -294,6 +414,7 @@ export function Chat({
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const attach = useAttachments(conversationId, { remote, active });
   const slashRows = useSlashHits(draft);
   const [slashAt, setSlashAt] = useState(0);
   // Escape hides the list until the draft changes.
@@ -330,9 +451,10 @@ export function Chat({
     }
   }
 
-  useEffect(() => {
-    if (!prefill) return;
-    const to = prefill.conversationId;
+  // Only a new prefill acts; switching conversations must not re-run it, so the
+  // conversation it reads is the latest, not a dependency.
+  const applyPrefill = useEffectEvent((next: Prefill) => {
+    const to = next.conversationId;
     if (to && to !== conversationId) {
       if (busyRef.current) {
         setError(MISSION_BUSY);
@@ -343,14 +465,19 @@ export function Chat({
       setError(null);
       setConversationId(to);
     }
-    setDraft(prefill.text);
-    // Only a new prefill acts; switching conversations must not re-run it.
-  }, [prefill]);
+    setDraft(next.text);
+  });
   useEffect(() => {
-    if (!notice) return;
+    if (prefill) applyPrefill(prefill);
+  }, [prefill]);
+
+  // A new `n` posts the run's notice, once.
+  const [noticeN, setNoticeN] = useState<number>();
+  if (notice && notice.n !== noticeN) {
+    setNoticeN(notice.n);
     const { n: _n, ...run } = notice;
     setItems((now) => [...now, { kind: "notice", ...run }]);
-  }, [notice]);
+  }
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -362,7 +489,9 @@ export function Chat({
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
       else if (event.kind === "done") setItems(settle);
-      else setItems((now) => applyEvent(now, event));
+      else if (event.kind === "text") setItems((now) => applyEvent(now, event));
+      // A card is a transition, so the webview can fade it in; text streams as is.
+      else startTransition(() => setItems((now) => applyEvent(now, event)));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
@@ -384,31 +513,48 @@ export function Chat({
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
-  /** Sends the draft, or `picked` from a suggestion (the draft stays).
-   * `as` sends in that mode, for `/plan <text>`. A slash line runs here. */
-  async function send(event?: FormEvent, picked?: string, as?: SessionMode) {
-    event?.preventDefault();
-    const text = (picked ?? draft).trim();
-    if (!text || busy) return;
-    if (picked === undefined && isSlashCommand(text)) {
-      await slash(text);
+  function startOver() {
+    if (busy) return;
+    void closeChat(conversationId);
+    setItems([]);
+    setError(null);
+    setConversationId(newConversationId());
+  }
+
+  /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
+   * `fromDraft` empties the box and its files; a picked suggestion leaves them. */
+  async function deliver(
+    text: string,
+    files: typeof attach.files,
+    fromDraft: boolean,
+    as?: SessionMode,
+  ) {
+    if ((!text && files.length === 0) || busy) return;
+    const unread = files.find((f) => f.status);
+    if (unread) {
+      setError(`${unread.name}: ${unread.status}`);
       return;
     }
+    const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
     // Suggestions belong to the reply they followed.
-    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
-    if (picked === undefined) setDraft("");
+    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text: said }]);
+    if (fromDraft) {
+      setDraft("");
+      attach.clear();
+    }
     setError(null);
     busyRef.current = true;
     setBusy(true);
     try {
-      await sendChat(conversationId, text, as ?? mode);
+      const paths = files.map((f) => f.path);
+      await (paths.length ? sendChat(conversationId, text, as ?? mode, paths) : sendChat(conversationId, text, as ?? mode));
     } catch (err) {
       setError(String(err));
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-      setItems(settle);
     }
+    // After the catch rather than in a finally, which React Compiler can't compile yet.
+    busyRef.current = false;
+    setBusy(false);
+    setItems(settle);
   }
 
   async function answer(id: string, choice: Answer) {
@@ -455,7 +601,7 @@ export function Chat({
         break;
       case "mode":
         setMode(effect.mode);
-        if (effect.text) void send(undefined, effect.text, effect.mode);
+        if (effect.text) void deliver(effect.text.trim(), [], false, effect.mode);
         break;
       case "open":
         onOpenView?.(effect.view);
@@ -479,6 +625,26 @@ export function Chat({
     }
     if (run && hit.runOnPick) void slash(hit.cmd);
     else setDraft(hit.insert);
+  }
+
+  // Declared after what they call: React Compiler skips a component that
+  // calls a function declared further down.
+  /** Sends the draft, or `picked` from a suggestion (the draft stays).
+   * A slash line runs instead of going to the model. */
+  async function send(event?: FormEvent, picked?: string) {
+    event?.preventDefault();
+    const text = (picked ?? draft).trim();
+    const files = picked === undefined ? attach.files : [];
+    if ((!text && files.length === 0) || busy) return;
+    if (picked === undefined && isSlashCommand(text)) {
+      await slash(text);
+      return;
+    }
+    await deliver(text, files, picked === undefined);
+  }
+
+  function pick(prompt: string) {
+    void send(undefined, prompt);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -515,14 +681,6 @@ export function Chat({
     }
   }
 
-  function startOver() {
-    if (busy) return;
-    void closeChat(conversationId);
-    setItems([]);
-    setError(null);
-    setConversationId(newConversationId());
-  }
-
   // The "…" bubble shows only while nothing else in the log is moving.
   const last = items[items.length - 1];
   const waiting =
@@ -531,96 +689,26 @@ export function Chat({
     !(last?.kind === "elicit" && last.answer === null);
 
   return (
-    <section className="chat" aria-label="Chat">
+    <section className="chat" aria-label="Chat" onDragOver={attach.onDragOver} onDrop={attach.onDrop}>
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
-        {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
-          <SignedOut remote={remote} onSignIn={onSignIn} />
+        {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
+          <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
           items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
         )}
-        {items.map((item, i) => {
-          switch (item.kind) {
-            case "user":
-              return <UserBubble key={i} text={item.text} />;
-            case "assistant":
-              return <AssistantBubble key={i} text={item.text} streaming={Boolean(item.streaming)} />;
-            case "tool":
-              return (
-                <ToolCard key={i} title={item.title} status={item.status} detail={item.detail} />
-              );
-            case "permission":
-              return (
-                <PermissionCard key={i} item={item} onAnswer={(a) => void answer(item.id, a)} />
-              );
-            case "elicit":
-              return (
-                <ElicitCard
-                  key={i}
-                  item={item}
-                  onAnswer={(action, value) => void answerCard(item, action, value)}
-                />
-              );
-            case "notice":
-              return (
-                <div
-                  key={i}
-                  className={item.ok ? "card notice" : "card notice warn"}
-                  role="status"
-                  aria-label={`${item.name} finished`}
-                >
-                  <span className="card-title">{item.name}</span>
-                  <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-                  <p className="card-detail-line plain">
-                    {item.text.length > NOTICE_CHARS
-                      ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
-                      : item.text}
-                  </p>
-                  <div className="card-buttons">
-                    <button
-                      type="button"
-                      className="quiet"
-                      onClick={() =>
-                        setDraft(
-                          item.ok
-                            ? `About the "${item.name}" automation run: `
-                            : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
-                        )
-                      }
-                    >
-                      {item.ok ? "Ask about it" : "Find the cause"}
-                    </button>
-                    {onOpenAutomations && (
-                      <button type="button" className="link" onClick={onOpenAutomations}>
-                        Open Automations
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            case "slash":
-              return (
-                <div
-                  key={i}
-                  className="card notice slash-notice"
-                  role="status"
-                  aria-label={`${item.command} result`}
-                >
-                  <span className="card-title">{item.command}</span>
-                  <p className="card-detail-line plain">{item.text}</p>
-                </div>
-              );
-            case "suggest":
-              return (
-                <SuggestRow
-                  key={i}
-                  items={item.items}
-                  busy={busy}
-                  onPick={(prompt) => void send(undefined, prompt)}
-                />
-              );
-          }
-        })}
+        {items.map((item, i) => (
+          <LogItem
+            key={i}
+            item={item}
+            busy={busy}
+            onAnswer={answer}
+            onAnswerCard={answerCard}
+            onPick={pick}
+            onDraft={setDraft}
+            onOpenAutomations={onOpenAutomations}
+          />
+        ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
             …
@@ -648,6 +736,7 @@ export function Chat({
         model={settings?.model ?? null}
         onModel={(id) => void pickModel(id)}
       />
+      <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (
           <SlashMenu
@@ -656,6 +745,9 @@ export function Chat({
             onHover={setSlashAt}
             onPick={(hit) => pickSlash(hit, true)}
           />
+        )}
+        {!remote && (
+          <AttachButton onPick={() => void attach.pick()} busy={busy} full={attach.files.length >= ATTACH_MAX} />
         )}
         <textarea
           aria-label="Message"
@@ -671,13 +763,17 @@ export function Chat({
             setSlashAt(0);
           }}
           onKeyDown={onKeyDown}
+          onPaste={attach.onPaste}
         />
+        {!remote && (
+          <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+        )}
         {busy ? (
           <button type="button" onClick={() => void cancelChat(conversationId)}>
             Stop
           </button>
         ) : (
-          <button type="submit" disabled={!draft.trim()}>
+          <button type="submit" disabled={!draft.trim() && attach.files.length === 0}>
             Send
           </button>
         )}

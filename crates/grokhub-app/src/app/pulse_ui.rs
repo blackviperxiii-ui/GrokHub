@@ -1040,7 +1040,7 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
         UpdateKind::AutomationDone => "Automation run".into(),
         UpdateKind::ScheduleCreated => "Automations".into(),
         UpdateKind::Digest => "Daily digest".into(),
-        _ => "Cabin".into(),
+        _ => grokhub_core::brand::product_name().into(),
     }
 }
 
@@ -1168,7 +1168,7 @@ impl Cabin {
             });
         });
         ui.label(
-            RichText::new(pc::PULSE_SUBTITLE)
+            RichText::new(*pc::PULSE_SUBTITLE)
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );
@@ -2446,7 +2446,7 @@ mod fetch_agent_tests {
             "Pulse image agent must not auto-follow redirects: {arm}"
         );
         assert!(
-            !arm.contains("try_proxy_from_env"),
+            !arm.contains("proxy_from_env"),
             "env proxy would skip public_only_resolve on the target: {arm}"
         );
     }

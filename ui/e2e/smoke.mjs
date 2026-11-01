@@ -694,11 +694,11 @@ async function usePersonality(s, config, name) {
 
 async function plan(s, workspace) {
   await tab(s, "Chat");
-  await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
+  await click(s, "[aria-label='Session mode'] button[title^='Loadout writes a plan']");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
-  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
+  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"The plan\"]"));
   const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
@@ -1264,11 +1264,18 @@ async function desktop(s, config) {
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//label[contains(., 'Let Grok control the desktop')]//button[@role='switch']",
+      value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});
-  const approvals = await find(s, ".settings > form select");
+  await click(s, ".settings > form button[type='submit']");
+  await waitFor("the saved desktop switch", () => {
+    const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+    return saved.desktopControl === true;
+  });
+  // Approvals live in Settings → Defaults.
+  await section(s, "Defaults");
+  const approvals = await waitFor("the approvals pick", () => find(s, ".settings > form select"));
   const always = await wd("POST", `${s}/element/${approvals}/element`, {
     using: "css selector",
     value: "option[value='always']",

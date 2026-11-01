@@ -379,7 +379,7 @@ impl Cabin {
                     SetupStep::Welcome => {}
                     SetupStep::App => {
                         let mut close_to_tray = self.cfg.close_to_tray;
-                        if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
+                        if crate::cards::settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
                             self.set_close_to_tray(close_to_tray);
                         }
                         self.ui_dream_time_row(ui);

@@ -155,7 +155,7 @@ impl Cabin {
         if crate::cards::settings_toggle(
             ui,
             "Learn my daily rhythm",
-            "Counts the minutes you're typing in the cabin, by weekday and hour, on this computer. Low-priority nudges wait for an hour you're usually around.",
+            grokhub_core::brand::filled("Counts the minutes you're typing in {product}, by weekday and hour, on this computer. Low-priority nudges wait for an hour you're usually around."),
             &mut on,
         ) {
             self.rhythm_now().on = on;
