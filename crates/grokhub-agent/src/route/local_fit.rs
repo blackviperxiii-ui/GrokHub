@@ -69,6 +69,8 @@ pub struct Fitted {
     pub notes_cut: bool,
     pub agents_cut: bool,
     pub turns_dropped: usize,
+    /// The newest message alone was longer than the window: its middle went.
+    pub newest_clipped: bool,
 }
 
 /// Shrink `req` until it fits `n_ctx` with [`reply_reserve`] left over.
@@ -112,7 +114,54 @@ pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
         let agents = agents_tokens(&out.input);
         done.agents_cut |= cap_agents(&mut out.input, agents.saturating_sub(over));
     }
+    // One message alone longer than the window (a pasted log): keep its start
+    // and end and say what was left out, instead of the device refusing it.
+    let over = request_tokens(&out).saturating_sub(budget);
+    if over > 0 {
+        done.newest_clipped = clip_newest_user(&mut out.input, over);
+    }
     (out, done)
+}
+
+/// Stands in for the middle [`clip_newest_user`] cut.
+pub const CLIPPED_NOTE: &str =
+    "characters of this message were left out in the middle to fit the on-device model";
+
+/// Cut about `over_tokens` from the middle of the newest user message.
+fn clip_newest_user(input: &mut [InputItem], over_tokens: u64) -> bool {
+    let Some(text) = input.iter_mut().rev().find_map(|item| match item {
+        InputItem::Message { role, content } if role == "user" => {
+            content.iter_mut().find_map(|c| match c {
+                ContentPart::InputText(t) => Some(t),
+                _ => None,
+            })
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    // About 4 bytes a token, with room for the note.
+    let cut = (over_tokens.saturating_add(64) as usize).saturating_mul(4);
+    let len = text.len();
+    let keep = len.saturating_sub(cut).max(len.min(512));
+    let mut head = keep / 2;
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = len - (keep - keep / 2);
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    if tail <= head {
+        return false;
+    }
+    let left_out = text[head..tail].chars().count();
+    *text = format!(
+        "{}\n\n[… {left_out} {CLIPPED_NOTE} …]\n\n{}",
+        &text[..head],
+        &text[tail..]
+    );
+    true
 }
 
 const AGENTS_OPEN: &str = "<agents>\n";

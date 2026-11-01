@@ -417,6 +417,8 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
+                // Free VRAM with the model loaded: the governor's drop baseline.
+                autoconfig::mark_resident();
                 side.effort_levels = super::local_effort::fetch_levels(
                     &side.host,
                     side.port,

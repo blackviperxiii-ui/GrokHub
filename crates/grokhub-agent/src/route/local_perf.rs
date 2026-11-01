@@ -69,6 +69,21 @@ fn idle_override() -> Option<u64> {
     }
 }
 
+/// Settings → Local AI → Context size, when you picked one: the hardware
+/// probe landing later keeps it instead of its own 4k/8k/16k guess.
+pub fn set_ctx_override(ctx: Option<u64>) {
+    CTX_OVERRIDE.store(ctx.unwrap_or(0), std::sync::atomic::Ordering::SeqCst);
+}
+
+static CTX_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn ctx_override() -> Option<u64> {
+    match CTX_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        c => Some(c),
+    }
+}
+
 /// Current stored defaults (CPU-safe floor until a probe runs).
 pub fn current_defaults() -> RuntimeDefaults {
     stored().lock().expect("local_perf defaults").clone()
@@ -197,7 +212,7 @@ pub fn apply_hardware(hw: &Hardware) {
     if let Some(secs) = idle_override() {
         d.idle_unload_secs = secs;
     }
-    super::local::set_ctx_cap(d.ctx);
+    super::local::set_ctx_cap(ctx_override().unwrap_or(d.ctx));
     set_defaults(d);
 }
 
@@ -279,5 +294,17 @@ mod tests {
         // Reset for other tests in this process.
         apply_hardware(&hw("", 0, 4_096));
         assert_eq!(super::super::local::ctx_cap(), 4_096);
+    }
+
+    #[test]
+    fn a_picked_context_size_outlives_the_hardware_probe() {
+        set_ctx_override(Some(32_768));
+        apply_hardware(&hw("NVIDIA GeForce RTX 3070", 8_192, 16_384));
+        assert_eq!(super::super::local::ctx_cap(), 32_768);
+        // Back to Auto: the probe's guess again.
+        set_ctx_override(None);
+        apply_hardware(&hw("NVIDIA GeForce RTX 3070", 8_192, 16_384));
+        assert_eq!(super::super::local::ctx_cap(), 8_192);
+        apply_hardware(&hw("", 0, 4_096));
     }
 }

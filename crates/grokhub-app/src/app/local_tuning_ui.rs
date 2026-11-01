@@ -103,6 +103,7 @@ pub(super) fn launch_changed(a: &LocalTuning, b: &LocalTuning) -> bool {
 fn apply(t: &LocalTuning, prev: Option<&LocalTuning>) {
     local::set_first(LocalFirst::parse(&t.first));
     local_autoconfig::set_overrides(overrides_for(t, local_perf::physical_cores()));
+    local_perf::set_ctx_override((t.ctx > 0).then(|| u64::from(t.ctx)));
     if t.ctx > 0 {
         local::set_ctx_cap(u64::from(t.ctx));
     } else if prev.is_some_and(|p| p.ctx > 0) {
@@ -161,12 +162,38 @@ fn read_rules() -> Rules {
         .unwrap_or_default()
 }
 
+/// Write the governor's choices from these rows into `governor.json`, read
+/// fresh from disk so everything else in it (the hand-edited allow and deny
+/// lists, keys this build doesn't know) stays as it is. A file that isn't a
+/// JSON object is left alone and named in the error.
 fn write_rules(rules: &Rules) -> Result<(), String> {
     let path = rules_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let text = serde_json::to_string_pretty(rules).map_err(|e| e.to_string())?;
+    let mut file = match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => {
+            serde_json::from_str::<serde_json::Value>(&t).map_err(|e| {
+                format!(
+                    "{} isn't valid JSON ({e}); fix or remove it",
+                    path.display()
+                )
+            })?
+        }
+        _ => serde_json::json!({}),
+    };
+    let obj = file
+        .as_object_mut()
+        .ok_or_else(|| format!("{} isn't a JSON object; fix or remove it", path.display()))?;
+    for (key, on) in [
+        ("pauseForGames", rules.pause_for_games),
+        ("unloadForGames", rules.unload_for_games),
+        ("throttleOnBattery", rules.throttle_on_battery),
+        ("useIdleTime", rules.use_idle_time),
+    ] {
+        obj.insert(key.into(), serde_json::Value::Bool(on));
+    }
+    let text = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
@@ -272,6 +299,8 @@ impl Cabin {
                 Ok(()) => {
                     row.error = None;
                     self.status = "Saved".into();
+                    // What the file holds now, hand edits included.
+                    rules = read_rules();
                 }
                 Err(e) => row.error = Some(format!("Could not save the governor rules: {e}")),
             }
@@ -339,6 +368,38 @@ mod tests {
             GAMES_LABELS[0],
             "Unload the model (the game gets everything)"
         );
+    }
+
+    #[test]
+    fn saving_a_governor_choice_keeps_the_hand_edited_lists_in_the_file() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("governor-merge");
+        std::fs::create_dir_all(root.join("local")).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let file = root.join("local").join("governor.json");
+        std::fs::write(
+            &file,
+            r#"{"allow":["blender.exe"],"deny":["game.exe"],"futureKey":7,"throttleOnBattery":true}"#,
+        )
+        .unwrap();
+        let mut r = read_rules();
+        r.throttle_on_battery = false;
+        set_games_choice(&mut r, 1);
+        write_rules(&r).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back["allow"], serde_json::json!(["blender.exe"]));
+        assert_eq!(back["deny"], serde_json::json!(["game.exe"]));
+        assert_eq!(back["futureKey"], serde_json::json!(7));
+        assert_eq!(back["throttleOnBattery"], serde_json::json!(false));
+        assert_eq!(back["pauseForGames"], serde_json::json!(true));
+        assert_eq!(back["unloadForGames"], serde_json::json!(false));
+        // A file that isn't JSON is left alone and named.
+        std::fs::write(&file, "{ not json").unwrap();
+        let err = write_rules(&r).unwrap_err();
+        assert!(err.contains("isn't valid JSON"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

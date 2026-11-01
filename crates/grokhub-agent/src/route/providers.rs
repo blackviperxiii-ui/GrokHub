@@ -1188,7 +1188,8 @@ pub fn apply_openrouter_routing(body: &mut Value, wire_model: &str, r: &Routing)
         } else {
             OPENROUTER_AUTO_ROUTER
         };
-        body["models"] = json!([wire_model, next]);
+        // `model` goes first; `models` lists only what comes after it.
+        body["models"] = json!([next]);
     }
 }
 
@@ -1197,14 +1198,16 @@ pub fn is_openrouter_host(host: &str) -> bool {
     host_is(host, "openrouter.ai")
 }
 
-fn error_of(status: u16, body: &str) -> ClientError {
+/// `openrouter`: the reply came from openrouter.ai, whose 404s name the
+/// account's privacy settings; any other host keeps its own error.
+fn error_of(status: u16, body: &str, openrouter: bool) -> ClientError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let msg = v["error"]["message"]
         .as_str()
         .or_else(|| v["error"].as_str())
         .or_else(|| v["message"].as_str())
         .unwrap_or("");
-    if policy_refusal(status, msg) {
+    if openrouter && policy_refusal(status, msg) {
         return ClientError::Protocol(POLICY_REFUSED.to_string());
     }
     map_http_status(
@@ -1270,7 +1273,8 @@ pub fn call_model(
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
     let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
-    if p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest()) {
+    let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
+    if openrouter {
         apply_openrouter_routing(&mut body, wire_model, &routing());
     }
     let body = body.to_string();
@@ -1282,7 +1286,7 @@ pub fn call_model(
         return Err(ClientError::Cancelled);
     }
     if !(200..300).contains(&r.status) {
-        return Err(error_of(r.status, &r.body));
+        return Err(error_of(r.status, &r.body, openrouter));
     }
     match p.kind {
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),

@@ -154,8 +154,10 @@ fn is_chat_class(class: &str) -> bool {
 }
 
 /// "Local AI for chats" sends this step to the device although a cloud model
-/// could take it: the switch is on, the mode covers the class, and the step
-/// fits the device as it would offline (never a cloud-only, hard-tool or
+/// could take it: the switch is on, the mode covers the class, the device has
+/// room (the governor is not throttling it for a game or a busy GPU: then the
+/// cloud wins and the device stays the fallback), and the step fits the
+/// device as it would offline (never a cloud-only, hard-tool or
 /// `prepare:hard` step, and never one over the context cap).
 pub fn first_takes(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     let covers = match gate.first {
@@ -167,7 +169,10 @@ pub fn first_takes(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
         offline: true,
         ..gate.clone()
     };
-    covers && gate.enabled && !gate.capacity.paused() && eligible(&as_offline, class, ctx_tokens)
+    covers
+        && gate.enabled
+        && gate.capacity.background_ok()
+        && eligible(&as_offline, class, ctx_tokens)
 }
 
 /// LO-48: the cabin sets this from `app.json` `promptCleanup` (default

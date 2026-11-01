@@ -97,15 +97,12 @@ mod chat_threads_tests;
 
 #[path = "composer_chips_tests.rs"]
 mod composer_chips_tests;
-
 #[path = "live_turn_tests.rs"]
 mod live_turn_tests;
-
-#[path = "permission_ask_tests.rs"]
-mod permission_ask_tests;
-
 #[path = "night_budget_tests.rs"]
 mod night_budget_tests;
+#[path = "permission_ask_tests.rs"]
+mod permission_ask_tests;
 
 #[path = "slash_gate_tests.rs"]
 mod slash_gate_tests;
@@ -143,6 +140,8 @@ fn cabin_src() -> String {
         include_str!("ideas_ui.rs"),
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
+        // Last: `fn_src` on its final fn runs to the end of the text.
+        include_str!("window_geom.rs"),
     )
     .replace("\r\n", "\n")
     .replace("pub(super) ", "")

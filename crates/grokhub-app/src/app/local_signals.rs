@@ -60,7 +60,7 @@ pub(super) fn start(config_dir: PathBuf) {
             grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
                 grokhub_agent::route::local_autoconfig::FreeNow {
                     vram_free_mb: super::local_probe::nvidia_free_vram_now(),
-                    ram_free_mb: local_probe::free_ram_now(),
+                    ram_free_mb: super::local_probe::free_ram_now(),
                 }
             }));
             sample_loop(&config_dir)
@@ -89,9 +89,12 @@ fn sample_loop(config_dir: &Path) {
                 .map(|t| Rules::from_json(&t))
                 .unwrap_or_default();
             // Sharing the GPU with a game: when the game takes much more VRAM
-            // than the running launch planned for, relaunch into what is left
-            // (between requests, like a level change).
+            // than was free with the model loaded, relaunch into what is left
+            // (between requests, like a level change). Battery or heat alone
+            // never restarts it.
+            let why = local_gov::reason();
             if local_gov::level() == Level::Throttle
+                && (g::game_reason(why) || why == "another app is keeping the GPU busy")
                 && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
             {
                 local_gov::request_restart();

@@ -289,3 +289,26 @@ fn an_unknown_window_falls_back_to_the_launch_default() {
     let n_ctx = crate::route::local_perf::current_defaults().ctx;
     assert!(fits(&rt.sent.lock().unwrap()[0], n_ctx));
 }
+
+#[test]
+fn one_message_longer_than_the_window_keeps_its_start_and_end() {
+    let start = "START of the pasted log. ";
+    let end = " END of the pasted log.";
+    let body = format!("{start}{}{end}", "line of a very long log\n".repeat(4_000));
+    let req = real_request(vec![text("user", &body)]);
+    let n_ctx = 4_096;
+    let (out, done) = fit(&req, n_ctx);
+    assert!(done.newest_clipped, "{done:?}");
+    assert!(
+        request_tokens(&out) <= n_ctx - reply_reserve(n_ctx),
+        "{} tokens",
+        request_tokens(&out)
+    );
+    let sent = first_text(out.input.last().unwrap());
+    assert!(sent.starts_with(start), "{}", &sent[..80]);
+    assert!(sent.ends_with(end));
+    assert!(sent.contains(CLIPPED_NOTE));
+    // A message that fits is never clipped.
+    let (_, small) = fit(&real_request(vec![text("user", "hi")]), n_ctx);
+    assert!(!small.newest_clipped);
+}

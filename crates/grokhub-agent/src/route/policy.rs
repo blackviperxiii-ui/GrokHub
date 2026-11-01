@@ -431,6 +431,54 @@ pub fn rank(
     out.into_iter().map(str::to_string).collect()
 }
 
+/// Rank for a tight week ("Auto: all models" with the budget at 80%): the
+/// model that answers this step for the least, without a slowdown or a limit.
+/// Degraded last, then any model that answered busy (429/503) in its last
+/// few calls, then the lowest expected cost, then the quickest recent
+/// answers, then the id. An unpriced model counts as dearest.
+pub fn rank_efficient(
+    class: &str,
+    candidates: &[&str],
+    reg: &Registry,
+    ctx_tokens: u64,
+) -> Vec<String> {
+    let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
+    let busy = |id: &str| {
+        reg.get(id)
+            .is_some_and(|r| r.health.recent.iter().rev().take(3).any(|c| c.pressure))
+    };
+    let cost = |id: &str| {
+        reg.get(id)
+            .and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens))
+            .unwrap_or(f64::MAX)
+    };
+    let p50 = |id: &str| {
+        let mut ms: Vec<u64> = reg
+            .get(id)
+            .map(|r| {
+                r.health
+                    .recent
+                    .iter()
+                    .filter(|c| c.ok)
+                    .map(|c| c.latency_ms)
+                    .collect()
+            })
+            .unwrap_or_default();
+        ms.sort_unstable();
+        ms.get(ms.len() / 2).copied().unwrap_or(u64::MAX)
+    };
+    let mut out: Vec<&str> = candidates.to_vec();
+    out.sort_by(|a, b| {
+        degraded(a)
+            .cmp(&degraded(b))
+            .then(busy(a).cmp(&busy(b)))
+            .then(cost(a).total_cmp(&cost(b)))
+            .then(p50(a).cmp(&p50(b)))
+            .then(a.cmp(b))
+    });
+    out.into_iter().map(str::to_string).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -37,8 +37,9 @@ const URL_HINT: &str =
 const KEY_ROW: &str = "Provider key";
 const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the model.";
 pub(super) const PICK_ROW: &str = "Use for your chats";
-const PICK_HINT: &str = "A model from a provider you allowed. Auto never picks one on its own, and never to save money.";
-pub(super) const PICK_OFF: &str = "Off (Auto: xAI or Local AI)";
+const PICK_HINT: &str = "Auto: all models ranks every model you connected for each step: the best one while nothing is tight, the cloud while a game keeps the device busy, the cheapest quick one when the week's budget runs low. Or pick one model for your chats.";
+pub(super) const PICK_OFF: &str = "Auto: xAI and Local AI only";
+pub(super) const PICK_ALL: &str = "Auto: all models (xAI, your providers, Local AI)";
 const ROUTE_ROW: &str = "OpenRouter routing";
 const ROUTE_HINT: &str = "How OpenRouter picks the endpoint for the model you chose. Sent with every call to openrouter.ai only.";
 const ROUTE_LABELS: [(&str, &str); 4] = [
@@ -48,7 +49,7 @@ const ROUTE_LABELS: [(&str, &str); 4] = [
     ("Lowest latency first", "latency"),
 ];
 const FALLBACK_ROW: &str = "Fall back to OpenRouter's router";
-const FALLBACK_HINT: &str = "When the model you picked has no endpoint left, OpenRouter goes on to its free router (for a free model) or Auto instead of failing.";
+const FALLBACK_HINT: &str = "When the model you picked fails for any reason (down, rate-limited, too long, flagged), OpenRouter goes on to its free router (for a free model) or Auto instead of failing, and bills the model that answered.";
 const DATA_ROW: &str = "OpenRouter data policy";
 const DATA_HINT: &str = "Zero data retention keeps your prompts off providers that store them; Allow also reaches providers that may train on prompts. Your account settings at openrouter.ai/settings/privacy still win.";
 const DATA_LABELS: [(&str, &str); 3] = [
@@ -141,6 +142,8 @@ pub(super) struct ProviderUi {
     pub model_choices: Option<Vec<String>>,
     /// The OpenRouter routing the router last heard.
     pub sent_routing: Option<providers::Routing>,
+    /// The model preferences the router last heard.
+    pub sent_prefs: Option<grokhub_agent::route::prefs::ModelPrefs>,
 }
 
 /// What the "Sign in with OpenRouter" thread sends the cabin.
@@ -295,6 +298,14 @@ impl Cabin {
         if self.harness.router.providers.sent_routing.as_ref() != Some(&self.cfg.provider_routing) {
             providers::set_routing(self.cfg.provider_routing.clone());
             self.harness.router.providers.sent_routing = Some(self.cfg.provider_routing.clone());
+        }
+        let prefs = grokhub_agent::route::prefs::ModelPrefs {
+            all: self.cfg.auto_all_models,
+            ..self.cfg.model_prefs.clone()
+        };
+        if self.harness.router.providers.sent_prefs.as_ref() != Some(&prefs) {
+            grokhub_agent::route::prefs::set_model_prefs(prefs.clone());
+            self.harness.router.providers.sent_prefs = Some(prefs);
         }
     }
 
@@ -574,6 +585,26 @@ impl Cabin {
         choices
     }
 
+    /// "Use for your chats" row `i`: Auto on xAI and Local AI, Auto on every
+    /// model, or one provider model (which turns "all models" off, so the
+    /// row shows what runs). True when something changed.
+    pub(super) fn set_chat_pick(&mut self, i: usize, models: &[String]) -> bool {
+        let (model, all) = match i {
+            0 => (String::new(), false),
+            1 => (String::new(), true),
+            _ => match models.get(i - 2) {
+                Some(m) => (m.clone(), false),
+                None => return false,
+            },
+        };
+        if model == self.cfg.provider_model && all == self.cfg.auto_all_models {
+            return false;
+        }
+        self.cfg.provider_model = model;
+        self.cfg.auto_all_models = all;
+        true
+    }
+
     /// Settings → Cabin defaults, under the model rows.
     pub(super) fn ui_provider_rows(&mut self, ui: &mut egui::Ui) {
         self.ensure_providers();
@@ -595,25 +626,20 @@ impl Cabin {
             });
         }
         let models = self.provider_model_choices();
-        if !models.is_empty() || !self.cfg.provider_model.is_empty() {
-            let mut labels = vec![PICK_OFF.to_string()];
+        if !models.is_empty() || !self.cfg.provider_model.is_empty() || self.cfg.auto_all_models {
+            let mut labels = vec![PICK_OFF.to_string(), PICK_ALL.to_string()];
             labels.extend(models.iter().map(|m| pick_label(m)));
-            let selected = if self.cfg.provider_model.is_empty() {
-                PICK_OFF.to_string()
-            } else {
-                pick_label(&self.cfg.provider_model)
+            let selected = match (self.cfg.provider_model.is_empty(), self.cfg.auto_all_models) {
+                (true, false) => PICK_OFF.to_string(),
+                (true, true) => PICK_ALL.to_string(),
+                (false, _) => pick_label(&self.cfg.provider_model),
             };
             if let Some(i) =
                 crate::cards::settings_dropdown(ui, PICK_ROW, PICK_HINT, &selected, &labels)
             {
-                let next = if i == 0 {
-                    String::new()
-                } else {
-                    models.get(i - 1).cloned().unwrap_or_default()
-                };
-                if next != self.cfg.provider_model {
-                    self.cfg.provider_model = next;
+                if self.set_chat_pick(i, &models) {
                     self.persist_cfg();
+                    self.sync_provider_pick();
                     self.status = "Saved".into();
                 }
             }
@@ -1412,6 +1438,53 @@ mod tests {
             "openrouter/alpha/small"
         );
         assert!(!is_free_model("openrouter/vendor/freeform-7b"));
-        assert_eq!(PICK_OFF, "Off (Auto: xAI or Local AI)");
+        assert_eq!(PICK_OFF, "Auto: xAI and Local AI only");
+    }
+
+    #[test]
+    fn use_for_your_chats_offers_auto_on_every_model_and_tells_the_router() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("chat-pick-all-models");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        let models = vec!["openrouter/openrouter/free".to_string()];
+        // Row 1: Auto on every model.
+        assert!(app.set_chat_pick(1, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("", true)
+        );
+        assert!(
+            !app.set_chat_pick(1, &models),
+            "the same row changes nothing"
+        );
+        app.sync_provider_pick();
+        assert!(grokhub_agent::route::prefs::model_prefs().all);
+        // Row 2: one model for your chats turns "all models" off.
+        assert!(app.set_chat_pick(2, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("openrouter/openrouter/free", false)
+        );
+        app.sync_provider_pick();
+        assert!(!grokhub_agent::route::prefs::model_prefs().all);
+        // Row 0: Auto on xAI and Local AI only. A row past the list is ignored.
+        assert!(app.set_chat_pick(0, &models));
+        assert_eq!(
+            (app.cfg.provider_model.as_str(), app.cfg.auto_all_models),
+            ("", false)
+        );
+        assert!(!app.set_chat_pick(9, &models));
+        // Saved as `autoAllModels`, left out while off.
+        app.cfg.auto_all_models = true;
+        let json = serde_json::to_string(&app.cfg).unwrap();
+        assert!(json.contains(r#""autoAllModels":true"#), "{json}");
+        app.cfg.auto_all_models = false;
+        assert!(!serde_json::to_string(&app.cfg)
+            .unwrap()
+            .contains("autoAllModels"));
+        assert_eq!(PICK_ALL, "Auto: all models (xAI, your providers, Local AI)");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

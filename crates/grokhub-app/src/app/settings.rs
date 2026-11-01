@@ -990,10 +990,17 @@ impl Cabin {
                                                                 self.refresh_models_now();
                                                             }
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
+                                                            self.ui_model_pref_rows(ui);
                                                             crate::ui_kit::section_header(ui, "Local AI", None);
                                                             super::privacy_page::paint_offline_row(ui);
                                                             self.ui_local_model_rows(ui);
-                                                            self.ui_local_tuning_rows(ui);
+                                                            // Live only once Local AI is on and installed;
+                                                            // the notes below say how to get there.
+                                                            if self.cfg.local_model
+                                                                && grokhub_agent::route::local::installed()
+                                                            {
+                                                                self.ui_local_tuning_rows(ui);
+                                                            }
                                                             for line in super::privacy_page::local_notes(
                                                                 self.cfg.local_model,
                                                                 grokhub_agent::route::local::installed(),

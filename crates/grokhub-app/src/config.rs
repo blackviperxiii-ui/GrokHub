@@ -364,6 +364,17 @@ pub struct AppConfig {
     /// Settings → AI models → Local AI: how the on-device model runs.
     #[serde(default, skip_serializing_if = "LocalTuning::is_default")]
     pub local_tuning: LocalTuning,
+    /// Settings → AI models → Models Auto may use: where Auto may send each
+    /// model on its own, and the effort it sends. By model id.
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_agent::route::prefs::ModelPrefs::is_empty"
+    )]
+    pub model_prefs: grokhub_agent::route::prefs::ModelPrefs,
+    /// "Use for your chats" → "Auto: all models": every model on a provider
+    /// you allowed joins Auto's pool next to xAI and Local AI.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_all_models: bool,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -867,6 +878,8 @@ impl Default for AppConfig {
             provider_model: String::new(),
             provider_routing: Default::default(),
             local_tuning: LocalTuning::default(),
+            model_prefs: Default::default(),
+            auto_all_models: false,
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_confirmed: false,

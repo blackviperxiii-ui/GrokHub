@@ -707,6 +707,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         escalate_bias,
         prior_escalated,
         care_first,
+        prefs: super::prefs::model_prefs(),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     laps.mark("route:choose");
@@ -1197,6 +1198,20 @@ pub fn stream_routed(
         effort.clone()
     };
     sent.model = model.clone();
+    // The prompt calls the assistant Grok: a call that goes anywhere else is
+    // told which model really answers, so it says so when asked.
+    let local_name = || {
+        super::local_sidecar::resolve_paths(&dir).and_then(|p| {
+            p.model
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+    };
+    super::identity::stamp(
+        &mut sent.input,
+        &model,
+        on_device.then(local_name).flatten().as_deref(),
+    );
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));
     let enter = timing::take_enter();
@@ -1293,6 +1308,11 @@ pub fn stream_routed(
                 if screen.heads_up_local.is_some() {
                     note = screen.heads_up_local.clone();
                 }
+                super::identity::stamp(
+                    &mut sent.input,
+                    super::local::live_tier(),
+                    local_name().as_deref(),
+                );
                 let out = super::local::serve_request(class, &sent, cancel);
                 if let Ok(turn) = &out {
                     if let Some(note) = &note {

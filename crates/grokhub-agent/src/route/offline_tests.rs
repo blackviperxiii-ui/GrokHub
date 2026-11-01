@@ -550,6 +550,27 @@ fn local_first_sends_chats_to_the_device_while_online_and_all_covers_background_
     );
     assert!(local::first_takes(&gate, "chat:quick", 1_000));
     assert!(!local::first_takes(&gate, "prepare:hard", 1_000));
+
+    // A game keeps the device busy (the governor throttles it): the cloud
+    // wins while it can answer, and the device stays the fallback.
+    gate.capacity = local::LocalCapacity {
+        ready: true,
+        level: grokhub_core::local_governor::Level::Throttle,
+    };
+    assert!(!local::first_takes(&gate, "chat:quick", 1_000));
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:first"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
 }
 
 #[test]

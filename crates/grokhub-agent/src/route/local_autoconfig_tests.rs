@@ -590,3 +590,31 @@ fn a_launch_is_sized_to_the_memory_a_game_leaves_free_and_grows_back_after() {
         (Some(6_000), Some(3_000), Some(40_000))
     );
 }
+
+#[test]
+fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as_a_game() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FREE: AtomicU64 = AtomicU64::new(0);
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(FREE.load(Ordering::SeqCst)),
+        ram_free_mb: None,
+    }));
+    // 7.5 GB free before launch; planning never sets the baseline.
+    FREE.store(7_500, Ordering::SeqCst);
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = None;
+    }
+    assert!(
+        !vram_dropped_since_launch(),
+        "no baseline before the model is resident"
+    );
+    // The model took 3.3 GB: that is the baseline, not a drop.
+    FREE.store(4_200, Ordering::SeqCst);
+    mark_resident();
+    assert!(!vram_dropped_since_launch());
+    FREE.store(3_500, Ordering::SeqCst);
+    assert!(!vram_dropped_since_launch(), "a small dip stays");
+    // A game took most of what was left.
+    FREE.store(1_200, Ordering::SeqCst);
+    assert!(vram_dropped_since_launch());
+}

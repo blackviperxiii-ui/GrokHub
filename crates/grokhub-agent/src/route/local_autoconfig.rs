@@ -488,7 +488,8 @@ struct Live {
     overrides: Overrides,
     /// The cabin's live free-memory read, taken at every launch.
     free_probe: Option<Arc<dyn Fn() -> FreeNow + Send + Sync>>,
-    /// Free VRAM the running launch was sized for (MB).
+    /// Free VRAM once the running model was resident (MB): what is left with
+    /// our own model loaded, so only someone else's use counts as a drop.
     launch_free_vram_mb: Option<u64>,
 }
 
@@ -547,8 +548,19 @@ pub fn vram_dropped(launch_free_mb: u64, now_free_mb: u64) -> bool {
 /// A relaunch is worth it once free VRAM is under this share of the launch's.
 pub const VRAM_DROP_PCT: u64 = 70;
 
-/// Under Throttle: free VRAM now is well under what the running launch
-/// assumed, so the governor should restart the model into the smaller room.
+/// The sidecar is up with the model loaded: free VRAM now is the baseline a
+/// later drop is measured against (the model's own memory is already gone
+/// from it, so loading it never reads as a game taking the GPU).
+pub fn mark_resident() {
+    let probe = live().lock().ok().and_then(|l| l.free_probe.clone());
+    let now = probe.map(|f| f().vram_free_mb).unwrap_or_default();
+    if let Ok(mut l) = live().lock() {
+        l.launch_free_vram_mb = now;
+    }
+}
+
+/// Under Throttle: free VRAM now is well under what was free once the model
+/// was resident, so the governor should restart the model into the smaller room.
 pub fn vram_dropped_since_launch() -> bool {
     let (probe, launched) = {
         let Ok(l) = live().lock() else {
@@ -652,9 +664,6 @@ fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan,
     // Plan against the memory free right now, not the probe's at setup.
     let now = probe.as_ref().map(|f| f()).unwrap_or_default();
     let p = with_free_now(p, now);
-    if let Ok(mut l) = live().lock() {
-        l.launch_free_vram_mb = now.vram_free_mb;
-    }
     let meta = gguf::read_meta(model).ok()?;
     let files = engine_files(binary);
     let files: Vec<&str> = files.iter().map(String::as_str).collect();

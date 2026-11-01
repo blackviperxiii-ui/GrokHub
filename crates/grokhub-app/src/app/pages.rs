@@ -6,8 +6,8 @@ use super::*;
 const SEND_SIGNIN_TITLE: &str = "Sign in to send this message";
 const SEND_SIGNIN_HINT: &str =
     "Your message is still in the box. Sign in with Grok, then press Enter.";
-/// Native engine, no GrokHub sign-in and no key yet.
-const NATIVE_SIGNIN_NOTE: &str =
+/// Native engine, no GrokHub sign-in and no key yet. Posted to the bell.
+pub(super) const NATIVE_SIGNIN_NOTE: &str =
     "Sign in with Grok in Settings → AI models, or add an API key there.";
 
 /// No sign-in or key, but Local AI is ready: chats answer on this computer.
@@ -715,36 +715,52 @@ impl Cabin {
         !cabin_oauth && !self.cfg.get_started_done
     }
 
-    /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
+    /// The composer's auth slot paints only the card after a refused send:
+    /// the standing "sign in" note is a bell notification
+    /// ([`Cabin::sync_auth_notice`]), never a strip above the composer.
     pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
-        if self.has_key() || self.imagine_native.tokens.is_some() {
+        if self.has_key() || self.imagine_native.tokens.is_some() || self.local_only_chat() {
             self.signin_card = false;
             return;
-        }
-        let local_only = self.local_only_chat();
-        if local_only {
-            self.signin_card = false;
         }
         if self.signin_card {
             self.ui_send_signin_card(ui);
-            return;
+        }
+    }
+
+    /// The standing sign-in note, when there is one to tell: no sign-in and
+    /// no key, past Get Started. Local AI ready changes the wording.
+    pub(super) fn auth_note_text(&self) -> Option<&'static str> {
+        if self.has_key() || self.imagine_native.tokens.is_some() {
+            return None;
         }
         if super::loadout_home::proof_shot_requested() || self.ui_wants_get_started() {
+            return None;
+        }
+        Some(if self.local_only_chat() {
+            LOCAL_ONLY_NOTE
+        } else {
+            NATIVE_SIGNIN_NOTE
+        })
+    }
+
+    /// Heartbeat: the sign-in note lands in the bell once per wording, with a
+    /// pill that opens Settings → AI models. Signing in posts nothing.
+    pub(super) fn sync_auth_notice(&mut self) {
+        let want = self.auth_note_text();
+        if want == self.notices.auth_note {
             return;
         }
-        ui.horizontal(|ui| {
-            crate::cards::settings_note(
-                ui,
-                if local_only {
-                    LOCAL_ONLY_NOTE
-                } else {
-                    NATIVE_SIGNIN_NOTE
-                },
+        self.notices.auth_note = want;
+        if let Some(text) = want {
+            self.notify(
+                super::notices::NoticeKind::Info,
+                text.to_string(),
+                Some(super::notices::NoticeAction::OpenSettings(
+                    SettingsSec::AiModels,
+                )),
             );
-            if crate::cards::ghost_pill(ui, "Settings") {
-                self.nav = Nav::Settings;
-            }
-        });
+        }
     }
 
     /// Shown after a send was refused for want of a sign-in. The typed text

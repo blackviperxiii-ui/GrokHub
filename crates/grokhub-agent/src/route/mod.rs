@@ -19,6 +19,7 @@ pub mod feedback;
 pub mod goal;
 pub mod guard;
 pub mod heal;
+pub mod identity;
 pub mod ladder;
 pub mod learn;
 pub mod live;
@@ -36,6 +37,7 @@ pub mod local_spec;
 pub mod log;
 pub mod match_ask;
 pub mod policy;
+pub mod prefs;
 pub mod providers;
 pub mod refresh;
 pub mod signals;
@@ -51,7 +53,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use grokhub_core::model_registry::cost_class::{
-    fast_base, fast_entitled, fast_of, route_key, CostClass, RouteOpts,
+    fast_base, fast_entitled, fast_of, route_key, usd_per_m, CostClass, RouteOpts,
 };
 use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::profile::{ModelProfile, RuntimeSettings};
@@ -335,6 +337,8 @@ pub struct RouteInput<'a> {
     pub text: &'a str,
     /// Learned escalate bias (−2..=+2) from [`feedback`] for this class.
     pub escalate_bias: i8,
+    /// Per-model preferences (Settings → AI models → Models Auto may use).
+    pub prefs: std::sync::Arc<prefs::ModelPrefs>,
     /// This episode already escalated (stronger model mid-flow).
     pub prior_escalated: bool,
     /// Care-first holds `chat:default` and the caller has already dropped keyword steer.
@@ -501,6 +505,43 @@ impl Router {
             rules.push("registry:empty".into());
             return keep(current);
         }
+        let tier = table::SpeedQuality::of(input.class);
+        let need_reasoning =
+            tier.needs_reasoning() || capabilities::class_need(input.class).require_reasoning;
+        // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick
+        // still use `ids`). A provider's listing seldom says whether a model
+        // reasons, so only one named non-reasoning is left out; the ranking decides.
+        let auto_ok = |m: &str| {
+            local::is_local(m)
+                || !need_reasoning
+                || table::is_reasoning_model(reg, profiles, m)
+                || (policy::is_new_provider(reg, m)
+                    && !m.to_ascii_lowercase().contains("non-reasoning"))
+        };
+        // A provider model that only "Auto: all models" lets in stays under your
+        // $/M ceiling; its own preference, the pick and a pin reach a pricier one.
+        let over_ceiling = |m: &str| {
+            input.prefs.use_of(m) == prefs::ModelUse::Default
+                && reg
+                    .get(m)
+                    .and_then(|r| r.meta.prices.completion)
+                    .is_some_and(|p| usd_per_m(p) > input.spend.settings.ceiling_usd_per_m)
+        };
+        // Auto's own pool is what your model preferences allow for this class
+        // (Settings → AI models → Models Auto may use). By default that is xAI
+        // and the device: a provider you added is never a stand-in or a
+        // fallback, and never the cheapest pick, until you allow it there (or
+        // turn on "Auto: all models"); only a pin, the pick or the class
+        // preference (a table row) takes it.
+        // A pin reaches its model whatever the preference says.
+        let allowed = |m: &str| {
+            let added = policy::is_new_provider(reg, m);
+            (input.pinned && m.trim() == current)
+                || (input.prefs.auto_allows(m, input.class, added) && !(added && over_ceiling(m)))
+        };
+        // "Auto: all models" in a tight week: the best model gives way to the
+        // one that answers for the least without a slowdown or a limit.
+        let efficient = input.prefs.all && input.spend.budget_tight;
         if !gb && reg.entitlement.credential == Credential::None {
             // No sign-in: nothing native is included, but a provider you added
             // and picked in Settings still answers on its own key and grant.
@@ -511,6 +552,32 @@ impl Router {
             {
                 rules.push("provider:picked".into());
                 return keep(p);
+            }
+            // Your preferences let Auto use a provider you added: it ranks those
+            // models for the step (the next one after a failed answer).
+            let theirs: Vec<&str> = ids
+                .iter()
+                .copied()
+                .filter(|m| policy::is_new_provider(reg, m) && allowed(m))
+                .collect();
+            let fitting: Vec<&str> = theirs.iter().copied().filter(|m| auto_ok(m)).collect();
+            let pool = if fitting.is_empty() {
+                &theirs
+            } else {
+                &fitting
+            };
+            let mut ranked = if efficient {
+                rules.push("auto:efficient".into());
+                policy::rank_efficient(input.class, pool, reg, input.ctx_tokens)
+            } else {
+                policy::rank(input.class, pool, table, reg, current, input.ctx_tokens)
+            };
+            if e2 {
+                let away = input.episode_model.unwrap_or(current).trim().to_string();
+                ranked.retain(|m| *m != away);
+            }
+            if let Some(m) = ranked.first() {
+                return keep(m);
             }
             // Otherwise the call keeps its own model.
             rules.push("cost:not_included".into());
@@ -523,25 +590,16 @@ impl Router {
             // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
             rules.push("cost:premium_ungranted".into());
         }
-        let tier = table::SpeedQuality::of(input.class);
-        let need_reasoning =
-            tier.needs_reasoning() || capabilities::class_need(input.class).require_reasoning;
-        // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
-        let auto_ok = |m: &str| {
-            local::is_local(m) || !need_reasoning || table::is_reasoning_model(reg, profiles, m)
-        };
-        // R3b: a provider you added is never a stand-in or a fallback, and never
-        // the cheapest pick: only a pin or the class preference (a table row) takes it.
         let own: Vec<&str> = ids
             .iter()
             .copied()
-            .filter(|m| !policy::is_new_provider(reg, m))
+            .filter(|m| allowed(m))
             .filter(|m| auto_ok(m))
             .collect();
         let preferred: Vec<&str> = ids
             .iter()
             .copied()
-            .filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some())
+            .filter(|m| allowed(m) || table.row(input.class, m).is_some())
             .filter(|m| auto_ok(m) || table.row(input.class, m).is_some())
             .collect();
         // A degraded model is still eligible, but a pin or an episode leaves it
@@ -688,15 +746,20 @@ impl Router {
             rules.push("key:keep".into());
             return keep(current);
         }
-        let mut ranked = attention::rank_models(
-            attn.kind,
-            input.class,
-            &preferred,
-            table,
-            reg,
-            current,
-            input.ctx_tokens,
-        );
+        let mut ranked = if efficient {
+            rules.push("auto:efficient".into());
+            policy::rank_efficient(input.class, &preferred, reg, input.ctx_tokens)
+        } else {
+            attention::rank_models(
+                attn.kind,
+                input.class,
+                &preferred,
+                table,
+                reg,
+                current,
+                input.ctx_tokens,
+            )
+        };
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
             ranked.retain(|m| *m != away);
@@ -755,6 +818,11 @@ impl Router {
         // A local route only while the flag is on, for an eligible class, on the live tier.
         // Pins and a Settings pick may still name any fitting model; Auto's quality pool
         // drops non-reasoning ones in [`Self::pick_model`].
+        // A pin and the pick reach a model whatever its preference says.
+        let keep_despite_prefs = |id: &str| {
+            (input.pinned && id.trim() == input.current_model.trim())
+                || input.prefer.is_some_and(|p| p.trim() == id.trim())
+        };
         // A chat the device answers is trimmed to its window on the way, so
         // the local tier's context length is no bar for it.
         let fit_for = |id: &str| {
@@ -779,6 +847,8 @@ impl Router {
                         && local::first_takes(&input.local, input.class, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
+            // "Never" in Settings takes a model out of every pool Auto builds.
+            .filter(|id| !input.prefs.excluded(id) || keep_despite_prefs(id))
             .collect();
         let row = policy::class_row(input.class);
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
@@ -868,14 +938,18 @@ impl Router {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
-        // "Local AI for chats": the device takes the step although the cloud could.
-        let first_local = local::first_takes(&input.local, input.class, input.ctx_tokens)
-            .then(|| {
-                ids.iter()
-                    .find(|id| local::is_local(id))
-                    .map(|id| id.to_string())
-            })
-            .flatten();
+        // "Local AI for chats": the device takes the step although the cloud
+        // could. A pinned model, and a device answer that just failed its
+        // check (escalate below), still win over it.
+        let first_local = (local::first_takes(&input.local, input.class, input.ctx_tokens)
+            && !input.pinned
+            && !local::escalate_after_verify(&input.local))
+        .then(|| {
+            ids.iter()
+                .find(|id| local::is_local(id))
+                .map(|id| id.to_string())
+        })
+        .flatten();
         let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
             // Sensitive data stays on the device, and the device is paused.
             local_paused(&mut rules)
@@ -1054,6 +1128,15 @@ impl Router {
             } else {
                 chosen
             };
+        // A provider model Auto took on its own (your preference allowed it).
+        if !chosen.no_route
+            && policy::is_new_provider(reg, &chosen.model)
+            && !rules
+                .iter()
+                .any(|r| r == "provider:picked" || r == "pin" || r.starts_with("pin:"))
+        {
+            rules.push("prefs:auto_provider".into());
+        }
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
             Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,
@@ -1111,6 +1194,17 @@ impl Router {
             .filter(|_| !sent_model.to_ascii_lowercase().contains("non-reasoning"));
         // xAI answers 400 to an effort on a model that doesn't take one (2.10.97).
         let takes_effort = menu.is_some() || grokhub_core::accepts_reasoning_effort(sent_model);
+        // Settings pinned this model's effort: sent as is when the model takes
+        // it and its listing (when it has one) names it.
+        let pref_effort: Option<String> = input
+            .prefs
+            .effort(sent_model)
+            .map(|e| {
+                grokhub_core::parse_reasoning_effort(e)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| e.to_string())
+            })
+            .filter(|e| takes_effort && menu.as_ref().is_none_or(|m| m.iter().any(|x| x == e)));
         let mut effort: Option<String> = match (row, band, pick) {
             (Some(row), Some(band), Some(pick)) => {
                 rules.push(format!("class:{}", row.class));
@@ -1154,6 +1248,10 @@ impl Router {
                     .map(str::to_string)
                     .unwrap_or(e)
             });
+        }
+        if let Some(e) = pref_effort {
+            rules.push("prefs:effort".into());
+            effort = Some(e);
         }
         let what = row.map(|r| r.plain).unwrap_or("this step");
         let clause = if row.is_some() {

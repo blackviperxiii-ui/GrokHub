@@ -330,6 +330,11 @@ pub(super) fn thermal_now() -> Thermal {
     .thermal()
 }
 
+#[cfg(not(any(target_os = "linux", windows)))]
+pub(super) fn free_ram_now() -> Option<u64> {
+    None
+}
+
 #[cfg(any(target_os = "linux", windows))]
 pub(super) fn free_ram_now() -> Option<u64> {
     free_ram_mb()
