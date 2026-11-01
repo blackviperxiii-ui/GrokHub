@@ -13,6 +13,7 @@ import {
   type Verbosity,
 } from "./api";
 import { Toggle } from "./Toggle";
+import { useNyxTiles } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 
 export const PERSONALITY_NOTE =
@@ -110,6 +111,7 @@ export function Personality() {
   }
 
   const saved = draft && page?.presets.find((p) => p.id === draft.id);
+  const tiles = useNyxTiles(page?.presets.map((p) => p.id) ?? null, page?.explicit ?? false);
 
   return (
     <div className="personality" role="group" aria-label="Personality">
@@ -247,6 +249,9 @@ export function Personality() {
             const on = p.id === page.current;
             return (
               <li key={p.id} className="card" aria-label={p.name}>
+                {tiles[p.id] && (
+                  <img className="persona-thumb" src={tiles[p.id]} alt="" aria-hidden="true" />
+                )}
                 <div className="card-status">
                   {on ? "In use" : p.custom ? "Yours" : "Built in"}
                 </div>

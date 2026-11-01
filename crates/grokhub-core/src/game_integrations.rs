@@ -171,6 +171,16 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "destiny2",
+        name: "Destiny 2",
+        steam_app_id: Some(1085660),
+        protection: Protection::Kernel("BattlEye"),
+        channels: &[Channel::OfficialWebApi(
+            "Bungie.net's official API with your own key, public profile only",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -281,6 +291,9 @@ mod tests {
         );
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
+        let d2 = by_id("destiny2").unwrap();
+        assert!(d2.follows_the_rules());
+        assert!(d2.how().contains("so Loadout adds nothing to the game"));
         let gw2 = by_id("gw2").unwrap();
         assert!(!gw2.channels[0].is_addon());
         assert!(gw2.how().contains("read-only key"));

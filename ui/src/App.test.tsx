@@ -108,6 +108,13 @@ vi.mock("./Devices", () => ({
     </button>
   ),
 }));
+vi.mock("./Skills", () => ({
+  Skills: ({ onUse }: { onUse: (text: string) => void }) => (
+    <button type="button" onClick={() => onUse("deploy the site")}>
+      Use
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
@@ -151,6 +158,7 @@ describe("App", () => {
       "Automations",
       "Agents",
       "Memory",
+      "Skills",
       "Connectors",
       "Workboard",
       "Devices",
@@ -198,14 +206,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Agents", "Memory", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Agents", "Memory", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
@@ -280,6 +288,15 @@ describe("App", () => {
     await userEvent.keyboard("tidy the board");
     await userEvent.click(screen.getByRole("option", { name: "Ask Loadout: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a skill's Use puts its trigger in the chat box and opens Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Skills" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Use" }));
+    expect(screen.getByText("Chat page: deploy the site in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 

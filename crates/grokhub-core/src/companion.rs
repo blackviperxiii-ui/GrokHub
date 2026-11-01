@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod wardrobe;
+
 /// Nyx's shipped companion file.
 pub const NYX_TOML: &str = include_str!("../assets/companions/nyx/companion.toml");
 
