@@ -13,6 +13,7 @@ import {
   type MemoryNotes,
 } from "./api";
 import { Toggle } from "./Toggle";
+import { StatusLine, useNote } from "./ui";
 
 type Scope = "workspace" | "global";
 const SCOPES: Scope[] = ["workspace", "global"];
@@ -31,7 +32,7 @@ export function Memory() {
   const [lineGlobal, setLineGlobal] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MemoryHit[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [editId, setEditId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -53,7 +54,7 @@ export function Memory() {
   useEffect(() => {
     getMemory().then(
       (next) => show(next, SCOPES),
-      (err) => setNote(String(err)),
+      fail,
     );
   }, []);
 
@@ -66,9 +67,9 @@ export function Memory() {
         files[scope].base,
       );
       show(next, [scope]);
-      setNote(redacted ? "Saved. A secret was replaced with [redacted]." : "Saved.");
+      ok(redacted ? "Saved. A secret was replaced with [redacted]." : "Saved.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       // The file may have changed under the editor; show what it holds now.
       await getMemory().then(
         (next) => show(next, [scope]),
@@ -86,9 +87,9 @@ export function Memory() {
       const { status, notes: next } = await addMemory(line.trim(), lineGlobal);
       show(next, []);
       setLine("");
-      setNote(`${status}.`);
+      ok(`${status}.`);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -96,9 +97,9 @@ export function Memory() {
     try {
       show(await next, []);
       setEditId(null);
-      setNote(done);
+      ok(done);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -107,12 +108,12 @@ export function Memory() {
     try {
       setHits(await searchMemory(query));
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
   if (!notes) {
-    return <section className="memory">{note ?? "Loading memory…"}</section>;
+    return <section className="memory">{note?.text ?? "Loading memory…"}</section>;
   }
 
   const editor = (scope: Scope, title: string, path: string) => (
@@ -239,11 +240,7 @@ export function Memory() {
           Remember
         </button>
       </form>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} className="note" />
       {editor("workspace", "Project notes", notes.workspacePath)}
       {editor("global", "Global notes", notes.globalPath)}
       <form className="add" onSubmit={search}>

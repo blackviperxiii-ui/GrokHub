@@ -26,6 +26,10 @@ impl Cabin {
                 self.open_last_chat_tab();
                 self.nav = Nav::Chat;
             }
+            "nav:home" => self.open_mission_home(),
+            "nav:library" => self.nav = Nav::Library,
+            "nav:objectives" => self.nav = Nav::Objectives,
+            "nav:journal" => self.nav = Nav::Journal,
             "nav:night" => self.nav = Nav::Night,
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,

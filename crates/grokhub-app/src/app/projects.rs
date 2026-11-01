@@ -99,7 +99,10 @@ impl Cabin {
                 }
                 self.touch_projects();
                 self.flush_projects();
-                self.status = format!("Project {}", self.projects[i].name);
+                self.status = format!(
+                    "Project {}",
+                    grokhub_core::project_display_name(&self.projects[i].name)
+                );
             }
             Err(e) => self.status = e.into(),
         }
