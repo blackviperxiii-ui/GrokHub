@@ -1059,3 +1059,72 @@ export function installShellUpdate(): Promise<void> {
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
+
+/** Settings → Behavior, saved in shell.json. Everything starts off. */
+export interface Behavior {
+  autocomplete: boolean;
+  /** Quiet hours for automations as HH:MM; both empty is none. */
+  quietStart: string;
+  quietEnd: string;
+  /** Tokens a day, one of `budgets`; 0 is off. */
+  dailyTokenBudget: number;
+  pauseOverBudget: boolean;
+}
+
+export interface BehaviorPage {
+  closeToTray: boolean;
+  behavior: Behavior;
+  budgets: { value: number; label: string }[];
+}
+
+export function getBehavior(): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("get_behavior");
+}
+
+export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
+}
+
+/** Settings → Defaults: the work folder and the approvals. */
+export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+  return invoke<Settings>("save_defaults", { workspace, approvals });
+}
+
+/** Settings → Privacy & data (src-tauri/src/privacy.rs). */
+export interface PrivacyPage {
+  offlineOnly: boolean;
+  /** An on-device model can take the chat while Offline only is on. */
+  localReady: boolean;
+  /** "3 calls sent off-device this week". */
+  sent: string;
+  hosts: { host: string; calls: number }[];
+  encrypted: boolean;
+  encryptedNote: string;
+  dataFolder: string;
+  canOpenFolder: boolean;
+}
+
+export function getPrivacy(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("get_privacy");
+}
+
+export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("set_offline_only", { on });
+}
+
+export function openDataFolder(): Promise<void> {
+  return invoke<void>("open_data_folder");
+}
+
+/** Settings → Background (src-tauri/src/background.rs). */
+export interface BackgroundPage {
+  runner: string;
+  nextDue: string | null;
+  quiet: string;
+  budget: string;
+  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+}
+
+export function getBackground(): Promise<BackgroundPage> {
+  return invoke<BackgroundPage>("get_background");
+}

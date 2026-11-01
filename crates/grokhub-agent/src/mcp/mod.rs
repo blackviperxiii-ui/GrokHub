@@ -447,7 +447,10 @@ pub fn disconnect(name: &str) -> Result<String, String> {
         || crate::harness::ChangeTarget::put(&target, None),
     )?;
     if done.is_none() {
-        return Err(format!("{name} isn't one of this cabin's connections"));
+        return Err(format!(
+            "{name} isn't one of {}'s connections",
+            grokhub_core::brand::product_name()
+        ));
     }
     crate::harness::forget_connection_token(&config, name);
     invalidate();

@@ -552,7 +552,7 @@ fn nightly_review_stays_quiet() {
         .next()
         .expect("connectors body");
     assert!(
-        connectors.contains("\"This cabin\"")
+        connectors.contains("section_label(ui, grokhub_core::brand::product_name())")
             && !connectors.contains("\"Grok Build\"")
             && !connectors.contains("run_grok_user_cmd")
             && !connectors.contains("run_mcp_doctor"),
