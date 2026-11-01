@@ -116,22 +116,24 @@ export type ElicitItem = {
   fieldTitle: string;
   secret: boolean;
   options?: ElicitChoice[];
-  /** "ended": the turn stopped before anyone answered. */
-  answer: ElicitAction | "ended" | null;
+  /** "ended": the turn stopped before anyone answered; "halted": Halt stopped it. */
+  answer: ElicitAction | "ended" | "halted" | null;
 };
 
-const PLAN_ANSWERS: Record<ElicitAction | "ended", string> = {
+const PLAN_ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
   accept: `Approved. ${PRODUCT_NAME} can make the changes now.`,
   decline: "Kept in plan mode.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
+  halted: "Not answered: halted.",
 };
 
-const ANSWERS: Record<ElicitAction | "ended", string> = {
+const ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
   accept: "Sent.",
   decline: "Declined.",
   cancel: "Cancelled.",
   ended: "Not answered: the turn ended.",
+  halted: "Not answered: halted.",
 };
 
 /** A plan to approve, the agent's question, or a connector's form or link. */

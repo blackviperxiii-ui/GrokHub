@@ -80,6 +80,7 @@ import {
   CHAT_EMPTY,
   EARLIER_STEP,
   EVENTS_LOST,
+  HALTED_LINE,
   itemsFrom,
   MISSION_BUSY,
   OPEN_BUSY,
@@ -394,6 +395,49 @@ describe("Chat", () => {
     expect(api.answerPermission).not.toHaveBeenCalled();
   });
 
+  it("Halt retires every waiting card as halted and says so once", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "d", title: "type", action: "hello", reason: "" });
+    emit(id, {
+      kind: "elicit",
+      id: "ask-h",
+      server: "Question",
+      message: "Which window?",
+      mode: "form",
+      url: "",
+      fieldName: "answer",
+      fieldTitle: "Your answer",
+      secret: false,
+    });
+    emit(id, { kind: "done", stop: "halted" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText("Not answered: halted.")).toBeInTheDocument();
+    expect(screen.getAllByText(HALTED_LINE)).toHaveLength(1);
+    expect(screen.getByText(HALTED_LINE)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a turn that comes back halted settles its cards even if the done event was missed", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "e", title: "type", action: "hi", reason: "" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
   it("a Deny from a notification shows on its card", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -416,6 +460,8 @@ describe("Chat", () => {
       { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
     ];
     expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
     expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
       answer: "deny",
     });

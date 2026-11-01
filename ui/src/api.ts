@@ -368,6 +368,31 @@ export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
 
+/** Sent after every Halt (top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc). */
+export const HALT_EVENT = "halt://done";
+
+/** Halt: stops desktop control and every running prompt at once. Resolves
+ * with the chats it stopped mid-reply. Desktop only; the web app and phones
+ * are refused. */
+export function haltDesktop(): Promise<string[]> {
+  if (!inShell()) return Promise.reject(new Error("Halt runs on the computer itself."));
+  return invoke<string[]>("halt_desktop");
+}
+
+/** The chats a Halt stopped, whichever way it was pressed. */
+export function onHalt(handler: (stopped: string[]) => void): Promise<UnlistenFn> {
+  return subscribe<string[]>(HALT_EVENT, handler);
+}
+
+export interface HaltKeys {
+  /** Super+Shift+Esc works from any app, not only this window. */
+  global: boolean;
+}
+
+export function getHaltKeys(): Promise<HaltKeys> {
+  return invoke<HaltKeys>("get_halt_keys");
+}
+
 /** The web app's stream was down longer than the desktop keeps events for. */
 export function onEventGap(handler: () => void): Promise<UnlistenFn> {
   return subscribe<null>(GAP_EVENT, () => handler());

@@ -833,6 +833,13 @@ mod tests {
     }
 
     #[test]
+    fn a_browser_never_halts_the_computer() {
+        for name in ["halt_desktop", "get_halt_keys"] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
+    }
+
+    #[test]
     fn a_browser_never_checks_installs_or_switches_shell_updates() {
         for name in [
             "get_update_status",
