@@ -1,0 +1,1 @@
+- Shell UI toolchain: Playwright 1.64.1, jsdom 30.1.3, ESLint 10.14.0 and @babel/core 8.0.10. The UI now declares Node 22.22.2 or newer, which jsdom 30 needs.

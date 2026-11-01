@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSkills, openSkillFolder, type SkillRow, type SkillSource } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { StatusLine, useNote } from "./ui";
 
 /** The groups, in page order. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
@@ -35,7 +36,7 @@ export function Skills({
   remote?: boolean;
 }) {
   const [rows, setRows] = useState<SkillRow[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, fail, clear } = useNote();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -43,9 +44,9 @@ export function Skills({
     setBusy(true);
     try {
       setRows((await getSkills()).rows);
-      setNote(null);
+      clear();
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     } finally {
       setBusy(false);
     }
@@ -54,16 +55,16 @@ export function Skills({
   useEffect(() => {
     getSkills().then(
       (page) => setRows(page.rows),
-      (err) => setNote(String(err)),
+      fail,
     );
   }, []);
 
   async function openFolder(row: SkillRow) {
     try {
       await openSkillFolder(row.source, row.name);
-      setNote(null);
+      clear();
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -89,11 +90,7 @@ export function Skills({
         Skills chat can use: this computer's cabin skills, the project's and your own, and the
         ones enabled plugins bring. Create or edit them in the {PRODUCT_NAME} cabin.
       </p>
-      {note && (
-        <p className="status" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} />
       {rows === null && !note && <p className="empty">Loading skills…</p>}
       {rows?.length === 0 && <p className="empty">{SKILLS_EMPTY}</p>}
       {rows && rows.length > 0 && shown.length === 0 && <p className="empty">{SKILLS_NONE_MATCHED}</p>}

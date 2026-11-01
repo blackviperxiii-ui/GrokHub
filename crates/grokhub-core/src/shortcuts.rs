@@ -209,6 +209,9 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("nav:night", "schedule"),
         ("nav:skills", "skills"),
         ("nav:pulse", "ideas"),
+        ("nav:objectives", "mission"),
+        ("nav:command", "shell"),
+        ("nav:command", "terminal"),
         ("nav:pulse", "feed"),
         ("nav:board", "workboard"),
         ("shortcuts", "keys"),
@@ -226,17 +229,22 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("/audiocheck", "sound"),
     ];
     let rows = [
+        ("Home", "nav:home"),
         ("Chat", "nav:chat"),
+        ("Objectives", "nav:objectives"),
+        ("Pulse", "nav:pulse"),
+        ("Library", "nav:library"),
+        ("Devices", "nav:devices"),
         ("Automations", "nav:night"),
         ("History", "nav:history"),
-        ("Devices", "nav:devices"),
+        ("Journal", "nav:journal"),
+        ("Skills", "nav:skills"),
         ("Connectors", "nav:connectors"),
-        ("Agents", "nav:agents"),
-        ("Skills and Connectors", "nav:skills"),
         ("Workboards", "nav:board"),
-        ("Pulse", "nav:pulse"),
         ("Imagine", "nav:imagine"),
         ("Memory", "nav:memory"),
+        ("Agents", "nav:agents"),
+        ("Command", "nav:command"),
         ("Settings", "nav:settings"),
         ("New chat", "/new"),
         ("Doctor", "/health"),
@@ -252,8 +260,9 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     rows.into_iter()
         .filter(|(label, action)| {
             if n.is_empty() {
-                // Not on the sidebar rail. There is no Night row: that page is Automations.
-                return !matches!(*action, "nav:devices" | "nav:agents" | "nav:connectors");
+                // Agents and the Command shell are found by typing. There is no
+                // Night row: that page is Automations.
+                return !matches!(*action, "nav:agents" | "nav:command");
             }
             label.to_ascii_lowercase().contains(&n)
                 || synonyms
@@ -273,15 +282,12 @@ mod tests {
         assert!(shortcut_help().contains("Super+G"));
         // 2.10.91: rows use the sidebar's names; the old name still finds the page.
         assert_eq!(filter_palette("night"), vec![("Automations", "nav:night")]);
-        assert_eq!(
-            filter_palette("skills"),
-            vec![("Skills and Connectors", "nav:skills")]
-        );
+        assert_eq!(filter_palette("skills"), vec![("Skills", "nav:skills")]);
         assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        // Off the rail, so an empty query hides them (22 - Devices/Agents/Connectors).
+        // Every page has a row; an empty query hides Agents and Command (27 - 2).
         // Night is not its own row; `night` still resolves to Automations above.
-        assert_eq!(filter_palette("").len(), 19);
+        assert_eq!(filter_palette("").len(), 25);
         assert_eq!(
             filter_palette("record"),
             vec![("Record my screen", "/record")]
@@ -299,7 +305,7 @@ mod tests {
             vec![("Check my audio", "/audiocheck")]
         );
         let empty = filter_palette("");
-        for gone in ["Devices", "Agents", "Connectors", "Night"] {
+        for gone in ["Agents", "Command", "Night"] {
             assert!(
                 empty.iter().all(|(l, _)| *l != gone),
                 "{gone} is not a default palette row: {empty:?}"
@@ -309,21 +315,25 @@ mod tests {
         assert_eq!(filter_palette("device"), vec![("Devices", "nav:devices")]);
         assert_eq!(filter_palette("agents"), vec![("Agents", "nav:agents")]);
         assert_eq!(filter_palette("agent"), vec![("Agents", "nav:agents")]);
-        // The word also sits inside "Skills and Connectors".
+        // One Connectors row: Skills no longer carries the word.
         assert_eq!(
             filter_palette("connectors"),
-            vec![
-                ("Connectors", "nav:connectors"),
-                ("Skills and Connectors", "nav:skills"),
-            ]
+            vec![("Connectors", "nav:connectors")]
         );
         assert_eq!(
             filter_palette("connector"),
-            vec![
-                ("Connectors", "nav:connectors"),
-                ("Skills and Connectors", "nav:skills"),
-            ]
+            vec![("Connectors", "nav:connectors")]
         );
+        for (q, want) in [
+            ("home", ("Home", "nav:home")),
+            ("library", ("Library", "nav:library")),
+            ("objectives", ("Objectives", "nav:objectives")),
+            ("mission", ("Objectives", "nav:objectives")),
+            ("journal", ("Journal", "nav:journal")),
+            ("shell", ("Command", "nav:command")),
+        ] {
+            assert_eq!(filter_palette(q), vec![want], "{q}");
+        }
         assert_eq!(
             filter_palette("keyb"),
             vec![("Keyboard shortcuts", "shortcuts")]

@@ -168,7 +168,7 @@ pub fn folder(
 /// Shows `dir` in the system file manager. `dir` comes from [`folder`].
 #[cfg(desktop)]
 pub fn open_folder(dir: &Path) -> Result<(), String> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     let opener = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -178,6 +178,9 @@ pub fn open_folder(dir: &Path) -> Result<(), String> {
     };
     let mut child = Command::new(opener)
         .arg(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|err| format!("Couldn't open the folder: {err}"))?;
     // Reap it so no zombie is left; the file manager outlives the opener.
