@@ -9,7 +9,7 @@
 - `cargo run -p grokhub-agent --example eval` (dry-run; `--live` is refused)
 ## Key files
 - `crates/grokhub-agent/src/lib.rs`: module list and the public surface the app uses.
-- `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to the `AcpEvent`s the cabin polls in `poll_acp`).
+- `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to the `AcpEvent`s the cabin polls in `poll_acp`). Before the loop, `crates/grokhub-agent/src/brain/instant.rs` answers a plain read-only ask ("list my skills", "how much disk space do I have") from one tool and a fixed reply with no model call, only when the Brief is a sure question or task and the gate and PreToolUse hooks say Run; anything else falls through.
 - `crates/grokhub-agent/src/gate.rs` (gate v0) and `crates/grokhub-agent/src/perm/mod.rs` (rule engine).
 - `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `schemas_for_job` / `ToolSet` (per-job allowlist filter), `execute` (read-only), `dispatch` / `dispatch_for_job` (gated set; job set refuses with `tool_set_outside`). `tools/talk.rs` (LO-45): a chat whose first Brief is plain talk keeps `TALK_DEMOTED` in the deferred index until a work Brief or one load of them appends them all; it shapes the list only, never dispatch or the gate.
 - `crates/grokhub-agent/src/tools/fence.rs`, `crates/grokhub-agent/src/file_checkpoint.rs`, `crates/grokhub-agent/src/recovery.rs`: fences; copy-before-write (`/rewind step`; Brain 2 `checkpoint.rs` = gaps); `RecoveryState` projects ladder/parks/drive (no second retry stack).
