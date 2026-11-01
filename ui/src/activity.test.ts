@@ -5,6 +5,7 @@ import {
   chatActivity,
   dockItems,
   dockSummary,
+  pruneActivity,
   routineFinished,
   routineStarted,
   stepsLine,
@@ -46,6 +47,11 @@ describe("chatActivity", () => {
     expect(done?.steps).toBe(1);
   });
 
+  it("a turn Halt stopped says so", () => {
+    const running = fold([{ kind: "text", text: "Typing" }]);
+    expect(fold([{ kind: "done", stop: "halted" }], running)).toMatchObject({ status: "done", detail: "Halted" });
+  });
+
   it("a permission ask or a plan waits on the user", () => {
     expect(
       fold([{ kind: "permission", id: "p1", title: "Run npm test", action: "run", reason: "" }]),
@@ -64,6 +70,16 @@ describe("chatActivity", () => {
     expect(fold([plan])).toMatchObject({ status: "waiting", detail: "Plan ready for your OK" });
   });
 
+  it("a Deny from a notification puts the waiting turn back to running", () => {
+    const ask: ChatEvent = { kind: "permission", id: "p1", title: "write", action: "a", reason: "" };
+    const answered: ChatEvent = { kind: "answered", id: "p1", answer: "deny" };
+    expect(fold([ask, answered])).toMatchObject({ status: "running", detail: "Thinking…" });
+    // Nothing to resume: no row appears, and a finished one stays finished.
+    expect(fold([answered])).toBeUndefined();
+    const done = fold([ask, { kind: "done", stop: "end_turn" }]);
+    expect(fold([answered], done)).toMatchObject({ status: "done", detail: "Reply finished" });
+  });
+
   it("an error fails the turn and new work starts a fresh count", () => {
     const failed = fold([tool("completed"), { kind: "error", message: "The key was rejected." }]);
     expect(failed).toMatchObject({ status: "failed", detail: "The key was rejected.", steps: 1 });
@@ -71,6 +87,16 @@ describe("chatActivity", () => {
       status: "running",
       detail: "Edit app.ts",
       steps: 1,
+    });
+  });
+
+  it("an error right after a finished turn starts from zero steps", () => {
+    const done = fold([tool("completed"), tool("completed"), { kind: "done", stop: "end_turn" }]);
+    expect(done).toMatchObject({ status: "done", steps: 2 });
+    expect(fold([{ kind: "error", message: "The key was rejected." }], done)).toMatchObject({
+      status: "failed",
+      detail: "The key was rejected.",
+      steps: 0,
     });
   });
 
@@ -114,5 +140,9 @@ describe("routines and the dock list", () => {
     const shown = dockItems(items, now);
     expect(shown.map((i) => i.key)).toEqual(["wait", "run-b", "run-a", "fail", "done"]);
     expect(dockSummary(shown)).toBe("1 waiting · 2 running · 1 failed · 1 done");
+    const map = Object.fromEntries(items.map((i) => [i.key, i]));
+    expect(Object.keys(pruneActivity(map, now))).toEqual(["done", "run-a", "run-b", "wait", "fail"]);
+    const fresh = Object.fromEntries(shown.map((i) => [i.key, i]));
+    expect(pruneActivity(fresh, now)).toBe(fresh);
   });
 });

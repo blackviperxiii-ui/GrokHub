@@ -519,7 +519,7 @@ impl ksni::Tray for GrokTray {
             icon_name: "grokhub".into(),
             icon_pixmap: vec![cabin_icon()],
             title: grokhub_core::brand::product_name().into(),
-            description: "Cabin — close stays in the tray".into(),
+            description: "Close stays in the tray".into(),
         }
     }
 
@@ -530,7 +530,7 @@ impl ksni::Tray for GrokTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
             StandardItem {
-                label: "Show cabin".into(),
+                label: format!("Show {}", grokhub_core::brand::product_name()),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(TrayCmd::Show);
                 }),
@@ -571,25 +571,23 @@ impl ksni::Tray for GrokTray {
     }
 }
 
+/// The 22px app icon as ksni ARGB32, for trays whose icon theme has no
+/// `grokhub` icon (a source run that never installed hicolor).
 #[cfg(unix)]
 fn cabin_icon() -> ksni::Icon {
-    let w = 22i32;
-    let h = 22i32;
-    let mut data = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let edge = x == 0 || y == 0 || x == w - 1 || y == h - 1;
-            let (a, r, g, b) = if edge {
-                (255, 40, 28, 22)
-            } else {
-                (255, 232, 168, 96)
-            };
-            data.extend_from_slice(&[a, r, g, b]);
-        }
-    }
+    let rgba = image::load_from_memory(include_bytes!(
+        "../../../packaging/icons/hicolor/22x22/apps/grokhub.png"
+    ))
+    .map(|img| img.into_rgba8())
+    .unwrap_or_else(|_| image::RgbaImage::new(1, 1));
+    let (w, h) = rgba.dimensions();
+    let data = rgba
+        .pixels()
+        .flat_map(|p| [p[3], p[0], p[1], p[2]])
+        .collect();
     ksni::Icon {
-        width: w,
-        height: h,
+        width: w as i32,
+        height: h as i32,
         data,
     }
 }
@@ -641,7 +639,11 @@ fn windows_tray_attach() -> Option<TrayHost> {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     let (tx, rx) = mpsc::channel();
-    let show = MenuItem::new("Show cabin", true, None);
+    let show = MenuItem::new(
+        format!("Show {}", grokhub_core::brand::product_name()),
+        true,
+        None,
+    );
     let nyx = MenuItem::new(desktop_nyx_label(), true, None);
     let halt = MenuItem::new("Halt", true, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -938,7 +940,7 @@ mod tests {
                 && hide.contains("if tip.show")
                 && hide.contains("if tip.mark_seen")
                 && hide.contains("Still running in the tray")
-                && hide.contains("In the tray — Show cabin to sit down"),
+                && hide.contains("In the tray — Show {} to sit down"),
             "first tip persists only when shown; cabin status stays: {hide}"
         );
     }
@@ -1198,6 +1200,23 @@ mod tests {
             linux.as_raw(),
             "Windows ICO pixels must match packaging/icons/hicolor/256x256"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_tray_pixmap_is_the_app_icon_not_a_fill_square() {
+        let icon = cabin_icon();
+        assert_eq!((icon.width, icon.height), (22, 22));
+        assert_eq!(icon.data.len(), 22 * 22 * 4);
+        let png = image::load_from_memory(include_bytes!(
+            "../../../packaging/icons/hicolor/22x22/apps/grokhub.png"
+        ))
+        .unwrap()
+        .into_rgba8();
+        let p = png.get_pixel(11, 11);
+        let at = (11 * 22 + 11) * 4;
+        assert_eq!(&icon.data[at..at + 4], &[p[3], p[0], p[1], p[2]]);
+        assert_ne!(&icon.data[at + 1..at + 4], &[232, 168, 96]);
     }
 
     #[test]

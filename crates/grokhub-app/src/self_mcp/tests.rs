@@ -107,6 +107,45 @@ pub(crate) fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 #[test]
+fn initialize_answers_the_asked_version_or_the_newest() {
+    let root = root("self-version");
+    let mut server = SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let mut answer = |asked: &str| {
+        let line = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": asked, "capabilities": {} } });
+        let reply = server.handle_line(&line.to_string(), &mut io).unwrap();
+        let v: Value = serde_json::from_str(&reply).unwrap();
+        v["result"]["protocolVersion"].as_str().unwrap().to_string()
+    };
+    assert_eq!(answer("2025-11-25"), "2025-11-25");
+    assert_eq!(answer("2025-06-18"), "2025-06-18");
+    assert_eq!(answer("2024-11-05"), "2024-11-05");
+    assert_eq!(answer("1999-01-01"), "2025-11-25");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn server_discover_is_method_not_found_so_new_clients_fall_back_to_initialize() {
+    // Session era only (its token card is a server-sent elicitation, which
+    // 2026-07-28 no longer allows): a dual-era client falls back on this error.
+    let root = root("self-discover");
+    let mut server = SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } } });
+    let reply = server.handle_line(&line.to_string(), &mut io).unwrap();
+    let v: Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(
+        (
+            v["id"].clone(),
+            v["error"]["code"].clone(),
+            v["error"]["message"].clone()
+        ),
+        (json!(1), json!(-32601), json!("Method not found"))
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn lists_every_tool_and_stdout_stays_json_rpc() {
     let root = root("self-list");
     let mut server = SelfServer::new(&root);

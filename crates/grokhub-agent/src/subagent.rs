@@ -226,7 +226,8 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             remove_worktree(&parent_ws, &path);
         }
     });
-    let id = match tasks.register_agent(call.agent_id.map(str::to_string), kill) {
+    let id = match tasks.register_agent(call.agent_id.map(str::to_string), &spec.description, kill)
+    {
         Ok(id) => id,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
@@ -2037,6 +2038,8 @@ mod tests {
 
     #[test]
     fn schemas_for_keeps_spawn_and_session_tools_in_plan_mode() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let plan = tools::schemas_for(&Gate::phase_readonly());
         let names: Vec<&str> = plan
             .iter()

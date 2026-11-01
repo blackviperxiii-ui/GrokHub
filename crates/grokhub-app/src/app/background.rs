@@ -88,11 +88,24 @@ impl BgRun {
     }
 }
 
+/// Which native session a background run writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum BgSession {
+    /// Fork the chat's session, so the run knows the conversation.
+    Fork,
+    /// Continue this session as it is (a resume on the same model).
+    Continue(String),
+    /// A new, empty session (a resume on another model, or a lost session).
+    Fresh,
+}
+
 /// Background runs and the blocks the next turn carries. Not saved.
 #[derive(Default)]
 pub(super) struct BgWork {
     pub runs: Vec<BgRun>,
     pub next_id: u64,
+    /// `(run id, card id)`: the board card each live run checkpoints (KB-02).
+    pub cards: Vec<(u64, String)>,
     /// `(thread id, note)` for runs that ended since that chat's last turn.
     pub unread: Vec<(String, String)>,
     /// Background results for the turn being kicked. Set on each send.
@@ -224,6 +237,26 @@ impl Cabin {
         thread_id: &str,
         origin: BgOrigin,
     ) -> Result<String, String> {
+        let gate = self.native_bg_gate();
+        let (run_id, title, card_session) =
+            self.start_native_bg_on(task, thread_id, origin, BgSession::Fork, gate)?;
+        // A scheduled run takes its automation's card in `start_scheduled_run`.
+        if matches!(origin, BgOrigin::User | BgOrigin::Agent) {
+            self.open_bg_card(run_id, &title, &card_session, origin == BgOrigin::User);
+        }
+        Ok(title)
+    }
+
+    /// Start one background run on `session` under `gate`. Returns its run id,
+    /// title and native session. Opens no card: the caller files or reuses one.
+    pub(super) fn start_native_bg_on(
+        &mut self,
+        task: &str,
+        thread_id: &str,
+        origin: BgOrigin,
+        session: BgSession,
+        gate: grokhub_agent::Gate,
+    ) -> Result<(u64, String, String), String> {
         let (cwd, parent) = {
             let thread = self.threads.iter().find(|t| t.id == thread_id);
             let cwd = thread
@@ -237,18 +270,26 @@ impl Cabin {
         let workspace = cwd
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| self.grok_cwd());
-        let child_id = if let Some(parent) = parent.as_deref() {
-            grokhub_agent::fork_session(parent)
-                .map(|info| info.id)
-                .unwrap_or_else(|_| format!("native-{}", grokhub_core::uid("n")))
-        } else {
-            format!("native-{}", grokhub_core::uid("n"))
+        // A resume never forks: it continues the card's own session, or starts
+        // fresh with only the resume block (KB-03), so no transcript is replayed.
+        let parent = match session {
+            BgSession::Fork => parent,
+            BgSession::Continue(_) | BgSession::Fresh => None,
+        };
+        let child_id = match session {
+            BgSession::Continue(id) => id,
+            BgSession::Fresh => format!("native-{}", grokhub_core::uid("n")),
+            BgSession::Fork => match parent.as_deref() {
+                Some(parent) => grokhub_agent::fork_session(parent)
+                    .map(|info| info.id)
+                    .unwrap_or_else(|_| format!("native-{}", grokhub_core::uid("n"))),
+                None => format!("native-{}", grokhub_core::uid("n")),
+            },
         };
         if let Some(parent) = parent.as_deref() {
             grokhub_agent::link_child(parent, &child_id);
         }
         let (client, auth_kind, bearer) = native_bg_model(self)?;
-        let gate = self.native_bg_gate();
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = self.bg_effort(origin);
@@ -281,6 +322,7 @@ impl Cabin {
             );
         });
         let title = bg_task_title(task);
+        let card_session = child_id.clone();
         self.bg.next_id += 1;
         self.bg.runs.push(BgRun {
             id: self.bg.next_id,
@@ -298,7 +340,7 @@ impl Cabin {
             native_session: Some(child_id),
             automation: None,
         });
-        Ok(title)
+        Ok((self.bg.next_id, title, card_session))
     }
 
     /// `BACKGROUND_TASK:` lines in a finished chat reply. Ones that do not fit
@@ -339,9 +381,18 @@ impl Cabin {
         if thread_id == self.visible_thread_id() {
             self.status = match (started, refused.len()) {
                 (0, _) => "Background task not started — see the next reply".into(),
-                (1, 0) => "Grok started a background task".into(),
-                (n, 0) => format!("Grok started {n} background tasks"),
-                (n, m) => format!("Grok started {n} background tasks · {m} not started"),
+                (1, 0) => format!(
+                    "{} started a background task",
+                    grokhub_core::brand::product_name()
+                ),
+                (n, 0) => format!(
+                    "{} started {n} background tasks",
+                    grokhub_core::brand::product_name()
+                ),
+                (n, m) => format!(
+                    "{} started {n} background tasks · {m} not started",
+                    grokhub_core::brand::product_name()
+                ),
             };
         }
     }
@@ -393,6 +444,7 @@ impl Cabin {
         }
         let mut crashed: Vec<grokhub_core::UpdateCard> = Vec::new();
         let mut scheduled_tokens = 0u64;
+        let mut tools: Vec<(u64, String, ToolCard)> = Vec::new();
         for run in self.bg.runs.iter_mut() {
             let Some(rx) = run.rx.take() else {
                 continue;
@@ -406,6 +458,10 @@ impl Cabin {
                     Ok(GrokPEvent::Tool(card)) => {
                         if !card.title.trim().is_empty() {
                             run.action = redact_held_secrets(&card.title, &self.secret_hold);
+                        }
+                        if matches!(card.status.as_str(), "completed" | "failed") {
+                            let session = run.native_session.clone().unwrap_or_default();
+                            tools.push((run.id, session, card));
                         }
                     }
                     Ok(GrokPEvent::Recovering(_)) => run.action = "Retrying…".into(),
@@ -456,6 +512,9 @@ impl Cabin {
         for card in crashed {
             self.post_feed_card(card);
         }
+        if !tools.is_empty() {
+            self.log_bg_tools(tools);
+        }
         // Scheduled runs are the governor's Automations job.
         self.governor_charge(JobKind::Automations, scheduled_tokens);
         self.post_finished_bg_runs();
@@ -490,6 +549,11 @@ impl Cabin {
             done.push(self.bg.runs.remove(i));
         }
         done.reverse();
+        for run in &done {
+            let end = run.end.clone().unwrap_or(BgEnd::Done);
+            self.finish_bg_card(run.id, &(&end).into(), run.origin == BgOrigin::Scheduled);
+        }
+        self.flush_board();
         for run in done {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
@@ -608,10 +672,17 @@ impl Cabin {
                 }
             }
         }
-        let mut changed = if *end == BgEnd::Done {
-            settle_inflight_card(&mut self.board, &run.thread_id)
-        } else {
-            abandon_inflight_card(&mut self.board, &run.thread_id)
+        self.end_run_card(&run.thread_id, &end.into());
+        let mut changed = match end {
+            BgEnd::Done => settle_inflight_card(&mut self.board, &run.thread_id),
+            // KB-03: a failure is an interruption, resumable from the checkpoint.
+            BgEnd::Failed(why) => grokhub_core::interrupt_inflight_card(
+                &mut self.board,
+                &run.thread_id,
+                grokhub_core::work_resume::InterruptCause::from_failure(why),
+                now_ms(),
+            ),
+            BgEnd::Stopped => abandon_inflight_card(&mut self.board, &run.thread_id),
         };
         if apply_assistant_work_marks(&mut self.board, reply, &run.thread_id) {
             changed = true;
@@ -675,8 +746,14 @@ impl Cabin {
             if run.origin == BgOrigin::Detached {
                 detached = true;
             }
+            let stopped = grokhub_core::work_run::RunEnd::Stopped;
+            self.finish_bg_card(run.id, &stopped, run.origin == BgOrigin::Scheduled);
         }
-        if detached && abandon_inflight_card(&mut self.board, thread_id) {
+        if detached {
+            self.end_run_card(thread_id, &grokhub_core::work_run::RunEnd::Stopped);
+            abandon_inflight_card(&mut self.board, thread_id);
+        }
+        if n > 0 {
             self.flush_board();
         }
         self.bg.unread.retain(|(id, _)| id != thread_id);
@@ -688,6 +765,15 @@ impl Cabin {
         for run in self.bg.runs.iter_mut() {
             run.stop_native();
             run.rx = None;
+        }
+        let ids: Vec<(u64, bool)> = self
+            .bg
+            .runs
+            .iter()
+            .map(|r| (r.id, r.origin == BgOrigin::Scheduled))
+            .collect();
+        for (id, scheduled) in ids {
+            self.finish_bg_card(id, &grokhub_core::work_run::RunEnd::Stopped, scheduled);
         }
         self.bg.runs.clear();
     }
@@ -788,18 +874,12 @@ impl Cabin {
             .filter(|(_, r)| r.thread_id == vis && r.origin != BgOrigin::Scheduled)
             .map(|(i, _)| i)
             .collect();
-        let elsewhere = self
-            .bg
-            .runs
-            .iter()
-            .filter(|r| r.thread_id != vis && r.live() && r.origin != BgOrigin::Scheduled)
-            .count();
         let queued = if self.running {
             self.followup_queue.len()
         } else {
             0
         };
-        if !typing && here.is_empty() && elsewhere == 0 && queued == 0 {
+        if !typing && here.is_empty() && queued == 0 {
             return;
         }
         let steerable = self.can_steer_live_turn();
@@ -817,7 +897,11 @@ impl Cabin {
             if typing {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    meta(ui, "Grok is still working.", crate::theme::muted());
+                    meta(
+                        ui,
+                        grokhub_core::brand::filled("{product} is still working."),
+                        crate::theme::muted(),
+                    );
                     if crate::cards::ghost_pill(ui, "Steer") {
                         act = Some(LiveWorkAct::Steer);
                     }
@@ -868,17 +952,9 @@ impl Cabin {
                     }
                 });
             }
-            if elsewhere > 0 {
-                let s = if elsewhere == 1 {
-                    "1 background task running in another chat".to_string()
-                } else {
-                    format!("{elsewhere} background tasks running in other chats")
-                };
-                meta(ui, &s, crate::theme::subtle());
-            }
         });
         ui.add_space(4.0);
-        if !here.is_empty() || elsewhere > 0 {
+        if !here.is_empty() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(500));
         }
@@ -1215,9 +1291,12 @@ mod sp2_tool_set_tests {
         );
         let chat_bytes = serde_json::to_vec(&chat).unwrap().len();
         let job_bytes = serde_json::to_vec(&job).unwrap().len();
+        // Lazy tools already keep chat to the core list, so the job is only
+        // required to be smaller here; the ≥30% cut against the full catalog is
+        // checked in grokhub-agent with lazy tools pinned off.
         assert!(
-            job_bytes * 10 <= chat_bytes * 7,
-            "job schema payload must be ≥30% smaller: job={job_bytes} chat={chat_bytes}"
+            job_bytes < chat_bytes,
+            "job schema payload must be smaller than chat: job={job_bytes} chat={chat_bytes}"
         );
     }
 

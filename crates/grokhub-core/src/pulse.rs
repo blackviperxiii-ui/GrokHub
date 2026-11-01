@@ -56,6 +56,27 @@ pub struct PulseMeta {
     /// Bite-sized hobby learning-path tip (Know me opt-in).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hobby_path: Option<crate::hobby_paths::HobbyPathMeta>,
+    /// One line on what the card's numbers mean, painted above its detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<PulseVerdict>,
+}
+
+/// How a verdict reads: normal, worth watching, or worth a look.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VerdictTone {
+    #[default]
+    Fine,
+    Watch,
+    Act,
+}
+
+/// A card's one-line interpretation, from rules over the user's own history.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PulseVerdict {
+    pub tone: VerdictTone,
+    pub line: String,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -67,7 +88,9 @@ fn is_false(v: &bool) -> bool {
 }
 
 pub const PULSE_TITLE: &str = "Pulse";
-pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
+pub static PULSE_SUBTITLE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    crate::brand::filled("What I'd do next, from how you use {product}.")
+});
 /// Pulse with no ideas, no posts, and nothing running.
 pub const PULSE_EMPTY: &str =
     "Nothing on Pulse yet. I'll add ideas and posts when I spot something worth doing.";

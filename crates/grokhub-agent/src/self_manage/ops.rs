@@ -75,11 +75,15 @@ pub fn run(
             let id = arg(args, "id");
             automation_write(ctx, args, Some(&id))
         }
-        "automation_disable" => {
-            control::disable_automation(&arg(args, "id"), &reason_of(args, "turned off by Grok"))
-        }
+        "automation_disable" => control::disable_automation(
+            &arg(args, "id"),
+            &reason_of(args, grokhub_core::brand::filled("turned off by {product}")),
+        ),
         "automation_delete" => control::delete_automation(&arg(args, "id")),
         "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
+        "work_get" | "work_list" | "work_update" | "work_add" | "work_archive" => {
+            super::work::run(ctx, tool, args)
+        }
         "know_me_tags" => Ok(grokhub_core::know_me::load(
             &ctx.config_dir.join(grokhub_core::know_me::FILE_NAME),
         )
@@ -103,11 +107,6 @@ pub(super) fn pulse_steam(
     let games = root.as_deref().map(steam::read_library).unwrap_or_default();
     let mut prefs = steam::load_prefs(ctx.config_dir);
     let on = args.get("on").and_then(Value::as_bool);
-    if on == Some(true) && root.is_none() {
-        return Err(
-            "Steam is not installed on this computer, so there is no library to use.".into(),
-        );
-    }
     let names = |key: &str| -> Vec<String> {
         args.get(key)
             .and_then(Value::as_array)
@@ -119,9 +118,17 @@ pub(super) fn pulse_steam(
             })
             .unwrap_or_default()
     };
+    let flips = [("mute", true), ("unmute", false)].map(|(key, mute)| (names(key), mute));
+    // Turning on or muting a game without Steam names the real cause, not
+    // "`X` is not in the Steam library".
+    if root.is_none() && (on == Some(true) || flips.iter().any(|(n, _)| !n.is_empty())) {
+        return Err(
+            "Steam is not installed on this computer, so there is no library to use.".into(),
+        );
+    }
     let mut changed = on.is_some();
-    for (key, mute) in [("mute", true), ("unmute", false)] {
-        for name in names(key) {
+    for (names, mute) in flips {
+        for name in names {
             let game = steam::find_game(&games, &name)
                 .ok_or_else(|| format!("`{}` is not in the Steam library.", line(&name)))?;
             prefs.set_muted(game.app_id, mute);
@@ -306,7 +313,7 @@ fn skill_create(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
         instructions,
         ..Default::default()
     };
-    let reason = reason_of(args, "created by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("created by {product}"));
     let done = hx::record_skill_change(
         ctx.config_dir,
         &ctx.skills_dir(),
@@ -341,7 +348,7 @@ fn skill_modify(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     if args.get("instructions").is_some() {
         skill.instructions = arg(args, "instructions");
     }
-    let reason = reason_of(args, "changed by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("changed by {product}"));
     let done = hx::record_skill_change(
         ctx.config_dir,
         &ctx.skills_dir(),
@@ -365,7 +372,7 @@ fn skill_delete(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     if !path.exists() {
         return Err(format!("no skill named {name}"));
     }
-    let reason = reason_of(args, "deleted by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("deleted by {product}"));
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let done = hx::record_skill_change(
         ctx.config_dir,
@@ -414,9 +421,9 @@ fn skill_move(ctx: &SelfCtx<'_>, args: &Value, enable: bool) -> Result<String, S
     let reason = reason_of(
         args,
         if enable {
-            "turned back on by Grok"
+            grokhub_core::brand::filled("turned back on by {product}")
         } else {
-            "turned off by Grok"
+            grokhub_core::brand::filled("turned off by {product}")
         },
     );
     let done = hx::record_skill_change(

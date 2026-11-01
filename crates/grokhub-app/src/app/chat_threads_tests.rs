@@ -120,8 +120,19 @@ fn history_rail_uses_session_names_and_can_delete() {
         .and_then(|s| s.split("fn ui_board(").next())
         .expect("ui_history");
     assert!(
-        hist.contains("Delete all") && hist.contains("delete_all_history"),
-        "History See all must offer Delete all: {hist}"
+        hist.contains("self.history_header(ui)"),
+        "History See all must draw the header with Delete all: {hist}"
+    );
+    let header = src
+        .split("fn history_header(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_history(").next())
+        .expect("history_header");
+    assert!(
+        header.contains("Delete all")
+            && header.contains("click_delete_all_history")
+            && header.contains("danger_pill"),
+        "Delete all is a red two-click button, never a one-click primary: {header}"
     );
     let poll = src
         .split("fn poll_single(")
@@ -576,27 +587,20 @@ fn pin_thread_flips_the_pin() {
 #[test]
 fn composer_and_history_omit_archived_idle_chrome() {
     let src = cabin_src();
-    let toast = fn_src(&src, "paint_archive_toast");
-    assert!(
-        !toast.contains("idle chat")
-            && !toast.contains("idle chats")
-            && !toast.contains("auto_archive_note")
-            && !toast.contains("ghost_pill(ui, \"Archived\")")
-            && !toast.contains("Nav::History"),
-        "composer archive toast must not show idle-archive chrome: {toast}"
-    );
-    assert!(
-        toast.contains("ghost_pill(ui, \"Undo\")"),
-        "manual archive Undo toast stays: {toast}"
-    );
     let live = src
         .split("ComposerStackSlot::LiveWork =>")
         .nth(1)
         .and_then(|s| s.split("ComposerStackSlot::SlashPalette =>").next())
         .expect("LiveWork slot");
     assert!(
-        live.contains("paint_archive_toast") && !live.contains("idle chat"),
-        "LiveWork must not embed idle-archive labels: {live}"
+        !live.contains("archive")
+            && !live.contains("diagnostics_notice")
+            && !live.contains("idle chat"),
+        "the composer stack paints no archive or diagnostics strip; the bell has them: {live}"
+    );
+    assert!(
+        !src.contains("fn paint_archive_toast") && !src.contains("fn paint_diagnostics_notice"),
+        "the old composer strips stay gone"
     );
     let hist = src
         .split("fn ui_history(")
@@ -662,17 +666,55 @@ fn archive_hides_from_main_list_and_reply_restores() {
         vec![0]
     );
     assert_eq!(cabin.status, "Archived Done chat");
+    let id = cabin.threads[1].id.clone();
+    assert_eq!(cabin.notices.items[0].text, "Archived Done chat");
     assert_eq!(
-        cabin.archive_undo.as_deref(),
-        Some(cabin.threads[1].id.as_str())
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::Unarchive(id.clone()))
     );
     cabin.unarchive_on_reply();
+    assert_eq!(
+        cabin.notices.items[0].action, None,
+        "a reply restored the chat, so its Undo goes quiet"
+    );
     assert!(!crate::threads::is_archived(&cabin.threads[1]));
     assert_eq!(cabin.status, "Restored Done chat to chats");
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
         vec![0, 1]
     );
+    quiet.settle();
+}
+
+#[test]
+fn bell_undo_restores_an_archived_chat_and_offers_undo_again() {
+    let mut quiet = QuietCabin::boot("bell-undo");
+    let cabin = &mut quiet.cabin;
+    cabin.threads.clear();
+    let mut keep = crate::threads::ChatThread::new("Keep", false);
+    keep.messages_mut().push(("user".into(), "stay".into()));
+    let mut done = crate::threads::ChatThread::new("Done chat", false);
+    done.messages_mut().push(("user".into(), "old".into()));
+    cabin.threads = vec![keep, done];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.notices.mark_read();
+    cabin.archive_thread_at(1);
+    assert_eq!(cabin.notices.unread, 1);
+    cabin.run_notice_action(0);
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(cabin.notices.items[0].text, "Unarchived Done chat");
+    assert_eq!(
+        cabin.notices.items[1].action, None,
+        "the Undo that ran is spent"
+    );
+    let id = cabin.threads[1].id.clone();
+    assert_eq!(
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::Archive(id))
+    );
+    cabin.run_notice_action(0);
+    assert!(crate::threads::is_archived(&cabin.threads[1]));
     quiet.settle();
 }
 
@@ -941,6 +983,52 @@ fn history_hit_opens_memory_or_chat() {
 }
 
 // Landed from PR #172.
+#[test]
+fn delete_all_history_needs_a_second_click() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("delete-all-confirm");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut pier = crate::threads::ChatThread::new("Pier light", false);
+    pier.messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    cabin.threads = vec![pier];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let t0 = std::time::Instant::now();
+
+    assert!(!cabin.click_delete_all_history(t0), "first click only arms");
+    assert!(cabin.history_delete_armed(t0));
+    assert!(
+        cabin.threads.iter().any(|t| t.title == "Pier light"),
+        "one click must leave every chat in place"
+    );
+
+    // A click after the window lapsed re-arms instead of deleting.
+    let late = t0 + super::DELETE_ALL_ARM + std::time::Duration::from_secs(1);
+    assert!(
+        !cabin.history_delete_armed(late),
+        "the arm lapses on its own"
+    );
+    assert!(
+        !cabin.click_delete_all_history(late),
+        "a stale arm never deletes"
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == "Pier light"));
+
+    // Confirming inside the window deletes.
+    let confirm = late + std::time::Duration::from_secs(2);
+    assert!(
+        cabin.click_delete_all_history(confirm),
+        "second click deletes"
+    );
+    assert!(
+        !cabin.threads.iter().any(|t| t.title == "Pier light"),
+        "confirmed Delete all wipes the chats"
+    );
+    assert!(!cabin.history_delete_armed(confirm), "deleting disarms");
+    join_persist(&cabin.persist_svc);
+}
+
 #[test]
 fn delete_all_history_leaves_one_empty_chat() {
     let _hold = crate::config::hold_test_config();
@@ -1356,9 +1444,12 @@ fn edit_puts_your_message_back_without_dropping_a_draft() {
     );
     assert_eq!(
         super::chat_ui::msg_act_labels(true),
-        &["Copy", "Edit", "Reply"]
+        &["Copy", "Edit", "Reply", super::chat_ui::MSG_MORE_LABEL]
     );
-    assert_eq!(super::chat_ui::msg_act_labels(false), &["Copy", "Reply"]);
+    assert_eq!(
+        super::chat_ui::msg_act_labels(false),
+        &["Copy", "Reply", super::chat_ui::MSG_MORE_LABEL]
+    );
     let src = cabin_src();
     let chat = fn_src(&src, "ui_chat");
     assert!(chat.contains("ChatBlockAct::Edit(body)"), "{chat}");
@@ -1680,4 +1771,339 @@ fn scheduled_and_orphan_background_reports_post_in_main() {
         Some("**Background task done** · Check the logs\n\nAll clear.")
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Stop used to drop the half-streamed reply: the text lived only in the stream
+/// buffers and halt_in_flight cleared them, then popped the assistant row.
+#[test]
+fn stop_keeps_the_reply_that_already_streamed() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-keeps-reply");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Stutter", false);
+    chat.messages_mut()
+        .push(("user".into(), "why does my game stutter".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.ingest_stream_chunk(LiveKind::Say, "Shader cache rebuilds on every launch, so");
+    cabin.halt_in_flight();
+    let last = cabin.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant", "{:?}", cabin.messages);
+    assert!(
+        last.1.contains("Shader cache rebuilds") && last.1.ends_with("*Stopped*"),
+        "the partial reply stays, marked stopped: {:?}",
+        last.1
+    );
+    assert!(cabin.stream_buf.is_empty() && cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+}
+
+#[test]
+fn stop_keeps_the_tool_calls_of_the_run() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-keeps-tools");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Disk", false);
+    chat.messages_mut()
+        .push(("user".into(), "what is eating my disk".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.ingest_stream_chunk(LiveKind::Say, "Checking the big folders.");
+    append_tool(&mut cabin.turn_log, "t1", "Scan Downloads", "completed", "");
+    cabin.ingest_stream_chunk(LiveKind::Say, "Downloads holds 40 GB of");
+    let expected = {
+        let mut log = cabin.turn_log.clone();
+        append_say(&mut log, STOPPED_TURN_SEAM);
+        encode_turn(&log)
+    };
+    cabin.halt_in_flight();
+    let last = cabin.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant");
+    assert_eq!(
+        last.1, expected,
+        "the whole timeline, tools in place, is kept"
+    );
+    assert!(last.1.contains("Scan Downloads") && last.1.contains("*Stopped*"));
+}
+
+#[test]
+fn stop_before_anything_streamed_leaves_no_empty_bubble() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-nothing-yet");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut chat = crate::threads::ChatThread::new("Duo", false);
+    chat.messages_mut()
+        .push(("user".into(), "find me a duo".into()));
+    let tid = chat.id.clone();
+    cabin.threads = vec![chat];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.halt_in_flight();
+    assert_eq!(
+        cabin.messages.last().map(|m| m.0.as_str()),
+        Some("user"),
+        "{:?}",
+        cabin.messages
+    );
+}
+
+#[test]
+fn stop_keeps_a_run_streaming_on_another_tab_in_that_tab() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("stop-other-tab");
+    let mut cabin = Cabin::quiet_for_test();
+    let here = crate::threads::ChatThread::new("Here", false);
+    let mut there = crate::threads::ChatThread::new("There", false);
+    there
+        .messages_mut()
+        .push(("user".into(), "plan my weekend".into()));
+    let there_id = there.id.clone();
+    cabin.threads = vec![here, there];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(there_id.clone());
+    cabin.ingest_stream_chunk(LiveKind::Say, "Saturday: ranked grind, then");
+    cabin.halt_in_flight();
+    assert!(
+        cabin.messages.is_empty(),
+        "nothing lands on the visible tab"
+    );
+    let there = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == there_id)
+        .expect("there");
+    let last = there.messages.last().expect("a row");
+    assert_eq!(last.0, "assistant");
+    assert!(last.1.contains("ranked grind") && last.1.ends_with("*Stopped*"));
+}
+
+fn seed_session(id: &str, text: &str) {
+    let turn = grokhub_agent::InputItem::Message {
+        role: "user".into(),
+        content: vec![grokhub_agent::ContentPart::InputText(text.into())],
+    };
+    grokhub_agent::record_turn(
+        id,
+        "/work",
+        "grok-4.7",
+        &[turn],
+        &grokhub_agent::Usage::default(),
+        "",
+        text,
+    )
+    .expect("seed session");
+}
+
+#[test]
+fn main_tab_clear_chat_asks_first_then_wipes_only_main_for_good() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("clear-main");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    main.messages_mut()
+        .push(("user".into(), "the vault code is kumquat".into()));
+    main.messages_mut()
+        .push(("assistant".into(), "Noted the kumquat".into()));
+    main.grok_session = Some("native-main-now".into());
+    main.retired_sessions = vec!["native-main-old".into()];
+    main.plan_body = "kumquat plan".into();
+    main.native_carry = true;
+    let mut other = crate::threads::ChatThread::new("Pier light", false);
+    other
+        .messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    other.grok_session = Some("native-pier".into());
+    seed_session("native-main-now", "the vault code is kumquat");
+    seed_session("native-main-old", "older kumquat");
+    seed_session("native-pier", "bring the lamp");
+    let bg = grokhub_agent::fork_session("native-main-now").expect("fork");
+    let mut background = crate::threads::ChatThread::new("Background", false);
+    background.background = true;
+    background.retired_sessions = vec![bg.id.clone(), "native-pier".into()];
+    cabin.threads = vec![main, other, background];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    // An older save, as threads.json.bak would hold it after a shrink.
+    crate::threads::save(&cabin.threads).expect("seed save");
+    let saved = cfg.root.join("threads.json");
+    std::fs::copy(&saved, cfg.root.join("threads.json.bak")).expect("seed bak");
+
+    cabin.apply_tab_act(TabAct::ClearMain);
+    assert_eq!(
+        cabin.confirm,
+        Some(super::confirm::ConfirmKind::ClearMainChat),
+        "the right-click item only asks"
+    );
+    assert_eq!(
+        cabin.threads[0].messages.len(),
+        2,
+        "nothing goes before the yes"
+    );
+
+    cabin.confirm = None;
+    cabin.clear_main_chat();
+    join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
+
+    let main = &cabin.threads[0];
+    assert!(main.main && main.title == "Main", "Main stays");
+    assert!(main.messages.is_empty());
+    assert!(
+        main.grok_session.is_none(),
+        "a deleted id stays tombstoned, so Main starts a new one"
+    );
+    assert!(main.retired_sessions.is_empty() && main.plan_body.is_empty() && !main.native_carry);
+    assert_eq!(cabin.status, "Main chat cleared");
+    for gone in ["native-main-now", "native-main-old", bg.id.as_str()] {
+        assert!(
+            !grokhub_agent::session_file(gone).unwrap().exists(),
+            "{gone} must be deleted"
+        );
+    }
+    assert!(grokhub_agent::session_file("native-pier")
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        cabin.threads[1].messages.len(),
+        1,
+        "other chats are untouched"
+    );
+    assert_eq!(
+        cabin.threads[2].retired_sessions,
+        vec!["native-pier".to_string()]
+    );
+    for file in ["threads.json", "threads.json.bak"] {
+        let text = std::fs::read_to_string(cfg.root.join(file)).expect(file);
+        assert!(!text.contains("kumquat"), "{file} still holds Main: {text}");
+        assert!(text.contains("bring the lamp"), "{file} lost another chat");
+    }
+    drop(cfg);
+}
+
+fn seed_turns(id: &str, turns: &[(&str, &str)]) {
+    for pair in turns.chunks(2) {
+        let items: Vec<grokhub_agent::InputItem> = pair
+            .iter()
+            .map(|(role, text)| grokhub_agent::InputItem::Message {
+                role: (*role).into(),
+                content: vec![grokhub_agent::ContentPart::InputText((*text).into())],
+            })
+            .collect();
+        grokhub_agent::record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &grokhub_agent::Usage::default(),
+            "",
+            pair[0].1,
+        )
+        .expect("seed turn");
+    }
+}
+
+#[test]
+fn delete_message_asks_first_then_takes_it_out_of_the_chat_and_the_saved_history() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("delete-message");
+    let mut cabin = Cabin::quiet_for_test();
+    let turns = [
+        ("user", "hi"),
+        ("assistant", "hello"),
+        ("user", "the code is kumquat"),
+        ("assistant", "noted the fruit"),
+        ("user", "bye"),
+        ("assistant", "later"),
+    ];
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    for (role, text) in turns {
+        main.messages_mut().push((role.into(), text.into()));
+    }
+    main.grok_session = Some("native-delete-one".into());
+    seed_turns("native-delete-one", &turns);
+    let main_id = main.id.clone();
+    cabin.threads = vec![main];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let row = |cabin: &mut Cabin, kind: grokhub_core::ChatKind, body: &str| {
+        cabin
+            .cached_chat_views()
+            .iter()
+            .position(|v| v.kind == kind && v.body == body)
+            .expect(body)
+    };
+    let confirm = |cabin: &mut Cabin| match cabin.confirm.take() {
+        Some(super::confirm::ConfirmKind::DeleteMessage { thread, mark, cut }) => {
+            cabin.delete_bubble_confirmed(&thread, mark, cut)
+        }
+        other => panic!("expected the delete question, got {other:?}"),
+    };
+    let said =
+        |cabin: &Cabin| -> Vec<String> { cabin.messages.iter().map(|m| m.1.clone()).collect() };
+    let saved = || grokhub_agent::export_markdown("native-delete-one").expect("export");
+
+    // A reply still running can't be cut.
+    cabin.running = true;
+    cabin.chat_job_thread = Some(main_id.clone());
+    let i = row(&mut cabin, grokhub_core::ChatKind::User, "bye");
+    cabin.ask_delete_bubble(i);
+    assert_eq!(cabin.confirm, None);
+    assert_eq!(cabin.status, grokhub_agent::FORGET_BUSY);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+
+    // The ask only: its reply stays, in the chat and in what the model reads.
+    let i = row(
+        &mut cabin,
+        grokhub_core::ChatKind::User,
+        "the code is kumquat",
+    );
+    cabin.ask_delete_bubble(i);
+    assert_eq!(said(&cabin).len(), 6, "nothing goes before the yes");
+    confirm(&mut cabin);
+    assert_eq!(cabin.status, super::threads_nav::DELETED);
+    assert!(!said(&cabin).iter().any(|m| m.contains("kumquat")));
+    assert!(!saved().contains("kumquat"), "{}", saved());
+    assert!(saved().contains("noted the fruit"));
+    assert!(!cabin.threads[0]
+        .messages
+        .iter()
+        .any(|m| m.1.contains("kumquat")));
+
+    // A reply goes whole: with the ask gone, "hi" is answered by both replies.
+    let i = row(
+        &mut cabin,
+        grokhub_core::ChatKind::Assistant,
+        "noted the fruit",
+    );
+    cabin.ask_delete_bubble(i);
+    confirm(&mut cabin);
+    assert_eq!(said(&cabin), vec!["hi", "bye", "later"]);
+    assert!(!saved().contains("noted the fruit") && !saved().contains("hello"));
+    assert!(saved().contains("later"));
+
+    // The chat moved on between the question and the yes: nothing goes.
+    let i = row(&mut cabin, grokhub_core::ChatKind::User, "bye");
+    cabin.ask_delete_bubble(i);
+    cabin.live_mut().push(("user".into(), "one more".into()));
+    confirm(&mut cabin);
+    assert_eq!(cabin.status, super::threads_nav::DELETE_MOVED_ON);
+    assert_eq!(said(&cabin), vec!["hi", "bye", "later", "one more"]);
+    assert!(saved().contains("bye"));
+    join_persist(&cabin.persist_svc);
+    drop(cfg);
 }

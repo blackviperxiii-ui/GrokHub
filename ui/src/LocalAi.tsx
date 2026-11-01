@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   cancelLocalDrafterDownload,
   cancelLocalEngineDownload,
@@ -172,9 +172,27 @@ export function LocalAi() {
   const tell = (text: string) => setNote({ text, error: false });
   const fail = (err: unknown) => setNote({ text: String(err), error: true });
 
+  // Runs each time this section shows. With unsaved edits the form stays as it
+  // is and only the status refreshes.
+  const refresh = useEffectEvent((next: LocalAiView) => {
+    const base = view?.config;
+    const edited =
+      base !== undefined &&
+      (draft !== base ||
+        allow !== base.manual.allowApps.join("\n") ||
+        deny !== base.manual.denyApps.join("\n"));
+    if (!edited) return show(next);
+    setView(next);
+    setEngine(next.engine);
+    setDraftOffer(next.draftOffer);
+    setDraftProgress(next.draftProgress);
+  });
   useEffect(() => {
-    getLocalAi().then(show, (err: unknown) => setNote({ text: String(err), error: true }));
-  }, [show]);
+    getLocalAi().then(
+      (next) => refresh(next),
+      (err: unknown) => setNote({ text: String(err), error: true }),
+    );
+  }, []);
 
   useEffect(() => {
     let stop: (() => void) | undefined;

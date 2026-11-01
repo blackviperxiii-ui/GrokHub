@@ -24,7 +24,7 @@ fn empty_home_paints_faint_greeting() {
     );
     assert!(
         slice.contains("theme::mark"),
-        "empty home paints a quiet Grok mark above the greeting: {slice}"
+        "empty home paints the quiet Loadout mark above the greeting: {slice}"
     );
     assert!(
         !slice.contains("italics"),
@@ -298,12 +298,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let show = src
         .split("fn show_from_tray(")
         .nth(1)
-        .and_then(|s| s.split("fn note_window_resume(").next())
+        .and_then(|s| s.split("fn logic_input_actions(").next())
         .expect("show_from_tray");
     assert!(
-        show.contains("open_fresh_home") && show.contains("apply_saved_geom"),
-        "tray show opens a fresh chat and restores the window: {show}"
+        show.contains("if was_hidden")
+            && show.contains("open_launch_page")
+            && show.contains("apply_saved_geom"),
+        "tray show opens Home (fresh draft behind it) and restores the window: {show}"
     );
+
     let fresh = fn_src(&src, "open_fresh_home");
     assert!(
         fresh.contains("new_thread(false)")
@@ -1574,6 +1577,23 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         ),
         "Dota 2",
     ));
+    let mut poe = grokhub_core::game_watch_poe::PoeSession::default();
+    poe.character = Some("Testwitch".into());
+    poe.deaths = 1;
+    rows.push((
+        "end_poe_session",
+        grokhub_core::game_watch_poe::session_card("Path of Exile 2", &poe, now),
+        "Path of Exile 2",
+    ));
+    let mc = grokhub_core::game_watch_minecraft::McSession {
+        deaths: 1,
+        ..Default::default()
+    };
+    rows.push((
+        "tick_minecraft",
+        grokhub_core::game_watch_minecraft::session_card(&mc, now),
+        "Minecraft",
+    ));
     rows.push((
         "finish_local_models",
         grokhub_core::local_model_news::Suggestion::Release {
@@ -1852,6 +1872,53 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::hobby_path_card(grokhub_core::HobbyId::Rust, rust_step, now),
         "Rust",
     ));
+    let elite = grokhub_core::game_watch_elite::EliteSession {
+        deaths: 1,
+        ..Default::default()
+    };
+    rows.push((
+        "end_elite_session",
+        grokhub_core::game_watch_elite::session_card(&elite, now),
+        "Elite Dangerous",
+    ));
+    rows.push((
+        "end_stardew_session",
+        grokhub_core::stardew_saves::session_card(
+            &grokhub_core::stardew_saves::FarmSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "Stardew Valley",
+    ));
+    rows.push((
+        "end_eso_session",
+        grokhub_core::eso_addon::session_card(
+            &grokhub_core::eso_addon::EsoSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "The Elder Scrolls Online",
+    ));
+    rows.push((
+        "tick_rl",
+        grokhub_core::game_watch_rl::match_card(&Default::default(), now),
+        "Rocket League",
+    ));
+    rows.push((
+        "end_factorio_session",
+        grokhub_core::factorio_state::session_card(
+            &grokhub_core::factorio_state::FactorioSession {
+                before: None,
+                after: Default::default(),
+            },
+            now,
+        ),
+        "Factorio",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
@@ -1917,6 +1984,32 @@ fn greeting_galley_h_drives_empty_home_greet_top() {
         cabin.chat_job_thread.is_none(),
         "galley height must not spawn a chat job"
     );
+}
+
+#[test]
+fn tray_restore_opens_home_but_a_raise_of_a_visible_window_keeps_the_page() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("tray-restore-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_cabin(vec![], 0);
+    let ctx = egui::Context::default();
+    // Minimized or behind other windows: still visible to the app.
+    cabin.window_visible = true;
+    cabin.nav = Nav::Pulse;
+    cabin.show_from_tray(&ctx);
+    assert_eq!(
+        cabin.nav,
+        Nav::Pulse,
+        "un-minimize / refocus keeps the page"
+    );
+    // Closed to the tray: comes back on Home.
+    cabin.window_visible = false;
+    cabin.nav = Nav::Settings;
+    cabin.show_from_tray(&ctx);
+    assert_eq!(cabin.nav, Nav::Home, "tray restore opens Home");
+    assert!(cabin.window_visible);
+    release_isolated(&root, cabin);
 }
 
 #[test]

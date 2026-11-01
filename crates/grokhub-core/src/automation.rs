@@ -457,6 +457,85 @@ fn schedule_name(before: &str, after_needle: &str) -> String {
     joined.trim().to_string()
 }
 
+/// The plain words [`parse_nl_automation`] reads back into this job's schedule,
+/// for an edit box: "every weekday at 9am summarize my inbox". A job made from
+/// such words gets them back as typed. `None` when the words cannot say the
+/// schedule (weekly, monthly, once, or more than one time a day).
+pub fn describe_automation(a: &Automation) -> Option<String> {
+    let when = describe_when(a)?;
+    let ask = a.instructions.trim();
+    let Some(parsed) = parse_nl_automation(ask) else {
+        let ask = if ask.is_empty() { a.name.trim() } else { ask };
+        return Some(format!("{when} {ask}").trim().to_string());
+    };
+    if describe_when(&parsed).as_deref() == Some(when.as_str()) {
+        return Some(ask.to_string());
+    }
+    // The words say another schedule than the job keeps (it was changed in the
+    // cabin): keep the ask, swap the when.
+    let rest = if parsed.schedule == "heartbeat" {
+        drop_interval(&parsed.name)
+    } else {
+        parsed.name.clone()
+    };
+    Some(format!("{when} {rest}").trim().to_string())
+}
+
+fn describe_when(a: &Automation) -> Option<String> {
+    if a.schedule == "heartbeat" {
+        return Some(format!(
+            "heartbeat every {} min",
+            a.heartbeat_every_min.max(1)
+        ));
+    }
+    let word = match a.schedule.as_str() {
+        "weekdays" => "every weekday at",
+        "daily" => "every day at",
+        _ => return None,
+    };
+    let times = normalize_times(&a.time, &a.times);
+    let [slot] = times.as_slice() else {
+        return None;
+    };
+    Some(format!("{word} {}", short_clock(hm_min(slot)?)))
+}
+
+/// "9am", "9:30pm", "12pm": what someone types, and what [`parse_clock_token`] reads.
+fn short_clock(tod_min: u32) -> String {
+    let (h24, m) = (tod_min / 60, tod_min % 60);
+    let half = if h24 < 12 { "am" } else { "pm" };
+    let h12 = match h24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    if m == 0 {
+        format!("{h12}{half}")
+    } else {
+        format!("{h12}:{m:02}{half}")
+    }
+}
+
+/// A heartbeat's name keeps its interval ("30 min check the build"); the ask is the rest.
+fn drop_interval(name: &str) -> String {
+    let mut words = name.split_whitespace().peekable();
+    let interval = |w: &&str| {
+        w.trim_end_matches("mins")
+            .trim_end_matches("min")
+            .parse::<u32>()
+            .is_ok()
+    };
+    if words.peek().is_some_and(interval) {
+        words.next();
+        if words
+            .peek()
+            .is_some_and(|w| matches!(*w, "min" | "mins" | "minutes"))
+        {
+            words.next();
+        }
+    }
+    words.collect::<Vec<_>>().join(" ")
+}
+
 /// Which scheduler owns a scheduling ask.
 ///
 /// A clock time ("every weekday at 9") is a cabin automation in `automations.json`; the
@@ -1265,5 +1344,98 @@ mod tests {
         let long = mark_automation_failed(job("b"), &"x".repeat(500));
         assert_eq!(long.health.error.chars().count(), AUTO_ERROR_CHARS);
         assert!(long.health.error.ends_with('…'));
+    }
+
+    /// The fields an edit re-parses: what the schedule is and what the job asks.
+    fn schedule_of(a: &Automation) -> (String, String, u32, String, String) {
+        (
+            a.schedule.clone(),
+            a.time.clone(),
+            a.heartbeat_every_min,
+            a.name.clone(),
+            a.instructions.clone(),
+        )
+    }
+
+    #[test]
+    fn describe_round_trips_typed_jobs_through_the_parser() {
+        for typed in [
+            "every weekday at 9am summarize my inbox",
+            "every day at 9:30 pm back up the notes",
+            "heartbeat every 30 min check the build",
+        ] {
+            let job = parse_nl_automation(typed).expect("typed");
+            let text = describe_automation(&job).expect("describable");
+            assert_eq!(text, typed);
+            let again = parse_nl_automation(&text).expect("again");
+            assert_eq!(schedule_of(&again), schedule_of(&job), "{typed}");
+        }
+    }
+
+    #[test]
+    fn describe_writes_the_when_for_a_cabin_job() {
+        let mut board = job("a");
+        board.schedule = "weekdays".into();
+        board.time = "13:05".into();
+        let text = describe_automation(&board).expect("weekday");
+        assert_eq!(text, "every weekday at 1:05pm summarize the board");
+        assert_eq!(
+            schedule_of(&parse_nl_automation(&text).expect("parse")),
+            (
+                "weekdays".to_string(),
+                "13:05".to_string(),
+                0,
+                "summarize the board".to_string(),
+                "every weekday at 1:05pm summarize the board".to_string()
+            )
+        );
+
+        let mut midnight = job("b");
+        midnight.time = "00:00".into();
+        assert_eq!(
+            describe_automation(&midnight).as_deref(),
+            Some("every day at 12am summarize the board")
+        );
+        assert_eq!(
+            parse_nl_automation("every day at 12am summarize the board")
+                .expect("midnight")
+                .time,
+            "00:00"
+        );
+
+        let mut beat = job("c");
+        beat.schedule = "heartbeat".into();
+        beat.heartbeat_every_min = 45;
+        let text = describe_automation(&beat).expect("heartbeat");
+        assert_eq!(text, "heartbeat every 45 min summarize the board");
+        let again = parse_nl_automation(&text).expect("parse");
+        assert_eq!(
+            (again.schedule.as_str(), again.heartbeat_every_min),
+            ("heartbeat", 45)
+        );
+    }
+
+    #[test]
+    fn describe_swaps_a_stale_when_and_skips_what_words_cannot_say() {
+        // Typed for 9am, moved to 7am in the cabin: the box says 7am once.
+        let mut moved = parse_nl_automation("every weekday at 9am summarize my inbox").expect("a");
+        moved.time = "07:00".into();
+        assert_eq!(
+            describe_automation(&moved).as_deref(),
+            Some("every weekday at 7am summarize my inbox")
+        );
+        let mut slower = parse_nl_automation("heartbeat every 30 min check the build").expect("b");
+        slower.heartbeat_every_min = 60;
+        assert_eq!(
+            describe_automation(&slower).as_deref(),
+            Some("heartbeat every 60 min check the build")
+        );
+
+        let mut weekly = job("w");
+        weekly.schedule = "weekly".into();
+        assert_eq!(describe_automation(&weekly), None);
+        let mut twice = job("t");
+        twice.times = vec!["07:00".into(), "19:00".into()];
+        assert_eq!(describe_automation(&twice), None);
     }
 }

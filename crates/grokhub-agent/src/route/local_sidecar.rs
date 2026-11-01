@@ -46,6 +46,12 @@ pub struct Sidecar {
     idle_unload_secs: u64,
     /// The auto-configured flags; `None` runs the one-shot `local_perf` defaults.
     launch: Option<LaunchArgs>,
+    /// The one-shot defaults with every GPU left out (`launch` is `None` and
+    /// the GPU backend crashed the first start).
+    bare_cpu: bool,
+    /// The `reasoning_effort` levels the model's chat template renders, read
+    /// from `/props` once the server is up; empty sends no effort.
+    pub effort_levels: Vec<String>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -58,6 +64,7 @@ impl std::fmt::Debug for Sidecar {
             .field("model", &self.model)
             .field("restarts", &self.restart_count())
             .field("idle_unload_secs", &self.idle_unload_secs)
+            .field("effort_levels", &self.effort_levels)
             .finish()
     }
 }
@@ -176,6 +183,7 @@ impl Sidecar {
             self.port,
             &self.token,
             self.launch.as_ref(),
+            self.bare_cpu,
         )?;
         *self.child.lock().expect("sidecar lock") = child;
         self.restarts.fetch_add(1, Ordering::SeqCst);
@@ -277,6 +285,27 @@ fn llama_command(binary: &Path, args: &[String], token: &str) -> Command {
     cmd
 }
 
+/// The flags one start passes: the planned launch, else the one-shot
+/// defaults, with every GPU left out when `bare_cpu`.
+fn spawn_args(
+    model: &Path,
+    host: &str,
+    port: u16,
+    launch: Option<&LaunchArgs>,
+    bare_cpu: bool,
+) -> Vec<String> {
+    match launch {
+        Some(l) => llama_args_with_launch(model, host, port, l),
+        None => {
+            let mut a = llama_args(model, host, port);
+            if bare_cpu {
+                a.extend(CPU_ONLY_ARGS.iter().map(|s| s.to_string()));
+            }
+            a
+        }
+    }
+}
+
 fn spawn_llama(
     binary: &Path,
     model: &Path,
@@ -284,6 +313,7 @@ fn spawn_llama(
     port: u16,
     token: &str,
     launch: Option<&LaunchArgs>,
+    bare_cpu: bool,
 ) -> Result<Child, String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
@@ -310,10 +340,7 @@ fn spawn_llama(
             ));
         }
     }
-    let args = match launch {
-        Some(l) => llama_args_with_launch(model, host, port, l),
-        None => llama_args(model, host, port),
-    };
+    let args = spawn_args(model, host, port, launch, bare_cpu);
     // The load log names out-of-memory failures; without a file it is dropped.
     let log = std::fs::File::create(server_log_path(binary))
         .map(Stdio::from)
@@ -323,6 +350,21 @@ fn spawn_llama(
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("could not start local model server: {e}"))
+}
+
+/// Appended to the one-shot defaults to keep the engine off every GPU.
+const CPU_ONLY_ARGS: [&str; 4] = ["-ngl", "0", "--device", "none"];
+
+/// Whether a failed start should be tried again with every GPU left out: the
+/// engine died while loading (a GPU driver or backend crash, not a slow load
+/// or out-of-memory) and this launch could still reach a GPU.
+pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu: bool) -> bool {
+    let died = err.contains("stopped before it was ready");
+    let on_gpu = match launch {
+        Some(l) => !l.cpu_only,
+        None => !bare_cpu,
+    };
+    died && on_gpu && !autoconfig::oom_in_log(log)
 }
 
 /// Start llama-server on a fresh loopback port.
@@ -344,6 +386,9 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
     let mut attempt: u8 = 0;
+    let mut bare_cpu = false;
+    // The first start's error, kept when the CPU retry fails too.
+    let mut gpu_err: Option<String> = None;
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
@@ -354,8 +399,9 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             port,
             &token,
             launch.as_ref(),
+            bare_cpu,
         )?;
-        let side = Sidecar {
+        let mut side = Sidecar {
             child: Mutex::new(child),
             host: host.clone(),
             port,
@@ -366,16 +412,28 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             last_used_secs: AtomicU64::new(unix_secs()),
             idle_unload_secs: idle,
             launch: launch.clone(),
+            bare_cpu,
+            effort_levels: Vec::new(),
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
+                side.effort_levels = super::local_effort::fetch_levels(
+                    &side.host,
+                    side.port,
+                    &side.token,
+                    super::local_effort::PROPS_TIMEOUT,
+                );
+                if let Some(why) = gpu_err.as_deref() {
+                    health::log("gpu_fallback", Some(why));
+                }
                 if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
-                    if attempt > 0 {
+                    if attempt > 0 || gpu_err.is_some() {
                         let tuned = autoconfig::Tuned {
                             ngl: l.ngl,
                             n_cpu_moe: l.n_cpu_moe,
                             ctx: l.ctx,
                             kv: l.kv,
+                            cpu_only: l.cpu_only,
                         };
                         let _ = autoconfig::save_tuned(dir, key, &tuned);
                     }
@@ -386,6 +444,18 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         };
         side.stop();
         let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        if gpu_err.is_none() && retry_on_cpu(&err, &log, launch.as_ref(), bare_cpu) {
+            gpu_err = Some(err);
+            match launch.as_ref() {
+                Some(l) => launch = Some(autoconfig::on_cpu(l)),
+                None => bare_cpu = true,
+            }
+            continue;
+        }
+        // The CPU died the same way, so the GPU was not why: report the first start.
+        if let Some(first) = gpu_err.take() {
+            return Err(first);
+        }
         let Some(prev) = launch.as_ref().filter(|_| autoconfig::oom_in_log(&log)) else {
             return Err(err);
         };
@@ -411,13 +481,14 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
         return false;
     }
     let url = format!("http://{host}:{port}/health");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: timeout,
+        read: Some(timeout),
+        ..Default::default()
+    });
     match agent
         .get(&url)
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .call()
     {
         Ok(resp) => resp.status() == 200,
@@ -739,11 +810,24 @@ pub fn global_pid() -> Option<u32> {
     slot.as_ref().map(Sidecar::pid)
 }
 
-/// Base URL + token for the global sidecar, when running.
-pub fn global_endpoint() -> Option<(String, String)> {
+/// Where a request reaches the global sidecar.
+#[derive(Clone)]
+pub struct Endpoint {
+    pub base_url: String,
+    pub token: String,
+    /// [`Sidecar::effort_levels`].
+    pub effort_levels: Vec<String>,
+}
+
+/// Base URL, token and effort levels of the global sidecar, when running.
+pub fn global_endpoint() -> Option<Endpoint> {
     tick_idle_unload();
     let slot = global_slot().lock().expect("sidecar global");
-    slot.as_ref().map(|s| (s.base_url(), s.token.clone()))
+    slot.as_ref().map(|s| Endpoint {
+        base_url: s.base_url(),
+        token: s.token.clone(),
+        effort_levels: s.effort_levels.clone(),
+    })
 }
 
 /// Mark the global sidecar as just used (keeps it warm).
@@ -907,7 +991,7 @@ mod rand_token {
     }
 }
 
-/// Minimal HTTP peer for contract tests: answers `/health` and
+/// Minimal HTTP peer for contract tests: answers `/health`, `/props` and
 /// `/v1/chat/completions` on 127.0.0.1, optional exit after N completions.
 #[cfg(test)]
 pub mod fake_server {
@@ -1086,6 +1170,15 @@ pub mod fake_server {
             write_resp(stream, code, body);
             return Ok(());
         }
+        if first.starts_with("GET /props") {
+            if !auth_ok {
+                write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
+                return Ok(());
+            }
+            let body = r#"{"default_generation_settings":{"n_ctx":8192},"total_slots":1,"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","high"]}}"#;
+            write_resp(stream, "200 OK", body);
+            return Ok(());
+        }
         if first.starts_with("POST /v1/chat/completions") {
             if !auth_ok {
                 write_resp(stream, "401 Unauthorized", r#"{"error":"bad token"}"#);
@@ -1156,6 +1249,8 @@ mod tests {
             last_used_secs: AtomicU64::new(last_used_secs),
             idle_unload_secs,
             launch: None,
+            bare_cpu: false,
+            effort_levels: Vec::new(),
         }
     }
 
@@ -1380,6 +1475,73 @@ mod tests {
         assert!(args.iter().any(|a| a == "--cache-prompt"));
     }
 
+    fn gpu_launch() -> LaunchArgs {
+        LaunchArgs {
+            backend: grokhub_core::local_profile::Backend::Vulkan,
+            ngl: 49,
+            all_layers: 49,
+            n_cpu_moe: Some(4),
+            ctx: 8192,
+            kv: autoconfig::KvType::Q8,
+            threads: 4,
+            threads_batch: None,
+            flash_attn: true,
+            mlock: false,
+            tensor_split: Some(vec![3, 1]),
+            draft: None,
+            cpu_only: false,
+        }
+    }
+
+    #[test]
+    fn a_start_that_crashed_on_the_gpu_is_retried_on_the_cpu_once() {
+        let died = "local model server stopped before it was ready";
+        let vk = "ggml_vulkan: Failed to create device";
+        let gpu = gpu_launch();
+        let cpu = autoconfig::on_cpu(&gpu);
+        // A crash while a GPU was in play: try the CPU.
+        assert!(retry_on_cpu(died, vk, Some(&gpu), false));
+        assert!(retry_on_cpu(died, "", None, false));
+        // Already on the CPU: nothing left to drop.
+        assert!(!retry_on_cpu(died, vk, Some(&cpu), false));
+        assert!(!retry_on_cpu(died, vk, None, true));
+        // Out of memory keeps its own retry (fewer layers, smaller model).
+        assert!(!retry_on_cpu(
+            died,
+            "ggml_vulkan: Device memory allocation of size 1 failed: ErrorOutOfDeviceMemory",
+            Some(&gpu),
+            false
+        ));
+        // A slow load is not a crash.
+        assert!(!retry_on_cpu(
+            "local model server did not become healthy in time",
+            "",
+            Some(&gpu),
+            false
+        ));
+    }
+
+    #[test]
+    fn the_cpu_retry_leaves_every_gpu_out() {
+        let m = Path::new("/m.gguf");
+        let cpu = autoconfig::on_cpu(&gpu_launch());
+        let a = spawn_args(m, "127.0.0.1", 4711, Some(&cpu), false);
+        assert!(a.windows(2).any(|w| w == ["-ngl", "0"]));
+        assert!(a.windows(2).any(|w| w == ["--device", "none"]));
+        assert!(!a
+            .iter()
+            .any(|x| x == "--tensor-split" || x == "--n-cpu-moe"));
+        // The one-shot defaults get the same flags.
+        let bare = spawn_args(m, "127.0.0.1", 4711, None, true);
+        assert!(bare.ends_with(&CPU_ONLY_ARGS.map(String::from)));
+        // A normal GPU start is unchanged.
+        let gpu = spawn_args(m, "127.0.0.1", 4711, Some(&gpu_launch()), false);
+        assert!(!gpu.iter().any(|x| x == "--device"));
+        assert!(!spawn_args(m, "127.0.0.1", 4711, None, false)
+            .iter()
+            .any(|x| x == "--device"));
+    }
+
     #[test]
     fn llama_command_passes_api_key_only_in_child_environment() {
         let launch = LaunchArgs {
@@ -1395,6 +1557,7 @@ mod tests {
             mlock: false,
             tensor_split: None,
             draft: None,
+            cpu_only: false,
         };
         for args in [
             llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),
@@ -1447,8 +1610,16 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&evil, p).unwrap();
         }
-        let err =
-            spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok", None).unwrap_err();
+        let err = spawn_llama(
+            &evil,
+            Path::new("/m.gguf"),
+            "127.0.0.1",
+            9,
+            "tok",
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.contains("must be named"), "{err}");
         let named = dir.join(llama_server_name());
         std::fs::write(&named, b"x").unwrap();
@@ -1459,7 +1630,16 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&named, p).unwrap();
         }
-        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok", None).unwrap_err();
+        let err = spawn_llama(
+            &named,
+            Path::new("/m.gguf"),
+            "0.0.0.0",
+            9,
+            "tok",
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.contains("loopback"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

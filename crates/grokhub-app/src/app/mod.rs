@@ -53,7 +53,7 @@ use grokhub_core::{
     greeting_name, grok_command_hits, halt_when_leaving_tab, has_auth, heartbeat_acts,
     heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route, home_slash_cmd,
     home_surface_from_nav, host_cmd_leaves_project, host_hour_blocked, host_risk, host_status_line,
-    hub_dispatch_ok, hub_kind_from_health, hub_pair_url, imagine_aspect_label, imagine_aspect_name,
+    hub_dispatch_ok, hub_kind_from_health, imagine_aspect_label, imagine_aspect_name,
     imagine_image_resolution, imagine_ref_status, imagine_stage_h, imagine_stage_visible,
     imagine_style_label, imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
@@ -70,20 +70,19 @@ use grokhub_core::{
     night_check_may_fire, night_counts_run, normalize_hm, now_ms, oauth_access_live,
     overlay_update_begin, overlay_update_finish, pair_code_is_live, palette_file_shown,
     palette_forget_stale_walk, palette_row_action, palette_search_is_saved, palette_shortcut,
-    parse_computer_op, parse_fast_topics, parse_hostname_i, parse_local_clock, parse_slash,
-    parse_suggest_lines, parse_suggest_skill_patches, parse_theme, parse_trajectory_jsonl,
-    partition_suggestions, patch_skill, perm_key, persist_user_turn, pick_fresh_seed,
-    pick_greeting_against, pick_lan_ipv4, plan_room, plus_empty_status, plus_menu_rows,
-    prefer_patch, presence_should_stream, project_menu_acts, project_menu_label,
-    project_title_from_hint, propose_skill_from_turn, prune_live_suggestions, ptt_after_speak,
-    ptt_after_stt, push_stream_capped, quiet_hours_active, quiet_hours_choice_label,
-    quiet_hours_menu, quote_for_reply, realtime_can_connect, recipe_from_cmds, record_turn,
-    redact_held_secrets, redact_secrets, redirect_prompt, refresh_last_stretch,
-    refund_host_reserved, release_inflight_card, remember_chip_click, remember_chip_dismiss,
-    remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
-    rename_node, replay_automation_target, replay_ops, resolve_bind_path, resolve_chat_model,
-    restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due, rewind_allowed,
-    rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
+    parse_computer_op, parse_fast_topics, parse_local_clock, parse_slash, parse_suggest_lines,
+    parse_suggest_skill_patches, parse_theme, parse_trajectory_jsonl, partition_suggestions,
+    patch_skill, perm_key, persist_user_turn, pick_fresh_seed, pick_greeting_against, plan_room,
+    plus_empty_status, plus_menu_rows, prefer_patch, presence_should_stream, project_menu_acts,
+    project_menu_label, project_title_from_hint, propose_skill_from_turn, prune_live_suggestions,
+    ptt_after_speak, ptt_after_stt, push_stream_capped, quiet_hours_active,
+    quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect,
+    recipe_from_cmds, record_turn, redact_held_secrets, redact_secrets, redirect_prompt,
+    refresh_last_stretch, refund_host_reserved, release_inflight_card, remember_chip_click,
+    remember_chip_dismiss, remember_chip_turn_outcome, remember_home_slash, remember_home_surface,
+    remember_typed_prompt, rename_node, replay_automation_target, replay_ops, resolve_bind_path,
+    resolve_chat_model, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
+    rewind_allowed, rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_snapshot_ready, roll_usage_day, route_schedule, save_hub_state, screen_from_extents,
     scrolled_off_tail, search_corpus, search_corpus_tagged, search_place, search_thread_body,
     seed_from_bound, settings_pin_blocks_auto, settings_update_hint, settings_update_label,
@@ -120,8 +119,6 @@ use grokhub_core::{
     RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
     TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
-#[cfg(test)]
-use grokhub_core::{chip_suggest_prompt, parse_llm_chips};
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -149,6 +146,7 @@ mod audio_check_ui;
 mod background;
 mod background_ui;
 mod backup_ui;
+mod board_triage;
 mod board_ui;
 mod budget_ui;
 mod canary_ui;
@@ -165,12 +163,17 @@ mod daily_drop_ui;
 mod day_brief_ui;
 mod desktop_anim;
 mod desktop_nyx;
+mod destiny_ui;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
+mod elite_ui;
 mod episode_ui;
+mod eso_ui;
 mod evidence_ui;
+mod factorio_ui;
 mod feed_ui;
+mod file_writes;
 mod findings_ui;
 mod fix_it;
 mod focus_ui;
@@ -178,6 +181,7 @@ mod game_companion_ui;
 mod game_watch_ui;
 mod ghost;
 mod glance;
+mod gw2_ui;
 mod harness_ui;
 mod heartbeat_gate;
 mod hobby_paths_ui;
@@ -190,6 +194,7 @@ mod interests_ui;
 mod jobs;
 mod journal_ui;
 mod knowme_ui;
+mod lan_host;
 mod library_ui;
 mod loadout_home;
 mod local_ai_ui;
@@ -199,6 +204,7 @@ mod local_probe;
 mod local_signals;
 mod marketplace_ui;
 mod memory_tidy;
+mod minecraft_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
@@ -208,14 +214,17 @@ mod model_wait_ui;
 mod native_signin_tests;
 mod net_log_ui;
 mod night;
+mod notices;
 mod nudge_watchers_ui;
 mod oauth;
+mod osrs_ui;
 mod pages;
 pub mod panels;
 mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod poe_ui;
 mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
@@ -224,6 +233,7 @@ mod proactive_ui;
 mod projects;
 mod provider_ui;
 mod pulse;
+mod pulse_fix_ui;
 mod pulse_sources_ui;
 mod pulse_ui;
 mod reactions_ui;
@@ -233,6 +243,7 @@ mod release_radar_ui;
 mod repaint_timer_tests;
 mod repair_ui;
 mod rhythm_ui;
+mod rl_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
@@ -245,6 +256,7 @@ mod setup_wizard;
 mod sidebar;
 mod skill_undo;
 mod slash;
+mod stardew_ui;
 mod status_toasts;
 mod steam_ui;
 mod systems_brief_ui;
@@ -256,8 +268,15 @@ mod web_search_ui;
 mod week_recap_ui;
 mod wind_down_ui;
 mod wishlist_ui;
+mod work_log;
+mod work_resume;
+mod wow_ui;
+
 use background::BgWork;
 use chat_ui::*;
+use lan_host::discover_hub_pair_url;
+#[cfg(test)]
+use lan_host::{hostname_i_now, routed_ipv4};
 
 use confirm::*;
 #[cfg(test)]
@@ -299,6 +318,7 @@ enum Nav {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsSec {
     Account,
+    AiModels,
     Privacy,
     Appearance,
     Behavior,
@@ -325,6 +345,10 @@ const HIDDEN_HEARTBEAT_MS: u64 = 400;
 /// How long a History query sits still before it runs. Every keystroke walks every
 /// thread, so the cabin waits for the typing to settle.
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
+/// How long History's armed "Delete all" waits for the confirming click.
+const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
+/// Closing line on a reply cut off by Stop, so it reads as stopped, not finished.
+const STOPPED_TURN_SEAM: &str = "\n\n*Stopped*";
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -362,6 +386,8 @@ pub(super) enum TabAct {
     CommitRename(usize),
     CancelRename,
     Delete(usize),
+    /// Main's right-click Clear chat: asks first, see `ConfirmKind::ClearMainChat`.
+    ClearMain,
 }
 
 enum JobOut {
@@ -449,11 +475,19 @@ pub struct Cabin {
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
     turn_retried: bool,
+    /// The bearer xAI last turned away (401/403). While it is still the one
+    /// on file, chats go to Local AI when it is ready; a new sign-in or key
+    /// is a different bearer and goes back to the cloud. Memory only.
+    rejected_bearer: Option<String>,
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
     /// This attempt filed a Doing card. Fail paths use it to undo that write.
     inflight_open: bool,
+    /// Tool calls of this turn already on its card's progress log.
+    run_tools_logged: Vec<String>,
+    /// KB-03: the resume turn's block, the card it resumes, and the ticks.
+    work_resume: work_resume::WorkResumeView,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -522,9 +556,6 @@ pub struct Cabin {
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
-    /// Minimize or tray hide. The next show opens a fresh empty chat.
-    resume_fresh: bool,
-    saw_minimized: bool,
     /// Useful setup ideas were offered once this launch. Refresh clears it.
     ideas_filled: bool,
     /// Model call for Ideas: the reply, and what it is checked against.
@@ -559,9 +590,12 @@ pub struct Cabin {
     /// Last query the debounce saw, so typing kicks a search without a button.
     history_q_seen: String,
     history_q_at: Option<Instant>,
+    /// When History's "Delete all" was armed; a second click inside
+    /// [`DELETE_ALL_ARM`] deletes, anything later re-arms.
+    history_delete_armed_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
-    /// Thread id for the quiet archive/unarchive Undo toast.
-    archive_undo: Option<String>,
+    /// Titlebar bell: archive Undo, diagnostics saves, status lines.
+    notices: notices::Notices,
     /// Local day the auto-archive pass last ran.
     chat_archive_day: Option<String>,
     last_receipt_ok: Option<bool>,
@@ -684,13 +718,16 @@ pub struct Cabin {
     agent_cursor: Option<crate::motion::AgentCursorAnim>,
     /// Workboards page: the open card and what you are typing on each.
     board_view: board_ui::BoardView,
-    llm_chips: Vec<QuickChip>,
     visible_chips: Vec<QuickChip>,
-    chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
-    chip_busy: bool,
-    chip_fp: String,
+    /// Home's row: the same engine for a fresh chat, four at most.
+    home_chips: Vec<QuickChip>,
     chip_paint_key: String,
-    chip_llm_at: u64,
+    /// The chip whose send is under way, so the turn it starts is known
+    /// as the chip's and not a typed ask.
+    chip_send_key: Option<String>,
+    /// The chip that started the running turn; only it is credited with
+    /// how the turn went. `None` for a typed turn.
+    chip_turn_key: Option<String>,
     greeting: String,
     greeting_fp: String,
     greeting_user_at: u64,
@@ -713,7 +750,6 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
-    sidebar_q: String,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -750,6 +786,8 @@ pub struct Cabin {
     imagine_pending: bool,
     imagine_native: imagine::ImagineNative,
     imagine_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// Background writes (/export, /remember, Memory Save) not yet reported.
+    file_writes: Vec<mpsc::Receiver<file_writes::FileWriteDone>>,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
     goal_stale: bool,
@@ -1106,10 +1144,13 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
+            work_resume: Default::default(),
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1177,8 +1218,6 @@ impl Cabin {
                 None
             },
             window_visible: !hidden,
-            resume_fresh: false,
-            saw_minimized: false,
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -1203,8 +1242,9 @@ impl Cabin {
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
+            history_delete_armed_at: None,
             history_hits: vec![],
-            archive_undo: None,
+            notices: Default::default(),
             chat_archive_day: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
@@ -1305,13 +1345,11 @@ impl Cabin {
             pulse_view: Default::default(),
             agent_cursor: None,
             board_view: Default::default(),
-            llm_chips: vec![],
             visible_chips: vec![],
-            chip_rx: None,
-            chip_busy: false,
-            chip_fp: String::new(),
+            home_chips: vec![],
             chip_paint_key: String::new(),
-            chip_llm_at: 0,
+            chip_send_key: None,
+            chip_turn_key: None,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -1334,7 +1372,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1366,6 +1403,7 @@ impl Cabin {
             imagine_pending: false,
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
+            file_writes: Vec::new(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -1546,8 +1584,8 @@ impl Cabin {
         let Ok(mgr) = GlobalHotKeyManager::new() else {
             return;
         };
-        let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-        let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+        let hey = HotKey::new(Some(Modifiers::META), Code::KeyG);
+        let halt = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Escape);
         let hey_id = hey.id();
         let halt_id = halt.id();
         if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
@@ -1592,10 +1630,13 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
             inflight_open: false,
+            run_tools_logged: Vec::new(),
+            work_resume: Default::default(),
             hub: Arc::new(Mutex::new(grokhub_core::HubState::empty())),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1654,8 +1695,6 @@ impl Cabin {
             tray: None,
             tray_rx: None,
             window_visible: true,
-            resume_fresh: false,
-            saw_minimized: false,
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -1680,8 +1719,9 @@ impl Cabin {
             history_q: String::new(),
             history_q_seen: String::new(),
             history_q_at: None,
+            history_delete_armed_at: None,
             history_hits: Vec::new(),
-            archive_undo: None,
+            notices: Default::default(),
             chat_archive_day: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
@@ -1782,13 +1822,11 @@ impl Cabin {
             pulse_view: Default::default(),
             agent_cursor: None,
             board_view: Default::default(),
-            llm_chips: Vec::new(),
             visible_chips: Vec::new(),
-            chip_rx: None,
-            chip_busy: false,
-            chip_fp: String::new(),
+            home_chips: Vec::new(),
             chip_paint_key: String::new(),
-            chip_llm_at: 0,
+            chip_send_key: None,
+            chip_turn_key: None,
             greeting: String::new(),
             greeting_fp: String::new(),
             greeting_user_at: 0,
@@ -1811,7 +1849,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
@@ -1843,6 +1880,7 @@ impl Cabin {
             imagine_pending: false,
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
+            file_writes: Vec::new(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -2212,6 +2250,27 @@ impl Cabin {
         }
     }
 
+    /// The engine session of the chat that owns the live run.
+    fn foreground_session(&self) -> Option<String> {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        self.threads
+            .get(idx)
+            .and_then(|t| t.grok_session.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Every native run and unattended loop, foreground and background alike.
+    fn halt_background(&mut self) {
+        grokhub_agent::halt_all_sessions();
+        self.stop_native_unattended();
+    }
+
     fn halt_in_flight(&mut self) {
         // A stopped turn's steer and background notes must not ride into another chat.
         self.bg.results_follow = None;
@@ -2221,8 +2280,11 @@ impl Cabin {
         self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
-        grokhub_agent::halt_all_sessions();
-        self.stop_native_unattended();
+        // Stop ends this chat's run and its tasks. Background runs and the
+        // unattended loops keep going; tray Halt stops those (halt_everything).
+        if let Some(id) = self.foreground_session() {
+            grokhub_agent::halt_session(&id);
+        }
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
             self.confirm = None;
@@ -2262,6 +2324,8 @@ impl Cabin {
         self.host_diff_rx = None;
         self.host_diff_kick = false;
         self.verify_rx = None;
+        // Stop ends the run; it must not erase what the run already said and did.
+        let kept = self.stopped_turn_transcript();
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -2278,7 +2342,13 @@ impl Cabin {
         self.elicit_draft.clear();
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.clone();
-        if job.as_deref().is_none_or(|id| id == vis) {
+        if let Some(text) = kept {
+            // Lands on the tab that owns the turn, like a finished reply.
+            self.apply_assistant_snapshot(text);
+            if job.as_deref().is_none_or(|id| id == vis) {
+                self.stamp_current_access();
+            }
+        } else if job.as_deref().is_none_or(|id| id == vis) {
             if self.messages.last().is_some_and(|m| m.0 == "assistant") {
                 self.live_mut().pop();
             }
@@ -2292,6 +2362,30 @@ impl Cabin {
         self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
+    }
+
+    /// What a stopped run already streamed (thinking, reply, tool calls), with a
+    /// closing "Stopped" line, or None when nothing came in before the Stop.
+    /// Takes the stream buffers, so call it before they are cleared.
+    fn stopped_turn_transcript(&mut self) -> Option<String> {
+        let thought = std::mem::take(&mut self.thought_buf);
+        let stream = std::mem::take(&mut self.stream_buf);
+        let tools = turn_needs_timeline(&self.turn_log);
+        if thought.trim().is_empty() && stream.trim().is_empty() && !tools {
+            return None;
+        }
+        let merged = if thought.is_empty() {
+            stream
+        } else {
+            merge_thinking_capped(&thought, &strip_thinking(&stream), IMAGE_FILE_CAP as usize)
+        };
+        append_say(&mut self.turn_log, STOPPED_TURN_SEAM);
+        let text = self.turn_transcript(
+            format!("{}{STOPPED_TURN_SEAM}", merged.trim_end()),
+            IMAGE_FILE_CAP,
+        );
+        self.turn_log.clear();
+        Some(text)
     }
 
     fn scrub_transcript(&self, content: String) -> String {
@@ -3557,6 +3651,17 @@ impl Cabin {
         self.last_heartbeat = Instant::now();
         // Halt holds every organ that starts work; local upkeep still runs.
         let now = now_ms();
+        // While this beat is fresh the shell fires no automations. Not from
+        // tests, whose config folder can be the real one.
+        #[cfg(not(test))]
+        {
+            static LEASE_BEAT: AtomicU64 = AtomicU64::new(0);
+            grokhub_core::scheduler_lease::beat_cabin_lease(
+                &config::config_dir(),
+                now,
+                &LEASE_BEAT,
+            );
+        }
         let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {
@@ -3695,6 +3800,14 @@ impl Cabin {
             self.review_busy,
             self.composer.trim().is_empty(),
             false,
+        ) {
+            return;
+        }
+        // One Anticipate turn per idle stretch: wait for the user to come back.
+        if grokhub_core::autonomy::anticipated_this_idle(
+            self.last_anticipate_ms,
+            now_ms(),
+            self.last_activity.elapsed().as_millis() as u64,
         ) {
             return;
         }
@@ -4810,6 +4923,7 @@ impl Cabin {
         self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
         self.halt_inbox();
         self.stop_all_bg_runs();
+        self.halt_background();
         self.halt_work(status);
     }
 
@@ -4891,7 +5005,10 @@ impl Cabin {
                     self.cfg.close_to_tray_tip_seen = true;
                 }
                 self.unmap_to_tray(ctx);
-                self.status = "In the tray — Show cabin to sit down".into();
+                self.status = format!(
+                    "In the tray — Show {} to sit down",
+                    grokhub_core::brand::product_name()
+                );
             }
         }
     }
@@ -4916,7 +5033,11 @@ impl Cabin {
         self.tray_rx = Some(crate::tray::begin_tray_spawn());
     }
 
+    /// Bring the window back. From the tray (hidden) it opens on Home like a
+    /// fresh launch; a raise of a window that was only minimized or behind
+    /// others keeps the page the user was on.
     fn show_from_tray(&mut self, ctx: &egui::Context) {
+        let was_hidden = !self.window_visible;
         self.window_visible = true;
         self.tray_saw_unfocused = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -4939,9 +5060,9 @@ impl Cabin {
         }
         self.apply_saved_geom(ctx);
         self.ensure_tray_spawn();
-        self.resume_fresh = false;
-        self.saw_minimized = false;
-        self.open_fresh_home();
+        if was_hidden {
+            self.open_launch_page();
+        }
         ctx.request_repaint();
     }
 
@@ -5009,18 +5130,6 @@ impl Cabin {
         }
     }
 
-    fn note_window_resume(&mut self, ctx: &egui::Context) {
-        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
-        if minimized {
-            self.saw_minimized = true;
-            self.resume_fresh = true;
-        } else if self.resume_fresh && self.saw_minimized && self.window_visible {
-            self.resume_fresh = false;
-            self.saw_minimized = false;
-            self.open_fresh_home();
-        }
-    }
-
     /// Tray **Quit**: stop background work, persist, tear down the tray, then exit.
     /// Titlebar × keeps close-to-tray; only this path sets `want_quit`.
     fn quit_from_tray(&mut self, ctx: &egui::Context) {
@@ -5031,6 +5140,7 @@ impl Cabin {
             "tray Quit must not CancelClose on a hidden cabin"
         );
         self.kill_bg_runs();
+        self.halt_background();
         self.halt_in_flight();
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
@@ -5123,6 +5233,7 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
+        self.halt_background();
         self.halt_in_flight();
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
@@ -5186,9 +5297,9 @@ impl eframe::App for Cabin {
         self.poll_persist_err();
         self.poll_recovered_stores();
         self.poll_imagine_save();
+        self.poll_file_writes();
         self.poll_host_diff();
         self.poll_acp();
-        self.poll_chips();
         self.poll_review();
         self.poll_self_review();
         if let Some(issue) = self.harness.self_review.copy_out.take() {
@@ -5257,7 +5368,6 @@ impl eframe::App for Cabin {
         self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
-        self.note_window_resume(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
         match crate::tray::cabin_close_action(
@@ -5319,8 +5429,7 @@ impl eframe::App for Cabin {
         );
         let live = wants_live_repaint(
             self.running,
-            self.chip_busy
-                || self.goal_busy
+            self.goal_busy
                 || self.oauth_photo_busy
                 || self.review_busy
                 || self.greeting_busy
@@ -5472,7 +5581,6 @@ impl eframe::App for Cabin {
             self.ui_palette(&ctx);
         }
         self.paint_record_indicator(&ctx);
-        self.paint_listen_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }
@@ -5496,6 +5604,7 @@ impl eframe::App for Cabin {
         }
         self.sync_idea_card_actions();
         status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
+        self.mirror_status_notice();
         self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
@@ -5856,106 +5965,6 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
     state.store(ui.ctx(), id);
 }
 
-struct LanHostCache {
-    at: Instant,
-    out: String,
-    inflight: bool,
-}
-
-static LAN_HOST: Mutex<Option<LanHostCache>> = Mutex::new(None);
 const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
-
-fn hostname_i() -> String {
-    if let Ok(g) = LAN_HOST.lock() {
-        if let Some(c) = g.as_ref() {
-            let hit = c.out.clone();
-            let fresh = c.at.elapsed().as_secs() < 30;
-            let busy = c.inflight;
-            drop(g);
-            if !fresh && !busy {
-                kick_hostname();
-            }
-            return hit;
-        }
-    }
-    let out = hostname_i_now();
-    if let Ok(mut g) = LAN_HOST.lock() {
-        *g = Some(LanHostCache {
-            at: Instant::now(),
-            out: out.clone(),
-            inflight: false,
-        });
-    }
-    out
-}
-
-fn hostname_i_now() -> String {
-    let out = lan_candidates_now();
-    let addrs = parse_hostname_i(&out);
-    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
-    if pick_lan_ipv4(&refs).is_some() {
-        return out;
-    }
-    // No candidate (macOS has no `hostname -I`): the address outbound traffic leaves from.
-    routed_ipv4().unwrap_or(out)
-}
-
-/// Space-separated local IPv4 addresses, in `hostname -I`'s format.
-#[cfg(not(windows))]
-fn lan_candidates_now() -> String {
-    let mut cmd = std::process::Command::new("hostname");
-    cmd.arg("-I");
-    crate::desktop::run_limited(cmd, Duration::from_millis(400))
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
-}
-
-/// Windows has no `hostname -I` (its `hostname` treats `-I` as an error), so read the
-/// adapters directly instead of spawning a process that always fails.
-#[cfg(windows)]
-fn lan_candidates_now() -> String {
-    let ips: Vec<String> = crate::win_native::adapter_ipv4s()
-        .iter()
-        .map(|ip| ip.to_string())
-        .collect();
-    ips.join(" ")
-}
-
-/// The local address the OS would route outbound traffic from. A UDP connect sends nothing;
-/// 192.0.2.1 is TEST-NET-1 (RFC 5737).
-fn routed_ipv4() -> Option<String> {
-    let sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    sock.connect(("192.0.2.1", 9)).ok()?;
-    Some(sock.local_addr().ok()?.ip().to_string())
-}
-
-fn kick_hostname() {
-    if let Ok(mut g) = LAN_HOST.lock() {
-        if let Some(c) = g.as_mut() {
-            if c.inflight {
-                return;
-            }
-            c.inflight = true;
-        }
-    }
-    std::thread::spawn(|| {
-        let out = hostname_i_now();
-        if let Ok(mut g) = LAN_HOST.lock() {
-            *g = Some(LanHostCache {
-                at: Instant::now(),
-                out,
-                inflight: false,
-            });
-        }
-    });
-}
-
-fn discover_hub_pair_url(port: u16) -> String {
-    let out = hostname_i();
-    let addrs = parse_hostname_i(&out);
-    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
-    hub_pair_url(port, pick_lan_ipv4(&refs).as_deref())
-}

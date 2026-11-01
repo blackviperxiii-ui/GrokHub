@@ -1,6 +1,6 @@
 # Maintainer: GrokHub contributors
 pkgname=grokhub
-pkgver=3.4.0
+pkgver=3.5.0
 pkgrel=1
 pkgdesc="Grok-native Linux cabin — Rust binary, no Electron"
 arch=('x86_64')

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { inShell, onPairChange, pair, paired } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
@@ -18,37 +18,41 @@ export function takeCodeFromLink(): string {
   return decodeURIComponent(match[1]);
 }
 
+/** Whether the address carries a pairing link's code (read only; `takeCodeFromLink` takes it). */
+function linkHasCode(): boolean {
+  return /(?:^#|&)code=[^&]/.test(window.location.hash);
+}
+
 /** The web app's first screen: pair this browser with the desktop. */
 export function Pair({ onPaired }: { onPaired: () => void }) {
   const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
+  // A pairing link starts connecting as the screen opens, so it starts busy.
+  const [busy, setBusy] = useState(linkHasCode);
   const [note, setNote] = useState<string | null>(null);
 
-  const connect = useCallback(
-    async (value: string) => {
-      setBusy(true);
-      setNote(null);
-      try {
-        await pair(value);
-        onPaired();
-      } catch (err) {
-        setNote(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [onPaired],
-  );
+  function attempt(value: string): Promise<void> {
+    return pair(value)
+      .then(() => onPaired())
+      .catch((err: unknown) => setNote(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(false));
+  }
 
+  function connect(value: string) {
+    setBusy(true);
+    setNote(null);
+    void attempt(value);
+  }
+
+  // Only once, on the first render: the link's code is gone after it is taken.
+  const pairFromLink = useEffectEvent((value: string) => void attempt(value));
   useEffect(() => {
-    // The link's code is taken off the address, so a re-run finds nothing.
     const fromLink = takeCodeFromLink();
-    if (fromLink) void connect(fromLink);
-  }, [connect]);
+    if (fromLink) pairFromLink(fromLink);
+  }, []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    void connect(code);
+    connect(code);
   }
 
   return (

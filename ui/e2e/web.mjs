@@ -133,6 +133,31 @@ async function sendChat({ conversationId, text }) {
 
 const COMMANDS = {
   get_settings: () => ({ ok: true, value: settings() }),
+  get_behavior: () => ({
+    ok: true,
+    value: {
+      closeToTray: true,
+      behavior: { autocomplete: false, quietStart: "", quietEnd: "", dailyTokenBudget: 0, pauseOverBudget: false },
+      budgets: [{ value: 0, label: "Off" }],
+    },
+  }),
+  get_privacy: () => ({
+    ok: true,
+    value: {
+      offlineOnly: false,
+      localReady: false,
+      sent: "0 calls sent off-device this week",
+      hosts: [],
+      encrypted: true,
+      encryptedNote: "Personal memory and the logs are sealed with your keyring.",
+      dataFolder: "/home/user/.config/GrokHub",
+      canOpenFolder: true,
+    },
+  }),
+  get_background: () => ({
+    ok: true,
+    value: { runner: "Here a job runs when you choose Run now.", nextDue: null, quiet: "No quiet hours", budget: "Daily token budget: Off", rows: [] },
+  }),
   send_chat: sendChat,
   answer_permission: ({ callId, answer }) => {
     if (STATE.permission?.id !== callId) return { ok: false, error: "no such approval" };
@@ -275,9 +300,11 @@ async function main() {
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
     await idea.getByRole("button", { name: "More" }).click();
     const items = await idea.getByRole("menuitem").allTextContents();
+    check(items.join("|") === "More like this", `the idea menu says ${JSON.stringify(items)}`);
+    const buttons = await idea.locator(".idea-buttons button").allTextContents();
     check(
-      items.join("|") === "Let's do it|More like this|Not interested",
-      `the idea menu says ${JSON.stringify(items)}`,
+      buttons.join("|") === "Let's do it|Not interested",
+      `the idea buttons say ${JSON.stringify(buttons)}`,
     );
     await idea.getByRole("button", { name: "More" }).click();
     await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
@@ -285,7 +312,7 @@ async function main() {
     const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
     check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
     check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
-    console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
+    console.log(`pulse: idea buttons ${buttons.join(", ")}, menu ${items.join(", ")}; the row filled the chat box`);
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
@@ -299,6 +326,14 @@ async function main() {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
+    await page.getByText("0 calls sent off-device this week").waitFor();
+    await page.getByText("No automation is on, so nothing is due.").waitFor();
+    check(
+      (await page.locator("section.settings").getByRole("switch").count()) === 0 &&
+        (await page.getByRole("button", { name: "Open data folder" }).count()) === 0,
+      "the web app offered to change Privacy & data",
+    );
+    console.log("settings: Defaults, Behavior, Privacy & data and Background read-only");
 
     const stores = await page.evaluate(async () => ({
       local: localStorage.length,

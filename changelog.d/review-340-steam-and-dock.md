@@ -1,0 +1,6 @@
+- Pulse's Steam library is read on its own thread, so a large `localconfig.vdf` no longer stalls the first frame or the Settings → Pulse → Sources page; the check on open waits for that read.
+- Settings Mute/Unmute re-reads `pulse-steam.json` before saving, so a mute the agent's `pulse_steam` tool saved moments earlier is kept.
+- The Steam config parser no longer drops every game after one with a value-less key, so play stats reach the Library and Pulse rankings again.
+- The PC loadout card retries its hardware read when the probe thread fails to start instead of showing "Reading this PC…" forever.
+- Shell Activity Dock: a turn that fails right after a finished one starts from zero steps, and finished entries older than ten minutes leave the activity map.
+- The agent's `pulse_steam` tool says Steam is not installed instead of "not in the Steam library" when there is no Steam.

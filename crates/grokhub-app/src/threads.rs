@@ -1,5 +1,6 @@
 use grokhub_core::{clean_tab_title, empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::config;
@@ -324,7 +325,83 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
             }
         }
     }
-    config::atomic_write(&path, s.as_bytes())
+    config::atomic_write(&path, s.as_bytes())?;
+    // Main's Clear chat waits for the save that carries the empty Main, then
+    // takes Main's old transcript out of every backup, the one just made too.
+    let main_now_empty = threads.iter().any(|t| t.main && t.messages.is_empty());
+    if main_now_empty
+        && MAIN_CLEARED
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        scrub_main_from_backups(&path);
+    }
+    Ok(())
+}
+
+/// Set by [`forget_main_history`] until the next save that holds an empty Main.
+static MAIN_CLEARED: AtomicBool = AtomicBool::new(false);
+
+/// Main's Clear chat. The next save of an empty Main also scrubs Main's
+/// transcript out of `threads.json.bak` and the quarantined copies, so no
+/// backup keeps it. Every other chat in those copies stays as it was.
+pub fn forget_main_history() {
+    MAIN_CLEARED.store(true, Ordering::SeqCst);
+}
+
+fn scrub_main_from_backups(path: &std::path::Path) {
+    let mut copies = vec![path.with_file_name("threads.json.bak")];
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|s| s.to_str())) {
+        let corrupt = format!("{name}.corrupt-");
+        let recovered = format!("{name}.recovered-");
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let file = e.file_name();
+                let file = file.to_string_lossy();
+                if file.starts_with(&corrupt) || file.starts_with(&recovered) {
+                    copies.push(e.path());
+                }
+            }
+        }
+    }
+    for copy in copies {
+        scrub_main_in(&copy);
+    }
+}
+
+/// Empty the Main row of one saved copy. A copy that doesn't parse is left as it is.
+fn scrub_main_in(copy: &std::path::Path) {
+    let Ok(bytes) = std::fs::read(copy) else {
+        return;
+    };
+    let Ok(mut rows) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let mut changed = false;
+    for row in rows.as_array_mut().into_iter().flatten() {
+        let Some(obj) = row.as_object_mut() else {
+            continue;
+        };
+        if obj.get("main").and_then(|m| m.as_bool()) != Some(true) {
+            continue;
+        }
+        for key in [
+            "messages",
+            "goal",
+            "planBody",
+            "grokSession",
+            "grokCwd",
+            "retiredSessions",
+            "nativeCarry",
+        ] {
+            changed |= obj.remove(key).is_some();
+        }
+    }
+    if changed {
+        if let Ok(s) = serde_json::to_string_pretty(&rows) {
+            let _ = config::atomic_write(copy, s.as_bytes());
+        }
+    }
 }
 
 fn thread_message_bodies(rows: &mut serde_json::Value) -> Vec<&mut String> {

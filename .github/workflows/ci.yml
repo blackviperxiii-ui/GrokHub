@@ -2,8 +2,10 @@ name: CI
 
 on:
   # Push to beta runs only the light gate (changes, fmt, guards, linux,
-  # windows; pii-guard lives in pii-guard.yml). Heavy jobs run on push to main,
-  # v* tags, the nightly schedule (which checks out beta) and manual runs.
+  # windows; pii-guard lives in pii-guard.yml). Push to main adds shell
+  # (ubuntu + windows) and deny; macOS jobs run on v* tags, the nightly
+  # schedule (which checks out beta) and manual runs; windows-release runs
+  # only on the nightly and manual runs (release.yml builds tags).
   push:
     branches: [main, beta]
     tags: ["v*"]
@@ -17,7 +19,8 @@ on:
   # Nightly full run on beta (~3 AM America/Chicago): everything PRs and beta
   # pushes skip (cross-check, shell, phones, windows-release, deny). Schedules
   # fire from the default branch (main), so every checkout below uses
-  # SOURCE_REF to build beta instead.
+  # SOURCE_REF to build beta instead. When beta's HEAD already had a green
+  # nightly, the build jobs skip (see `changes` and `nightly-green`).
   schedule:
     - cron: "0 8 * * *"
 
@@ -41,11 +44,14 @@ env:
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 # PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
-# build) and windows (same), plus path-filtered shell and phone-android. The
-# slow jobs (cross-check, macOS shell, phone-ios, windows-release, and deny
-# unless Cargo.lock or deny.toml changed) run on push to main, v* tags,
-# nightly (on beta) and on manual runs. Push to beta runs only the gate. Every gate is a job-level `if:`, never a workflow-level
-# path filter, so a skipped job still reports and required checks never hang.
+# build) and windows (same, skipped when a PR only touches ui/ or workflows
+# other than this one), plus path-filtered shell (ubuntu only) and
+# phone-android. Push to main adds deny, shell on ubuntu + windows and
+# path-filtered phone-android. The macOS jobs (cross-check, macOS shell,
+# phone-ios) run on v* tags, nightly (on beta) and manual runs;
+# windows-release only on nightly and manual runs. Push to beta runs only the
+# gate. Every gate is a job-level `if:`, never a workflow-level path filter,
+# so a skipped job still reports and required checks never hang.
 # Each job restores its own build cache; caches save only from pushes to beta
 # and main, so PRs start warm from their base branch.
 jobs:
@@ -63,19 +69,41 @@ jobs:
     # pull_request and push use paths-filter. merge_group has no filter base,
     # so it counts as code=true; schedule and workflow_dispatch run everything.
     outputs:
-      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+      # A nightly on a beta SHA that already had a green nightly builds nothing.
+      code: ${{ steps.dedup.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true') }}
+      skip: ${{ steps.dedup.outputs.cache-hit == 'true' }}
+      sha: ${{ steps.sha.outputs.sha }}
       # Heavy outputs are false on push to beta; nightly covers beta instead.
       # merge_group always runs deny: queued PRs get the supply-chain check.
       deny: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && steps.paths.outputs.deny == 'true') }}
-      cross: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.cross == 'true') }}
+      # macOS (cross-check, phone-ios, macOS shell): nightly, manual and tags only.
+      cross: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
       phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || ((github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.paths.outputs.phone == 'true') }}
-      phone_ios: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.phone == 'true') }}
-      release: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      phone_ios: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+      # windows-release: nightly and manual only. release.yml's windows-installer
+      # builds and packs every tag and beta push, and runs the pack-script tests.
+      release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+      # windows on PRs: skipped (still reports, so the required check passes)
+      # when the PR only touches ui/, docs, or workflows other than this one.
+      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
+      - name: Source SHA
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # nightly-green saves this key after a green nightly; a hit means beta
+      # has not moved since, so the build jobs skip.
+      - name: Nightly already green on this SHA
+        id: dedup
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .nightly-green
+          key: ci-nightly-green-${{ steps.sha.outputs.sha }}
+          lookup-only: true
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         if: github.event_name == 'pull_request'
@@ -88,6 +116,14 @@ jobs:
               - '!**/*.md'
               - '!screenshots/**'
               - '!research/**'
+            windows:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!screenshots/**'
+              - '!research/**'
+              - '!ui/**'
+              - '!.github/**'
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -96,14 +132,7 @@ jobs:
             deny:
               - 'Cargo.lock'
               - 'deny.toml'
-            cross:
-              - 'crates/grokhub-proto/**'
-              - 'crates/grokhub-core/**'
-              - 'crates/grokhub-hub/**'
-              - 'crates/grokhub-agent/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
+            ci_workflow:
               - '.github/workflows/ci.yml'
             phone:
               - 'ui/**'
@@ -117,9 +146,10 @@ jobs:
               - 'crates/grokhub-desktop/**'
               - 'crates/grokhub-proto/**'
               - '.github/workflows/ci.yml'
-      # Shell matrix: PRs run ubuntu + windows only when shell/UI paths change;
-      # merge_group runs ubuntu + windows; push to beta runs none (nightly covers
-      # it); push to main, tags, nightly and manual add macOS.
+      # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
+      # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly
+      # and manual); push to beta runs none (nightly covers it); tags, nightly
+      # and manual add macOS.
       - name: Shell matrix
         id: shell
         env:
@@ -128,10 +158,10 @@ jobs:
           SHELL_PATHS: ${{ steps.paths.outputs.shell }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest","windows-latest"]'; else os='[]'; fi
+            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest"]'; else os='[]'; fi
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/beta ]; then
             os='[]'
-          elif [ "$EVENT" = merge_group ]; then
+          elif [ "$EVENT" = merge_group ] || { [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; }; then
             os='["ubuntu-latest","windows-latest"]'
           else
             os='["ubuntu-latest","windows-latest","macos-latest"]'
@@ -198,6 +228,11 @@ jobs:
           workspaces: ". -> target"
       - name: Guard fail-closed tests
         run: bash scripts/test-ci-guards.sh
+      - name: Shell update manifest test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          bash scripts/test-shell-update-manifest.sh
       - name: Repo friction guards
         env:
           # Live label fetch for the Cargo.lock escape hatch (gh / API).
@@ -339,7 +374,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -414,7 +449,7 @@ jobs:
           name: smoke-shots-${{ runner.os }}
           path: smoke-shots/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
 
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
@@ -434,7 +469,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -494,7 +529,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -532,7 +567,7 @@ jobs:
   # Clippy and tests in one job so they share one build and one cache.
   windows:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -561,7 +596,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release == 'true'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -580,37 +615,8 @@ jobs:
         run: |
           if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      # Deck-match evidence: grokhub.exe beside deck slides 02 and 20 (chrome)
-      # plus settings/upgrade captures from the widget recipe work. Evidence
-      # only, so it never fails the check.
-      - name: Deck shots
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/deck-shots.ps1 -Slide 02
-      - name: Upload deck shots
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: deck-shots
-          path: target/deck-shots/
-          if-no-files-found: ignore
-          retention-days: 14
-      # Free web_search proof: live DDG Lite cites in OpenRouter + local chats
-      # at HARD DONE sizes. Evidence only — never fails the check.
-      - name: Web search shots
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/web-search-shots.ps1
-      - name: Upload web search shots
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-search-shots
-          path: target/web-search-shots/
-          if-no-files-found: ignore
-          retention-days: 14
+      # Deck and web search screenshots moved to deck-shots.yml (manual runs
+      # only): they took over 30 minutes and never gated anything.
       - name: Pack script locks
         shell: pwsh
         run: ./scripts/make-windows-release.tests.ps1
@@ -619,3 +625,25 @@ jobs:
         run: |
           if (Test-Path package.json) { throw 'electron leftover' }
           if (Test-Path desktop) { throw 'electron leftover' }
+
+  # Marks a green nightly so the next one skips the build jobs while beta's
+  # HEAD stays the same. Any failed or cancelled job leaves no mark.
+  nightly-green:
+    needs: [changes, fmt, guards, linux, deny, cross-check, shell, phone-android, phone-ios, windows, windows-release]
+    if: >-
+      !cancelled() && github.event_name == 'schedule' &&
+      needs.changes.outputs.skip != 'true' && needs.changes.outputs.sha != '' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mark
+        env:
+          SHA: ${{ needs.changes.outputs.sha }}
+        run: |
+          mkdir -p .nightly-green
+          echo "$SHA" > .nightly-green/sha
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .nightly-green
+          key: ci-nightly-green-${{ needs.changes.outputs.sha }}

@@ -385,7 +385,7 @@ pub struct FileRow {
     pub path: String,
     pub name: String,
     pub size: String,
-    /// "LM Studio", "Ollama", "GrokHub models" or "Model file".
+    /// "LM Studio", "Ollama", "Loadout models" or "Model file".
     pub source: &'static str,
     /// Not a file from GrokHub's catalog.
     pub third_party: bool,
@@ -448,11 +448,15 @@ pub fn file_row(path: &Path, bytes: u64, source: &'static str, seen: &[String]) 
     }
 }
 
+/// The models folder keeps its `GrokHub` name on disk; it shows by the brand.
+static FOLDER_SOURCE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("{} models", grokhub_core::brand::product_name()));
+
 fn source_name(s: Source) -> &'static str {
     match s {
         Source::LmStudio => "LM Studio",
         Source::Ollama => "Ollama",
-        Source::Folder => "GrokHub models",
+        Source::Folder => FOLDER_SOURCE.as_str(),
     }
 }
 

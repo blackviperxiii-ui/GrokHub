@@ -1,0 +1,965 @@
+//! Efficiency bench (LO-30): what each fixed scenario would send to a model,
+//! measured offline with a scripted client. No network, no keys.
+//!
+//! Per scenario it reports how many model requests the engine made, the bytes
+//! of the first request split into system prompt / tool schemas / history, the
+//! bytes summed over every request (what an uncached provider re-reads), the
+//! share of each request's head that the next request repeats byte for byte
+//! (what Grok's prompt cache and llama.cpp's KV cache can reuse), whether facts
+//! planted early are still in the last request (recall), wall time and the
+//! process's peak RSS. Token cards compare these numbers before and after.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use serde_json::{json, Value};
+
+use super::{scratch, text_turn, tool_turn, NoHalt, SUITE};
+use crate::client::{
+    responses_body, ClientError, ContentPart, InputItem, ResponsesRequest, StreamEvent, TurnOutput,
+};
+use crate::events::Engine;
+use crate::gate::{ClosedPermits, Gate, PermMode};
+use crate::perm::ConfigGuard;
+use crate::{AuthKind, CancelToken, EngineParts, ModelClient, NativeEngine, SteerQueue, Usage};
+
+/// A runaway engine is cut off here so the bench always ends; hitting it is
+/// itself the finding.
+pub const BENCH_REQUEST_CAP: usize = 60;
+
+/// One planted fact the last request must still carry.
+const FACT_NOTE: &str = "FACT-ALPHA: the save folder is D:/Loadout/saves";
+const FACT_HISTORY: &str = "FACT-BRAVO: my duo partner is called Kestrel";
+const FACT_LOG: &str = "FACT-CHARLIE: the crash dump is in D:/Loadout/dumps";
+
+/// The `re-reads` log: big enough that one read_file hits its 50,000-char cap.
+const BIG_LOG: &str = "server.log";
+const BIG_LOG_LINES: usize = 4000;
+
+/// A local model's window, small enough that two full log reads pass the
+/// history trim's 40% mark.
+const LOCAL_CONTEXT_TOKENS: u64 = 64_000;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BenchRow {
+    pub scenario: &'static str,
+    pub requests: usize,
+    pub capped: bool,
+    pub first_system_bytes: usize,
+    pub first_tools_bytes: usize,
+    pub first_history_bytes: usize,
+    pub first_total_bytes: usize,
+    pub total_bytes: usize,
+    pub est_tokens_total: u64,
+    /// Mean share (0-100) of request k's cacheable head that request k+1 repeats.
+    pub stable_prefix_pct: u32,
+    pub recall_ok: bool,
+    pub wall_ms: u128,
+    pub peak_rss_kb: u64,
+    /// The reasoning effort each request sent (`-` for none), in order.
+    pub efforts: Vec<String>,
+    /// Each request's size in bytes, in order.
+    pub request_bytes: Vec<usize>,
+    /// Each request's cacheable head minus what it shares with the previous
+    /// request's head: the bytes a prompt cache has not seen yet.
+    pub fresh_bytes: Vec<usize>,
+}
+
+struct Recorder {
+    script: Vec<TurnOutput>,
+    finish: String,
+    n: AtomicUsize,
+    /// Next scripted turn. A load the model makes on its own does not use one.
+    pos: AtomicUsize,
+    bodies: Mutex<Vec<Value>>,
+}
+
+impl Recorder {
+    fn new(script: Vec<TurnOutput>, finish: &str) -> Self {
+        Self {
+            script,
+            finish: finish.to_string(),
+            n: AtomicUsize::new(0),
+            pos: AtomicUsize::new(0),
+            bodies: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn bodies(&self) -> Vec<Value> {
+        self.bodies
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+}
+
+impl ModelClient for Recorder {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        let n = self.n.fetch_add(1, Ordering::SeqCst);
+        if n >= BENCH_REQUEST_CAP {
+            return Err(ClientError::Cancelled);
+        }
+        // Side calls (compaction, judges, briefs) count too: they are spend.
+        self.bodies
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push(responses_body(req));
+        let pos = self.pos.load(Ordering::SeqCst);
+        let next = self
+            .script
+            .get(pos)
+            .cloned()
+            .unwrap_or_else(|| text_turn(&self.finish));
+        // Like a real model, load a scripted tool the list only has in its
+        // lazy index before calling it; the scripted call comes next.
+        if let Some(name) = next.calls.first().map(|c| c.name.as_str()) {
+            if indexed_only(&req.tools, name) {
+                return Ok(tool_turn(
+                    &format!("load-{name}"),
+                    crate::tools::registry::LOAD_TOOL_SCHEMA,
+                    &json!({ "name": name }).to_string(),
+                ));
+            }
+        }
+        self.pos.fetch_add(1, Ordering::SeqCst);
+        Ok(next)
+    }
+}
+
+/// `name` is not in `tools` but the `load_tool_schema` index lists it.
+fn indexed_only(tools: &[Value], name: &str) -> bool {
+    let indexed = tools.iter().any(|t| {
+        t["name"] == crate::tools::registry::LOAD_TOOL_SCHEMA
+            && t["description"]
+                .as_str()
+                .is_some_and(|d| d.lines().any(|l| l.starts_with(&format!("{name} — "))))
+    });
+    indexed && !tools.iter().any(|t| t["name"].as_str() == Some(name))
+}
+
+fn json_len(v: &Value) -> usize {
+    serde_json::to_vec(v).map(|b| b.len()).unwrap_or(0)
+}
+
+/// The part a provider cache can reuse, in the order it is read: tools, then
+/// the input (system message first, then history).
+fn cache_head(body: &Value) -> String {
+    let tools = body.get("tools").cloned().unwrap_or(Value::Null);
+    let input = body.get("input").cloned().unwrap_or(Value::Null);
+    format!(
+        "{}{}",
+        serde_json::to_string(&tools).unwrap_or_default(),
+        serde_json::to_string(&input).unwrap_or_default()
+    )
+}
+
+fn common_prefix(a: &str, b: &str) -> usize {
+    a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
+}
+
+fn split_input(body: &Value) -> (usize, usize) {
+    let Some(items) = body.get("input").and_then(Value::as_array) else {
+        return (0, 0);
+    };
+    let mut system = 0;
+    let mut rest = 0;
+    for item in items {
+        let len = json_len(item);
+        let role = item.get("role").and_then(Value::as_str).unwrap_or("");
+        if role == "system" || role == "developer" {
+            system += len;
+        } else {
+            rest += len;
+        }
+    }
+    (system, rest)
+}
+
+fn peak_rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+/// The reasoning effort a request body sent, or `-` when it sent none.
+fn sent_effort(body: &Value) -> String {
+    body.pointer("/reasoning/effort")
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn row_from(scenario: &'static str, bodies: &[Value], facts: &[&str], wall_ms: u128) -> BenchRow {
+    let first = bodies.first().cloned().unwrap_or(Value::Null);
+    let (first_system_bytes, first_history_bytes) = split_input(&first);
+    let first_tools_bytes = first.get("tools").map(json_len).unwrap_or(0);
+    let total_bytes: usize = bodies.iter().map(json_len).sum();
+    let heads: Vec<String> = bodies.iter().map(cache_head).collect();
+    let fresh_bytes = heads
+        .iter()
+        .enumerate()
+        .map(|(i, h)| match i.checked_sub(1).map(|p| &heads[p]) {
+            Some(prev) => h.len() - common_prefix(prev, h),
+            None => h.len(),
+        })
+        .collect();
+    let pcts: Vec<f64> = heads
+        .windows(2)
+        .filter(|w| !w[0].is_empty())
+        .map(|w| common_prefix(&w[0], &w[1]) as f64 * 100.0 / w[0].len() as f64)
+        .collect();
+    let stable_prefix_pct = if pcts.is_empty() {
+        100
+    } else {
+        (pcts.iter().sum::<f64>() / pcts.len() as f64).round() as u32
+    };
+    let last = bodies
+        .last()
+        .map(|b| serde_json::to_string(b).unwrap_or_default())
+        .unwrap_or_default();
+    BenchRow {
+        scenario,
+        requests: bodies.len(),
+        capped: bodies.len() >= BENCH_REQUEST_CAP,
+        first_system_bytes,
+        first_tools_bytes,
+        first_history_bytes,
+        first_total_bytes: bodies.first().map(json_len).unwrap_or(0),
+        total_bytes,
+        est_tokens_total: crate::tokens::estimate_token_bytes(total_bytes as u64),
+        stable_prefix_pct,
+        recall_ok: facts.iter().all(|f| last.contains(f)),
+        wall_ms,
+        peak_rss_kb: peak_rss_kb(),
+        efforts: bodies.iter().map(sent_effort).collect(),
+        request_bytes: bodies.iter().map(json_len).collect(),
+        fresh_bytes,
+    }
+}
+
+fn seed_workspace(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(dir.join("notes.txt"), format!("{FACT_NOTE}\n"));
+    let mut log = String::new();
+    for i in 0..2000 {
+        log.push_str(&format!(
+            "2026-10-31T20:{:02}:{:02} INFO service[{}] heartbeat ok latency_ms={}\n",
+            i / 60 % 60,
+            i % 60,
+            i % 17,
+            i % 97
+        ));
+    }
+    let _ = std::fs::write(dir.join("system.log"), log);
+}
+
+fn seed_big_log(dir: &Path) {
+    let mut log = format!("{FACT_LOG}\n");
+    for i in 1..BIG_LOG_LINES {
+        log.push_str(&format!(
+            "2026-10-31T21:{:02}:{:02} WARN worker[{}] slow request ms={}\n",
+            i / 60 % 60,
+            i % 60,
+            i % 13,
+            16 + i % 41
+        ));
+    }
+    let _ = std::fs::write(dir.join(BIG_LOG), log);
+}
+
+fn read(id: &str, file: &str) -> TurnOutput {
+    tool_turn(id, "read_file", &json!({ "target_file": file }).to_string())
+}
+
+fn list(id: &str) -> TurnOutput {
+    tool_turn(id, "list_dir", &json!({ "path": "" }).to_string())
+}
+
+/// A stored chat as a session file holds it: the first turn's system
+/// message, then the turns.
+fn history_turns(n: usize, system: &str) -> Vec<InputItem> {
+    let mut out = vec![InputItem::Message {
+        role: "system".into(),
+        content: vec![ContentPart::InputText(system.to_string())],
+    }];
+    for i in 0..n {
+        let user = if i == 0 {
+            format!("Remember this. {FACT_HISTORY}. Also my rig has a 4070.")
+        } else {
+            format!("Turn {i}: what should I tweak next for frame pacing in my game?")
+        };
+        let reply = format!(
+            "Turn {i} answer: cap the frame rate a few fps under your refresh rate, keep \
+             V-Sync off in game, turn on low latency mode, and check shader cache size. {}",
+            "Details: ".repeat(20)
+        );
+        out.push(InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(user)],
+        });
+        out.push(InputItem::Message {
+            role: "assistant".into(),
+            content: vec![ContentPart::InputText(reply)],
+        });
+    }
+    out
+}
+
+struct Scenario {
+    name: &'static str,
+    /// Sent one after another in the same chat.
+    prompts: Vec<&'static str>,
+    script: Vec<TurnOutput>,
+    finish: &'static str,
+    /// Turns of an earlier chat to resume, before the prompts.
+    history_turns: usize,
+    facts: Vec<&'static str>,
+    /// Model window in tokens; `None` keeps the engine's default.
+    context_tokens: Option<u64>,
+    /// Write `history_trim.toml` with `enabled = false` (the control row).
+    trim_off: bool,
+    /// Turn Steady effort on (`steadyEffort` in `app.json`).
+    steady: bool,
+    /// What the Workboard holds while it runs (KB-04).
+    board: Board,
+    /// The engine's conversation id after `bench-`; empty uses the name. The
+    /// router keys its 1-in-10 effort holdout on it, so rows compared byte
+    /// for byte need ids on the same side of it.
+    session: &'static str,
+}
+
+/// KB-04: the Workboard during a scenario. Board reads and writes are local
+/// file work, so a board with cards must cost a normal turn nothing; only a
+/// resume turn carries one capped note, in its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Board {
+    /// No `workboard.json`.
+    Off,
+    /// Cards on the board, with progress logs, and none running.
+    Idle,
+    /// The same board; the first prompt is the resume turn of its interrupted
+    /// card, carrying the KB-03 resume block, then a plain follow-up.
+    Resume,
+}
+
+/// The interrupted card the `kanban_resume` turn picks up.
+const BOARD_RESUME_ID: &str = "w-bench-tray";
+const BOARD_NOW: u64 = 1_761_955_200_000;
+/// The same two asks in every kanban row, so the rows differ only by the board.
+const KANBAN_PROMPTS: [&str; 2] = [
+    "Pick the tray icon fix back up.",
+    "Thanks. Where is my save folder again?",
+];
+
+/// A board as a few weeks of use leave it: your cards, the agent's finished
+/// and filed cards, one interrupted run, and their progress logs. No card is
+/// in Doing.
+fn seed_board(cfg: &Path) {
+    use grokhub_core::work_item::{append_work_log, Checkpoint, StepStatus, WorkKind, WorkStep};
+    use grokhub_core::work_resume::{claim_run, interrupt_card, InterruptCause, HOST_CABIN};
+    use grokhub_core::work_run as wr;
+    use grokhub_core::{BoardCard, BoardStatus, WorkOrigin};
+    let step = |text: &str, status| WorkStep {
+        text: text.to_string(),
+        status,
+    };
+    let mut cards = Vec::new();
+    for (i, (title, status)) in [
+        ("Buy a longer HDMI cable", BoardStatus::Todo),
+        ("Back up the Elden Ring saves", BoardStatus::Todo),
+        ("Try the new GPU driver", BoardStatus::FollowUp),
+        ("Sort the screenshots folder", BoardStatus::Done),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut c = BoardCard::new(title, "", "");
+        c.id = format!("w-bench-user-{i}");
+        c.status = status;
+        c.updated_ms = BOARD_NOW - 1000;
+        cards.push(c);
+    }
+    let mut done = BoardCard::new("Clear the shader cache", "", "");
+    done.id = "w-bench-done".into();
+    done.origin = Some(WorkOrigin::Agent);
+    done.status = BoardStatus::Done;
+    done.steps = vec![
+        step("Find the cache folders", StepStatus::Done),
+        step("Delete the stale caches", StepStatus::Done),
+    ];
+    cards.push(done);
+    let mut tray = BoardCard::new("Fix the tray icon", "", "");
+    tray.id = BOARD_RESUME_ID.into();
+    tray.origin = Some(WorkOrigin::Agent);
+    tray.kind = WorkKind::Task;
+    tray.status = BoardStatus::InProgress;
+    tray.run = true;
+    tray.thread_id = Some("t-bench".into());
+    tray.steps = vec![
+        step("Read the tray code", StepStatus::Done),
+        step("Patch the DPI scaling", StepStatus::Doing),
+        step("Re-run the app tests", StepStatus::Planned),
+    ];
+    tray.checkpoint = Some(Checkpoint {
+        goal: "Fix the blurry tray icon on a 150% display".into(),
+        refs: vec!["src/tray.rs".into()],
+        session: "native-bench".into(),
+        model: "grok-4.7".into(),
+        attempt: 1,
+        ..Default::default()
+    });
+    claim_run(
+        &mut tray,
+        HOST_CABIN,
+        grokhub_core::wire::PermissionMode::Auto,
+    );
+    interrupt_card(&mut tray, InterruptCause::Restart, BOARD_NOW);
+    cards.push(tray);
+    let _ = std::fs::create_dir_all(cfg);
+    let _ = wr::edit_board_file(&wr::board_path(cfg), BOARD_NOW, |board| {
+        board.extend(cards);
+    });
+    for (id, text) in [
+        (
+            BOARD_RESUME_ID,
+            "Read src/tray.rs: the icon is drawn at 16 px",
+        ),
+        (BOARD_RESUME_ID, "Started the DPI patch"),
+        ("w-bench-done", "Cleared 2.1 GB of shader cache"),
+    ] {
+        let _ = append_work_log(&wr::work_dir(cfg), id, BOARD_NOW, wr::LOG_NOTE, text);
+    }
+}
+
+/// The resume note the app sends with the resume turn, read back from the
+/// seeded board.
+fn board_resume_block(cfg: &Path) -> String {
+    use grokhub_core::work_run as wr;
+    wr::read_board_file(&wr::board_path(cfg))
+        .ok()
+        .and_then(|cards| cards.into_iter().find(|c| c.id == BOARD_RESUME_ID))
+        .map(|c| grokhub_core::work_resume::resume_block(&c))
+        .unwrap_or_default()
+}
+
+/// One kanban row: the same asks and replies, only the board differs.
+fn kanban(name: &'static str, board: Board, session: &'static str) -> Scenario {
+    Scenario {
+        name,
+        prompts: KANBAN_PROMPTS.to_vec(),
+        script: vec![
+            text_turn("Back on it: the DPI patch is next."),
+            text_turn("D:/Loadout/saves."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![],
+        context_tokens: None,
+        trim_off: false,
+        steady: false,
+        board,
+        session,
+    }
+}
+
+/// A log read three times with the same arguments, one turn each (a third
+/// identical call in one turn would be refused unrun), then a notes read.
+fn re_reads(name: &'static str, trim_off: bool) -> Scenario {
+    Scenario {
+        name,
+        prompts: vec![
+            "Read server.log and sum it up.",
+            "I restarted the server. Read server.log again.",
+            "One more look at server.log, then remind me where my save folder is.",
+        ],
+        script: vec![
+            read("g1", BIG_LOG),
+            text_turn("Only slow requests so far."),
+            read("g2", BIG_LOG),
+            text_turn("Still only slow requests."),
+            read("g3", BIG_LOG),
+            read("g4", "notes.txt"),
+            text_turn("Slow requests only. Your save folder is D:/Loadout/saves."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![FACT_NOTE, FACT_LOG],
+        context_tokens: Some(LOCAL_CONTEXT_TOKENS),
+        trim_off,
+        steady: false,
+        board: Board::Off,
+        session: "",
+    }
+}
+
+/// LO-37: three tool calls that fail (missing files), then one that works.
+/// Off, effort climbs on every failed step; Steady climbs after two in a row.
+fn tool_errors(name: &'static str, steady: bool) -> Scenario {
+    Scenario {
+        name,
+        prompts: vec!["Find my crash notes and read them to me."],
+        script: vec![
+            read("e1", "crash.txt"),
+            read("e2", "logs/crash.txt"),
+            read("e3", "dumps/crash.txt"),
+            read("e4", "notes.txt"),
+            text_turn("No crash notes, but your notes name the save folder."),
+        ],
+        finish: "Anything else?",
+        history_turns: 0,
+        facts: vec![FACT_NOTE],
+        context_tokens: None,
+        trim_off: false,
+        steady,
+        board: Board::Off,
+        session: "",
+    }
+}
+
+fn scenarios() -> Vec<Scenario> {
+    vec![
+        Scenario {
+            name: "chat",
+            prompts: vec!["What can you do for my gaming PC?"],
+            script: vec![text_turn(
+                "I can check your rig, tune games and plan sessions.",
+            )],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        Scenario {
+            name: "tools",
+            prompts: vec!["Read my notes and the system log, then sum it up."],
+            script: vec![
+                read("a", "notes.txt"),
+                list("b"),
+                read("c", "system.log"),
+                text_turn("Your notes name the save folder; the log is all heartbeats."),
+            ],
+            finish: "Done.",
+            history_turns: 0,
+            facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        Scenario {
+            name: "diagnostics",
+            prompts: vec!["run a diagnostics check on my pc"],
+            script: vec![
+                list("d1"),
+                read("d2", "system.log"),
+                read("d3", "notes.txt"),
+                text_turn("Checked the folder and the system log: nothing failing."),
+            ],
+            finish: "Checked the folder and the system log: nothing failing.",
+            history_turns: 0,
+            facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        Scenario {
+            name: "long-chat",
+            prompts: vec!["Which name did I give my duo partner?"],
+            script: vec![text_turn("Kestrel.")],
+            finish: "Kestrel.",
+            history_turns: 20,
+            facts: vec![FACT_HISTORY],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        Scenario {
+            name: "three-turns",
+            prompts: vec![
+                "Read my notes.",
+                "Thanks. What does a frame cap do?",
+                "And where is my save folder again?",
+            ],
+            script: vec![
+                read("t1", "notes.txt"),
+                text_turn("Your notes name the save folder."),
+                text_turn("It holds the game a few fps under refresh so frame times stay even."),
+                text_turn("D:/Loadout/saves."),
+            ],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        Scenario {
+            // LO-45: a chat that opens as small talk, then asks for a file.
+            name: "chat-then-code",
+            prompts: vec!["hi there", "Read my notes."],
+            script: vec![
+                text_turn("Hey! What's up?"),
+                read("cc1", "notes.txt"),
+                text_turn("Your notes name the save folder."),
+            ],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+        re_reads("re-reads", false),
+        re_reads("re-reads (trim off)", true),
+        tool_errors("tool-errors", false),
+        tool_errors("tool-errors (steady)", true),
+        // KB-04: the Workboard costs a normal turn nothing; a resume pays once.
+        kanban("kanban_off", Board::Off, "kanban-1"),
+        kanban("kanban_idle_on", Board::Idle, "kanban-2"),
+        kanban("kanban_resume", Board::Resume, "kanban-3"),
+        // LO-43: a plain read-only ask runs its tool with no model request.
+        Scenario {
+            name: "instant",
+            prompts: vec!["list my skills"],
+            script: vec![],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![],
+            context_tokens: None,
+            trim_off: false,
+            steady: false,
+            board: Board::Off,
+            session: "",
+        },
+    ]
+}
+
+/// The engine the chat tab runs: the real system prompt and the app's
+/// unlimited step budget, so a runaway shows up as it would for a user.
+fn bench_engine(ws: &Path, id: &str, client: Arc<dyn ModelClient + Send + Sync>) -> NativeEngine {
+    let stable = grokhub_core::cabin_rules::cabin_static_rules(false);
+    NativeEngine::new(EngineParts {
+        client,
+        workspace: ws.to_path_buf(),
+        model: "grok-4.7".into(),
+        effort: Some("high".into()),
+        system: crate::system_prompt_parts(&stable, "", ws),
+        conversation_id: format!("bench-{id}"),
+        auth_kind: AuthKind::ApiKey,
+        max_turns: 0,
+        cancel: CancelToken::new(),
+        steer: SteerQueue::new(),
+        halt: Box::new(NoHalt),
+        gate: Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: false,
+            desktop: false,
+        },
+        desktop: None,
+        permits: Arc::new(ClosedPermits),
+    })
+}
+
+/// Run every scenario and return one row each.
+pub fn run_bench() -> Vec<BenchRow> {
+    run_scenarios(|_| true)
+}
+
+/// Run the scenarios whose name `keep` takes, in order, one row each.
+fn run_scenarios(keep: impl Fn(&str) -> bool) -> Vec<BenchRow> {
+    let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
+    let mut rows = Vec::new();
+    for sc in scenarios().into_iter().filter(|sc| keep(sc.name)) {
+        let Some(dir) = scratch(&format!("eff-{}", sc.name)) else {
+            continue;
+        };
+        let _cfg = ConfigGuard::set(dir.join("cfg"));
+        let ws = dir.join("ws");
+        seed_workspace(&ws);
+        if sc.facts.contains(&FACT_LOG) {
+            seed_big_log(&ws);
+        }
+        if sc.trim_off {
+            let _ = std::fs::create_dir_all(dir.join("cfg"));
+            let _ = std::fs::write(
+                dir.join("cfg").join(crate::compact::HISTORY_TRIM_CONFIG),
+                "enabled = false\n",
+            );
+        }
+        if sc.steady {
+            let _ = std::fs::create_dir_all(dir.join("cfg"));
+            let _ = std::fs::write(
+                dir.join("cfg").join("app.json"),
+                "{\"steadyEffort\": true}\n",
+            );
+        }
+        let rec = Arc::new(Recorder::new(sc.script, sc.finish));
+        let shared: Arc<dyn ModelClient + Send + Sync> = rec.clone();
+        let id = if sc.session.is_empty() {
+            sc.name
+        } else {
+            sc.session
+        };
+        let mut engine = bench_engine(&ws, id, shared);
+        if let Some(tokens) = sc.context_tokens {
+            engine.set_context_length(tokens);
+        }
+        if sc.history_turns > 0 {
+            let system = crate::system_prompt_parts(
+                &grokhub_core::cabin_rules::cabin_static_rules(false),
+                "",
+                &ws,
+            );
+            engine.resume(history_turns(sc.history_turns, &system), Usage::default());
+        }
+        let mut resume = None;
+        if sc.board != Board::Off {
+            seed_board(&dir.join("cfg"));
+        }
+        if sc.board == Board::Resume {
+            resume = Some(board_resume_block(&dir.join("cfg")));
+        }
+        let start = Instant::now();
+        for (i, prompt) in sc.prompts.iter().enumerate() {
+            // KB-03: the block rides in the resume turn's input only, as the
+            // app's `kick_model` sends it; later turns carry nothing new.
+            let ask = match resume.as_deref().filter(|_| i == 0) {
+                Some(block) => grokhub_core::skill::apply_skill_follow(prompt, Some(block)),
+                None => prompt.to_string(),
+            };
+            let _ = engine.prompt(&ask, None, &mut |_| {});
+        }
+        let wall = start.elapsed().as_millis();
+        let bodies = rec.bodies();
+        if let Some(out) = std::env::var_os("GROKHUB_BENCH_DUMP") {
+            let out = Path::new(&out);
+            let _ = std::fs::create_dir_all(out);
+            let _ = std::fs::write(
+                out.join(format!("{}.json", sc.name)),
+                serde_json::to_string_pretty(&bodies).unwrap_or_default(),
+            );
+        }
+        rows.push(row_from(sc.name, &bodies, &sc.facts, wall));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    rows
+}
+
+/// Markdown table of [`run_bench`] rows.
+pub fn render_bench(rows: &[BenchRow]) -> String {
+    let mut out = String::from(
+        "| scenario | requests | 1st sys B | 1st tools B | 1st history B | 1st total B | all requests B | est tokens | stable prefix % | recall | wall ms | peak RSS so far KB | effort per request |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+    );
+    for r in rows {
+        out.push_str(&format!(
+            "| {} | {}{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            r.scenario,
+            r.requests,
+            if r.capped { " (hit cap)" } else { "" },
+            r.first_system_bytes,
+            r.first_tools_bytes,
+            r.first_history_bytes,
+            r.first_total_bytes,
+            r.total_bytes,
+            r.est_tokens_total,
+            r.stable_prefix_pct,
+            if r.recall_ok { "ok" } else { "LOST" },
+            r.wall_ms,
+            r.peak_rss_kb,
+            r.efforts.join(" ")
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_measures_every_scenario_and_keeps_planted_facts() {
+        let rows = run_bench();
+        let names: Vec<&str> = rows.iter().map(|r| r.scenario).collect();
+        assert_eq!(
+            names,
+            [
+                "chat",
+                "tools",
+                "diagnostics",
+                "long-chat",
+                "three-turns",
+                "chat-then-code",
+                "re-reads",
+                "re-reads (trim off)",
+                "tool-errors",
+                "tool-errors (steady)",
+                "kanban_off",
+                "kanban_idle_on",
+                "kanban_resume",
+                "instant"
+            ]
+        );
+        let (instant, rows) = rows.split_last().expect("rows");
+        assert_eq!(instant.requests, 0, "{instant:?}");
+        assert_eq!(instant.total_bytes, 0, "{instant:?}");
+        assert_eq!(instant.first_total_bytes, 0, "{instant:?}");
+        for r in rows {
+            assert!(r.requests >= 1, "{r:?}");
+            assert!(r.first_tools_bytes > 0 && r.first_system_bytes > 0, "{r:?}");
+            assert!(r.recall_ok, "a planted fact fell out: {r:?}");
+        }
+        let row = |name: &str| rows.iter().find(|r| r.scenario == name).unwrap();
+        // LO-45: small talk opens on the lighter Talk list; work asks don't.
+        let talk = row("chat-then-code");
+        assert!(
+            talk.first_tools_bytes < row("tools").first_tools_bytes,
+            "{talk:?}"
+        );
+        assert_eq!(
+            talk.requests, 4,
+            "one load, then the scripted read: {talk:?}"
+        );
+        // Dropping the two older log reads sends fewer bytes in the same requests.
+        let trimmed = row("re-reads");
+        let control = row("re-reads (trim off)");
+        assert_eq!(trimmed.requests, control.requests);
+        assert!(
+            trimmed.total_bytes < control.total_bytes,
+            "{trimmed:?} vs {control:?}"
+        );
+        // LO-37: off, each failed read lifts effort; Steady holds chat at high.
+        let climbs = row("tool-errors");
+        let steady = row("tool-errors (steady)");
+        assert_eq!(climbs.requests, steady.requests);
+        assert_eq!(
+            climbs.efforts[..5],
+            ["high", "xhigh", "xhigh", "xhigh", "xhigh"],
+            "{climbs:?}"
+        );
+        assert_eq!(
+            steady.efforts[..5],
+            ["high", "high", "high", "high", "high"],
+            "{steady:?}"
+        );
+        let table = render_bench(rows);
+        assert!(table.contains("| diagnostics |"), "{table}");
+        assert!(
+            table.contains("| high xhigh xhigh xhigh xhigh "),
+            "effort per request: {table}"
+        );
+        assert!(
+            render_bench(std::slice::from_ref(instant)).contains("| instant | 0 |"),
+            "{table}"
+        );
+        for name in ["kanban_off", "kanban_idle_on", "kanban_resume"] {
+            assert!(table.contains(&format!("| {name} | 2 |")), "{table}");
+        }
+    }
+
+    /// First-request system prompt bytes on every row before KB-04.
+    const SYSTEM_BYTES_BEFORE_KB04: usize = 10_943;
+
+    /// KB-04: the token gate for the Workboard. A board full of cards costs a
+    /// normal turn 0 bytes; a resume turn pays one capped note, in its input,
+    /// once; the request after it adds nothing new.
+    #[test]
+    fn kanban_board_costs_a_normal_turn_nothing_and_a_resume_once() {
+        use grokhub_core::work_resume::RESUME_BLOCK_MAX;
+        let sessions: Vec<&str> = scenarios()
+            .iter()
+            .filter(|s| s.name.starts_with("kanban_"))
+            .map(|s| s.session)
+            .collect();
+        assert_eq!(sessions, ["kanban-1", "kanban-2", "kanban-3"]);
+        for s in sessions {
+            assert!(
+                !crate::route::guard::in_holdout(&format!("bench-{s}")),
+                "{s}: every kanban row must route outside the effort holdout"
+            );
+        }
+        let rows = run_scenarios(|n| n.starts_with("kanban_"));
+        let row = |name: &str| rows.iter().find(|r| r.scenario == name).unwrap().clone();
+        let off = row("kanban_off");
+        let idle = row("kanban_idle_on");
+        let resume = row("kanban_resume");
+        assert_eq!(off.requests, 2, "{off:?}");
+
+        // Cards on the board, none active: byte for byte the board-off row.
+        assert_eq!(idle.first_system_bytes, off.first_system_bytes);
+        assert_eq!(idle.first_tools_bytes, off.first_tools_bytes);
+        assert_eq!(idle.total_bytes, off.total_bytes);
+        assert_eq!(idle.request_bytes, off.request_bytes, "0 B per turn");
+        assert_eq!(idle.stable_prefix_pct, off.stable_prefix_pct);
+
+        // The board sentence (156 B) left the cabin rules: the system prompt
+        // was 10,943 B before KB-04.
+        assert!(
+            off.first_system_bytes <= SYSTEM_BYTES_BEFORE_KB04 - 156,
+            "{} system bytes",
+            off.first_system_bytes
+        );
+
+        // Nothing about the board in the system prompt or the tool list.
+        assert_eq!(resume.requests, off.requests);
+        assert_eq!(resume.first_system_bytes, off.first_system_bytes);
+        assert_eq!(resume.first_tools_bytes, off.first_tools_bytes);
+        assert_eq!(resume.stable_prefix_pct, off.stable_prefix_pct);
+        // The resume turn: at most the block's cap, about 300 tokens.
+        let added = resume.request_bytes[0] - off.request_bytes[0];
+        assert!(added > 0, "the resume turn carries its note");
+        assert!(added <= RESUME_BLOCK_MAX, "{added} B on the resume turn");
+        assert!(
+            crate::tokens::estimate_token_bytes(added as u64) <= 300,
+            "{added} B"
+        );
+        assert_eq!(resume.first_history_bytes - off.first_history_bytes, added);
+        // The next request re-reads that turn from the cached head and adds
+        // nothing a cache has not seen.
+        assert_eq!(resume.fresh_bytes[1], off.fresh_bytes[1]);
+        assert_eq!(
+            resume.request_bytes[1] - off.request_bytes[1],
+            added,
+            "the follow-up sends no second note"
+        );
+    }
+
+    #[test]
+    fn prefix_share_and_recall_math() {
+        let a = json!({"tools": [1], "input": [{"role": "system", "c": "x"}]});
+        let b = json!({"tools": [1], "input": [{"role": "system", "c": "x"}, {"role": "user", "c": "FACT"}]});
+        let row = row_from("t", &[a, b], &["FACT"], 1);
+        assert_eq!(row.requests, 2);
+        assert!(row.stable_prefix_pct >= 90, "{row:?}");
+        assert!(row.recall_ok);
+        let lost = row_from("t", &[json!({"input": []})], &["FACT"], 1);
+        assert!(!lost.recall_ok);
+    }
+}

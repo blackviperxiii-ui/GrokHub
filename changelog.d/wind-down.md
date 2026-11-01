@@ -1,1 +1,0 @@
-- Late-night wind-down (opt-in, Settings → Behavior): well past your usual wind-down or after an hour idle with nothing running, one Pulse card a night offers to sleep the PC. It never shows during a game, a fullscreen app, a render, a download or an agent task, and the PC only sleeps after you confirm.

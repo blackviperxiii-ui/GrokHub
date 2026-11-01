@@ -36,22 +36,22 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
     let live = gate.enabled && !gate.halted;
     // The game guard answers first: a held call reads no window, parks no
     // card and reaches no backend.
-    if let Some(c) = call.as_ref().filter(|_| live) {
-        if let Some(msg) = server.guard_refusal(&c.tool) {
-            write_span(
-                dir,
-                c,
-                false,
-                &msg,
-                access_now(dir, gate.enabled),
-                None,
-                None,
-            );
-            return RpcOutcome {
-                reply: Some(refusal_reply(&c.id, &msg)),
-                exit: false,
-            };
-        }
+    if let Some(c) = call.as_ref().filter(|_| live)
+        && let Some(msg) = server.guard_refusal(&c.tool)
+    {
+        write_span(
+            dir,
+            c,
+            false,
+            &msg,
+            access_now(dir, gate.enabled),
+            None,
+            None,
+        );
+        return RpcOutcome {
+            reply: Some(refusal_reply(&c.id, &msg)),
+            exit: false,
+        };
     }
     let mut parked = None;
     if let Some(c) = call.as_mut() {
@@ -134,10 +134,10 @@ pub(crate) fn add_hints<B: DesktopBackend>(
     if !args.is_object() {
         return;
     }
-    if hx::needs_window(tool, args) {
-        if let Ok(w) = server.backend_mut().list_windows() {
-            args["window"] = Value::String(w.active);
-        }
+    if hx::needs_window(tool, args)
+        && let Ok(w) = server.backend_mut().list_windows()
+    {
+        args["window"] = Value::String(w.active);
     }
     let at = match tool {
         "click" => args.clone(),
@@ -741,7 +741,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         let out = handle_desk_line(
             &mut s,
             &rpc("focus_window", json!({ "title": "GrokHub" })),
@@ -749,7 +749,7 @@ mod tests {
             &dir,
             &mut || false,
         );
-        assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
+        assert_eq!(reply_text(&out), *grokhub_core::desktop_mcp::OFF_MSG);
         assert!(s.backend_mut().opened.is_empty());
         assert_eq!(
             s.backend_mut().windows.active,
@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(req.class, "delete");
         assert_eq!(
             req.action,
-            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the cabin can't see which)"
+            "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the app can't see which)"
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(
@@ -1089,7 +1089,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1124,7 +1124,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click Pay in org.shop Checkout — Shop"
+                "Loadout wants to click Pay in org.shop Checkout — Shop"
             )
         );
         assert!(
@@ -1140,7 +1140,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "send",
-                "Grok wants to click Send in org.shop Checkout — Shop"
+                "Loadout wants to click Send in org.shop Checkout — Shop"
             )
         );
         assert_eq!(
@@ -1229,7 +1229,7 @@ mod tests {
             (req.class.as_str(), req.action.as_str()),
             (
                 "money",
-                "Grok wants to click an unlabeled control in org.shop Checkout — Shop"
+                "Loadout wants to click an unlabeled control in org.shop Checkout — Shop"
             )
         );
         assert!(

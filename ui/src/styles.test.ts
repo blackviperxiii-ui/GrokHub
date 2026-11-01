@@ -5,9 +5,58 @@ import RAW_CSS from "./styles.css?raw";
 // below are matched with LF.
 const CSS = RAW_CSS.replace(/\r\n/g, "\n");
 
-// Error text (`--danger-text`) must read at WCAG AA (4.5:1) on every
-// theme's page (`--bg`) and card (`--panel`) backgrounds. `--danger` stays for
-// borders and fills, which only need 3:1.
+/** The body of every top-level `@media` block whose query is exactly `query`. */
+function mediaBlocks(sheet: string, query: string): string[] {
+  const text = sheet.replace(/\/\*[\s\S]*?\*\//g, "");
+  const out: string[] = [];
+  let from = text.indexOf(`@media ${query} {`);
+  while (from >= 0) {
+    const open = text.indexOf("{", from);
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) {
+        out.push(text.slice(open + 1, i));
+        break;
+      }
+    }
+    from = text.indexOf(`@media ${query} {`, open);
+  }
+  return out;
+}
+
+/** `selector { … }` inside `block`, normalised to one line, or "" if absent. */
+function rule(block: string, selector: string): string {
+  const at = block.indexOf(selector);
+  if (at < 0) return "";
+  return block
+    .slice(at, block.indexOf("}", at) + 1)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+describe("styles.css view transitions", () => {
+  it("eases cards' view transitions over 150ms", () => {
+    expect(
+      rule(CSS, "::view-transition-group(*),\n::view-transition-old(*),\n::view-transition-new(*) {"),
+    ).toBe(
+      "::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 150ms; animation-timing-function: var(--ease-out); }",
+    );
+  });
+
+  it("turns them off for reduced motion", () => {
+    const reduced = mediaBlocks(CSS, "(prefers-reduced-motion: reduce)").find((b) =>
+      b.includes("::view-transition-group(*)"),
+    );
+    expect(rule(reduced ?? "", "::view-transition-group(*)")).toBe(
+      "::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }",
+    );
+  });
+});
+
+// The OS-dark default (`prefers-color-scheme: dark` with no theme picked) has
+// its own copy of the Ops Dark colours, which contrast.test.ts doesn't read
+// (it skips @media blocks); it must not drift from the theme.
 
 /** The `--name: value;` pairs declared in the last block whose selector list is `selector`. */
 function block(selector: string): Record<string, string> {
@@ -21,7 +70,7 @@ function block(selector: string): Record<string, string> {
 
 const PALETTE = block(':root,\n:root[data-theme="dark"],\n:root[data-theme="ops-dark"]');
 
-/** A hex colour, following `var(--x)` through the Ops palette. */
+/** A colour, following `var(--x)` through the Ops palette. */
 function resolve(vars: Record<string, string>, name: string): string {
   const value = vars[name] ?? PALETTE[name];
   if (!value) throw new Error(`${name} is not defined`);
@@ -29,57 +78,12 @@ function resolve(vars: Record<string, string>, name: string): string {
   return ref ? resolve(vars, ref[1]) : value;
 }
 
-function luminance(hex: string): number {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!m) throw new Error(`${hex} is not a 6-digit hex colour`);
-  const [r, g, b] = [0, 2, 4].map((i) => {
-    const c = Number.parseInt(m[1].slice(i, i + 2), 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-/** WCAG contrast ratio, to one decimal. */
-function contrast(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 10) / 10;
-}
-
-const THEMES: Record<string, string> = {
-  light: ":root",
-  "ops-dark": ':root[data-theme="dark"],\n:root[data-theme="ops-dark"]',
-  "oled-black": ':root[data-theme="oled-black"]',
-  "soft-charcoal": ':root[data-theme="soft-charcoal"]',
-};
-
-describe("styles.css error text contrast", () => {
-  it("every theme's --danger-text reads at 4.5:1 or better on --bg and --panel", () => {
-    const seen: Record<string, [number, number]> = {};
-    for (const [theme, selector] of Object.entries(THEMES)) {
-      const vars = block(selector);
-      const text = resolve(vars, "--danger-text");
-      seen[theme] = [contrast(text, resolve(vars, "--bg")), contrast(text, resolve(vars, "--panel"))];
-      for (const ratio of seen[theme]) expect(ratio, theme).toBeGreaterThanOrEqual(4.5);
-    }
-    expect(seen).toEqual({
-      light: [6.8, 7.4],
-      "ops-dark": [7.2, 6.8],
-      "oled-black": [7.6, 7.4],
-      "soft-charcoal": [6.5, 6.1],
-    });
-  });
-
-  it("the OS-dark fallback matches the Ops Dark theme", () => {
+describe("styles.css OS-dark fallback", () => {
+  it("matches the Ops Dark theme", () => {
     const fallback = block(':root:not([data-theme="light"])');
-    const ops = block(THEMES["ops-dark"]);
-    for (const name of ["--bg", "--panel", "--danger", "--danger-text"]) {
+    const ops = block(':root[data-theme="dark"],\n:root[data-theme="ops-dark"]');
+    for (const name of ["--bg", "--panel", "--text", "--muted", "--danger", "--danger-text"]) {
       expect(resolve(fallback, name), name).toBe(resolve(ops, name));
     }
-  });
-
-  it("contrast() follows WCAG 2 (black on white is 21:1)", () => {
-    expect(contrast("#000000", "#ffffff")).toBe(21);
-    // The old error text: `--danger` on the Ops Dark page misses AA.
-    expect(contrast("#d7263d", "#0b0b0d")).toBe(4);
   });
 });

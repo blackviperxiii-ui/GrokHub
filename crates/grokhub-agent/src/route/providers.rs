@@ -625,34 +625,37 @@ pub trait ProviderTransport: Send + Sync {
 /// The real wire. Every call reaches it only after [`guard_provider`].
 pub struct UreqTransport;
 
-fn agent() -> ureq::Agent {
+fn agent() -> grokhub_core::http::Agent {
     // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
-    // on the target (same as web_fetch / Pulse).
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(20))
-        .timeout(Duration::from_secs(600))
-        .redirects(0)
-        .resolver(crate::public_only_resolve)
-        .build()
+    // on the target (same as web_fetch / Pulse). `public_only` never reads it.
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(20),
+        overall: Some(Duration::from_secs(600)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
-fn reply(r: Result<ureq::Response, ureq::Error>) -> Result<HttpReply, String> {
+/// Every request is sent with `any_status`, so a 4xx/5xx comes back as an answer.
+fn reply(
+    r: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
+) -> Result<HttpReply, String> {
     let resp = match r {
-        Ok(resp) => {
+        Ok(resp) if resp.status() < 400 => {
             grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
             resp
         }
-        Err(ureq::Error::Status(code, resp)) => {
+        Ok(resp) => {
             grokhub_core::connectivity::note_global_transport_hint(
-                grokhub_core::connectivity::classify_http_status(code),
+                grokhub_core::connectivity::classify_http_status(resp.status()),
                 grokhub_core::now_ms(),
             );
             resp
         }
-        Err(ureq::Error::Transport(t)) => {
-            let msg = t.to_string();
-            super::connectivity::note_ureq_transport(&ureq::Error::Transport(t));
-            return Err(msg);
+        Err(err) => {
+            super::connectivity::note_http_transport(&err);
+            return Err(err.to_string());
         }
     };
     let status = resp.status();
@@ -666,9 +669,9 @@ fn reply(r: Result<ureq::Response, ureq::Error>) -> Result<HttpReply, String> {
 
 impl ProviderTransport for UreqTransport {
     fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String> {
-        let mut req = agent().get(url);
+        let mut req = agent().get(url).any_status();
         for (k, v) in headers {
-            req = req.set(k, v);
+            req = req.header(k, v);
         }
         reply(req.call())
     }
@@ -689,12 +692,12 @@ impl ProviderTransport for UreqTransport {
         body: &str,
         limit: Option<Duration>,
     ) -> Result<HttpReply, String> {
-        let mut req = agent().post(url);
+        let mut req = agent().post(url).any_status();
         if let Some(limit) = limit {
             req = req.timeout(limit);
         }
         for (k, v) in headers {
-            req = req.set(k, v);
+            req = req.header(k, v);
         }
         reply(req.send_string(body))
     }
@@ -871,6 +874,8 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
             InputItem::FunctionCallOutput { call_id, output } => {
                 messages.push(json!({"role": "tool", "tool_call_id": call_id, "content": output}));
             }
+            // An xAI compaction item only xAI can read.
+            InputItem::ServerCompaction { .. } => {}
         }
     }
     let mut body = json!({"model": model, "stream": false, "messages": messages});
@@ -964,6 +969,8 @@ pub fn anthropic_body(
                     json!({"type": "tool_result", "tool_use_id": call_id, "content": output}),
                 );
             }
+            // An xAI compaction item only xAI can read.
+            InputItem::ServerCompaction { .. } => {}
         }
     }
     let max_tokens = max_output

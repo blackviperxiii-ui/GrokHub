@@ -1,7 +1,17 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { DELETE_ASK_QUESTION, DELETE_MESSAGE_LABEL, DELETE_REPLY_QUESTION, MESSAGE_MENU_LABEL } from "./DeleteMessage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Answer, Approvals, ChatEnvelope, ChatEvent, ElicitAction, SessionMode, Settings } from "./api";
+import type {
+  Answer,
+  Approvals,
+  ChatEnvelope,
+  ChatEvent,
+  ElicitAction,
+  SessionMode,
+  Settings,
+  Transcript,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
@@ -19,6 +29,15 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  deleteChat: vi.fn<(id: string) => Promise<void>>(),
+  forgetMessage:
+    vi.fn<(id: string, cut: { reply: boolean; text: string | null; later: number }) => Promise<boolean>>(),
+  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
+  setModel: vi.fn<(id: string) => Promise<Settings>>(),
+  listModels: vi.fn(),
+  slashHits: vi.fn(() => Promise.resolve([])),
+  runSlash: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -29,6 +48,14 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  deleteChat: api.deleteChat,
+  forgetMessage: api.forgetMessage,
+  getLastChat: api.getLastChat,
+  loadChat: api.loadChat,
+  setModel: api.setModel,
+  listModels: api.listModels,
+  slashHits: api.slashHits,
+  runSlash: api.runSlash,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -37,9 +64,39 @@ vi.mock("./api", () => ({
     api.gap = handler;
     return Promise.resolve(() => {});
   },
+  // Push to talk has its own tests (Mic.test.tsx).
+  transcribe: vi.fn(),
+  // Attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
-import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
+import {
+  applyEvent,
+  Chat,
+  CHAT_EMPTY,
+  EARLIER_STEP,
+  EVENTS_LOST,
+  HALTED_LINE,
+  itemsFrom,
+  MISSION_BUSY,
+  OPEN_BUSY,
+  type Item,
+} from "./Chat";
+
+const SAVED: Transcript = {
+  id: "shell-saved",
+  title: "paint colours",
+  lines: [
+    { role: "user", text: "pick a paint colour" },
+    { role: "tools", text: "read_file, web_search" },
+    { role: "assistant", text: "Try **blue**." },
+  ],
+  earlier: 0,
+};
 
 const SETTINGS: Settings = {
   model: "grok-4.7",
@@ -51,6 +108,8 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
 };
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
@@ -81,9 +140,11 @@ describe("Chat", () => {
       api.closeChat,
       api.answerElicit,
       api.saveSettings,
+      api.loadChat,
     ]) {
       fn.mockReset();
     }
+    api.getLastChat.mockReset().mockResolvedValue(null);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.handler = null;
     api.gap = null;
@@ -248,12 +309,32 @@ describe("Chat", () => {
     emit("someone-else", { kind: "text", text: "nope" });
     emit(id, { kind: "text", text: "Hi from " });
     emit(id, { kind: "text", text: "Grok" });
-    expect(screen.getByText("Hi from Grok")).toHaveClass("streaming");
+    // The reply renders as Markdown, so its text sits in a paragraph inside the bubble.
+    const bubble = () => screen.getByText("Hi from Grok").closest(".bubble");
+    expect(bubble()).toHaveClass("streaming");
     expect(screen.queryByText(/nope/)).toBeNull();
 
     finish();
-    await waitFor(() => expect(screen.getByText("Hi from Grok")).not.toHaveClass("streaming"));
-    expect(screen.getByText("Hi from Grok")).toHaveAttribute("data-role", "assistant");
+    await waitFor(() => expect(bubble()).not.toHaveClass("streaming"));
+    expect(bubble()).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("renders the reply as Markdown and keeps the person's message plain", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("**mine** <b>x</b>");
+    emit(id, { kind: "text", text: "## Plan\n- **one**\n<script>alert(1)</script>" });
+    finish();
+    const reply = await screen.findByRole("heading", { level: 2, name: "Plan" });
+    const bubble = reply.closest(".bubble")!;
+    expect(bubble).toHaveAttribute("data-role", "assistant");
+    expect(within(bubble as HTMLElement).getByRole("listitem")).toHaveTextContent("one");
+    expect(bubble.querySelector("strong")).toHaveTextContent("one");
+    expect(bubble.querySelector("script")).toBeNull();
+    expect(within(bubble as HTMLElement).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    const mine = screen.getByText("**mine** <b>x</b>");
+    expect(mine).toHaveAttribute("data-role", "user");
+    expect(mine.querySelector("strong, b")).toBeNull();
   });
 
   it("shows a permission card and Allow once answers it", async () => {
@@ -312,6 +393,78 @@ describe("Chat", () => {
     expect(await screen.findByText("Not run: the turn ended")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("Halt retires every waiting card as halted and says so once", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "d", title: "type", action: "hello", reason: "" });
+    emit(id, {
+      kind: "elicit",
+      id: "ask-h",
+      server: "Question",
+      message: "Which window?",
+      mode: "form",
+      url: "",
+      fieldName: "answer",
+      fieldTitle: "Your answer",
+      secret: false,
+    });
+    emit(id, { kind: "done", stop: "halted" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText("Not answered: halted.")).toBeInTheDocument();
+    expect(screen.getAllByText(HALTED_LINE)).toHaveLength(1);
+    expect(screen.getByText(HALTED_LINE)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("a turn that comes back halted settles its cards even if the done event was missed", async () => {
+    let finish: (stop: string) => void = () => {};
+    api.sendChat.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("type it");
+
+    emit(id, { kind: "permission", id: "e", title: "type", action: "hi", reason: "" });
+    await act(async () => finish("halted"));
+
+    expect(screen.getByText("Not run: halted")).toBeInTheDocument();
+    expect(screen.getByText(HALTED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Not run: the turn ended")).toBeNull();
+  });
+
+  it("a Deny from a notification shows on its card", async () => {
+    holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write both");
+
+    emit(id, { kind: "permission", id: "n1", title: "write", action: "n.txt", reason: "" });
+    emit(id, { kind: "permission", id: "n2", title: "edit", action: "m.txt", reason: "" });
+    emit(id, { kind: "answered", id: "n1", answer: "deny" });
+
+    expect(screen.getByRole("group", { name: "Approve write" })).toHaveTextContent("Denied");
+    const other = screen.getByRole("group", { name: "Approve edit" });
+    expect(other).not.toHaveTextContent("Denied");
+    expect(screen.getAllByRole("button", { name: "Allow once" })).toHaveLength(1);
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
+  it("an answer that comes after the turn ended leaves the card ended", () => {
+    const ended: Item[] = [
+      { kind: "permission", id: "a", title: "write", action: "", reason: "", answer: "ended" },
+      { kind: "permission", id: "b", title: "write", action: "", reason: "", answer: "allow" },
+    ];
+    expect(applyEvent(ended, { kind: "answered", id: "a", answer: "deny" })).toEqual(ended);
+    const halted: Item[] = [{ kind: "permission", id: "h", title: "type", action: "", reason: "", answer: "halted" }];
+    expect(applyEvent(halted, { kind: "answered", id: "h", answer: "deny" })).toEqual(halted);
+    expect(applyEvent(ended, { kind: "answered", id: "b", answer: "deny" })[1]).toMatchObject({
+      answer: "deny",
+    });
   });
 
   it("Stop cancels the turn in flight", async () => {
@@ -472,13 +625,13 @@ describe("applyEvent", () => {
       fieldTitle: "",
       secret: false,
     });
-    const card = screen.getByRole("group", { name: "Grok's plan" });
+    const card = screen.getByRole("group", { name: "The plan" });
     expect(card).toHaveTextContent("1. Read build.rs");
     expect(screen.getAllByText("1. Read build.rs")).toHaveLength(1);
     expect(screen.queryByText("…")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", null, "");
-    expect(card).toHaveTextContent("Approved. Grok can make the changes now.");
+    expect(card).toHaveTextContent("Approved. Loadout can make the changes now.");
     finish();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"),
@@ -505,7 +658,7 @@ describe("applyEvent", () => {
     expect(send).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Your answer"), "blue{Enter}");
     expect(api.answerElicit).toHaveBeenCalledWith(id, "ask-1", "accept", "answer", "blue");
-    expect(screen.getByRole("group", { name: "Grok asks" })).toHaveTextContent("Sent.");
+    expect(screen.getByRole("group", { name: "Loadout asks" })).toHaveTextContent("Sent.");
     emit(id, ask(2));
     finish();
     await waitFor(() =>
@@ -527,19 +680,228 @@ describe("applyEvent", () => {
         "Add your API key" +
         "No key yet? Make one at console.x.ai.",
     );
-    expect(screen.queryByText("Ask Grok anything.")).toBeNull();
+    expect(screen.queryByText("Ask Loadout anything.")).toBeNull();
     await userEvent.click(within(card).getByRole("button", { name: "Add your API key" }));
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it("signed out on the web app, it says to add the key on the computer", async () => {
+  it("where Grok sign-in is offered, the card leads with it, and a sign-in hides the card", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
+    const onSignIn = vi.fn();
+    const { unmount } = render(<Chat onOpenSettings={() => {}} onSignIn={onSignIn} grokSignIn />);
+    const card = await screen.findByRole("region", { name: "Sign in" });
+    expect(card).toHaveTextContent("Sign in with your Grok account, or add an xAI API key.");
+    await userEvent.click(within(card).getByRole("button", { name: "Sign in with Grok" }));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    unmount();
+    api.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      hasApiKey: false,
+      signedIn: { name: "Sam", email: null },
+    });
+    render(<Chat onOpenSettings={() => {}} grokSignIn />);
+    expect(await screen.findByText(CHAT_EMPTY)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+
+  it("signed out on the web app, it says to sign in on the computer", async () => {
     api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
     render(<Chat onOpenSettings={() => {}} remote />);
     expect(
       await screen.findByText(
-        "Loadout on your computer has no API key yet. Add one there, then chat here.",
+        "Loadout on your computer isn't signed in yet. Sign in there, then chat here.",
       ),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+});
+
+describe("Chat history", () => {
+  beforeEach(() => {
+    for (const fn of [api.sendChat, api.closeChat, api.cancelChat, api.loadChat]) fn.mockReset();
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.handler = null;
+  });
+
+  it("turns a saved chat's lines into bubbles and one muted tools line", () => {
+    expect(itemsFrom(SAVED)).toEqual([
+      { kind: "user", text: "pick a paint colour" },
+      { kind: "tools", text: "read_file, web_search" },
+      { kind: "assistant", text: "Try **blue**.", streaming: false },
+    ]);
+  });
+
+  it("reopens the last chat on mount, and the next message carries it on", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    expect(await screen.findByText("pick a paint colour")).toHaveAttribute("data-role", "user");
+    expect(screen.getByText("Tools ran: read_file, web_search")).toHaveAttribute("data-role", "tools");
+    expect(screen.getByText("blue").closest("[data-role]")).toHaveAttribute("data-role", "assistant");
+    await startTurn("and the trim?");
+    expect(api.sendChat).toHaveBeenLastCalledWith("shell-saved", "and the trim?", "chat");
+  });
+
+  it("the web app never asks for the desktop's last chat", async () => {
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(api.getLastChat).not.toHaveBeenCalled();
+  });
+
+  it("a last chat that arrives after the person started typing away stays out", async () => {
+    let arrive: (t: Transcript) => void = () => {};
+    api.getLastChat.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fresh question");
+    await act(async () => arrive(SAVED));
+    expect(screen.queryByText("pick a paint colour")).toBeNull();
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("a chat opened from History replaces the open one, which stays saved", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.loadChat.mockResolvedValue(SAVED);
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const first = await startTurn("hello");
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("pick a paint colour")).toBeVisible();
+    expect(api.closeChat).toHaveBeenCalledWith(first);
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved");
+    expect(screen.queryByText("hello")).toBeNull();
+
+    // Picking the chat that is already open does nothing.
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 2 }} />);
+    expect(api.loadChat).toHaveBeenCalledTimes(1);
+    expect(api.closeChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("opening a chat waits for a running reply", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(screen.getByText(OPEN_BUSY)).toBeVisible();
+    expect(api.loadChat).not.toHaveBeenCalled();
+    expect(api.closeChat).not.toHaveBeenCalled();
+    finish();
+  });
+
+  it("deleting the open chat in History starts a new one; another chat's delete changes nothing", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-other", n: 1 }} />);
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+    rerender(<Chat onOpenSettings={() => {}} deleted={{ id: "shell-saved", n: 2 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat deletes the open chat's saved history and starts a new one", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockResolvedValue();
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("pick a paint colour")).toBeNull());
+    expect(api.deleteChat).toHaveBeenCalledWith("shell-saved");
+    const id = await startTurn("new start");
+    expect(id).not.toBe("shell-saved");
+  });
+
+  it("Clear chat keeps the chat on screen when the delete fails", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.deleteChat.mockRejectedValue("disk is read-only");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByText("pick a paint colour");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    expect(await screen.findByText(/disk is read-only/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a bubble's ··· deletes that message after asking, and a reply goes with its tools", async () => {
+    api.getLastChat.mockResolvedValue({
+      ...SAVED,
+      lines: [...SAVED.lines, { role: "user", text: "and the trim?" }, { role: "assistant", text: "White." }],
+    });
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    render(<Chat onOpenSettings={() => {}} />);
+    const ask = await screen.findByText("and the trim?");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    const dialog = screen.getByRole("alertdialog", { name: DELETE_ASK_QUESTION });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep" }));
+    expect(api.forgetMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("and the trim?")).toBeVisible();
+
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenCalledWith("shell-saved", {
+      from: 3,
+      to: 4,
+      reply: false,
+      text: "and the trim?",
+      later: 0,
+    });
+    await waitFor(() => expect(screen.queryByText("and the trim?")).toBeNull());
+
+    // The ··· adds nothing to a bubble's text, so copying or reading it
+    // gives the message alone.
+    expect(screen.getByText("White.").closest(".bubble")?.textContent).toBe("White.");
+
+    // Right-click on a reply: the whole reply to "pick a paint colour" goes,
+    // its tools line included, now that "White." answers it too.
+    fireEvent.contextMenu(screen.getByText("White."));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    expect(screen.getByRole("alertdialog", { name: DELETE_REPLY_QUESTION })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(api.forgetMessage).toHaveBeenLastCalledWith(
+      "shell-saved",
+      expect.objectContaining({ reply: true, text: "pick a paint colour", later: 0 }),
+    );
+    await waitFor(() => expect(screen.queryByText("White.")).toBeNull());
+    expect(screen.queryByText("Tools ran: read_file, web_search")).toBeNull();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("a delete the saved chat refuses keeps the message and says why", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.forgetMessage.mockReset().mockRejectedValue("Wait for the reply to finish, then delete the message.");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText("pick a paint colour"));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/Wait for the reply to finish/)).toBeVisible();
+    expect(screen.getByText("pick a paint colour")).toBeVisible();
+  });
+
+  it("the web app offers no message menu", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} remote />);
+    await startTurn("hello from the phone");
+    expect(screen.queryByRole("button", { name: MESSAGE_MENU_LABEL })).toBeNull();
+  });
+
+  it("Show earlier loads more of a long chat's start", async () => {
+    api.getLastChat.mockResolvedValue({ ...SAVED, earlier: 5 });
+    api.loadChat.mockResolvedValue({
+      ...SAVED,
+      lines: [{ role: "user", text: "the very first ask" }, ...SAVED.lines],
+      earlier: 0,
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Show earlier messages (5)" }));
+    expect(api.loadChat).toHaveBeenCalledWith("shell-saved", 3 + EARLIER_STEP);
+    expect(await screen.findByText("the very first ask")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
   });
 });

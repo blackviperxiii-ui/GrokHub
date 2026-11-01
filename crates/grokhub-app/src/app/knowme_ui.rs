@@ -42,10 +42,7 @@ fn scan_input() -> ScanInput {
         .unwrap_or_default();
     let profile = super::local_probe::read_profile(&home);
     let gpu = profile
-        .gpus
-        .iter()
-        .find(|g| !g.integrated)
-        .or_else(|| profile.gpus.first())
+        .main_gpu()
         .map(|g| g.name.trim().to_string())
         .unwrap_or_default();
     let locale = ["LC_ALL", "LANG"]
@@ -182,7 +179,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             crate::cards::settings_note(
                 ui,
-                "What chats teach goes to USER.md (you), SOUL.md (how the cabin behaves) and MEMORY.md (what you asked it to remember).",
+                "What chats teach goes to USER.md (you), SOUL.md (how your assistant behaves) and MEMORY.md (what you asked it to remember).",
             );
             if crate::cards::ghost_pill(ui, "See and edit") {
                 self.nav = Nav::Memory;

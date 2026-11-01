@@ -6,6 +6,27 @@ use crate::ui_kit::{setting_row, SettingRowControl};
 /// Status line when an action would archive, delete, pin, or rename Main.
 pub(super) const MAIN_STAYS: &str = "Main is your permanent chat and always stays put";
 
+/// Status after a bubble's Delete message….
+pub(super) const DELETED: &str = "Message deleted";
+/// Deleted from the chat; the saved history had no copy to take out (a cabin
+/// note, or a message already folded into a summary of older ones).
+pub(super) const DELETED_NOT_SAVED: &str =
+    "Message deleted from the chat. The assistant's saved history had no copy of it";
+pub(super) const DELETE_GONE: &str = "That message is already gone";
+pub(super) const DELETE_MOVED_ON: &str = "The chat changed, so nothing was deleted. Try again";
+
+/// A chat's messages, shared with the thread row they came from.
+type Transcript = Arc<Vec<(String, String)>>;
+
+/// A cheap fingerprint of a chat's messages: Delete message… only cuts the
+/// transcript it was asked about.
+fn transcript_mark(messages: &[(String, String)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    messages.hash(&mut h);
+    h.finish()
+}
+
 impl Cabin {
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
@@ -221,8 +242,12 @@ impl Cabin {
             self.status = format!("{title} is already archived");
             return;
         }
-        self.archive_undo = Some(id.clone());
         self.status = format!("Archived {title}");
+        self.notify(
+            notices::NoticeKind::Info,
+            self.status.clone(),
+            Some(notices::NoticeAction::Unarchive(id)),
+        );
         self.persist();
     }
 
@@ -237,8 +262,12 @@ impl Cabin {
             return;
         }
         t.last_active_ms = now_ms();
-        self.archive_undo = Some(id);
         self.status = format!("Unarchived {title}");
+        self.notify(
+            notices::NoticeKind::Info,
+            self.status.clone(),
+            Some(notices::NoticeAction::Archive(id)),
+        );
         self.persist();
     }
 
@@ -259,22 +288,6 @@ impl Cabin {
         }
     }
 
-    /// Undo the last archive or unarchive toast (same chat, flip back).
-    pub(super) fn undo_archive_toast(&mut self) {
-        let Some(id) = self.archive_undo.take() else {
-            return;
-        };
-        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
-            return;
-        };
-        if threads::is_archived(&self.threads[idx]) {
-            self.unarchive_thread_at(idx);
-        } else {
-            self.archive_thread_at(idx);
-        }
-        self.archive_undo = None;
-    }
-
     /// Reply in an archived chat restores it to the main list with a quiet note.
     pub(super) fn unarchive_on_reply(&mut self) {
         let idx = self.thread_idx;
@@ -285,11 +298,12 @@ impl Cabin {
             return;
         }
         let title = t.title.clone();
+        let id = t.id.clone();
         if let Some(t) = self.threads.get_mut(idx) {
             let _ = threads::unarchive_thread(t);
             t.last_active_ms = now_ms();
         }
-        self.archive_undo = None;
+        self.notices.drop_actions_for(&id);
         self.status = format!("Restored {title} to chats");
         self.persist();
     }
@@ -554,7 +568,7 @@ impl Cabin {
         self.remember_last_chat_tab();
     }
 
-    /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
+    /// Launch and tray restore leave an empty chat draft ready behind Home.
     /// The previous transcript and pin stay on that thread in History.
     /// A reply that is still running stays on the thread that started it.
     pub(super) fn open_fresh_home(&mut self) {
@@ -847,9 +861,196 @@ impl Cabin {
         self.persist();
     }
 
+    /// Main tab's Clear chat, after its confirm. Main's transcript and every
+    /// saved history its model reads back go for good: its sessions, their
+    /// attachments, `/bg` and scheduled forks of them, and Main's copy in the
+    /// backups. Main itself stays, and so do the Workboard, memory and settings.
+    pub(super) fn clear_main_chat(&mut self) {
+        let i = self.main_thread_idx();
+        let open = self.thread_idx == i;
+        let mut halted = false;
+        if open && self.running {
+            self.halt_in_flight();
+            self.finish_hub_dispatch("Chat cleared", false);
+            halted = true;
+        }
+        let main_id = self.threads[i].id.clone();
+        self.drop_bg_runs_for(&main_id);
+        let main = &self.threads[i];
+        let mut ids = threads::sessions_deleted_with_chat(
+            main.grok_session.as_deref(),
+            &main.retired_sessions,
+        );
+        if let Some(bound) = self.acp.as_ref().map(|h| h.session_id.clone()) {
+            if ids.contains(&bound) {
+                if !halted {
+                    self.halt_in_flight();
+                }
+                self.acp = None;
+            }
+        }
+        for id in &ids {
+            let _ = grokhub_agent::delete_session(id);
+        }
+        ids.extend(grokhub_agent::delete_forks_of(&ids));
+        self.grok_sessions.retain(|s| !ids.contains(&s.id));
+        for t in &mut self.threads {
+            t.retired_sessions.retain(|s| !ids.contains(s));
+        }
+        let main = &mut self.threads[i];
+        main.messages = Arc::new(Vec::new());
+        main.goal = Default::default();
+        main.plan_body.clear();
+        // Deleted ids stay tombstoned, so Main's next turn starts a new session.
+        main.grok_session = None;
+        main.grok_cwd = None;
+        main.native_carry = false;
+        main.last_active_ms = now_ms();
+        if open {
+            self.messages = main.messages.clone();
+            self.drop_leaving_thread_chrome();
+            self.followup_step = 0;
+            self.active_skill_follow = None;
+            self.goal_step = 0;
+        }
+        threads::forget_main_history();
+        self.status = "Main chat cleared".into();
+        self.persist();
+    }
+
+    /// Chat `thread`'s messages: the open chat's live copy, or its stored row.
+    fn chat_messages_of(&self, thread: &str) -> Option<(usize, Transcript)> {
+        let idx = self.threads.iter().position(|t| t.id == thread)?;
+        let msgs = if idx == self.thread_idx && self.visible_thread_id() == thread {
+            self.messages.clone()
+        } else {
+            self.threads[idx].messages.clone()
+        };
+        Some((idx, msgs))
+    }
+
+    /// A turn is running in chat `thread`: its reply can't be cut yet.
+    fn turn_running_in(&self, thread: &str) -> bool {
+        self.running && self.chat_job_thread.as_deref() == Some(thread)
+    }
+
+    /// A bubble's Delete message… in chat `thread`, whose rows are `views`:
+    /// work out which messages it stands for and ask first.
+    pub(super) fn ask_delete_bubble_in(
+        &mut self,
+        thread: &str,
+        views: &[grokhub_core::ChatView],
+        view: usize,
+    ) {
+        if self.turn_running_in(thread) {
+            self.status = grokhub_agent::FORGET_BUSY.into();
+            return;
+        }
+        let Some((_, msgs)) = self.chat_messages_of(thread) else {
+            self.status = DELETE_GONE.into();
+            return;
+        };
+        let refs: Vec<(&str, &str)> = msgs.iter().map(|m| (m.0.as_str(), m.1.as_str())).collect();
+        let Some(cut) = grokhub_core::bubble_delete(&refs, views, view) else {
+            self.status = DELETE_GONE.into();
+            return;
+        };
+        self.confirm = Some(super::confirm::ConfirmKind::DeleteMessage {
+            thread: thread.to_string(),
+            mark: transcript_mark(&msgs),
+            cut,
+        });
+    }
+
+    /// [`Self::ask_delete_bubble_in`] for the open chat's row `view`.
+    pub(super) fn ask_delete_bubble(&mut self, view: usize) {
+        let thread = self.visible_thread_id();
+        let views = self.cached_chat_views().to_vec();
+        self.ask_delete_bubble_in(&thread, &views, view);
+    }
+
+    /// Take the bubble's messages out of the chat and out of the saved history
+    /// the model resumes from. Nothing goes if the chat changed since the ask.
+    pub(super) fn delete_bubble_confirmed(
+        &mut self,
+        thread: &str,
+        mark: u64,
+        cut: grokhub_core::BubbleDelete,
+    ) {
+        let Some((idx, msgs)) = self
+            .chat_messages_of(thread)
+            .filter(|(_, m)| transcript_mark(m) == mark)
+        else {
+            self.status = DELETE_MOVED_ON.into();
+            return;
+        };
+        if self.turn_running_in(thread) {
+            self.status = grokhub_agent::FORGET_BUSY.into();
+            return;
+        }
+        let text = |i: usize| msgs.get(i).map(|m| m.1.as_str()).unwrap_or("");
+        let (range, what) = match cut {
+            grokhub_core::BubbleDelete::Ask { at, later } => (
+                at..at + 1,
+                grokhub_agent::Forget::Ask {
+                    text: text(at),
+                    later,
+                },
+            ),
+            grokhub_core::BubbleDelete::Reply { from, to, ask } => (
+                from..to,
+                grokhub_agent::Forget::Reply {
+                    ask: ask.map(|(at, later)| (text(at), later)),
+                },
+            ),
+        };
+        if range.end > msgs.len() {
+            self.status = DELETE_MOVED_ON.into();
+            return;
+        }
+        let session = self.threads[idx]
+            .grok_session
+            .clone()
+            .filter(|id| !id.trim().is_empty());
+        let saved = match session.as_deref() {
+            Some(id) => {
+                // The engine re-reads the session file when it starts again.
+                if self.acp.as_ref().is_some_and(|h| h.session_id == id) {
+                    self.acp = None;
+                }
+                grokhub_agent::forget_message(id, what)
+            }
+            None => Ok(grokhub_agent::Forgotten::Removed),
+        };
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(err) => {
+                self.status = err;
+                return;
+            }
+        };
+        let mut left = msgs.as_ref().clone();
+        left.drain(range);
+        let left = Arc::new(left);
+        if idx == self.thread_idx && self.visible_thread_id() == thread {
+            // A cut before the tail: every cached view rebuilds.
+            self.messages_rev = self.messages_rev.wrapping_add(1);
+            self.messages_body_rev = self.messages_body_rev.wrapping_add(1);
+            self.messages = left.clone();
+        }
+        self.threads[idx].messages = left;
+        self.status = match saved {
+            grokhub_agent::Forgotten::Removed => DELETED.into(),
+            grokhub_agent::Forgotten::NotSaved => DELETED_NOT_SAVED.into(),
+        };
+        self.persist();
+    }
+
     pub(super) fn delete_all_history(&mut self) {
         let thread_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
         self.halt_in_flight();
+        // Every chat is going: stop every chat's engine and tasks, not just this one.
+        grokhub_agent::halt_all_sessions();
         for id in &thread_ids {
             self.drop_bg_runs_for(id);
         }
@@ -899,6 +1100,33 @@ impl Cabin {
         self.status = "Deleted all chats".into();
         self.stamp_current_access();
         self.persist();
+    }
+
+    /// History's "Delete all" button. The first click only arms it; a second
+    /// click within [`DELETE_ALL_ARM`] wipes every chat. Returns true when it
+    /// deleted.
+    pub(super) fn click_delete_all_history(&mut self, now: Instant) -> bool {
+        match self.history_delete_armed_at.take() {
+            Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => {
+                self.delete_all_history();
+                true
+            }
+            _ => {
+                self.history_delete_armed_at = Some(now);
+                false
+            }
+        }
+    }
+
+    /// True while "Delete all" waits for its confirming click; clears a stale arm.
+    pub(super) fn history_delete_armed(&mut self, now: Instant) -> bool {
+        let armed = self
+            .history_delete_armed_at
+            .is_some_and(|at| now.saturating_duration_since(at) <= DELETE_ALL_ARM);
+        if !armed {
+            self.history_delete_armed_at = None;
+        }
+        armed
     }
 
     pub(super) fn nav_from_id(id: &str) -> Nav {

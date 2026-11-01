@@ -5,7 +5,7 @@ use super::*;
 /// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
 pub(super) static DESKTOP_CONTROL_HINT: std::sync::LazyLock<String> = std::sync::LazyLock::new(
     || {
-        format!("Grok can see the screen and use the mouse and keyboard through {}. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
+        format!("{} can see the screen and use the mouse and keyboard. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
     },
 );
 
@@ -23,6 +23,22 @@ pub(super) fn support_link(url: &str) -> Option<&str> {
     crate::desktop::url_safe_to_open(url).then_some(url)
 }
 
+/// What About's support field saves: `Some("")` for blank (hides the link),
+/// the trimmed URL when the link would show, `None` to refuse the edit.
+pub(super) fn support_url_to_save(draft: &str) -> Option<String> {
+    let draft = draft.trim();
+    if draft.is_empty() {
+        return Some(String::new());
+    }
+    support_link(draft).map(str::to_string)
+}
+
+/// Developer-only Labs demos (the cursor-motion preview) show only with
+/// `GROKHUB_DEV_DEMOS=1`.
+pub(super) fn dev_demos_on(var: Option<&str>) -> bool {
+    var.map(str::trim) == Some("1")
+}
+
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
@@ -34,6 +50,7 @@ pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
         SettingsSec::Account => "Account",
+        SettingsSec::AiModels => "AI models",
         SettingsSec::Privacy => "Privacy & data",
         SettingsSec::Appearance => "Appearance",
         SettingsSec::Behavior => "Behavior",
@@ -375,28 +392,35 @@ pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
 }
 
 const ROW_MODEL: &str = "Default model";
+/// Account keeps your name and picture; the Grok sign-in moved to AI models.
+pub(super) const ACCOUNT_SIGN_IN_MOVED: &str =
+    "Sign in with Grok, OpenRouter and API keys are in Settings → AI models.";
 const ROW_PERMISSION: &str = "Permission";
-const ROW_DESKTOP: &str = "Let Grok control the desktop";
+fn row_desktop() -> &'static str {
+    *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW
+}
 const ROW_DESKTOP_TEST: &str = "Desktop control";
 const ROW_SCREEN_RECORD: &str = "Screen recording";
-const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to Grok only for the diagnosis.";
+const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to the cloud model only for the diagnosis.";
 const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
 /// Settings → Defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
-pub(super) const DEFAULTS_ROWS: &[&str] = &[
-    ROW_MODEL,
-    super::budget_ui::FAST_ROW,
-    super::budget_ui::CAP_ROW,
-    super::budget_ui::CEILING_ROW,
-    ROW_PERMISSION,
-    ROW_DESKTOP,
-    ROW_DESKTOP_TEST,
-    ROW_SCREEN_RECORD,
-    ROW_SESSION,
-    ROW_COLLAPSE,
-];
+pub(super) fn defaults_rows() -> [&'static str; 10] {
+    [
+        ROW_MODEL,
+        super::budget_ui::FAST_ROW,
+        super::budget_ui::CAP_ROW,
+        super::budget_ui::CEILING_ROW,
+        ROW_PERMISSION,
+        row_desktop(),
+        ROW_DESKTOP_TEST,
+        ROW_SCREEN_RECORD,
+        ROW_SESSION,
+        ROW_COLLAPSE,
+    ]
+}
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -535,6 +559,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_proactive_reminders(&mut self, on: bool) {
+        if self.cfg.proactive_reminders == on {
+            return;
+        }
+        self.cfg.proactive_reminders = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_living_wall(&mut self, on: bool) {
         if self.cfg.imagine_wall == on {
             return;
@@ -567,6 +600,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_steady_effort(&mut self, on: bool) {
+        if self.cfg.steady_effort == on {
+            return;
+        }
+        self.cfg.steady_effort = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_reduce_motion(&mut self, on: bool) {
         if self.cfg.reduce_motion == on {
             return;
@@ -594,7 +636,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         self.pull_account_oauth_from_disk();
-        let authed = self.has_key();
+        // The Grok sign-in, not "any key": Sign out here only signs out of Grok.
+        let authed = self.account_chrome_now().connected;
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
@@ -688,12 +731,13 @@ impl Cabin {
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
-        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
+        self.renew_account_oauth();
+        let account_auth = self.account_chrome_now();
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
-            "Saved in cabin config."
+            "Saved in your settings on this PC."
         } else {
-            "A local image, kept in cabin config."
+            "A local image, kept in your settings on this PC."
         };
         let pending = self
             .oauth_pending
@@ -708,6 +752,7 @@ impl Cabin {
         // Every section on one scroll, in nav order; the nav marks the one in view.
         let general = [
             (SettingsSec::Account, "Account"),
+            (SettingsSec::AiModels, "AI models"),
             (SettingsSec::Privacy, "Privacy & data"),
             (SettingsSec::Appearance, "Appearance"),
             (SettingsSec::Personality, "Personality"),
@@ -886,6 +931,10 @@ impl Cabin {
                                                             {
                                                                 clear_picture = true;
                                                             }
+                                                            crate::cards::settings_note(ui, ACCOUNT_SIGN_IN_MOVED);
+                                                        }
+                                                        SettingsSec::AiModels => {
+                                                            crate::ui_kit::section_header(ui, "Sign-ins", None);
                                                             if crate::cards::settings_action(
                                                                 ui,
                                                                 account_auth.title,
@@ -900,6 +949,106 @@ impl Cabin {
                                                             }
                                                             if let Some(p) = &pending {
                                                                 crate::cards::settings_note(ui, p);
+                                                            }
+                                                            self.ui_provider_rows(ui);
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Models",
+                                                                None,
+                                                            );
+                                                            let models = self.router_model_choices();
+                                                            let model_labels: Vec<String> =
+                                                                models.iter().map(|(_, label)| label.clone()).collect();
+                                                            let pin = cabin_default_model_id(&self.cfg.model);
+                                                            let model_selected = models
+                                                                .iter()
+                                                                .find(|(id, _)| *id == pin)
+                                                                .map(|(_, label)| label.clone())
+                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
+                                                            if let Some(i) = settings_dropdown(
+                                                                ui,
+                                                                ROW_MODEL,
+                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
+                                                                &model_selected,
+                                                                &model_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = models.get(i) {
+                                                                    let next = cabin_default_model_id(id);
+                                                                    if next != self.cfg.model {
+                                                                        self.cfg.model = next;
+                                                                        self.persist_cfg();
+                                                                        self.status = "Saved".into();
+                                                                    }
+                                                                }
+                                                            }
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Refresh models",
+                                                                "Check xAI's model list and your plan now.",
+                                                                "Refresh",
+                                                            ) {
+                                                                self.refresh_models_now();
+                                                            }
+                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
+                                                            crate::ui_kit::section_header(ui, "Local AI", None);
+                                                            super::privacy_page::paint_offline_row(ui);
+                                                            self.ui_local_model_rows(ui);
+                                                            for line in super::privacy_page::local_notes(
+                                                                self.cfg.local_model,
+                                                                grokhub_agent::route::local::installed(),
+                                                            ) {
+                                                                crate::cards::settings_note(ui, line);
+                                                            }
+                                                            crate::ui_kit::section_header(ui, "Spend & effort", None);
+                                                            self.ui_spend_rows(ui);
+                                                            let mut steady_effort = self.cfg.steady_effort;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Steady effort",
+                                                                "Thinks harder only after two failed tools in a row, keeps chat at High or below, and eases back after a clean step. Spends less; a hard run of errors may get less thought. Off by default.",
+                                                                &mut steady_effort,
+                                                            ) {
+                                                                self.set_steady_effort(steady_effort);
+                                                            }
+                                                            let budgets = grokhub_core::TOKEN_BUDGETS;
+                                                            let budget_labels: Vec<String> = budgets
+                                                                .iter()
+                                                                .map(|b| grokhub_core::token_budget_label(*b))
+                                                                .collect();
+                                                            let budget_hint = format!(
+                                                                "Warns at 80% and when used up, once a day. {}.",
+                                                                grokhub_core::budget_line(
+                                                                    &self.usage,
+                                                                    self.cfg.daily_token_budget,
+                                                                )
+                                                            );
+                                                            if let Some(i) = settings_dropdown(
+                                                                ui,
+                                                                "Daily token budget",
+                                                                &budget_hint,
+                                                                &grokhub_core::token_budget_label(
+                                                                    self.cfg.daily_token_budget,
+                                                                ),
+                                                                &budget_labels,
+                                                            ) {
+                                                                if let Some(b) = budgets.get(i) {
+                                                                    self.cfg.daily_token_budget = *b;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
+                                                            }
+                                                            if self.cfg.daily_token_budget > 0 {
+                                                                let mut pause = self.cfg.budget_pauses_scheduled;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Pause scheduled work over budget",
+                                                                    "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
+                                                                    &mut pause,
+                                                                ) {
+                                                                    self.cfg.budget_pauses_scheduled = pause;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
                                                             }
                                                         }
                                                         SettingsSec::Appearance => {
@@ -951,20 +1100,21 @@ impl Cabin {
                                                             );
                                                             self.ui_wind_down_row(ui);
                                                             self.ui_downloads_tidy_row(ui);
+                                                            self.ui_workboard_tidy_row(ui);
                                                             crate::ui_kit::section_header(
                                                                 ui,
                                                                 "Tray & wall",
                                                                 None,
                                                             );
                                                             let mut close_to_tray = self.cfg.close_to_tray;
-                                                            if settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
+                                                            if settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
                                                                 self.set_close_to_tray(close_to_tray);
                                                             }
                                                             let mut living_wall = self.cfg.imagine_wall;
                                                             if settings_toggle(
                                                                 ui,
                                                                 "Living wall",
-                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
+                                                                grokhub_core::brand::filled("Every few hours {product} paints a new cover. Twenty live. Oldest leaves first."),
                                                                 &mut living_wall,
                                                             ) {
                                                                 self.set_living_wall(living_wall);
@@ -992,6 +1142,15 @@ impl Cabin {
                                                                 self.set_composer_autocomplete(
                                                                     composer_autocomplete,
                                                                 );
+                                                            }
+                                                            let mut reminders = self.cfg.proactive_reminders;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Reminder notifications",
+                                                                "A system notification when a card on your board is due within the hour. Quiet hours hold it.",
+                                                                &mut reminders,
+                                                            ) {
+                                                                self.set_proactive_reminders(reminders);
                                                             }
                                                             self.ui_focus_help_row(ui);
                                                             self.ui_screenshot_explain_settings(ui);
@@ -1029,7 +1188,7 @@ impl Cabin {
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 "Quiet hours",
-                                                                "Inside quiet hours the cabin holds a destructive automation and stops anticipating. Off is start and end equal.",
+                                                                grokhub_core::brand::filled("Inside quiet hours {product} holds a destructive automation and stops anticipating. Off is start and end equal."),
                                                                 &quiet_selected,
                                                                 &quiet_labels,
                                                             ) {
@@ -1051,46 +1210,6 @@ impl Cabin {
                                                             self.ui_chat_archive_row(ui);
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
-                                                            }
-                                                            let budgets = grokhub_core::TOKEN_BUDGETS;
-                                                            let budget_labels: Vec<String> = budgets
-                                                                .iter()
-                                                                .map(|b| grokhub_core::token_budget_label(*b))
-                                                                .collect();
-                                                            let budget_hint = format!(
-                                                                "Warns at 80% and when used up, once a day. {}.",
-                                                                grokhub_core::budget_line(
-                                                                    &self.usage,
-                                                                    self.cfg.daily_token_budget,
-                                                                )
-                                                            );
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                "Daily token budget",
-                                                                &budget_hint,
-                                                                &grokhub_core::token_budget_label(
-                                                                    self.cfg.daily_token_budget,
-                                                                ),
-                                                                &budget_labels,
-                                                            ) {
-                                                                if let Some(b) = budgets.get(i) {
-                                                                    self.cfg.daily_token_budget = *b;
-                                                                    self.persist_cfg();
-                                                                    self.status = "Saved".into();
-                                                                }
-                                                            }
-                                                            if self.cfg.daily_token_budget > 0 {
-                                                                let mut pause = self.cfg.budget_pauses_scheduled;
-                                                                if settings_toggle(
-                                                                    ui,
-                                                                    "Pause scheduled work over budget",
-                                                                    "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
-                                                                    &mut pause,
-                                                                ) {
-                                                                    self.cfg.budget_pauses_scheduled = pause;
-                                                                    self.persist_cfg();
-                                                                    self.status = "Saved".into();
-                                                                }
                                                             }
                                                             ui.add_space(8.0);
                                                             self.ui_home_learned(ui);
@@ -1122,7 +1241,7 @@ impl Cabin {
                                                                 && crate::cards::settings_action(
                                                                     ui,
                                                                     &format!("Restart {}", grokhub_core::brand::product_name()),
-                                                                    "Reload hub, then start a new cabin and exit this one.",
+                                                                    "Reload hub, then open a new window and close this one.",
                                                                     "Restart",
                                                                 )
                                                             {
@@ -1150,61 +1269,10 @@ impl Cabin {
                                                                 copy_diag = true;
                                                             }
                                                             self.ui_support_link(ui);
+                                                            self.ui_support_url_field(ui);
                                                         }
                                                         SettingsSec::Defaults => {
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "Models & providers",
-                                                                None,
-                                                            );
-                                                            let models = self.router_model_choices();
-                                                            let model_labels: Vec<String> =
-                                                                models.iter().map(|(_, label)| label.clone()).collect();
-                                                            let pin = cabin_default_model_id(&self.cfg.model);
-                                                            let model_selected = models
-                                                                .iter()
-                                                                .find(|(id, _)| *id == pin)
-                                                                .map(|(_, label)| label.clone())
-                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                ROW_MODEL,
-                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
-                                                                &model_selected,
-                                                                &model_labels,
-                                                            ) {
-                                                                if let Some((id, _)) = models.get(i) {
-                                                                    let next = cabin_default_model_id(id);
-                                                                    if next != self.cfg.model {
-                                                                        self.cfg.model = next;
-                                                                        self.persist_cfg();
-                                                                        self.status = "Saved".into();
-                                                                    }
-                                                                }
-                                                            }
-                                                            if crate::cards::settings_action(
-                                                                ui,
-                                                                "Refresh models",
-                                                                "Check xAI's model list and your plan now.",
-                                                                "Refresh",
-                                                            ) {
-                                                                self.refresh_models_now();
-                                                            }
-                                                            // Proof shot pins Web search above the
-                                                            // long local-model block so the optional
-                                                            // SearXNG / Brave fields stay on screen.
-                                                            if super::loadout_home::web_search_settings_shot()
-                                                            {
-                                                                self.ui_web_search_rows(ui);
-                                                                self.ui_local_model_rows(ui);
-                                                                self.ui_provider_rows(ui);
-                                                            } else {
-                                                                self.ui_local_model_rows(ui);
-                                                                self.ui_provider_rows(ui);
-                                                                self.ui_web_search_rows(ui);
-                                                            }
-                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
-                                                            self.ui_spend_rows(ui);
+                                                            self.ui_web_search_rows(ui);
                                                             crate::ui_kit::section_header(
                                                                 ui,
                                                                 "Permissions & session",
@@ -1244,7 +1312,7 @@ impl Cabin {
                                                             }
                                                             if settings_toggle(
                                                                 ui,
-                                                                ROW_DESKTOP,
+                                                                row_desktop(),
                                                                 DESKTOP_CONTROL_HINT.as_str(),
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
@@ -1387,7 +1455,7 @@ impl Cabin {
                                                                     && crate::cards::settings_action(
                                                                         ui,
                                                                         &format!("Restart {}", grokhub_core::brand::product_name()),
-                                                                        "Reload hub, then start a new cabin and exit this one.",
+                                                                        "Reload hub, then open a new window and close this one.",
                                                                         "Restart",
                                                                     )
                                                                 {
@@ -1406,7 +1474,7 @@ impl Cabin {
                                                             }
                                                             crate::cards::settings_note(
                                                                 ui,
-                                                                "This cabin's MCP servers are in Settings, Connectors.",
+                                                                grokhub_core::brand::filled("{product}'s MCP servers are in Settings, Connectors."),
                                                             );
                                                             let cwd = self.grok_cwd();
                                                             crate::native_plugins::paint(ui, &cwd);
@@ -1414,6 +1482,7 @@ impl Cabin {
                                                             self.ui_labs_diagnostics(ui);
                                                             ui.add_space(12.0);
                                                             self.ui_labs_desktop_nyx(ui);
+                                                            if dev_demos_on(std::env::var("GROKHUB_DEV_DEMOS").ok().as_deref()) {
                                                             ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")
@@ -1435,6 +1504,7 @@ impl Cabin {
                                                                 self.agent_cursor =
                                                                     Some(crate::motion::AgentCursorAnim::demo(now, origin));
                                                                 self.status = "Cursor preview".into();
+                                                            }
                                                             }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
@@ -1504,9 +1574,7 @@ impl Cabin {
         }
     }
 
-    /// Settings → Copy diagnostics and the palette row: the bundle goes to the
-    /// clipboard, and the status line only says so.
-    /// Settings → About: a quiet text link, only while `app.json` has a support URL.
+    /// Settings → About: a quiet text link, only while a support URL is set.
     fn ui_support_link(&self, ui: &mut egui::Ui) {
         let Some(url) = support_link(&self.cfg.support_url) else {
             return;
@@ -1519,10 +1587,51 @@ impl Cabin {
         }
     }
 
+    /// Settings → About: where the support link points. Saves on Enter or when
+    /// the field loses focus; blank hides the link, anything but a plain web
+    /// page is refused.
+    fn ui_support_url_field(&mut self, ui: &mut egui::Ui) {
+        let id = ui.id().with("support_url_draft");
+        let mut draft = ui
+            .data_mut(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| self.cfg.support_url.clone());
+        ui.add_space(6.0);
+        let edit = ui
+            .horizontal(|ui| {
+                ui.label(
+                    RichText::new("Support link")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft)
+                        .hint_text(crate::theme::hint("https://… (blank hides it)"))
+                        .desired_width(280.0),
+                )
+            })
+            .inner;
+        if edit.lost_focus() {
+            match support_url_to_save(&draft) {
+                Some(url) if url == self.cfg.support_url => {}
+                Some(url) => {
+                    self.cfg.support_url = url;
+                    self.persist_cfg();
+                    self.status = "Saved".into();
+                }
+                None => self.status = "Support link needs a full https:// address.".into(),
+            }
+            ui.data_mut(|d| d.remove::<String>(id));
+        } else if edit.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, draft));
+        }
+    }
+
+    /// Settings → Copy diagnostics and the palette row: the bundle goes to the
+    /// clipboard, and the status line only says so.
     pub(super) fn copy_diagnostics(&mut self, ctx: &egui::Context) {
         let version = crate::update::build_version_line();
         let bundle = diagnostics_bundle(
-            version.strip_prefix("GrokHub ").unwrap_or(&version),
+            grokhub_core::strip_product_prefix(&version),
             self.has_key(),
             HUB_KIND,
             self.skill_list.len(),
@@ -2057,6 +2166,43 @@ mod tests {
     }
 
     #[test]
+    fn support_url_field_saves_web_pages_and_blank_only() {
+        assert_eq!(support_url_to_save("  "), Some(String::new()));
+        assert_eq!(
+            support_url_to_save(" https://donate.example/my-app "),
+            Some("https://donate.example/my-app".into())
+        );
+        assert_eq!(support_url_to_save("donate.example"), None);
+        assert_eq!(support_url_to_save("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn cursor_demo_needs_the_dev_flag() {
+        assert!(!dev_demos_on(None));
+        assert!(!dev_demos_on(Some("0")));
+        assert!(!dev_demos_on(Some("")));
+        assert!(dev_demos_on(Some("1")));
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        let gate = src
+            .find(concat!(
+                "dev_demos_on(std::env::var(\"GROKHUB_",
+                "DEV_DEMOS\")"
+            ))
+            .expect("Labs gate");
+        let demo = src
+            .find(concat!("\"Desktop-agent cursor ", "(preview)\""))
+            .expect("demo label");
+        assert!(gate < demo, "the cursor demo sits inside the dev gate");
+    }
+
+    #[test]
+    fn behavior_has_a_reminders_toggle_and_about_a_support_field() {
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        assert!(src.contains(concat!("self.set_proactive_", "reminders(reminders);")));
+        assert!(src.contains(concat!("self.ui_support_url_", "field(ui);")));
+    }
+
+    #[test]
     fn about_shows_the_support_link_quietly() {
         // Windows checkouts carry CRLF; the body split below looks for "\n    }\n".
         let src = include_str!("settings.rs").replace("\r\n", "\n");
@@ -2120,21 +2266,21 @@ mod tests {
             grokhub_core::sanitize_chat_model("nope")
         );
         assert_eq!(
-            DEFAULTS_ROWS,
-            &[
+            defaults_rows(),
+            [
                 "Default model",
                 "Use Grok 4.7 Fast when you're waiting",
                 "Weekly spend cap",
                 "Price limit",
                 "Permission",
-                "Let Grok control the desktop",
+                "Let Loadout control the desktop",
                 "Desktop control",
                 "Screen recording",
                 "Session mode",
                 "Always collapse"
             ]
         );
-        assert!(DEFAULTS_ROWS
+        assert!(defaults_rows()
             .iter()
             .all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();

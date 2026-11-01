@@ -879,7 +879,7 @@ pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("objectives", "Objectives"),
     ("pulse", "Pulse"),
     ("library", "Library"),
-    ("devices", "PC"),
+    ("devices", "Devices"),
     ("profile", "Profile"),
 ];
 
@@ -1673,7 +1673,7 @@ fn decode_mark_png(bytes: &'static [u8]) -> ColorImage {
 fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
-        let bytes = include_bytes!("../assets/grokhub-32.png");
+        let bytes = include_bytes!("../assets/loadout-mark-32.png");
         // A blank mark beats a crash if the bundled PNG ever stops decoding.
         let Ok(img) = image::load_from_memory(bytes) else {
             return ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
@@ -2158,7 +2158,7 @@ mod tests {
             .expect("mark");
         assert!(
             mark.contains("get_or_init") && mark.contains("OnceLock"),
-            "decode grokhub-32.png once: {mark}"
+            "decode loadout-mark-32.png once: {mark}"
         );
         assert!(
             mark.contains("get_temp") && mark.contains("insert_temp"),

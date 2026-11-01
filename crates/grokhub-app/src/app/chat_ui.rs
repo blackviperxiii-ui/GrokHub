@@ -127,6 +127,9 @@ fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
 pub(super) fn paint_connectivity_status_chip(ui: &mut egui::Ui) {
     use crate::ui_kit::{badge, BadgeTone};
     use grokhub_core::connectivity::{global_ui_phase, ConnectivityUiPhase};
+    if super::connectivity_ui::paint_offline_only_chip(ui) {
+        return;
+    }
     let phase = global_ui_phase();
     let tone = match phase {
         ConnectivityUiPhase::Online => BadgeTone::Neutral,
@@ -414,6 +417,43 @@ pub(super) enum ChatBlockAct {
     Edit(String),
     /// Labs Diagnostics mode: save this turn's redacted debug bundle.
     SaveDiagnostics(u32),
+    /// The bubble's ··· or right-click menu: Delete message…. The row it
+    /// came from names which messages go.
+    Delete,
+}
+
+/// The quiet "more" button at the end of a bubble's actions. The UI font
+/// has no "⋯" glyph.
+pub(super) const MSG_MORE_LABEL: &str = "···";
+/// The one item in a bubble's ··· and right-click menus.
+pub(super) const DELETE_MSG_LABEL: &str = "Delete message…";
+
+/// The bubble menu's items. True when Delete message… was picked.
+fn msg_menu_items(ui: &mut egui::Ui) -> bool {
+    ui.set_min_width(140.0);
+    let picked = ui.button(DELETE_MSG_LABEL).clicked();
+    if picked {
+        ui.close();
+    }
+    picked
+}
+
+/// Right-click anywhere on a bubble opens its menu at the pointer. The
+/// bubble only hovers, so its text stays selectable and its links clickable.
+fn msg_context_menu(ui: &egui::Ui, bubble: &egui::Response) -> bool {
+    let open = bubble.contains_pointer() && ui.input(|i| i.pointer.secondary_clicked());
+    egui::Popup::new(
+        bubble.id.with("msg-menu"),
+        ui.ctx().clone(),
+        bubble.rect,
+        ui.layer_id(),
+    )
+    .kind(egui::PopupKind::Menu)
+    .layout(egui::Layout::top_down_justified(egui::Align::Min))
+    .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+    .at_pointer_fixed()
+    .show(msg_menu_items)
+    .is_some_and(|r| r.inner)
 }
 
 pub(super) struct ChatBlockPaint {
@@ -637,7 +677,7 @@ pub(super) fn paint_speech_bubble(
                     mark.id(),
                     mark_rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    crate::theme::muted(),
+                    egui::Color32::WHITE,
                 );
             }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
@@ -672,15 +712,15 @@ fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
 /// Message actions. Diagnostics mode adds Save diagnostics on assistant rows.
 pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
     if user {
-        &["Copy", "Edit", "Reply"]
+        &["Copy", "Edit", "Reply", MSG_MORE_LABEL]
     } else {
-        &["Copy", "Reply"]
+        &["Copy", "Reply", MSG_MORE_LABEL]
     }
 }
 
 pub(super) fn msg_act_labels_for(user: bool, diagnostics: bool) -> &'static [&'static str] {
     if !user && diagnostics {
-        &["Copy", "Reply", "Save diagnostics"]
+        &["Copy", "Reply", "Save diagnostics", MSG_MORE_LABEL]
     } else {
         msg_act_labels(user)
     }
@@ -759,7 +799,14 @@ pub(super) fn paint_msg_acts_for(
             } else {
                 resp
             };
-            if resp.clicked() {
+            if label == MSG_MORE_LABEL {
+                let picked = egui::Popup::menu(&resp)
+                    .show(msg_menu_items)
+                    .is_some_and(|r| r.inner);
+                if picked {
+                    act = ChatBlockAct::Delete;
+                }
+            } else if resp.clicked() {
                 if label == "Copy" {
                     crate::theme::mark_copy_clicked(ui.ctx(), resp.id);
                 }
@@ -935,6 +982,47 @@ impl Cabin {
             crate::fx::paint_composer_glow_at(ui, pill, self.running);
         }
     }
+}
+
+/// Width the composer text wraps at inside the pill's middle column
+/// (minus the mic and the gap before it).
+pub(super) fn composer_text_w(mid: f32) -> f32 {
+    (mid - 8.0 - 22.0).max(80.0)
+}
+
+/// Lines the composer text takes on screen: typed breaks plus soft wraps.
+pub(super) fn composer_visual_rows(ui: &egui::Ui, text: &str, text_w: f32) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+    // TextEdit wraps inside composer_field_frame's 2px side margins.
+    let wrap = (text_w - 4.0).max(1.0);
+    let galley = ui.fonts_mut(|f| {
+        f.layout(
+            text.to_owned(),
+            egui::FontId::new(15.0, egui::FontFamily::Proportional),
+            egui::Color32::PLACEHOLDER,
+            wrap,
+        )
+    });
+    galley.rows.len().max(1)
+}
+
+/// Tallest the composer pill gets before its text scrolls inside it:
+/// 240px, or 40% of the window on short screens.
+pub(super) fn composer_max_h(window_h: f32) -> f32 {
+    (window_h * 0.4).clamp(crate::theme::QUERY_MIN_H, 240.0)
+}
+
+/// Pill height for `rows` lines: one line keeps the 60px pill, each extra
+/// line adds 22px, capped at `max_h`.
+pub(super) fn composer_pill_h(rows: usize, max_h: f32) -> f32 {
+    let want = if rows <= 1 {
+        crate::theme::QUERY_MIN_H
+    } else {
+        (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
+    };
+    want.min(max_h.max(crate::theme::QUERY_MIN_H))
 }
 
 fn composer_field_frame() -> egui::Frame {
@@ -1198,17 +1286,20 @@ pub(super) fn paint_chat_block_with(
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
+            let menu = msg_context_menu(ui, &resp);
             // User rows never show Save diagnostics; keep paint_msg_acts on the
             // hot path so the thin wrapper stays live for tests and callers.
             let _ = (diagnostics, diag_turn);
+            let act = paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act;
             ChatBlockPaint {
-                act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act,
+                act: if menu { ChatBlockAct::Delete } else { act },
                 drawn: true,
                 thought_fold,
             }
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
+            let menu = msg_context_menu(ui, &resp);
             let act = if reply_acts {
                 paint_msg_acts_for(
                     ui,
@@ -1223,6 +1314,7 @@ pub(super) fn paint_chat_block_with(
             } else {
                 ChatBlockAct::None
             };
+            let act = if menu { ChatBlockAct::Delete } else { act };
             ChatBlockPaint {
                 act,
                 drawn: true,
@@ -1233,6 +1325,7 @@ pub(super) fn paint_chat_block_with(
             // GL-05: a slash or system result keeps this one bubble as it ages.
             // It never takes the thought frame, its slanted text, or its label.
             let resp = paint_result_bubble(ui, &block.body);
+            let menu = msg_context_menu(ui, &resp);
             let act = if reply_acts {
                 paint_msg_acts_for(
                     ui,
@@ -1247,6 +1340,7 @@ pub(super) fn paint_chat_block_with(
             } else {
                 ChatBlockAct::None
             };
+            let act = if menu { ChatBlockAct::Delete } else { act };
             ChatBlockPaint {
                 act,
                 drawn: true,
@@ -1456,6 +1550,8 @@ impl Cabin {
                     let thinking = self.thinking_here();
                     let live = thinking && !self.live_blocks.is_empty();
                     let mut act = ChatBlockAct::None;
+                    // The stored row whose menu picked Delete message….
+                    let mut delete_view: Option<usize> = None;
                     let jump_you = self.jump_last_you;
                     let mut jumped_you = false;
                     let no_turn_row;
@@ -1713,6 +1809,7 @@ impl Cabin {
                             }
                             match painted.act {
                                 ChatBlockAct::None => {}
+                                ChatBlockAct::Delete => delete_view = Some(i),
                                 other => act = other,
                             }
                             if painted.drawn {
@@ -1805,7 +1902,14 @@ impl Cabin {
                         ChatBlockAct::SaveDiagnostics(turn) => {
                             self.save_chat_diagnostics(Some(turn.max(1)));
                         }
+                        // The reply still streaming has no stored row yet.
+                        ChatBlockAct::Delete => {
+                            self.status = grokhub_agent::FORGET_BUSY.into();
+                        }
                         ChatBlockAct::None => {}
+                    }
+                    if let Some(view) = delete_view {
+                        self.ask_delete_bubble(view);
                     }
                     if self.chrome_here() {
                         self.paint_approval_stack(ui);
@@ -2392,7 +2496,7 @@ impl Cabin {
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Grok wants permission")
+                        RichText::new(grokhub_core::brand::filled("{product} wants permission"))
                             .size(14.0)
                             .color(crate::theme::fg()),
                     );
@@ -2637,7 +2741,13 @@ impl Cabin {
         let pane_w =
             crate::cards::composer_pill_w(ui.ctx().content_rect().width()).min(avail.width());
         let side = empty_home_side_gap(avail.width(), pane_w);
-        let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H);
+        // Last frame's pill height: a long draft lifts the box so it never
+        // grows off the bottom of the pane.
+        let pill_now = self
+            .composer_geom
+            .map_or(crate::theme::QUERY_MIN_H, |(pill, _, _)| pill.height());
+        let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H)
+            .min((avail.height() - pill_now - 96.0).max(16.0));
         let mark_h = if greet_on { 40.0 + 12.0 } else { 0.0 };
         let greet_h = if greet_on {
             greeting_galley_h(ui, &self.greeting, pane_w) + mark_h
@@ -2935,8 +3045,6 @@ impl Cabin {
                         self.paint_session_tools(ui);
                     }
                     ComposerStackSlot::LiveWork => {
-                        self.paint_archive_toast(ui);
-                        self.paint_diagnostics_notice(ui);
                         self.paint_live_work(ui);
                     }
                     ComposerStackSlot::SlashPalette => {
@@ -3049,14 +3157,20 @@ impl Cabin {
                         self.apply_composer_session_row(ui);
                         let composer_id = egui::Id::new("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
-                        let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
                         let pad_l = 20.0;
                         let pad_r = 24.0;
-                        let pill_h = if rows == 1 {
-                            crate::theme::QUERY_MIN_H
-                        } else {
-                            (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
-                        };
+                        let inner = (cap - pad_l - pad_r).max(200.0);
+                        let mid = crate::cards::composer_mid_w(inner);
+                        let text_w = composer_text_w(mid);
+                        // Count wrapped lines, not just Enter presses, so long text
+                        // grows the pill instead of spilling past it.
+                        let rows = composer_visual_rows(ui, &self.composer, text_w);
+                        let max_h = composer_max_h(ui.ctx().content_rect().height());
+                        let pill_h = ui.ctx().animate_value_with_time(
+                            composer_id.with("pill-h"),
+                            composer_pill_h(rows, max_h),
+                            0.08,
+                        );
                         ui.allocate_ui_with_layout(
                             egui::vec2(cap, pill_h),
                             egui::Layout::left_to_right(egui::Align::Center),
@@ -3075,7 +3189,6 @@ impl Cabin {
                                     crate::theme::composer_chrome_stroke(focused),
                                     egui::StrokeKind::Middle,
                                 );
-                                let inner = (cap - pad_l - pad_r).max(200.0);
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 ui.add_space(pad_l);
                                 let plus = crate::icons::paint_bar_icon(
@@ -3101,7 +3214,6 @@ impl Cabin {
                                 ui.add_space(8.0);
                                 let cluster = crate::cards::composer_go_cluster_w();
                                 let go_sz = crate::cards::composer_go_hit_w();
-                                let mid = crate::cards::composer_mid_w(inner);
                                 let (mut mic_rect, mut go_rect) =
                                     (egui::Rect::NOTHING, egui::Rect::NOTHING);
                                 ui.allocate_ui_with_layout(
@@ -3109,15 +3221,15 @@ impl Cabin {
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         ui.spacing_mut().item_spacing.x = 8.0;
-                                        let text_w = (mid - 8.0 - 22.0).max(80.0);
                                         let edit = egui::ScrollArea::vertical()
                                             .id_salt("chat-composer-scroll")
                                             .max_width(text_w)
                                             .max_height(pill_h)
                                             .auto_shrink([false, true])
                                             .show(ui, |ui| {
+                                                // Floor only: past max_h the field is
+                                                // taller than the pill and scrolls.
                                                 ui.set_min_height(pill_h);
-                                                ui.set_max_height(pill_h);
                                                 let hint_align = if rows == 1 {
                                                     egui::Align::Center
                                                 } else {
@@ -3237,34 +3349,6 @@ impl Cabin {
                 }
             }
         });
-    }
-
-    // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
-    // and forbids Nav:: in that window. Keep this toast Nav-free.
-    /// Quiet archive / unarchive note with Undo. Idle auto-archive stays off chrome.
-    pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
-        let Some(id) = self.archive_undo.clone() else {
-            return;
-        };
-        let Some(t) = self.threads.iter().find(|t| t.id == id) else {
-            self.archive_undo = None;
-            return;
-        };
-        let title = t.title.clone();
-        let archived = threads::is_archived(t);
-        let verb = if archived { "Archived" } else { "Unarchived" };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                RichText::new(format!("{verb} {title}"))
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-            if crate::cards::ghost_pill(ui, "Undo") {
-                self.undo_archive_toast();
-            }
-        });
-        ui.add_space(4.0);
     }
 
     /// A turn is streaming on this tab: only its last message grows, and the pane

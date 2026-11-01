@@ -878,7 +878,7 @@ impl Cabin {
                 crate::cards::help_text(
                     ui,
                     &format!(
-                        "Saved as personalities/{}.toml in the cabin's settings folder. Tone only: approvals and safety rules still come after it.",
+                        "Saved as personalities/{}.toml in the app's settings folder. Tone only: approvals and safety rules still come after it.",
                         draft.edit.id
                     ),
                 );
@@ -977,27 +977,6 @@ impl Cabin {
         }
         if close {
             self.picker.draft = None;
-        }
-    }
-
-    /// Titlebar, left of the session menu: the open chat's personality. A click opens
-    /// the centred picker.
-    pub(super) fn paint_personality_switch(&mut self, ui: &mut egui::Ui) {
-        if self.nav != Nav::Chat {
-            return;
-        }
-        let name = self.titlebar_personality_label();
-        let resp = ui.add(
-            egui::Button::new(
-                RichText::new(name.as_str())
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            )
-            .frame(false),
-        );
-        let resp = crate::theme::pointing(resp).on_hover_text("Personality for this chat");
-        if resp.clicked() {
-            self.picker.switch_open = true;
         }
     }
 

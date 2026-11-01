@@ -1,5 +1,6 @@
 //! Spike-4c coverage: every outbound request builder in `crates/` (a `ureq`
-//! agent or request, a websocket client) sits behind the EgressGuard. Each file
+//! or `reqwest` agent or request, an agent from the `grokhub_core::http`
+//! facade, a websocket client) sits behind the EgressGuard. Each file
 //! that builds one is listed in [`WRAPPED`] with how many it builds and the
 //! guard call in front of them. A new builder fails this test until it is
 //! wrapped and listed, so the next fetch can't skip the guard.
@@ -26,17 +27,37 @@ const BUILDERS: &[&str] = &[
     "ureq::builder(",
     "ureq::AgentBuilder::new(",
     "ureq::Agent::new(",
+    // ureq 3 (behind the facade since LU-12 stage 5): its agent constructors,
+    // bare so a `use ureq::Agent;` import is caught too, and `ureq::run`.
+    "Agent::new_with_defaults(",
+    "Agent::new_with_config(",
+    "Agent::with_parts(",
+    ".new_agent(",
+    "ureq::run(",
+    // reqwest (none left in `crates/` since LU-12 stage 5).
+    "reqwest::blocking::Client::builder(",
+    "reqwest::Client::builder(",
+    "reqwest::blocking::Client::new(",
+    "reqwest::Client::new(",
+    "reqwest::get(",
+    "reqwest::blocking::get(",
+    // The app's own client (`grokhub_core::http`): each agent counts where it's built.
+    "http::agent(",
     "tungstenite::client(",
     "tungstenite::connect(",
 ];
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
 const WRAPPED: &[(&str, usize, &str)] = &[
-    ("grokhub-agent/src/client.rs", 1, "XaiClient::once: guard_egress (chat, personal) to api.x.ai"),
+    ("grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; every caller is counted and listed here with the guard it runs first"),
+    ("grokhub-core/src/connectivity.rs", 1, "default_http_client: the connectivity re-probe (HEAD to the xAI models URL, no user data; run_probe_if_due sends nothing while Offline only is on) and the net log speed test (offline::refuse first)"),
+    ("grokhub-core/src/game_watch_league.rs", 1, "RiotLoopback: League's live client API on 127.0.0.1 only (loopback_self_signed: loopback-only resolver, https only, no redirects); no egress line (on-device)"),
+    ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns and /v1/responses/compact): XAI_MODEL_ENDPOINTS + guard_egress (chat, personal) to api.x.ai"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
-    ("grokhub-agent/src/route/local_http.rs", 1, "HttpLocalRuntime: loopback-only chat/completions; no egress line (on-device)"),
+    ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),
     ("grokhub-agent/src/route/local_sidecar.rs", 1, "Sidecar health_ok: loopback /health with bearer token; no egress line"),
+    ("grokhub-agent/src/route/local_effort.rs", 1, "fetch_levels: loopback-only /props with bearer token; no egress line"),
     ("grokhub-agent/src/route/local_spec.rs", 1, "measure: the speed test's loopback chat/completions to the sidecar it just started; no egress line"),
     ("grokhub-agent/src/route/sources.rs", 1, "XaiApiSource::get / XaiProbeTransport::send: guard_egress (no user data) to api.x.ai"),
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
@@ -47,17 +68,20 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ),
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
-    ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before ureq AgentBuilder; DDG/SearXNG go through PageFetch"),
+    ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before its http::agent; DDG/SearXNG go through PageFetch"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/local_ai_ui.rs", 1, "HttpRuntimeFetch::open: runtime_download_url_ok + egress_ok on every hop to GitHub"),
-    ("grokhub-app/src/app/library_ui/game_art.rs", 1, "fetch_art: egress_ok (no user data) to Steam's store CDN, no redirects, public IPs only"),
+    ("grokhub-app/src/app/destiny_ui.rs", 1, "api_send: egress_ok (no user data; key only in the X-API-Key header) to www.bungie.net, no redirects, public IPs only"),
+    ("grokhub-app/src/app/osrs_ui.rs", 1, "fetch_stats: egress_ok (no user data beyond the public display name) to Jagex's hiscores, no redirects, public IPs only"),
+    ("grokhub-app/src/app/gw2_ui.rs", 1, "api_get: egress_ok (no user data; key only in the Authorization header) to api.guildwars2.com, no redirects, public IPs only"),
+    ("grokhub-app/src/app/library_ui/game_art.rs", 1, "fetch_art: egress_ok (no user data) to Steam's store CDN and store details, no redirects, public IPs only"),
     ("grokhub-app/src/app/print_alerts_ui.rs", 1, "get_json / post_control: egress_ok (no user data) to the user's LAN printer"),
     ("grokhub-app/src/app/pulse_ui.rs", 1, "source_preview / cache_image: egress_ok (chat)"),
     ("grokhub-app/src/app/pulse_sources_ui.rs", 1, "fetch_source: egress_ok on every hop (chat for a topic search, else no user data)"),
-    ("grokhub-app/src/desktop.rs", 3, "hub health, CDP HTTP and websocket: egress_ok (loopback)"),
+    ("grokhub-app/src/desktop.rs", 2, "hub health and CDP HTTP (loopback_agent), CDP websocket: egress_ok (loopback)"),
     ("grokhub-app/src/github.rs", 1, "run_github_tool: egress_ok (chat)"),
-    ("grokhub-app/src/imagine_auth.rs", 2, "post_form / imagine_discovery: egress_ok (no user data)"),
-    ("grokhub-app/src/oauth.rs", 4, "discovery / post_form / userinfo / photo: egress_ok (no user data)"),
+    ("grokhub-app/src/imagine_auth.rs", 1, "auth_agent callers post_form / imagine_discovery: egress_ok (no user data)"),
+    ("grokhub-app/src/oauth.rs", 1, "auth_agent callers discovery / post_form / userinfo / photo: egress_ok (no user data)"),
     ("grokhub-app/src/release_update.rs", 1, "fetch (release list, SHA256SUMS, asset): egress_ok (no user data) to GitHub"),
     ("grokhub-app/src/update.rs", 1, "latest cabin tag: egress_ok (no user data)"),
     ("grokhub-app/src/xai.rs", 1, "xai_agent callers: grok_json, STT, TTS, polls, downloads"),
@@ -205,4 +229,79 @@ fn an_unwrapped_fetch_fails_the_coverage_check() {
         vec!["grokhub-demo/src/feed.rs: 2 outbound builder(s), 1 listed as wrapped".to_string()]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_direct_ureq_3_or_reqwest_client_counts_as_a_builder() {
+    let root = crate::harness::test_dir("egress-coverage-direct");
+    let src = root.join("grokhub-demo").join("src");
+    fs::create_dir_all(&src).unwrap();
+    let fixture = "use ureq::Agent;\n\
+                   pub fn a() { let _ = Agent::new_with_defaults(); }\n\
+                   pub fn b() { let _ = ureq::Agent::new_with_config(ureq::config::Config::default()); }\n\
+                   pub fn c() { let _ = ureq::config::Config::builder().build().new_agent(); }\n\
+                   pub fn d() { let _ = reqwest::blocking::Client::builder(); }\n";
+    fs::write(src.join("feed.rs"), fixture).unwrap();
+    assert_eq!(
+        unwrapped(&scan(&root), &[]),
+        vec![
+            "grokhub-demo/src/feed.rs: 4 outbound builder(s) with no EgressGuard entry".to_string()
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_agent_from_the_http_facade_counts_as_a_builder() {
+    let root = crate::harness::test_dir("egress-coverage-facade");
+    let src = root.join("grokhub-demo").join("src");
+    fs::create_dir_all(&src).unwrap();
+    let fixture = "pub fn a() { let _ = grokhub_core::http::agent(Default::default()); }\n";
+    fs::write(src.join("feed.rs"), fixture).unwrap();
+    assert_eq!(
+        unwrapped(&scan(&root), &[]),
+        vec![
+            "grokhub-demo/src/feed.rs: 1 outbound builder(s) with no EgressGuard entry".to_string()
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The model client posts only from `post_guarded`, after the endpoint allowlist and
+/// the guard, and every xAI URL it names is on [`XAI_MODEL_ENDPOINTS`] (compaction too).
+///
+/// [`XAI_MODEL_ENDPOINTS`]: crate::harness::XAI_MODEL_ENDPOINTS
+#[test]
+fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
+    let raw = fs::read_to_string(crates_dir().join("grokhub-agent/src/client.rs")).unwrap();
+    let text = production_text(&raw);
+    assert_eq!(text.matches(".post(").count(), 1, "one POST site");
+    let body = text
+        .split("fn post_guarded(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ").next())
+        .expect("post_guarded");
+    let allow = body
+        .find("XAI_MODEL_ENDPOINTS.contains(")
+        .expect("allowlist check");
+    let guard = body.find("guard_egress(").expect("guard");
+    let post = body.find(".post(url)").expect("post");
+    assert!(allow < guard && guard < post, "{body}");
+    let urls: Vec<&str> = text
+        .match_indices("\"https://api.x.ai/")
+        .map(|(at, _)| {
+            let rest = &text[at + 1..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    assert_eq!(
+        urls,
+        vec![
+            "https://api.x.ai/v1/responses",
+            "https://api.x.ai/v1/responses/compact"
+        ]
+    );
+    for url in &urls {
+        assert!(crate::harness::XAI_MODEL_ENDPOINTS.contains(url), "{url}");
+    }
 }

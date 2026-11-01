@@ -8,7 +8,55 @@ const SEND_SIGNIN_HINT: &str =
     "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
 const NATIVE_SIGNIN_NOTE: &str =
-    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
+    "Sign in with Grok in Settings → AI models, or add an API key there.";
+
+/// No sign-in or key, but Local AI is ready: chats answer on this computer.
+pub(super) const LOCAL_ONLY_NOTE: &str =
+    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → AI models for the full models.";
+
+/// A page body that scrolls under a fixed header. Pages drawn straight into
+/// a CentralPanel run off the bottom of the window once their content is
+/// taller than it; this fills the rest of the panel and scrolls instead.
+/// `salt` keeps each page's scroll offset its own.
+pub(super) fn page_body<R>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(("page_body", salt))
+        .auto_shrink([false, false])
+        .show(ui, add)
+        .inner
+}
+
+/// Rows that fill a Memory editor `height` points tall, so an empty file
+/// still shows a full editor and a long one scrolls inside it.
+pub(super) fn memory_editor_rows(height: f32, row_h: f32) -> usize {
+    if row_h <= 0.0 || !height.is_finite() {
+        return 24;
+    }
+    (((height - 16.0) / row_h).floor() as usize).clamp(8, 200)
+}
+
+/// A todo's state in words for the Queue tile. The agent stores raw keys
+/// (`in_progress`); the tile showed them as-is, with the row id after them.
+pub(super) fn todo_status_label(status: &str) -> String {
+    match status {
+        "pending" => "To do".into(),
+        "in_progress" => "In progress".into(),
+        "completed" => "Done".into(),
+        "cancelled" => "Cancelled".into(),
+        other => {
+            let words = other.replace('_', " ");
+            let mut c = words.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect(),
+                None => "To do".into(),
+            }
+        }
+    }
+}
 
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
@@ -34,6 +82,9 @@ pub(super) enum BoardAct {
     Restore(String),
     /// Remove the card for good. Its chat stays in History.
     Delete(String),
+    /// Delete every archived card archived at least this many days ago (0: all
+    /// of them), with their logs. Cards on the board stay.
+    DeleteArchived(u32),
     Link(String),
     Unlink(String),
     Open(String),
@@ -56,6 +107,53 @@ pub(super) enum BoardAct {
     },
     /// Stop the turn running in a card's chat.
     Stop,
+    /// Carry on a paused or interrupted run (KB-03 fills in the resume).
+    Resume(String),
+    /// A paused run becomes yours: back to To do, and the sweep leaves it.
+    HandBack(String),
+    /// Open or close a card's log drawer.
+    ToggleLog(String),
+    /// Agent: do this, now (Work on it) or on the queue.
+    Assign {
+        id: String,
+        queue: bool,
+    },
+    Unqueue(String),
+    /// A drop on a card: into its column, just above it.
+    Place {
+        id: String,
+        column: KanbanColumn,
+        before: Option<String>,
+    },
+    Priority {
+        id: String,
+        priority: &'static str,
+    },
+    /// Open the reason field under the card.
+    AskBlock(String),
+    Block {
+        id: String,
+        reason: String,
+    },
+    Unblock(String),
+    /// Open the steps editor under the card.
+    EditSteps(String),
+    SaveSteps {
+        id: String,
+        text: String,
+    },
+    /// Close the block or steps editor.
+    CancelTriage,
+    /// Start a recipe or playbook on the card.
+    Flow {
+        id: String,
+        flow: grokhub_core::CardFlow,
+    },
+    /// Make it recurring with one of `work_triage::RECUR_CHOICES`.
+    Recur {
+        id: String,
+        choice: usize,
+    },
 }
 
 /// Drag payload for a workboard card: its id.
@@ -301,82 +399,84 @@ impl Cabin {
                     RichText::new("Background jobs for this thread.").color(crate::theme::muted()),
                 );
                 ui.add_space(12.0);
-                if !self.cfg.goal_pin.is_empty() {
-                    crate::cards::status_chip(
-                        ui,
-                        &format!("Pinned · step {}", self.goal_step),
-                        crate::cards::ChipTone::Mute,
-                    );
-                    ui.add_space(8.0);
-                }
-                let mut run_at: Option<usize> = None;
-                let todo_session = self
-                    .threads
-                    .get(self.thread_idx)
-                    .and_then(|thread| thread.grok_session.clone())
-                    .unwrap_or_default();
-                let todos = grokhub_agent::todos_for(&todo_session);
-                if !self.grok_tasks.is_empty() {
-                    crate::cards::section_label(ui, "Grok tasks");
-                    ui.add_space(8.0);
-                    for (id, title, done) in &self.grok_tasks {
-                        let st = queue_task_label(title, *done);
+                page_body(ui, "queue", |ui| {
+                    if !self.cfg.goal_pin.is_empty() {
+                        crate::cards::status_chip(
+                            ui,
+                            &format!("Pinned · step {}", self.goal_step),
+                            crate::cards::ChipTone::Mute,
+                        );
+                        ui.add_space(8.0);
+                    }
+                    let mut run_at: Option<usize> = None;
+                    let todo_session = self
+                        .threads
+                        .get(self.thread_idx)
+                        .and_then(|thread| thread.grok_session.clone())
+                        .unwrap_or_default();
+                    let todos = grokhub_agent::todos_for(&todo_session);
+                    if !self.grok_tasks.is_empty() {
+                        crate::cards::section_label(ui, "Agent tasks");
+                        ui.add_space(8.0);
+                        for (id, title, done) in &self.grok_tasks {
+                            let st = queue_task_label(title, *done);
+                            crate::cards::grok_tile(
+                                ui,
+                                crate::icons::TileIcon::Bolt,
+                                title,
+                                &format!("{st} · {id}"),
+                                None,
+                                *done,
+                            );
+                            ui.add_space(6.0);
+                        }
+                        ui.add_space(12.0);
+                    }
+                    if !todos.is_empty() {
+                        crate::cards::section_label(ui, "Todos");
+                        ui.add_space(8.0);
+                        for todo in &todos {
+                            let done = todo.status == "completed" || todo.status == "cancelled";
+                            crate::cards::grok_tile(
+                                ui,
+                                crate::icons::TileIcon::List,
+                                &todo.content,
+                                &todo_status_label(&todo.status),
+                                None,
+                                done,
+                            );
+                            ui.add_space(6.0);
+                        }
+                        ui.add_space(12.0);
+                    }
+                    if self.agents.is_empty() && self.grok_tasks.is_empty() && todos.is_empty() {
+                        let _ = crate::cards::empty_prompt_tile(
+                            ui,
+                            crate::icons::TileIcon::List,
+                            "No jobs yet",
+                            "Queued work from chat shows up here.",
+                        );
+                    }
+                    for (i, a) in self.agents.iter().enumerate() {
                         crate::cards::grok_tile(
                             ui,
                             crate::icons::TileIcon::Bolt,
-                            title,
-                            &format!("{st} · {id}"),
+                            &a.title,
+                            &a.status,
                             None,
-                            *done,
+                            false,
                         );
                         ui.add_space(6.0);
+                        if crate::cards::ghost_pill(ui, "Run") {
+                            run_at = Some(i);
+                        }
                     }
-                    ui.add_space(12.0);
-                }
-                if !todos.is_empty() {
-                    crate::cards::section_label(ui, "Todos");
-                    ui.add_space(8.0);
-                    for todo in &todos {
-                        let done = todo.status == "completed" || todo.status == "cancelled";
-                        crate::cards::grok_tile(
-                            ui,
-                            crate::icons::TileIcon::List,
-                            &todo.content,
-                            &format!("{} · {}", todo.status, todo.id),
-                            None,
-                            done,
-                        );
-                        ui.add_space(6.0);
+                    if let Some(i) = run_at {
+                        if self.start_queued_job(i) {
+                            self.kick_model(false);
+                        }
                     }
-                    ui.add_space(12.0);
-                }
-                if self.agents.is_empty() && self.grok_tasks.is_empty() && todos.is_empty() {
-                    let _ = crate::cards::empty_prompt_tile(
-                        ui,
-                        crate::icons::TileIcon::List,
-                        "No jobs yet",
-                        "Queued work from chat shows up here.",
-                    );
-                }
-                for (i, a) in self.agents.iter().enumerate() {
-                    crate::cards::grok_tile(
-                        ui,
-                        crate::icons::TileIcon::Bolt,
-                        &a.title,
-                        &a.status,
-                        None,
-                        false,
-                    );
-                    ui.add_space(6.0);
-                    if crate::cards::ghost_pill(ui, "Run") {
-                        run_at = Some(i);
-                    }
-                }
-                if let Some(i) = run_at {
-                    if self.start_queued_job(i) {
-                        self.kick_model(false);
-                    }
-                }
+                });
             });
     }
 
@@ -422,119 +522,123 @@ impl Cabin {
                 ) {
                     self.start_hub();
                 }
-                crate::cards::section_label(ui, "This computer");
-                let mut rotated = false;
-                let (name, sharing, pair_code) = if let Ok(mut st) = self.hub.lock() {
-                    if self.hub_on
-                        && st
-                            .pair
-                            .as_ref()
-                            .is_some_and(|p| !pair_code_is_live(p.expires_at, now_ms()))
-                    {
-                        st.rotate_pair();
-                        rotated = true;
-                    }
-                    (
-                        st.device_name.clone(),
-                        self.hub_on,
-                        st.pair.as_ref().and_then(|p| {
-                            devices_shows_pair_code(
-                                self.hub_on,
-                                pair_code_is_live(p.expires_at, now_ms()),
-                            )
-                            .then(|| p.code.clone())
-                        }),
-                    )
-                } else {
-                    (String::new(), false, None)
-                };
-                if rotated {
-                    self.persist_hub();
-                }
-                let body = if sharing {
-                    format!("Sharing on port {}", self.hub_port)
-                } else {
-                    "Not sharing. Start share to pair another computer.".into()
-                };
-                crate::cards::grok_tile(
-                    ui,
-                    crate::icons::TileIcon::Host,
-                    if name.is_empty() { "This cabin" } else { &name },
-                    &body,
-                    None,
-                    sharing,
-                );
-                ui.add_space(16.0);
-                crate::cards::section_label(ui, "Pair");
-                if let Some(code) = pair_code {
-                    crate::cards::grok_tile(
-                        ui,
-                        crate::icons::TileIcon::Connect,
-                        &code,
-                        &format!(
-                            "Open {} on the other computer.",
-                            discover_hub_pair_url(self.hub_port)
-                        ),
-                        None,
-                        false,
-                    );
-                } else if sharing {
-                    ui.label(
-                        RichText::new("Paired. Make a new code after another computer joins.")
-                            .size(13.0)
-                            .color(crate::theme::muted()),
-                    );
-                    ui.add_space(8.0);
-                    if crate::cards::ghost_pill(ui, "New code") {
-                        if let Ok(mut s) = self.hub.lock() {
-                            s.rotate_pair();
+
+                page_body(ui, "devices", |ui| {
+                    crate::cards::section_label(ui, "This computer");
+                    let mut rotated = false;
+                    let (name, sharing, pair_code) = if let Ok(mut st) = self.hub.lock() {
+                        if self.hub_on
+                            && st
+                                .pair
+                                .as_ref()
+                                .is_some_and(|p| !pair_code_is_live(p.expires_at, now_ms()))
+                        {
+                            st.rotate_pair();
+                            rotated = true;
                         }
+                        (
+                            st.device_name.clone(),
+                            self.hub_on,
+                            st.pair.as_ref().and_then(|p| {
+                                devices_shows_pair_code(
+                                    self.hub_on,
+                                    pair_code_is_live(p.expires_at, now_ms()),
+                                )
+                                .then(|| p.code.clone())
+                            }),
+                        )
+                    } else {
+                        (String::new(), false, None)
+                    };
+                    if rotated {
                         self.persist_hub();
                     }
-                } else if crate::cards::empty_prompt_tile(
-                    ui,
-                    crate::icons::TileIcon::Connect,
-                    "No pair code",
-                    "Start share to mint a code for another computer.",
-                ) {
-                    self.start_hub();
-                }
-                ui.add_space(16.0);
-                crate::cards::section_label(ui, "Send a task");
-                egui::Frame::NONE
-                    .fill(crate::theme::elevated())
-                    .corner_radius(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.task_prompt)
-                                .desired_rows(3)
-                                .desired_width(f32::INFINITY)
-                                .frame(
-                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
-                                )
-                                .hint_text(crate::theme::hint("What should this computer do?")),
-                        );
-                    });
-                ui.add_space(8.0);
-                if self.has_key() {
-                    if crate::cards::white_pill(ui, "Send a task home") {
-                        let t = std::mem::take(&mut self.task_prompt);
-                        self.nav = Nav::Chat;
-                        self.send_chat(t);
-                    }
-                } else {
-                    ui.horizontal(|ui| {
-                        crate::cards::settings_note(
+                    let body = if sharing {
+                        format!("Sharing on port {}", self.hub_port)
+                    } else {
+                        "Not sharing. Start share to pair another computer.".into()
+                    };
+                    crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::Host,
+                        if name.is_empty() { "This PC" } else { &name },
+                        &body,
+                        None,
+                        sharing,
+                    );
+                    ui.add_space(16.0);
+                    crate::cards::section_label(ui, "Pair");
+                    if let Some(code) = pair_code {
+                        crate::cards::grok_tile(
                             ui,
-                            "Sign in with Grok in Settings → Account, or add an API key.",
+                            crate::icons::TileIcon::Connect,
+                            &code,
+                            &format!(
+                                "Open {} on the other computer.",
+                                discover_hub_pair_url(self.hub_port)
+                            ),
+                            None,
+                            false,
                         );
-                        if crate::cards::ghost_pill(ui, "Sign in") {
-                            self.set_nav_id("settings");
+                    } else if sharing {
+                        ui.label(
+                            RichText::new("Paired. Make a new code after another computer joins.")
+                                .size(13.0)
+                                .color(crate::theme::muted()),
+                        );
+                        ui.add_space(8.0);
+                        if crate::cards::ghost_pill(ui, "New code") {
+                            if let Ok(mut s) = self.hub.lock() {
+                                s.rotate_pair();
+                            }
+                            self.persist_hub();
                         }
-                    });
-                }
+                    } else if crate::cards::empty_prompt_tile(
+                        ui,
+                        crate::icons::TileIcon::Connect,
+                        "No pair code",
+                        "Start share to mint a code for another computer.",
+                    ) {
+                        self.start_hub();
+                    }
+                    ui.add_space(16.0);
+                    crate::cards::section_label(ui, "Run a task on this PC");
+                    egui::Frame::NONE
+                        .fill(crate::theme::elevated())
+                        .corner_radius(12.0)
+                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.task_prompt)
+                                    .desired_rows(3)
+                                    .desired_width(f32::INFINITY)
+                                    .frame(
+                                        egui::Frame::NONE
+                                            .inner_margin(egui::Margin::symmetric(4, 2)),
+                                    )
+                                    .hint_text(crate::theme::hint("What should this computer do?")),
+                            );
+                        });
+                    ui.add_space(8.0);
+                    if self.has_key() {
+                        if crate::cards::white_pill(ui, "Run it here") {
+                            let t = std::mem::take(&mut self.task_prompt);
+                            self.nav = Nav::Chat;
+                            self.send_chat(t);
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
+                            crate::cards::settings_note(
+                                ui,
+                                "Sign in with Grok in Settings → AI models, or add an API key.",
+                            );
+                            if crate::cards::ghost_pill(ui, "Sign in") {
+                                self.set_nav_id("settings");
+                            }
+                        });
+                    }
+                });
             });
     }
 
@@ -580,23 +684,24 @@ impl Cabin {
                             } else {
                                 let name = self.mem_name.clone();
                                 let body = self.mem_body.clone();
-                                std::thread::spawn(move || {
-                                    if config::read_memory(&name) != body {
-                                        let _ = config::write_memory(&name, &body);
-                                    }
-                                });
-                                self.status = format!("Wrote {}", self.mem_name);
+                                self.status = format!("Saving {name}…");
+                                self.save_memory_file(name, body, false);
                             }
                         }
                     });
                 });
+                // The editor gets the body's full height and scrolls inside
+                // itself; notes above it scroll the page, so a 400-line file
+                // never pushes Save or the file tabs off screen.
+                let editor_h = (ui.available_height() - 36.0).max(240.0);
+                page_body(ui, "memory", |ui| {
                 if self.mem_name != "MEMORY.md"
                     && grokhub_core::learn_notes::is_placeholder(&self.mem_body)
                 {
                     ui.add_space(8.0);
                     crate::cards::settings_note(
                         ui,
-                        "Still the starter template. The cabin fills this in as you chat, or write it here.",
+                        grokhub_core::brand::filled("Still the starter template. {product} fills this in as you chat, or write it here."),
                     );
                 }
                 self.ui_memory_raw_tidy(ui);
@@ -621,16 +726,25 @@ impl Cabin {
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.mem_body)
-                                .desired_rows(24)
-                                .desired_width(f32::INFINITY)
-                                .frame(
-                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
-                                )
-                                .font(egui::TextStyle::Monospace),
-                        );
+                        let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                        let rows = memory_editor_rows(editor_h, row_h);
+                        egui::ScrollArea::vertical()
+                            .id_salt("memory_editor")
+                            .max_height(editor_h)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.mem_body)
+                                        .desired_rows(rows)
+                                        .desired_width(f32::INFINITY)
+                                        .frame(egui::Frame::NONE.inner_margin(
+                                            egui::Margin::symmetric(4, 2),
+                                        ))
+                                        .font(egui::TextStyle::Monospace),
+                                );
+                            });
                     });
+                });
             });
     }
 
@@ -651,6 +765,10 @@ impl Cabin {
             self.signin_card = false;
             return;
         }
+        let local_only = self.local_only_chat();
+        if local_only {
+            self.signin_card = false;
+        }
         if self.signin_card {
             self.ui_send_signin_card(ui);
             return;
@@ -659,7 +777,14 @@ impl Cabin {
             return;
         }
         ui.horizontal(|ui| {
-            crate::cards::settings_note(ui, NATIVE_SIGNIN_NOTE);
+            crate::cards::settings_note(
+                ui,
+                if local_only {
+                    LOCAL_ONLY_NOTE
+                } else {
+                    NATIVE_SIGNIN_NOTE
+                },
+            );
             if crate::cards::ghost_pill(ui, "Settings") {
                 self.nav = Nav::Settings;
             }
@@ -735,16 +860,60 @@ impl Cabin {
         true
     }
 
+    /// History title with "Delete all". It wipes every chat and its sessions
+    /// on disk, so it takes two clicks: the first arms a red
+    /// "Delete all N chats?" with Cancel beside it.
+    fn history_header(&mut self, ui: &mut egui::Ui) {
+        let now = Instant::now();
+        let armed = self.history_delete_armed(now);
+        let chats = self
+            .threads
+            .iter()
+            .filter(|t| !crate::threads::is_deleted(t))
+            .count();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("History")
+                    .font(crate::theme::title_font(28.0))
+                    .color(crate::theme::fg()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if !armed {
+                    "Delete all".to_string()
+                } else if chats == 1 {
+                    "Delete 1 chat?".to_string()
+                } else {
+                    format!("Delete all {chats} chats?")
+                };
+                if crate::cards::danger_pill(ui, &label) {
+                    self.click_delete_all_history(Instant::now());
+                }
+                if armed && crate::cards::ghost_pill(ui, "Cancel") {
+                    self.history_delete_armed_at = None;
+                }
+            });
+        });
+        if armed {
+            crate::cards::settings_note(
+                ui,
+                "Click again to delete every chat and its saved sessions. This can't be undone.",
+            );
+            // Repaint so the button disarms on its own when the window lapses.
+            ui.ctx().request_repaint_after(DELETE_ALL_ARM);
+        }
+        ui.add_space(14.0);
+    }
+
     pub(super) fn ui_history(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
-            if crate::cards::page_header(ui, "History", "Delete all") {
-                self.delete_all_history();
-            }
+            self.history_header(ui);
+page_body(ui, "history", |ui| {
             ui.add_space(8.0);
             // Projects + History list (moved off the Chat rail drawer).
-            self.ui_projects_and_history(ui, ui.available_width().min(320.0));
+            self.ui_projects_section(ui);
             ui.add_space(12.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
@@ -804,7 +973,7 @@ impl Cabin {
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Chats");
             ui.label(
-                RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
+                RichText::new("Your chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
                     .size(12.0)
                     .color(crate::theme::subtle()),
             );
@@ -867,6 +1036,7 @@ impl Cabin {
                 }
             }
             self.paint_native_history_merge(ui);
+});
         });
     }
 
@@ -1056,12 +1226,11 @@ impl Cabin {
                                 let col_w = ui.available_width();
                                 crate::cards::section_label(ui, col.label());
                                 ui.add_space(6.0);
-                                let ids: Vec<String> = self
-                                    .board
-                                    .iter()
-                                    .filter(|c| c.status.column() == Some(*col))
-                                    .map(|c| c.id.clone())
-                                    .collect();
+                                let ids: Vec<String> =
+                                    grokhub_core::work_triage::in_column(&self.board, *col)
+                                        .into_iter()
+                                        .map(|i| self.board[i].id.clone())
+                                        .collect();
                                 if ids.is_empty() {
                                     ui.label(
                                         RichText::new("—")
@@ -1097,8 +1266,11 @@ impl Cabin {
                                     }
                                 }
                                 if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
-                                    if let Some(status) =
-                                        from(&self.board, &drag).and_then(|st| board_drop_move(st, *col))
+                                    // A drop on a card already placed it above that card.
+                                    let placed = matches!(act, Some(BoardAct::Place { .. }));
+                                    if let Some(status) = from(&self.board, &drag)
+                                        .and_then(|st| board_drop_move(st, *col))
+                                        .filter(|_| !placed)
                                     {
                                         act = Some(BoardAct::Move {
                                             id: drag.0.clone(),
@@ -1109,50 +1281,7 @@ impl Cabin {
                             }
                         });
                         }
-                        let archived: Vec<(String, String)> = self
-                            .board
-                            .iter()
-                            .filter(|c| c.status == BoardStatus::Dismissed)
-                            .map(|c| (c.id.clone(), c.title.clone()))
-                            .collect();
-                        if !archived.is_empty() {
-                            ui.add_space(12.0);
-                            crate::cards::section_label(ui, "Archived");
-                            for (id, title) in archived {
-                                let width = ui.available_width().max(1.0);
-                                let cache_id = egui::Id::new((
-                                    "cabin-board-arch-h",
-                                    id.as_str(),
-                                    super::chat_ui::pane_width_bucket(width),
-                                ));
-                                let cached =
-                                    ui.ctx().data(|d| d.get_temp::<f32>(cache_id)).unwrap_or(0.0);
-                                // One `horizontal`: one parent auto-id. The cached
-                                // height already includes the spacing under the row.
-                                if super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
-                                    ui.skip_ahead_auto_ids(1);
-                                    continue;
-                                }
-                                let y0 = ui.cursor().min.y;
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(title)
-                                            .size(crate::theme::FONT_TIP)
-                                            .color(crate::theme::muted()),
-                                    );
-                                    if crate::cards::ghost_pill(ui, "Restore") {
-                                        act = Some(BoardAct::Restore(id.clone()));
-                                    }
-                                    if crate::cards::ghost_pill(ui, "Delete") {
-                                        act = Some(BoardAct::Delete(id));
-                                    }
-                                });
-                                let h = (ui.cursor().min.y - y0).max(0.0);
-                                if h > 0.0 {
-                                    ui.ctx().data_mut(|d| d.insert_temp(cache_id, h));
-                                }
-                            }
-                        }
+                        self.ui_board_archived(ui, &mut act);
                     });
         });
         // Only a click opens a card; hover does nothing. A drag folds it at once.
@@ -1173,6 +1302,22 @@ impl Cabin {
         let Some(act) = act else {
             return false;
         };
+        // Your edit hands the card to you: the sweep no longer tidies it.
+        if let BoardAct::Move { id, .. }
+        | BoardAct::Link(id)
+        | BoardAct::Unlink(id)
+        | BoardAct::Save(id)
+        | BoardAct::SaveNotes { id, .. }
+        | BoardAct::Work(id)
+        | BoardAct::Say { id, .. }
+        | BoardAct::Resume(id)
+        | BoardAct::HandBack(id)
+        | BoardAct::Place { id, .. }
+        | BoardAct::Priority { id, .. }
+        | BoardAct::Unblock(id) = &act
+        {
+            grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
+        }
         match act {
             BoardAct::Add => {
                 let mut card = BoardCard::new(
@@ -1206,23 +1351,67 @@ impl Cabin {
                 self.board_link = false;
                 true
             }
-            BoardAct::Move { id, status } => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = status;
-                }
-                true
+            BoardAct::Move { id, status } => match status.column() {
+                // To the end of the column, numbered so the shell shows the same order.
+                Some(column) => grokhub_core::work_triage::place_card(
+                    &mut self.board,
+                    &id,
+                    column,
+                    None,
+                    grokhub_core::now_ms(),
+                ),
+                None => false,
+            },
+            BoardAct::Place { id, column, before } => grokhub_core::work_triage::place_card(
+                &mut self.board,
+                &id,
+                column,
+                before.as_deref(),
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::Assign { id, queue } => self.assign_card(&id, queue),
+            BoardAct::Unqueue(id) => grokhub_core::work_triage::unqueue_card(&mut self.board, &id),
+            BoardAct::Priority { id, priority } => {
+                grokhub_core::work_triage::set_priority(&mut self.board, &id, priority)
+                    .unwrap_or(false)
             }
+            BoardAct::AskBlock(id) => {
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.steps = None;
+                self.board_view.triage.blocking = Some((id, String::new()));
+                false
+            }
+            BoardAct::Block { id, reason } => self.block_board_card(&id, &reason),
+            BoardAct::Unblock(id) => grokhub_core::work_triage::unblock_card(
+                &mut self.board,
+                &id,
+                grokhub_core::now_ms(),
+            ),
+            BoardAct::EditSteps(id) => {
+                let text = self
+                    .board
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(grokhub_core::work_triage::steps_text)
+                    .unwrap_or_default();
+                self.board_view.open = Some(id.clone());
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = Some((id, text));
+                false
+            }
+            BoardAct::SaveSteps { id, text } => self.save_board_steps(&id, &text),
+            BoardAct::CancelTriage => {
+                self.board_view.triage.blocking = None;
+                self.board_view.triage.steps = None;
+                false
+            }
+            BoardAct::Flow { id, flow } => self.start_card_flow(&id, flow),
+            BoardAct::Recur { id, choice } => self.make_card_recurring(&id, choice),
             BoardAct::Archive(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Dismissed;
-                }
-                true
+                grokhub_core::archive_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Restore(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Todo;
-                }
-                true
+                grokhub_core::restore_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Delete(id) => {
                 let Some(thread) = self
@@ -1237,7 +1426,7 @@ impl Cabin {
                     self.board_view.note = Some((id, "Stop the card's chat first".into()));
                     return false;
                 }
-                self.board.retain(|c| c.id != id);
+                crate::work_store::delete_card(&mut self.board, &id);
                 self.forget_board_card_view(&id);
                 // A Follow up chat was hidden because its card was the way in.
                 // With the card gone it goes back to History, as the status says.
@@ -1250,6 +1439,39 @@ impl Cabin {
                     "Card deleted".into()
                 };
                 true
+            }
+            BoardAct::DeleteArchived(days) => {
+                self.board_view.confirm = None;
+                let now = grokhub_core::now_ms();
+                let threads: Vec<(String, Option<String>)> = self
+                    .board
+                    .iter()
+                    .filter(|c| c.status == BoardStatus::Dismissed)
+                    .map(|c| (c.id.clone(), c.thread_id.clone()))
+                    .collect();
+                let gone = crate::work_store::delete_archived(
+                    &mut self.board,
+                    u64::from(days) * grokhub_core::work_item::DAY_MS,
+                    now,
+                );
+                let mut unparked = false;
+                for id in &gone {
+                    self.forget_board_card_view(id);
+                    let thread = threads
+                        .iter()
+                        .find(|(t, _)| t == id)
+                        .and_then(|(_, t)| t.clone());
+                    unparked |= self.unpark_follow_up_chat(thread.as_deref());
+                }
+                if unparked {
+                    self.persist();
+                }
+                let n = gone.len();
+                self.status = format!(
+                    "Deleted {n} archived {}",
+                    if n == 1 { "card" } else { "cards" }
+                );
+                n > 0
             }
             BoardAct::Link(id) => {
                 let thread = self.visible_thread_id();
@@ -1312,6 +1534,28 @@ impl Cabin {
             }
             BoardAct::Stop => {
                 self.halt_work("Stopped");
+                false
+            }
+            BoardAct::Resume(id) => {
+                self.resume_work_card(&id);
+                // The card was touched above; Resume saves the board itself.
+                true
+            }
+            BoardAct::HandBack(id) => {
+                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
+                    c.origin = Some(grokhub_core::WorkOrigin::User);
+                    c.status = BoardStatus::Todo;
+                }
+                self.status = "The card is yours now. It is in To do.".into();
+                true
+            }
+            BoardAct::ToggleLog(id) => {
+                let open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
+                self.board_view.log = if open {
+                    None
+                } else {
+                    Some((id.clone(), self.read_card_log(&id)))
+                };
                 false
             }
             BoardAct::Open(id) => {
@@ -1383,9 +1627,9 @@ impl Cabin {
                 })
                 .cloned()
                 .collect();
-            crate::cards::section_label(ui, "Cabin skills");
+            crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
             ui.label(
-                RichText::new("SKILL.md under ~/.config/GrokHub/skills. The cabin follows these on a matching ask and writes new ones after a hard host run.")
+                RichText::new(grokhub_core::brand::filled("SKILL.md under ~/.config/GrokHub/skills. {product} follows these on a matching ask and writes new ones after a hard host run."))
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -1393,7 +1637,7 @@ impl Cabin {
             if cabin_skills.is_empty() {
                 ui.label(
                     RichText::new(if self.skill_list.is_empty() {
-                        "None yet. The cabin saves one after it works something out, or /skill <name> runs one you wrote."
+                        grokhub_core::brand::filled("None yet. {product} saves one after it works something out, or /skill <name> runs one you wrote.")
                     } else {
                         "None matched."
                     })
@@ -1567,13 +1811,8 @@ impl Cabin {
 
     pub(super) fn kick_history_search(&mut self) {
         if !self.scratch() {
-            let name = self.mem_name.clone();
-            let body = self.mem_body.clone();
-            std::thread::spawn(move || {
-                if config::read_memory(&name) != body {
-                    let _ = config::write_memory(&name, &body);
-                }
-            });
+            // Quiet autosave before searching; only a failure speaks up.
+            self.save_memory_file(self.mem_name.clone(), self.mem_body.clone(), true);
         }
         let q = self.history_q.clone();
         let mem_name = self.mem_name.clone();
@@ -1703,12 +1942,18 @@ impl Cabin {
             // Capture the config directory now, like the other scheduled saves:
             // looking it up when the thread runs can land in another directory.
             let dir = config::config_dir();
+            // Quiet on success; a failed save names the file on the status line.
+            let (tx, rx) = mpsc::channel();
+            self.file_writes.push(rx);
             self.mem_leave_saves.retain(|s| !s.is_finished());
             self.mem_leave_saves.push(std::thread::spawn(move || {
                 let _pin = pin_scheduled_dir(dir);
-                if config::read_memory(&leaving) != body {
-                    let _ = config::write_memory(&leaving, &body);
-                }
+                let result = if config::read_memory(&leaving) != body {
+                    config::write_memory(&leaving, &body).map(|()| leaving.clone())
+                } else {
+                    Ok(leaving.clone())
+                };
+                let _ = tx.send(file_writes::FileWriteDone::quiet(leaving, result));
             }));
         }
         self.mem_name = name.into();

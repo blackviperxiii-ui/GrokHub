@@ -1,11 +1,14 @@
 //! Pulse's Steam source: the user's local Steam library feeds each game's
 //! public news into the Feed, most recently played first. The library is read
-//! from disk at most once a day; the toggle and per-game mutes live in
-//! `{config}/pulse-steam.json`, which the agent's `pulse_steam` tool writes too.
+//! from disk at most once a day, on its own thread; the toggle and per-game
+//! mutes live in `{config}/pulse-steam.json`, which the agent's `pulse_steam`
+//! tool writes too.
 
 use super::*;
 use grokhub_core::pulse_sources::SourceReq;
 use grokhub_core::steam::{self, SteamGame, SteamPrefs};
+use std::path::PathBuf;
+use std::sync::mpsc;
 
 /// How often the library is read again.
 const LIBRARY_TTL_MS: u64 = 24 * 60 * 60 * 1000;
@@ -14,10 +17,12 @@ const PREFS_TTL_MS: u64 = 2_000;
 
 #[derive(Default)]
 pub(super) struct SteamState {
-    /// `None` until the first read; then whether Steam was found.
+    /// `None` until the first read lands; then whether Steam was found.
     found: Option<bool>,
     games: Vec<SteamGame>,
     read_ms: u64,
+    /// A library read still running on its thread.
+    pending: Option<mpsc::Receiver<Vec<SteamGame>>>,
     prefs: SteamPrefs,
     prefs_ms: u64,
 }
@@ -38,18 +43,82 @@ impl SteamState {
         self.prefs.set_muted(app_id, true);
     }
 
-    /// The library and prefs, read again when they are stale.
-    fn refresh(&mut self, now: u64, root: impl FnOnce() -> Option<std::path::PathBuf>) {
-        if self.found.is_none() || now.saturating_sub(self.read_ms) >= LIBRARY_TTL_MS {
-            let root = root();
-            self.games = root.as_deref().map(steam::read_library).unwrap_or_default();
-            self.found = Some(root.is_some());
-            self.read_ms = now;
+    /// The library and prefs, read again when they are stale. Finding Steam
+    /// is a few path checks; reading the library (every manifest plus the play
+    /// stats in `localconfig.vdf`, megabytes after years of play) runs on its
+    /// own thread and lands on a later frame, so no frame waits on the disk.
+    fn refresh(&mut self, now: u64, root: impl FnOnce() -> Option<PathBuf>) {
+        self.take_read(now);
+        if self.pending.is_none()
+            && (self.found.is_none() || now.saturating_sub(self.read_ms) >= LIBRARY_TTL_MS)
+        {
+            self.start_read(now, root());
         }
         if self.prefs_ms == 0 || now.saturating_sub(self.prefs_ms) >= PREFS_TTL_MS {
             self.prefs = steam::load_prefs(&crate::config::config_dir());
             self.prefs_ms = now.max(1);
         }
+    }
+
+    /// Start reading the library under `root` on its own thread. No root
+    /// means no Steam, known right away.
+    fn start_read(&mut self, now: u64, root: Option<PathBuf>) {
+        let Some(root) = root else {
+            self.games.clear();
+            self.found = Some(false);
+            self.read_ms = now;
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("pulse-steam".into())
+            .spawn(move || {
+                let _ = tx.send(steam::read_library(&root));
+            });
+        // A spawn that fails (thread limit) leaves nothing pending, so the
+        // next refresh tries again.
+        if spawned.is_ok() {
+            self.pending = Some(rx);
+        }
+    }
+
+    /// Keep a finished read, if one landed.
+    fn take_read(&mut self, now: u64) {
+        let Some(rx) = &self.pending else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(games) => self.land(games, now),
+            Err(mpsc::TryRecvError::Empty) => {}
+            // The reader died: Steam is there, keep the list we had.
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let games = std::mem::take(&mut self.games);
+                self.land(games, now);
+            }
+        }
+    }
+
+    fn land(&mut self, games: Vec<SteamGame>, now: u64) {
+        self.games = games;
+        self.found = Some(true);
+        self.read_ms = now;
+        self.pending = None;
+    }
+
+    /// Block until the read in flight lands (tests only).
+    #[cfg(test)]
+    fn wait_read(&mut self, now: u64) {
+        if let Some(rx) = self.pending.take() {
+            let games = rx.recv().unwrap_or_default();
+            self.land(games, now);
+        }
+    }
+
+    /// Steam was found and its first library read is still on its thread, so
+    /// the games aren't known yet. Callers wait a frame instead of showing
+    /// "no library".
+    pub(super) fn reading(&self) -> bool {
+        self.pending.is_some() && self.found.is_none()
     }
 
     fn found(&self) -> bool {
@@ -98,9 +167,19 @@ impl SteamState {
         steam::muted_post(source_name, &self.games, &self.prefs)
     }
 
-    fn save(&mut self, now: u64) -> Result<(), String> {
+    /// Change the prefs and save them. The file is read again first, so a
+    /// change the agent's `pulse_steam` tool made since the last read (up to
+    /// `PREFS_TTL_MS` ago) stays instead of being overwritten by this copy.
+    fn update_prefs(
+        &mut self,
+        now: u64,
+        change: impl FnOnce(&mut SteamPrefs),
+    ) -> Result<(), String> {
+        let dir = crate::config::config_dir();
+        self.prefs = steam::load_prefs(&dir);
+        change(&mut self.prefs);
         self.prefs_ms = now.max(1);
-        steam::save_prefs(&crate::config::config_dir(), &self.prefs)
+        steam::save_prefs(&dir, &self.prefs)
     }
 }
 
@@ -132,6 +211,16 @@ impl Cabin {
             .collect()
     }
 
+    /// A library game's name from what was last read. Never reads Steam.
+    pub(super) fn steam_cached_name(&self, app_id: u32) -> Option<&str> {
+        self.sources
+            .steam
+            .games
+            .iter()
+            .find(|g| g.app_id == app_id)
+            .map(|g| g.name.as_str())
+    }
+
     /// Game names from the library while the Steam source is on.
     pub(super) fn steam_game_names(&mut self) -> Vec<String> {
         self.sources.steam.refresh(now_ms(), steam::detect_root);
@@ -159,6 +248,11 @@ impl Cabin {
         let now = now_ms();
         self.sources.steam.refresh(now, steam::detect_root);
         let state = &mut self.sources.steam;
+        if state.reading() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
         if !state.found() {
             return;
         }
@@ -170,8 +264,7 @@ impl Cabin {
             )
             .changed()
         {
-            state.prefs.on = Some(on);
-            if let Err(err) = state.save(now) {
+            if let Err(err) = state.update_prefs(now, |p| p.on = Some(on)) {
                 self.status = err;
                 return;
             }
@@ -210,8 +303,7 @@ impl Cabin {
                 }
             });
             if let Some((id, mute)) = flip {
-                state.prefs.set_muted(id, mute);
-                if let Err(err) = state.save(now) {
+                if let Err(err) = state.update_prefs(now, |p| p.set_muted(id, mute)) {
                     self.status = err;
                 }
             }
@@ -249,6 +341,81 @@ mod tests {
             (reads, state.found(), state.requests().len()),
             (1, false, 0)
         );
+    }
+
+    #[test]
+    fn a_found_library_is_read_off_the_ui_thread_then_kept_for_a_day() {
+        let root = std::env::temp_dir().join(format!("gh-steam-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let apps = root.join("steamapps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(
+            apps.join("appmanifest_10.acf"),
+            "\"AppState\" { \"appid\" \"10\" \"name\" \"Current Main\" \"LastPlayed\" \"10\" }",
+        )
+        .unwrap();
+        let mut state = SteamState::default();
+        let probes = std::cell::Cell::new(0);
+        let probe = || {
+            probes.set(probes.get() + 1);
+            Some(root.clone())
+        };
+        state.refresh(1_000, probe);
+        // The frame that starts the read knows nothing yet and asks Steam nothing.
+        assert!(state.reading());
+        assert_eq!((state.found(), state.requests().len()), (false, 0));
+        state.wait_read(1_500);
+        let names: Vec<&str> = state.games.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            (state.reading(), state.found(), names),
+            (false, true, vec!["Current Main"])
+        );
+        assert_eq!(state.requests().len(), 1);
+        // Within a day nothing is read again.
+        state.refresh(1_500 + LIBRARY_TTL_MS - 1, probe);
+        assert_eq!((probes.get(), state.pending.is_some()), (1, false));
+        // A day later the re-read starts, and the old list stays while it runs.
+        state.refresh(1_500 + LIBRARY_TTL_MS, probe);
+        assert_eq!(
+            (
+                probes.get(),
+                state.pending.is_some(),
+                state.reading(),
+                state.games.len()
+            ),
+            (2, true, false, 1)
+        );
+        state.wait_read(2_000 + LIBRARY_TTL_MS);
+        assert_eq!(state.games.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_settings_change_keeps_what_the_agent_saved_meanwhile() {
+        let _g = crate::config::hold_test_config();
+        let dir = crate::config::test_config_root("steam-prefs");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _pin = crate::config::TestConfigDir::set(dir.clone());
+        let mut state = SteamState {
+            found: Some(true),
+            games: vec![game(20, "Current Main"), game(10, "Old Save")],
+            read_ms: 1,
+            prefs_ms: 1,
+            ..Default::default()
+        };
+        // The agent's pulse_steam tool mutes Old Save while the cached prefs
+        // (read under 2 s ago) still say nothing is muted.
+        let mut agent = SteamPrefs::default();
+        agent.set_muted(10, true);
+        steam::save_prefs(&dir, &agent).unwrap();
+        state.update_prefs(2, |p| p.set_muted(20, true)).unwrap();
+        assert_eq!(steam::load_prefs(&dir).muted, vec![10, 20]);
+        assert_eq!(
+            (state.prefs.muted.clone(), state.prefs_ms),
+            (vec![10, 20], 2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

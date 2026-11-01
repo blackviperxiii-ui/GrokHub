@@ -15,8 +15,6 @@ use std::time::SystemTime;
 pub(super) struct DiagnosticsState {
     /// Last zip written (Open folder).
     pub(super) last_zip: Option<std::path::PathBuf>,
-    /// The chat shows "Saved … / Open folder" for the last bundle until dismissed.
-    pub(super) notice: bool,
     /// Built and redacted, shown for Save or Cancel; nothing is written yet.
     pub(super) pending: Option<PendingDiagnostics>,
 }
@@ -40,6 +38,7 @@ impl Cabin {
 
     pub(super) fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
         let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
+        self.mark_stale_auth(&mut lines);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
             self.skill_list.len(),
@@ -54,7 +53,6 @@ impl Cabin {
         self.cfg.diagnostics_mode = on;
         if !on {
             self.diagnostics.last_zip = None;
-            self.diagnostics.notice = false;
         }
         self.persist_cfg();
         self.status = "Saved".into();
@@ -101,47 +99,18 @@ impl Cabin {
         }
     }
 
-    /// Under the composer after a Save from a message or the chat menu: the
-    /// file name with Open folder, until opened or dismissed.
-    pub(super) fn paint_diagnostics_notice(&mut self, ui: &mut egui::Ui) {
-        if !self.diagnostics.notice {
-            return;
-        }
-        let Some(name) = self
-            .diagnostics
-            .last_zip
-            .as_deref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-        else {
-            self.diagnostics.notice = false;
-            return;
-        };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                RichText::new(format!("Saved {name}"))
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-            if crate::cards::ghost_pill(ui, "Open folder") {
-                self.open_diagnostics_folder();
-                self.diagnostics.notice = false;
-            }
-            if crate::cards::ghost_pill(ui, "Dismiss") {
-                self.diagnostics.notice = false;
-            }
-        });
-        ui.add_space(4.0);
-    }
-
     /// Open the Desktop folder that holds the last diagnostics zip.
     pub(super) fn open_diagnostics_folder(&mut self) {
         let Some(path) = self.diagnostics.last_zip.clone() else {
             self.status = "No diagnostics file yet".into();
             return;
         };
-        let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or(path);
+        self.open_folder_of(&path);
+    }
+
+    /// Open the folder that holds `path` (the bell's Open folder).
+    pub(super) fn open_folder_of(&mut self, path: &std::path::Path) {
+        let dir = path.parent().unwrap_or(path);
         if let Err(e) = crate::desktop::open_path(&dir.display().to_string()) {
             self.status = format!("Couldn't open folder: {e}");
         }
@@ -163,10 +132,7 @@ impl Cabin {
             return;
         }
         let version = crate::update::build_version_line();
-        let version = version
-            .strip_prefix("GrokHub ")
-            .unwrap_or(&version)
-            .to_string();
+        let version = grokhub_core::strip_product_prefix(&version).to_string();
         let messages: Vec<(String, String)> = if self.thread_idx < self.threads.len()
             && self.threads[self.thread_idx].id == thread.id
             && !self.messages.is_empty()
@@ -393,8 +359,12 @@ impl Cabin {
             Ok(path) => {
                 let on_desktop = path.parent() == grokhub_core::desktop_dir().as_deref();
                 self.status = diagnostics_saved_status(&path, on_desktop);
+                self.notify(
+                    super::notices::NoticeKind::Success,
+                    self.status.clone(),
+                    Some(super::notices::NoticeAction::OpenFolder(path.clone())),
+                );
                 self.diagnostics.last_zip = Some(path);
-                self.diagnostics.notice = true;
             }
             Err(e) => self.status = format!("Couldn't save diagnostics: {e}"),
         }
@@ -476,21 +446,33 @@ impl Cabin {
         }
     }
 
-    fn diagnostics_service_status(&self) -> Vec<String> {
-        let mut lines: Vec<String> = grokhub_core::doctor_lines(
+    /// A sign-in or key on file that can't carry a turn reads as stale, not
+    /// "present", so the status agrees with what the send does.
+    fn mark_stale_auth(&self, lines: &mut [grokhub_core::DoctorLine]) {
+        if self.has_key() && !self.cloud_cred_usable() {
+            if let Some(first) = lines.first_mut() {
+                *first = grokhub_core::xai_auth_stale_line(self.chat_ready());
+            }
+        }
+    }
+
+    pub(super) fn diagnostics_service_status(&self) -> Vec<String> {
+        let mut doctor = grokhub_core::doctor_lines(
             self.has_key(),
             config::config_dir().join("memory").is_dir(),
             HUB_KIND,
-        )
-        .into_iter()
-        .map(|l| {
-            if l.ok {
-                format!("ok — {}", l.text)
-            } else {
-                format!("fail — {}", l.text)
-            }
-        })
-        .collect();
+        );
+        self.mark_stale_auth(&mut doctor);
+        let mut lines: Vec<String> = doctor
+            .into_iter()
+            .map(|l| {
+                if l.ok {
+                    format!("ok — {}", l.text)
+                } else {
+                    format!("fail — {}", l.text)
+                }
+            })
+            .collect();
         for l in grokhub_core::doctor_extras(self.last_receipt_ok, self.skill_list.len()) {
             lines.push(if l.ok {
                 format!("ok — {}", l.text)
@@ -869,7 +851,13 @@ mod tests {
         let path = cabin.diagnostics.last_zip.clone().expect("zip path");
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
         assert_eq!(cabin.status, format!("Saved {name} to your Desktop"));
-        assert!(cabin.diagnostics.notice);
+        assert_eq!(
+            cabin.notices.items[0].action,
+            Some(super::super::notices::NoticeAction::OpenFolder(
+                path.clone()
+            ))
+        );
+        assert_eq!(cabin.notices.items[0].text, cabin.status);
         assert!(path.starts_with(&desk), "{path:?}");
         assert!(
             name.starts_with("loadout-diagnostics-") && name.ends_with(".zip"),

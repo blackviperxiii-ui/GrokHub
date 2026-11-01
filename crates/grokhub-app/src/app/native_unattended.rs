@@ -1,7 +1,7 @@
 //! Route unattended cabin work (scheduled, night, `/send`, `/bg`) onto the native
 //! engine. Ask fails closed here because nobody can answer a card.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use grokhub_agent::route::goal::{pin_goal, Goal, RouteGoal};
@@ -96,18 +96,23 @@ fn take_governed_spent() -> Vec<(JobKind, u64)> {
 /// kind when a background job ran it, then delete its session file so these
 /// runs don't fill History.
 fn settle_ephemeral(done: &grokhub_agent::UnattendedDone, kind: Option<JobKind>) {
+    settle_usage(&done.usage, kind);
+    let _ = grokhub_agent::delete_session(&done.session_id);
+}
+
+/// Count a one-shot's tokens toward today's usage and its governor kind.
+fn settle_usage(usage: &grokhub_agent::Usage, kind: Option<JobKind>) {
     if let Some(kind) = kind {
-        note_governed_spend(kind, usage_tokens(&done.usage));
+        note_governed_spend(kind, usage_tokens(usage));
     }
-    if done.usage != grokhub_agent::Usage::default() {
+    if *usage != grokhub_agent::Usage::default() {
         let mut spent = EPHEMERAL_SPENT
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         spent
             .get_or_insert_with(grokhub_agent::Usage::default)
-            .add(&done.usage);
+            .add(usage);
     }
-    let _ = grokhub_agent::delete_session(&done.session_id);
 }
 
 fn take_ephemeral_spent() -> Option<grokhub_agent::Usage> {
@@ -248,58 +253,81 @@ pub(super) fn single_turn_json(done: &grokhub_agent::UnattendedDone) -> String {
     .to_string()
 }
 
+/// Router class one-shot background asks log under.
+const ONE_SHOT_CLASS: &str = "background:one-shot";
+
+/// One background ask (chips, ideas, feed rewrite, digest): a single model call
+/// with no function tools, no engine loop and no session file. `search` turns on
+/// xAI's hosted web and X search for the digest, which must cite real links.
 fn fast_once(
     ready: &ReadyModel,
-    workspace: &Path,
     prompt: &str,
     model: &str,
     kind: Option<JobKind>,
     goal: Option<&RouteGoal>,
+    search: bool,
 ) -> Result<String, String> {
-    let done = execute(Prepared {
-        ready: ReadyModel {
-            client: Arc::clone(&ready.client),
-            kind: ready.kind,
-            bearer: ready.bearer.clone(),
-        },
-        workspace: workspace.to_path_buf(),
-        model: model.to_string(),
-        effort: Some(grokhub_core::BACKGROUND_EFFORT.to_string()),
-        system: String::new(),
-        session_id: format!("native-fast-{}", uid("f")),
-        resume: false,
-        gate: fast_gate(),
-        prompt: prompt.to_string(),
-        image: None,
-        goal: goal.cloned(),
-    });
-    settle_ephemeral(&done, kind);
-    if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
-        return Err(done.stop_reason);
+    let session = format!("native-fast-{}", uid("f"));
+    let req = one_shot_request(&session, prompt, model, search);
+    let cancel = grokhub_agent::CancelToken::new();
+    grokhub_agent::watch_cancel(&session, cancel.clone());
+    if goal.is_some() {
+        pin_goal(&session, goal.cloned());
     }
-    if done.stop_reason == "error" && done.text.trim().is_empty() {
-        return Err(if done.error.is_empty() {
-            "unattended run failed".into()
-        } else {
-            done.error
-        });
+    let out = grokhub_agent::route::live::stream_routed(
+        ready.client.as_ref(),
+        &req,
+        &cancel,
+        &mut |_| {},
+        ONE_SHOT_CLASS,
+    );
+    if goal.is_some() {
+        pin_goal(&session, None);
     }
-    Ok(done.text)
+    grokhub_agent::forget_session(&session);
+    match out {
+        Ok(turn) => {
+            settle_usage(&turn.usage, kind);
+            Ok(turn.text)
+        }
+        Err(grokhub_agent::ClientError::Cancelled) => Err("cancelled".into()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
+fn one_shot_request(
+    session: &str,
+    prompt: &str,
+    model: &str,
+    search: bool,
+) -> grokhub_agent::ResponsesRequest {
+    grokhub_agent::ResponsesRequest {
+        model: model.to_string(),
+        effort: Some(grokhub_core::BACKGROUND_EFFORT.to_string()),
+        input: vec![grokhub_agent::InputItem::Message {
+            role: "user".into(),
+            content: vec![grokhub_agent::ContentPart::InputText(prompt.to_string())],
+        }],
+        conversation_id: session.to_string(),
+        tools: Vec::new(),
+        hosted_search: search,
+        call_timeout: None,
+    }
+}
+
+/// A text-only one-shot. An empty reply gets one retry on the fallback model.
 fn fast_text(
     ready: &ReadyModel,
-    workspace: &Path,
     prompt: &str,
     kind: Option<JobKind>,
     goal: Option<&RouteGoal>,
 ) -> Result<String, String> {
     let model = tier_model(CABIN_FAST_MODEL, goal);
-    let primary = fast_once(ready, workspace, prompt, &model, kind, goal)?;
+    let primary = fast_once(ready, prompt, &model, kind, goal, false)?;
     if !primary.trim().is_empty() {
         return Ok(primary);
     }
-    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind, goal)
+    fast_once(ready, prompt, CABIN_FAST_FALLBACK, kind, goal, false)
 }
 
 fn native_rules(cabin: &Cabin, workspace: &std::path::Path, job: &str) -> String {
@@ -344,12 +372,10 @@ impl Cabin {
         grokhub_agent::mcp::shutdown_all();
         self.grok_loop_rx = None;
         self.review_rx = None;
-        self.chip_rx = None;
         self.greeting_rx = None;
         self.ideas_rx = None;
         self.digest_rx = None;
         self.review_busy = false;
-        self.chip_busy = false;
         self.greeting_busy = false;
         self.digest_busy = false;
     }
@@ -520,43 +546,6 @@ impl Cabin {
         });
     }
 
-    /// Test-only Fast-model chip ask. Composer paint no longer calls this.
-    #[cfg(test)]
-    pub(super) fn spawn_native_chips(&mut self) {
-        let chat = self.chip_chat_pairs();
-        let title = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| t.title.clone())
-            .unwrap_or_default();
-        let habits = top_habit_labels(&self.chip_memory, 6);
-        let others = self.other_chip_threads();
-        let mut dismissed = self.chip_dismissed.clone();
-        for hit in &self.chip_memory.hits {
-            if hit.dismisses >= 1 {
-                dismissed.push(hit.value.clone());
-                dismissed.push(hit.label.clone());
-            }
-        }
-        let prompt =
-            chip_suggest_prompt(&chat, &title, &self.composer, &habits, &dismissed, &others);
-        let ready = match unattended_model(self) {
-            Ok(ready) => ready,
-            Err(err) => {
-                self.status = err;
-                return;
-            }
-        };
-        let workspace = self.grok_cwd();
-        let (tx, rx) = mpsc::channel();
-        self.chip_rx = Some(rx);
-        self.chip_busy = true;
-        std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
-            let _ = tx.send(parse_llm_chips(&text));
-        });
-    }
-
     /// Test-only Fast-model greeting ask. Empty-home paint no longer calls this.
     #[cfg(test)]
     pub(super) fn spawn_native_greeting(&mut self, prompt: String) {
@@ -567,12 +556,11 @@ impl Cabin {
                 return;
             }
         };
-        let workspace = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
+            let text = fast_text(&ready, &prompt, None, None).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
@@ -592,14 +580,12 @@ impl Cabin {
                 return;
             }
         };
-        let workspace = self.grok_cwd();
         let goal = kind.and_then(|k| self.bg_goal(k));
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(
                 grokhub_agent::harness::Origin::Proactive,
             );
-            let text =
-                fast_text(&ready, &workspace, &prompt, kind, goal.as_ref()).unwrap_or_default();
+            let text = fast_text(&ready, &prompt, kind, goal.as_ref()).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
@@ -619,7 +605,6 @@ impl Cabin {
                 return;
             }
         };
-        let workspace = self.grok_cwd();
         let goal = self.bg_goal(JobKind::Digest);
         let (tx, rx) = mpsc::channel();
         self.digest_rx = Some(rx);
@@ -627,7 +612,7 @@ impl Cabin {
         std::thread::spawn(move || {
             let digest = Some(JobKind::Digest);
             let model = tier_model(CABIN_FAST_MODEL, goal.as_ref());
-            let out = fast_once(&ready, &workspace, &prompt, &model, digest, goal.as_ref());
+            let out = fast_once(&ready, &prompt, &model, digest, goal.as_ref(), true);
             let _ = tx.send(out);
         });
     }
@@ -756,7 +741,6 @@ mod tests {
                 "follow_feed_lookup",
                 "native_digest",
             ),
-            (include_str!("chips.rs"), "spawn_chip_llm", "native_chips"),
             (
                 include_str!("chips.rs"),
                 "spawn_greeting_llm",
@@ -832,9 +816,6 @@ mod tests {
         );
         assert_eq!(ideas.len(), 1);
         assert_eq!(ideas[0].title, "Standup note");
-        let chips = parse_llm_chips(r#"[{"label":"Check status","value":"status please"}]"#);
-        assert_eq!(chips.len(), 1);
-        assert_eq!(chips[0].label, "Check status");
         let greet = pick_greeting_against("", Some("Good to see you today"), &[]);
         assert_eq!(greet, "Good to see you today");
         let review = parse_suggest_lines(
@@ -1001,20 +982,6 @@ mod tests {
                 .all(|info| !info.id.starts_with("native-fast-")),
             "one-shot runs don't fill History"
         );
-
-        say.text
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone_from(&r#"[{"label":"Check status","value":"status please"}]"#.to_string());
-        cabin.spawn_chip_llm();
-        wait_until(|| {
-            cabin.poll_chips();
-            !cabin.chip_busy
-        });
-        assert!(cabin
-            .llm_chips
-            .iter()
-            .any(|chip| chip.label == "Check status"));
 
         say.text
             .lock()
@@ -1326,8 +1293,11 @@ mod tests {
         // config.rs only seeds a new install's pick (Nyx); it never reads it into a prompt.
         // loadout_home.rs pins Viper (+ adults-only) for GROKHUB_DECK_SHOT seeds only —
         // titlebar/proof shots; it never layers personality into a chat or night-job prompt.
+        // loadout_home/wardrobe_parity.rs is a #[cfg(test)] module: it lists the voice ids
+        // to check the cabin and shell outfit tables match, and builds no prompt.
         let want: std::collections::BTreeSet<String> = [
             "app/loadout_home.rs",
+            "app/loadout_home/wardrobe_parity.rs",
             "app/native_engine.rs",
             "app/personality_ui.rs",
             "config.rs",
@@ -1336,5 +1306,106 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         assert_eq!(readers, want);
+    }
+
+    /// Records each request a one-shot sends and answers with fixed text.
+    struct Rec {
+        reply: String,
+        seen: std::sync::Mutex<Vec<grokhub_agent::ResponsesRequest>>,
+    }
+
+    impl ModelClient for Rec {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(req.clone());
+            sink(StreamEvent::TextDelta(self.reply.clone()));
+            Ok(TurnOutput {
+                text: self.reply.clone(),
+                usage: Usage {
+                    input_tokens: 4,
+                    output_tokens: 3,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn background_one_shots_send_one_call_with_no_function_tools() {
+        let (_lock, root, _env) = isolated("one-shot-shape");
+        let rec = Arc::new(Rec {
+            reply: "Keep my feed short.".into(),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        set_unattended_client_for_test(Some(rec.clone()));
+        let _ = take_ephemeral_spent();
+        let mut cabin = Cabin::quiet_for_test();
+        let (tx, rx) = mpsc::channel();
+        cabin.spawn_native_ideas("Rewrite these feed instructions.".into(), tx, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(30)).unwrap(),
+            "Keep my feed short."
+        );
+        cabin.spawn_native_digest();
+        wait_until(|| {
+            cabin.poll_digest_lookup();
+            cabin.digest_rx.is_none()
+        });
+        let seen = rec.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "one call per ask");
+        for req in &seen {
+            assert!(req.tools.is_empty(), "no function tools: {:?}", req.tools);
+            assert_eq!(req.effort.as_deref(), Some(grokhub_core::BACKGROUND_EFFORT));
+            assert_eq!(req.input.len(), 1, "the ask alone, no engine scaffolding");
+        }
+        // Only the digest searches: it must cite links it actually found.
+        assert!(!seen[0].hosted_search);
+        assert!(seen[1].hosted_search);
+        let text = format!("{:?}", seen[0].input);
+        assert!(text.contains("Rewrite these feed instructions."), "{text}");
+        assert!(!text.contains("cabin-volatile"), "{text}");
+        // Both calls still count toward today's tokens.
+        let spent = take_ephemeral_spent().unwrap_or_default();
+        assert_eq!((spent.input_tokens, spent.output_tokens), (8, 6));
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_one_shot_reply_gets_one_retry_on_the_fallback_model() {
+        let (_lock, root, _env) = isolated("one-shot-retry");
+        let rec = Arc::new(Rec {
+            reply: String::new(),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        set_unattended_client_for_test(Some(rec.clone()));
+        let mut cabin = Cabin::quiet_for_test();
+        let (tx, rx) = mpsc::channel();
+        cabin.spawn_native_ideas("Suggest ideas.".into(), tx, None);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(30)).unwrap(), "");
+        let models: Vec<String> = rec
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.model.clone())
+            .collect();
+        assert_eq!(
+            models,
+            vec![
+                CABIN_FAST_MODEL.to_string(),
+                CABIN_FAST_FALLBACK.to_string()
+            ]
+        );
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

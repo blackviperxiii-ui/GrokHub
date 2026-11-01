@@ -1,0 +1,1 @@
+Settings keeps its section list in place while each page scrolls on its own, every section opens at the top, and a Close button (or Esc) takes you back to the screen you came from. The Approvals dropdown now matches the other fields, and Journal sits in the same centered column as the other screens.

@@ -1,0 +1,2 @@
+- Library: Battle.net games show up, World of Warcraft first, including installs inside a Wine prefix on Linux (Wine, Lutris, Bottles, Heroic, Faugus, or a Proton non-Steam shortcut), read from the Battle.net app's own install list.
+- Game watcher: while WoW runs, boss pulls, kills, wipes and deaths come from the combat log WoW writes after `/combatlog`, for Retail and Classic flavors. Read-only file reads; nothing touches the game.

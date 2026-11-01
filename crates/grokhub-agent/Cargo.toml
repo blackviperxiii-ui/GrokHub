@@ -10,9 +10,9 @@ publish = false
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
 serde.workspace = true
-serde_json.workspace = true
+# `raw_value`: an xAI compaction item is kept as the exact JSON text it came in.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }
-ureq = { workspace = true }
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
 base64 = "0.22"
 ignore = "0.4"
@@ -23,18 +23,11 @@ image = { workspace = true }
 # every table but `moz_places` / `urls`.
 rusqlite = { workspace = true, features = ["hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
-# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
+# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq 3, zeroize via
 # rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
 ring = "0.17"
 zeroize = "1"
 keyring = { workspace = true }
-
-[dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "http2",
-    "blocking",
-] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
@@ -44,10 +37,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Power",
     "Win32_System_Threading",
+    "Win32_System_Time",
 ] }
 
 # keyring's `v1` feature only turns on the macOS `keychain` store, and

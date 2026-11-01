@@ -150,17 +150,19 @@ impl Cabin {
                     next.push_str(note.trim());
                     next.push('\n');
                     let written = next.clone();
-                    std::thread::spawn(move || {
-                        let _ = config::write_memory("MEMORY.md", &written);
+                    self.status = "Saving MEMORY.md…".into();
+                    self.spawn_file_write("MEMORY.md".into(), false, move || {
+                        config::write_memory("MEMORY.md", &written)?;
+                        Ok("MEMORY.md".into())
                     });
                     self.mem_body = next;
-                    self.status = "Wrote MEMORY.md".into();
                 } else {
                     let note = note.clone();
-                    std::thread::spawn(move || {
-                        let _ = config::append_memory("MEMORY.md", &note);
+                    self.status = "Saving MEMORY.md…".into();
+                    self.spawn_file_write("MEMORY.md".into(), false, move || {
+                        config::append_memory("MEMORY.md", &note)?;
+                        Ok("MEMORY.md".into())
                     });
-                    self.status = "Wrote MEMORY.md".into();
                 }
             }
             Slash::Board => {
@@ -469,7 +471,10 @@ impl Cabin {
                     t.grok_session = None;
                 }
                 self.persist_idle_key = self.persist_idle_now();
-                self.status = "Plan mode — Grok will plan first".into();
+                self.status = format!(
+                    "Plan mode — {} will plan first",
+                    grokhub_core::brand::product_name()
+                );
             }
             Slash::AlwaysApprove => {
                 if self.permission_mode == PermissionMode::AlwaysApprove {
@@ -645,18 +650,18 @@ impl Cabin {
                 self.persist();
                 if let Some(t) = self.threads.get(self.thread_idx) {
                     let t = t.clone();
-                    let dest = if self.cfg.project_dir.trim().is_empty() {
-                        config::config_dir().join("export.md")
-                    } else {
-                        std::path::PathBuf::from(expand_home(&self.cfg.project_dir))
-                            .join("export.md")
-                    };
+                    // A stamped name per export: a second /export never
+                    // clobbers the first. expand_home lives in export_dest.
+                    let dest = self.export_dest(&Self::stamped_export_name("export.md"));
                     let status_path = dest.display().to_string();
-                    std::thread::spawn(move || {
+                    let make_dir = self.cfg.project_dir.trim().is_empty();
+                    self.status = format!("Exporting to {status_path}…");
+                    self.spawn_file_write(status_path, false, move || {
                         let md = threads::export_markdown(&t);
-                        let _ = std::fs::write(&dest, md);
+                        file_writes::write_new_file(&dest, md.as_bytes(), make_dir)
+                            .map(|p| p.display().to_string())
+                            .map_err(|e| e.to_string())
                     });
-                    self.status = format!("Wrote {status_path}");
                 }
             }
             Slash::ExportAs(fmt) => match grokhub_core::ChatExport::parse(&fmt) {
@@ -799,7 +804,7 @@ impl Cabin {
             self.status = "Nothing to export".into();
             return;
         };
-        let dest = self.export_dest(format.file_name());
+        let dest = self.export_dest(&Self::stamped_export_name(format.file_name()));
         let status_path = dest.display().to_string();
         let footer = format!(
             "Exported from {} {}",
@@ -807,7 +812,9 @@ impl Cabin {
             env!("CARGO_PKG_VERSION")
         );
         let now = now_ms();
-        std::thread::spawn(move || {
+        let make_dir = self.cfg.project_dir.trim().is_empty();
+        self.status = format!("Exporting to {status_path}…");
+        self.spawn_file_write(status_path, false, move || {
             let msgs = t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
             let body = match format {
                 grokhub_core::ChatExport::Html => {
@@ -818,9 +825,10 @@ impl Cabin {
                 }
                 grokhub_core::ChatExport::Markdown => threads::export_markdown(&t),
             };
-            let _ = std::fs::write(&dest, body);
+            file_writes::write_new_file(&dest, body.as_bytes(), make_dir)
+                .map(|p| p.display().to_string())
+                .map_err(|e| e.to_string())
         });
-        self.status = format!("Wrote {status_path}");
     }
 }
 

@@ -1,0 +1,1 @@
+- `/export`, `/export html|json`, `/remember` and Memory Save now say "Wrote …" only after the file is on disk, and "Couldn't write …: <reason>" when it fails. Each export gets its own time-stamped file (`export-YYYYMMDD-HHMM.md`) instead of overwriting the last one.

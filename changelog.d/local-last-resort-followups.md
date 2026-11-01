@@ -1,1 +1,0 @@
-- Routing: with the cloud down or no sign-in, hard work stays off the local model (also after a failed on-device check), a provider you picked or pinned still answers on its own key, and a model held back only by your price limit asks for your OK instead of switching to local.

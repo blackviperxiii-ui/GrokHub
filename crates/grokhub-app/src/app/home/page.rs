@@ -2,7 +2,9 @@
 
 use grokhub_core::home::{place_slots, GAP};
 
-use super::super::loadout_home::{caption, grouped, level_xp, objective_progress, XP_PER_LEVEL};
+use super::super::loadout_home::{
+    caption, grouped, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
+};
 use super::super::mission_page::{day_caption, greeting};
 use super::super::*;
 use super::edit::HomeEditDraft;
@@ -14,7 +16,8 @@ const COMPOSE_H: f32 = 140.0;
 const DRAFT_ID: &str = "home-mission-draft";
 const COMPOSE_H_ID: &str = "home-mission-compose-h";
 
-/// Default Home chips (Mission Control preset).
+/// Home chips in deck screenshots only (Mission Control preset). Real Home
+/// paints the ranked row from the chip engine (`Cabin::home_chips`).
 pub(in crate::app) const HOME_CHIPS: [&str; 4] = [
     "Fix my stutter",
     "Find a duo tonight",
@@ -69,7 +72,26 @@ impl Cabin {
                         pose,
                     );
                 }
-                if edit_resp.on_hover_text("Edit Home").clicked() {
+                // The pencil alone floated with no label; name it, and let
+                // the words open the editor too.
+                let label = ui.painter().layout_no_wrap(
+                    "Edit Home".to_string(),
+                    egui::FontId::proportional(crate::theme::TYPE_CAPTION),
+                    crate::theme::muted(),
+                );
+                let label_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        edit_btn.left() - 6.0 - label.size().x,
+                        edit_btn.center().y - label.size().y / 2.0,
+                    ),
+                    label.size(),
+                );
+                let label_resp = ui
+                    .allocate_rect(label_rect, egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.painter()
+                    .galley(label_rect.min, label, crate::theme::muted());
+                if label_resp.clicked() || edit_resp.on_hover_text("Edit Home").clicked() {
                     self.home_edit = Some(HomeEditDraft::from_layout(&self.home_layout));
                 }
 
@@ -121,6 +143,10 @@ impl Cabin {
             match act {
                 ModuleAction::OpenChat(text) => self.send_home_to_chat(text),
                 ModuleAction::Nav(id) => self.set_nav_id(id),
+                ModuleAction::Settings(sec) => {
+                    self.set_nav_id("settings");
+                    self.settings_sec = sec;
+                }
             }
         }
     }
@@ -151,7 +177,8 @@ impl Cabin {
                 );
             });
             if show_xp {
-                let (level, xp, frac) = level_xp(self.dock_finished_tasks(ui.ctx()), done);
+                let xp_tally = self.dock_xp(ui.ctx());
+                let (level, xp, frac) = level_xp(xp_tally, done);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(280.0_f32.min(ui.available_width()), 48.0),
@@ -177,10 +204,11 @@ impl Cabin {
                                     },
                                 );
                             });
-                            let (bar, _) = ui.allocate_exact_size(
+                            let (bar, bar_resp) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 6.0),
                                 egui::Sense::hover(),
                             );
+                            bar_resp.on_hover_text(xp_hover(xp_tally));
                             ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
                             let mut fill = bar;
                             fill.set_width(bar.width() * frac);
@@ -196,13 +224,20 @@ impl Cabin {
         let id = egui::Id::new(DRAFT_ID);
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         ui.add_space(GAP);
-        ui.horizontal_wrapped(|ui| {
-            for s in HOME_CHIPS {
-                if crate::ui_kit::chip(ui, s, true, true).clicked() {
-                    actions.push(ModuleAction::OpenChat(s.to_string()));
+        if super::super::loadout_home::deck_shot_requested() {
+            ui.horizontal_wrapped(|ui| {
+                for s in HOME_CHIPS {
+                    if crate::ui_kit::chip(ui, s, true, true).clicked() {
+                        actions.push(ModuleAction::OpenChat(s.to_string()));
+                    }
                 }
+            });
+        } else {
+            let chips = self.home_chips.clone();
+            if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
+                self.take_home_chip_act(act, &chips);
             }
-        });
+        }
         ui.add_space(10.0);
         let mut send = false;
         egui::Frame::NONE

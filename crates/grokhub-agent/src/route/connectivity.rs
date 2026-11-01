@@ -54,7 +54,8 @@ static STATE: AtomicU8 = AtomicU8::new(NetState::Online as u8);
 
 /// Current connectivity (tests may force Offline via [`ForceOffline`]).
 pub fn state() -> NetState {
-    if test_offline() {
+    // Offline only (LU-13) reads as Offline whatever the network says.
+    if test_offline() || grokhub_core::offline::enabled() {
         return NetState::Offline;
     }
     NetState::from_u8(STATE.load(Ordering::SeqCst))
@@ -107,26 +108,22 @@ pub fn cloud_queue_note(class: &str) -> String {
         "prepare:hard" => "a hard prepare step",
         other => other,
     };
+    if grokhub_core::offline::enabled() {
+        return format!("Offline only is on: {what} needs the internet.");
+    }
     format!("Waiting for the network: {what} needs the cloud.")
 }
 
-/// Classify a `ureq` error for [`grokhub_core::connectivity::note_global_transport_hint`].
-pub fn classify_ureq_error(err: &ureq::Error) -> grokhub_core::connectivity::TransportHint {
-    use grokhub_core::connectivity::{classify_http_status, TransportHint};
-    match err {
-        ureq::Error::Status(code, _) => classify_http_status(*code),
-        ureq::Error::Transport(t) => match t.kind() {
-            ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io => {
-                TransportHint::OfflineCandidate
-            }
-            _ => TransportHint::Inconclusive,
-        },
-    }
+/// Classify an HTTP error for [`grokhub_core::connectivity::note_global_transport_hint`].
+pub fn classify_http_error(
+    err: &grokhub_core::http::Error,
+) -> grokhub_core::connectivity::TransportHint {
+    grokhub_core::connectivity::classify_http_error(err)
 }
 
-/// Feed ureq transport failures into the cabin connectivity engine.
-pub fn note_ureq_transport(err: &ureq::Error) {
-    let hint = classify_ureq_error(err);
+/// Feed HTTP transport failures into the cabin connectivity engine.
+pub fn note_http_transport(err: &grokhub_core::http::Error) {
+    let hint = classify_http_error(err);
     grokhub_core::connectivity::note_global_transport_hint(hint, grokhub_core::now_ms());
 }
 
@@ -215,10 +212,30 @@ mod tests {
     }
 
     #[test]
-    fn ureq_connect_errors_are_offline_candidates() {
+    fn http_connect_errors_are_offline_candidates() {
         use grokhub_core::connectivity::TransportHint;
-        let err = ureq::get("http://127.0.0.1:1/").call().unwrap_err();
-        assert_eq!(classify_ureq_error(&err), TransportHint::OfflineCandidate);
+        use grokhub_core::http::{agent, Error, Opts, TransportKind};
+        let err = agent(Opts::default())
+            .get("http://127.0.0.1:1/")
+            .call()
+            .err()
+            .unwrap();
+        assert_eq!(classify_http_error(&err), TransportHint::OfflineCandidate);
+        let bad_url = Error::Transport {
+            kind: TransportKind::Other,
+            message: "bad url".into(),
+        };
+        assert_eq!(classify_http_error(&bad_url), TransportHint::Inconclusive);
+        let unavailable = Error::Status {
+            code: 503,
+            body: String::new(),
+            retry_after: None,
+            message: "x: status code 503".into(),
+        };
+        assert_eq!(
+            classify_http_error(&unavailable),
+            TransportHint::CloudReachable
+        );
     }
 
     #[test]
@@ -273,16 +290,15 @@ mod tests {
         assert!(!state().prefer_local(), "router stays online after 401");
     }
 
-    fn synthetic_connect_error() -> reqwest::Error {
-        reqwest::blocking::Client::builder()
-            .build()
-            .unwrap()
+    fn synthetic_connect_error() -> grokhub_core::http::Error {
+        grokhub_core::http::agent(grokhub_core::http::Opts::default())
             .get("http://127.0.0.1:1/")
-            .send()
-            .unwrap_err()
+            .call()
+            .err()
+            .unwrap()
     }
 
-    fn synthetic_status_error(status: u16) -> reqwest::Error {
+    fn synthetic_status_error(status: u16) -> grokhub_core::http::Error {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -298,12 +314,10 @@ mod tests {
                 let _ = stream.write_all(resp.as_bytes());
             }
         });
-        reqwest::blocking::Client::builder()
-            .build()
+        grokhub_core::http::agent(grokhub_core::http::Opts::default())
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .call()
+            .err()
             .unwrap()
-            .get(format!("http://127.0.0.1:{port}/"))
-            .send()
-            .and_then(|r| r.error_for_status())
-            .unwrap_err()
     }
 }

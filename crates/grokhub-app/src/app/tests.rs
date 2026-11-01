@@ -36,6 +36,11 @@ mod step_search_tests;
 #[path = "board_ideas_tests.rs"]
 mod board_ideas_tests;
 
+#[path = "work_log_tests.rs"]
+mod work_log_tests;
+#[path = "work_resume_tests.rs"]
+mod work_resume_tests;
+
 #[path = "idle_chat_state_tests.rs"]
 mod idle_chat_state_tests;
 
@@ -112,6 +117,7 @@ fn cabin_src() -> String {
     // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
+        include_str!("lan_host.rs"),
         include_str!("persist.rs"),
         include_str!("persist_service.rs"),
         include_str!("acp.rs"),
@@ -1689,7 +1695,7 @@ fn plan_and_empty_video_stay_off_a_run() {
     }
 
     cabin.run_slash(super::Slash::Plan);
-    assert_eq!(cabin.status, "Plan mode — Grok will plan first");
+    assert_eq!(cabin.status, "Plan mode — Loadout will plan first");
     assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
     assert_eq!(cabin.cfg.session_mode, "plan");
     assert!(cabin.acp.is_none());
@@ -1967,10 +1973,13 @@ fn quiet_cabin() -> Cabin {
         web_search_key_draft: String::new(),
         running: false,
         turn_retried: false,
+        rejected_bearer: None,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         rx: None,
         chat_job_thread: None,
         inflight_open: false,
+        run_tools_logged: Vec::new(),
+        work_resume: Default::default(),
         hub: std::sync::Arc::new(std::sync::Mutex::new(grokhub_core::HubState::empty())),
         hub_on: false,
         hub_port: grokhub_core::DEFAULT_PORT,
@@ -2029,8 +2038,6 @@ fn quiet_cabin() -> Cabin {
         tray: None,
         tray_rx: None,
         window_visible: true,
-        resume_fresh: false,
-        saw_minimized: false,
         ideas_filled: false,
         ideas_rx: None,
         tray_saw_unfocused: false,
@@ -2055,8 +2062,9 @@ fn quiet_cabin() -> Cabin {
         history_q: String::new(),
         history_q_seen: String::new(),
         history_q_at: None,
+        history_delete_armed_at: None,
         history_hits: Vec::new(),
-        archive_undo: None,
+        notices: Default::default(),
         chat_archive_day: None,
         last_receipt_ok: None,
         beta_auto_off_checked_at: None,
@@ -2157,13 +2165,11 @@ fn quiet_cabin() -> Cabin {
         pulse_view: Default::default(),
         agent_cursor: None,
         board_view: Default::default(),
-        llm_chips: Vec::new(),
         visible_chips: Vec::new(),
-        chip_rx: None,
-        chip_busy: false,
-        chip_fp: String::new(),
+        home_chips: Vec::new(),
         chip_paint_key: String::new(),
-        chip_llm_at: 0,
+        chip_send_key: None,
+        chip_turn_key: None,
         greeting: String::new(),
         greeting_fp: String::new(),
         greeting_user_at: 0,
@@ -2186,7 +2192,6 @@ fn quiet_cabin() -> Cabin {
         board_link: false,
         settings_menu_open: false,
         settings_menu_ignore: false,
-        sidebar_q: String::new(),
         win_max: false,
         geom_dirty: false,
         geom_applied: false,
@@ -2218,6 +2223,7 @@ fn quiet_cabin() -> Cabin {
         imagine_pending: false,
         imagine_native: super::imagine::ImagineNative::default(),
         imagine_save_rx: None,
+        file_writes: Vec::new(),
         goal_rx: None,
         goal_busy: false,
         goal_stale: false,
@@ -2371,7 +2377,7 @@ fn empty_skill_tile_stays_off_a_run() {
 
     cabin.add_suggested_skill(&tile);
 
-    assert_eq!(cabin.status, "Need a cabin-real skill name and steps");
+    assert_eq!(cabin.status, "Need a real skill name and steps");
     assert!(cabin.suggestions.skills.is_empty());
     assert!(!cabin.running);
     assert!(matches!(cabin.nav, super::Nav::Chat));
@@ -2486,12 +2492,17 @@ fn export_writes_html_and_json_next_to_export_md() {
     cabin.cfg.project_dir.clear();
 
     cabin.run_slash_line("/export html");
+    wait_file_writes(cabin);
     let html_path = cabin
         .status
         .strip_prefix("Wrote ")
         .unwrap_or("")
         .to_string();
-    assert!(html_path.ends_with("export.html"), "{}", cabin.status);
+    assert!(
+        html_path.contains("export-") && html_path.ends_with(".html"),
+        "{}",
+        cabin.status
+    );
     wait_for("export.html must hold the escaped chat", || {
         let page = std::fs::read_to_string(&html_path).unwrap_or_default();
         page.contains("harbor &lt;b&gt;export&lt;/b&gt; line")
@@ -2499,12 +2510,17 @@ fn export_writes_html_and_json_next_to_export_md() {
     });
 
     cabin.run_slash_line("/export json");
+    wait_file_writes(cabin);
     let json_path = cabin
         .status
         .strip_prefix("Wrote ")
         .unwrap_or("")
         .to_string();
-    assert!(json_path.ends_with("export.json"), "{}", cabin.status);
+    assert!(
+        json_path.contains("export-") && json_path.ends_with(".json"),
+        "{}",
+        cabin.status
+    );
     wait_for("export.json must parse and keep both turns", || {
         std::fs::read_to_string(&json_path)
             .ok()
@@ -2513,7 +2529,8 @@ fn export_writes_html_and_json_next_to_export_md() {
     });
 
     cabin.run_slash_line("/export md");
-    assert!(cabin.status.ends_with("export.md"), "{}", cabin.status);
+    wait_file_writes(cabin);
+    assert!(cabin.status.ends_with(".md"), "{}", cabin.status);
     cabin.run_slash_line("/export pdf");
     assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
     assert!(!cabin.running);

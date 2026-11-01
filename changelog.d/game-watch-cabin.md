@@ -1,1 +1,0 @@
-- The Game watcher now listens only while Counter-Strike 2 or Dota 2 is running, shows its tips as a quiet note in Loadout (at most one a minute, never in the game), and posts one recap card to Pulse when each match ends.

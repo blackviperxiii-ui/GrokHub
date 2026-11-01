@@ -309,10 +309,6 @@ pub struct AppConfig {
     pub model: String,
     #[serde(default)]
     pub imagine_model: String,
-    #[serde(default)]
-    pub voice_model: String,
-    #[serde(default)]
-    pub cabin_eyes: bool,
     /// Git clone used by Settings → Update / `grokhub --update`.
     #[serde(default)]
     pub source_dir: String,
@@ -328,8 +324,6 @@ pub struct AppConfig {
     /// Home's empty draft must not overwrite this (`open_fresh_home` keeps it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub last_chat_tab: String,
-    #[serde(default)]
-    pub connector_hosts: Vec<String>,
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     /// First close-to-tray toast has been shown. Quiet hours do not set this.
@@ -346,6 +340,16 @@ pub struct AppConfig {
     /// It routes nothing until a local runtime is installed.
     #[serde(default)]
     pub local_model: bool,
+    /// LO-48 (`promptCleanup`): the on-device model fixes typos in a chat ask
+    /// before the model reads it. Off by default: it can change wording and
+    /// adds up to 300 ms. Works only while `local_model` is on.
+    #[serde(default)]
+    pub prompt_cleanup: bool,
+    /// `app.json` only (`briefModelFallback`). Off by default: an ask that
+    /// neither the Brief rules nor the local scorer can sort gets the default
+    /// Brief. On, it costs one fast-model call instead.
+    #[serde(default)]
+    pub brief_model_fallback: bool,
     /// Router R3b: the model on a provider you added (`<provider>/<model>`)
     /// for your own chats. Used only while its key and your grant exist.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -400,11 +404,11 @@ pub struct AppConfig {
     #[serde(default = "default_price_ceiling")]
     pub price_ceiling_usd_per_m: u32,
     /// Spike-6a: an OS notification for a proactive card due in under an hour.
-    /// Off unless you opt in (`app.json` only).
+    /// Off unless you opt in (Settings → Behavior).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub proactive_reminders: bool,
-    /// `app.json` only for now. A donation page for Settings → About's quiet
-    /// "Support the developer" link. Empty (the default) hides the link.
+    /// A donation page for Settings → About's quiet "Support the developer"
+    /// link, set in About. Empty (the default) hides the link.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub support_url: String,
     #[serde(default)]
@@ -418,6 +422,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: steady effort. The router reads `steadyEffort`
+    /// (`grokhub_agent::route::ladder::EffortSettings`). Off by default.
+    #[serde(default)]
+    pub steady_effort: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -810,20 +818,19 @@ impl Default for AppConfig {
             yolo: default_yolo(),
             model: String::new(),
             imagine_model: String::new(),
-            voice_model: String::new(),
-            cabin_eyes: false,
             source_dir: String::new(),
             project_dir: String::new(),
             host_on: default_host_on(),
             host_hour_cap: default_host_cap(),
             current_thread: String::new(),
             last_chat_tab: String::new(),
-            connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
             mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
+            prompt_cleanup: false,
+            brief_model_fallback: false,
             provider_model: String::new(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
@@ -847,6 +854,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            steady_effort: false,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -1090,7 +1098,7 @@ pub fn load() -> AppConfig {
     cfg
 }
 
-const SOUL_SEED: &str = "# Soul\n\nWho this cabin is. Edit this.\n";
+const SOUL_SEED: &str = "# Soul\n\nWho your assistant is. Edit this.\n";
 const USER_SEED: &str = "# User\n\nWho you are. Edit this.\n";
 pub(crate) const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
 
@@ -1214,13 +1222,19 @@ pub fn workboard_path() -> PathBuf {
     config_dir().join("workboard.json")
 }
 
+/// Loads, fills fields older files lack, and remembers the cards so later saves
+/// can merge with the shell's and the self MCP's writes.
 pub fn load_board() -> Vec<BoardCard> {
-    load_json(&workboard_path(), JSON_STORE_CAP)
+    let path = workboard_path();
+    let mut cards: Vec<BoardCard> = load_json(&path, JSON_STORE_CAP);
+    crate::work_store::note_loaded(&path, &mut cards);
+    cards
 }
 
+/// Merged save: takes the board lock, re-reads, keeps the newer copy of each
+/// card, then writes through `atomic_write`.
 pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
-    atomic_write(&workboard_path(), s.as_bytes())
+    crate::work_store::save(&workboard_path(), cards)
 }
 
 /// Decision backlog / experiment journal (local-first open questions).
@@ -1587,7 +1601,7 @@ mod tests {
         );
         assert_eq!(
             tuned.background.daily_tokens(grokhub_core::JobKind::Ideas),
-            100_000
+            50_000
         );
         let saved = serde_json::to_string(&tuned).unwrap();
         assert!(
@@ -1685,6 +1699,35 @@ mod tests {
         assert!(!load().composer_autocomplete);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steady_effort() {
+        assert!(!AppConfig::default().steady_effort);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.steady_effort);
+        let _g = hold_test_config();
+        let root = test_config_root("steady-effort");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            steady_effort: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().steady_effort);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"steadyEffort\": true"),
+            "the router reads this key: {text}"
+        );
+        assert!(grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
+        cfg.steady_effort = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().steady_effort);
+        assert!(!grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1805,6 +1848,17 @@ mod tests {
         );
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        // LO-48: the typo tidy is opt-in; `promptCleanup` turns it on.
+        assert!(!loaded.prompt_cleanup && !old.prompt_cleanup);
+        assert!(body.contains("\"promptCleanup\": false"), "{body}");
+        let tidy: AppConfig =
+            serde_json::from_str(r#"{"promptCleanup":true}"#).expect("promptCleanup on");
+        assert!(tidy.prompt_cleanup);
+        // Brain 1: the Brief's model fallback is opt-in; `briefModelFallback` turns it on.
+        assert!(!loaded.brief_model_fallback && !old.brief_model_fallback);
+        let fallback: AppConfig =
+            serde_json::from_str(r#"{"briefModelFallback":true}"#).expect("briefModelFallback on");
+        assert!(fallback.brief_model_fallback);
         assert!(
             !old.setup_done && body.contains("\"setupDone\": false"),
             "{body}"
@@ -1829,7 +1883,7 @@ mod tests {
             "boot must still read a leftover app.json key so Cabin can migrate it"
         );
         ensure_memory_seeds();
-        assert!(read_memory("SOUL.md").contains("Who this cabin is"));
+        assert!(read_memory("SOUL.md").contains("Who your assistant is"));
         assert!(read_memory("USER.md").contains("Who you are"));
         assert!(read_memory("MEMORY.md").contains("Long-term notes"));
         write_memory("SOUL.md", "be useful").expect("mem");
@@ -2196,6 +2250,32 @@ mod tests {
         );
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert_eq!(back.support_url, "https://donate.example/my-app");
+    }
+
+    #[test]
+    fn old_app_json_with_retired_keys_still_loads() {
+        let old = r#"{"model":"grok-4","voiceModel":"grok-voice","cabinEyes":true,
+            "connectorHosts":["a.example"],"proactiveReminders":true}"#;
+        let cfg: AppConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(cfg.model, "grok-4");
+        assert!(cfg.proactive_reminders);
+        let text = serde_json::to_string(&cfg).unwrap();
+        for gone in ["voiceModel", "cabinEyes", "connectorHosts"] {
+            assert!(!text.contains(gone), "{gone} is dropped on save: {text}");
+        }
+    }
+
+    #[test]
+    fn proactive_reminders_round_trip() {
+        let off = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!off.contains("proactiveReminders"), "{off}");
+        let cfg = AppConfig {
+            proactive_reminders: true,
+            ..AppConfig::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert!(back.proactive_reminders);
     }
 
     #[test]

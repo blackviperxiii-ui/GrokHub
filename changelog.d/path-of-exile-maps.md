@@ -1,0 +1,1 @@
+- Path of Exile sessions now count the maps you ran, the area level you reached and the time spent in maps, from the game's own Client.txt, in Settings and the Pulse recap.

@@ -274,10 +274,10 @@ impl DesktopBackend for WindowsBackend {
     }
 
     fn is_locked(&mut self) -> bool {
-        if let Some((at, locked)) = self.lock_at {
-            if at.elapsed() < Duration::from_secs(2) {
-                return locked;
-            }
+        if let Some((at, locked)) = self.lock_at
+            && at.elapsed() < Duration::from_secs(2)
+        {
+            return locked;
         }
         let locked = !self.desktop_open();
         self.lock_at = Some((Instant::now(), locked));

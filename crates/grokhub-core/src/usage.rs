@@ -154,7 +154,8 @@ pub fn usage_line(day: &UsageDay) -> String {
     s
 }
 
-fn compact_tokens(n: u64) -> String {
+/// "812k", "1.2M": token counts for tight labels.
+pub fn compact_tokens(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
         10_000..=999_999 => format!("{}k", n / 1_000),

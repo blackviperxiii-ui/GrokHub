@@ -219,6 +219,20 @@ async function waitFor(what, fn, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${what}${last ? `: ${last.message}` : ""}`);
 }
 
+// New cards rise in from opacity 0 (styles.css rise-in), and WebDriver reads
+// an invisible element's text as "". Read until the card is visible and says
+// what it should, then return what it said last.
+async function cardText(s, card, ok, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < end) {
+    text = await wd("GET", `${s}/element/${card}/text`);
+    if (ok(text)) break;
+    await sleep(100);
+  }
+  return text;
+}
+
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
@@ -252,6 +266,33 @@ async function tab(s, label) {
     }),
   );
   await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  await onView(s, label);
+}
+
+/** Waits until the top tab `label` is the one pressed. A page stays mounted
+ * once opened, so finding its content proves nothing about what shows. */
+async function onView(s, label) {
+  await waitFor(`the ${label} view`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}'][@aria-pressed='true']`,
+    }),
+  );
+}
+
+/** Scrolls the element into view and is true once it sits still there for
+ * 300 ms, so a click lands on it. */
+async function settled(s, el) {
+  const where = () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "arguments[0].scrollIntoView({ block: 'center' }); const r = arguments[0].getBoundingClientRect(); return [r.x, r.y];",
+      args: [{ [ELEMENT]: el }],
+    });
+  const [x, y] = await where();
+  await sleep(300);
+  const [x2, y2] = await where();
+  return x === x2 && y === y2;
 }
 
 /** A Settings section by its label in the Settings nav. */
@@ -398,7 +439,7 @@ async function connectors(s, config) {
 // For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete takes the first post away. After the post
+// opens in the lightbox. Delete… and its confirm take the first post away. After the post
 // the idea writer adds one idea; its menu holds Let's do it, More like this
 // and Not interested, and More like this is kept for the next run. A click on
 // the seeded idea's row puts its action in the chat box, unsent.
@@ -490,11 +531,20 @@ async function pulse(s, config) {
     value: `${post}//button[@aria-label='More']`,
   });
   await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
+  // The menu's Delete… asks first; the confirm row's Delete takes it away.
   const del = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//button[normalize-space()='Delete']`,
+    value: `${post}//button[@role='menuitem'][normalize-space()='Delete…']`,
   });
   await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
+  const sure = await waitFor("the delete confirm", async () => {
+    const el = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: `${post}//div[contains(@class,'confirm-row')]//button[normalize-space()='Delete']`,
+    });
+    return el.length === 1 ? el[0][ELEMENT] : null;
+  });
+  await wd("POST", `${s}/element/${sure}/click`, {});
   await waitFor("the deleted post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
@@ -528,11 +578,20 @@ async function pulse(s, config) {
   });
   const labels = [];
   for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
-  if (labels.join("|") !== "Let's do it|More like this|Not interested") {
+  if (labels.join("|") !== "More like this") {
     throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
   }
+  const rowButtons = await wd("POST", `${s}/elements`, {
+    using: "xpath",
+    value: `${written}//div[contains(@class,'idea-buttons')]/button`,
+  });
+  const buttonLabels = [];
+  for (const b of rowButtons) buttonLabels.push(await wd("GET", `${s}/element/${b[ELEMENT]}/text`));
+  if (buttonLabels.join("|") !== "Let's do it|Not interested") {
+    throw new Error(`the idea buttons say ${JSON.stringify(buttonLabels)}`);
+  }
   await shot(s, "pulse-ideas");
-  await wd("POST", `${s}/element/${items[1][ELEMENT]}/click`, {});
+  await wd("POST", `${s}/element/${items[0][ELEMENT]}/click`, {});
   await waitFor("More like this kept", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
@@ -639,7 +698,14 @@ async function palette(s) {
     find(s, "[aria-label='Command palette'] input"),
   );
   await wd("POST", `${s}/element/${again}/value`, { text: "journ\uE007" });
-  await waitFor("the Journal page", () => find(s, "section.journal"));
+  await onView(s, "Journal");
+  await waitFor("the palette to close", async () => {
+    const open = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: "[aria-label='Command palette']",
+    });
+    return open.length === 0;
+  });
   console.log("the Command button opened the Journal");
 }
 
@@ -650,17 +716,22 @@ async function palette(s) {
 async function usePersonality(s, config, name) {
   await tab(s, "Settings");
   await section(s, "Personality");
-  const use = await waitFor(`${name}'s Use button`, async () => {
-    const el = await wd("POST", `${s}/element`, {
-      using: "xpath",
-      value: `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`,
-    });
-    return el[ELEMENT];
-  });
-  await wd("POST", `${s}/element/${use}/click`, {});
+  // The cards' pictures arrive after the list and push the buttons down, so
+  // a click can land where Use was a moment ago. Click Use once it sits
+  // still, and again while it still shows.
+  const useButton = `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`;
+  await waitFor(`${name}'s Use button`, () =>
+    wd("POST", `${s}/element`, { using: "xpath", value: useButton }),
+  );
   await waitFor(`${name} in use`, async () => {
     const t = await textOf(s, `ul[aria-label='Personalities'] li[aria-label='${name}'] .card-status`);
-    return t === "In use" ? t : null;
+    if (t === "In use") return t;
+    const [use] = await wd("POST", `${s}/elements`, { using: "xpath", value: useButton });
+    if (use && (await settled(s, use[ELEMENT]))) {
+      await wd("POST", `${s}/element/${use[ELEMENT]}/click`, {});
+      await sleep(500);
+    }
+    return null;
   });
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
   const id = name === "Nyx" ? "" : name.toLowerCase();
@@ -671,12 +742,12 @@ async function usePersonality(s, config, name) {
 
 async function plan(s, workspace) {
   await tab(s, "Chat");
-  await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
+  await click(s, "[aria-label='Session mode'] button[title^='Loadout writes a plan']");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
-  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
-  const shown = await wd("GET", `${s}/element/${card}/text`);
+  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"The plan\"]"));
+  const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
   const voiced = mockSeen.find((c) => c.body.includes(PLAN_PROMPT));
@@ -1108,7 +1179,7 @@ async function main() {
       });
       return el[ELEMENT];
     });
-    const asked = await wd("GET", `${s}/element/${card}/text`);
+    const asked = await cardText(s, card, (t) => t.includes("write") && t.includes(NOTE));
     if (!asked.includes("write") || !asked.includes(NOTE)) {
       throw new Error(`permission card said ${JSON.stringify(asked)}`);
     }
@@ -1205,12 +1276,24 @@ async function main() {
   }
 }
 
+// A tool counts as offered when the model gets its schema or, with deferred
+// tools on, its line in load_tool_schema's index ("name — blurb").
+function offeredTools(body) {
+  const tools = JSON.parse(body).tools ?? [];
+  const index = tools.find((t) => t.name === "load_tool_schema")?.description ?? "";
+  const deferred = (index.split("Deferred tools (index):\n")[1] ?? "")
+    .split("\n")
+    .map((line) => line.split(" — ")[0].trim())
+    .filter(Boolean);
+  return [...tools.map((t) => t.name), ...deferred];
+}
+
 // Computer-use: desktop tools are off until Settings turns them on. With the
 // switch on and approvals at Always, the model types a delete into the
 // desktop: the card must wait with nothing typed and no further model call,
 // and Deny must reach the model as a refusal.
 async function desktop(s, config) {
-  const offered = (call) => (JSON.parse(call.body).tools ?? []).map((t) => t.name);
+  const offered = (call) => offeredTools(call.body);
   const before = mockSeen.find((c) => c.path === "/v1/responses");
   if (offered(before).includes("type")) throw new Error("desktop tools were offered while off");
 
@@ -1219,11 +1302,18 @@ async function desktop(s, config) {
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//label[contains(., 'Let Grok control the desktop')]//button[@role='switch']",
+      value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});
-  const approvals = await find(s, ".settings > form select");
+  await click(s, ".settings > form button[type='submit']");
+  await waitFor("the saved desktop switch", () => {
+    const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+    return saved.desktopControl === true;
+  });
+  // Approvals live in Settings → Defaults.
+  await section(s, "Defaults");
+  const approvals = await waitFor("the approvals pick", () => find(s, ".settings > form select"));
   const always = await wd("POST", `${s}/element/${approvals}/element`, {
     using: "css selector",
     value: "option[value='always']",
@@ -1313,7 +1403,7 @@ async function web(s) {
     console.log(`the browser got the reply: ${JSON.stringify(WEB_REPLY)}`);
 
     const asked = mockSeen.find((c) => c.body.includes(WEB_PROMPT));
-    const tools = (JSON.parse(asked.body).tools ?? []).map((t) => t.name);
+    const tools = offeredTools(asked.body);
     if (tools.includes("type") || tools.includes("click")) {
       throw new Error(`a web chat was offered desktop tools: ${tools}`);
     }

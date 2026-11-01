@@ -695,7 +695,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         .and_then(|s| s.split("fn send_followup_turn").next())
         .expect("send_chat auth");
     assert!(
-        send_auth.contains("persist_user_turn(self.agent_ready())")
+        send_auth.contains("persist_user_turn(self.chat_ready())")
             && send_auth.contains("kick_model(true)"),
         "typed send must check the native sign-in, then kick the turn: {send_auth}"
     );
@@ -837,7 +837,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "Skills reads the native engine's listing, never grok inspect: {skills_ui}"
     );
     assert!(
-            skills_ui.contains("Cabin skills") && skills_ui.contains("self.skill_list"),
+            skills_ui.contains("\"{product} skills\"") && skills_ui.contains("self.skill_list"),
             "the skills the cabin follows and writes must be listed, not only the Grok catalog: {skills_ui}"
         );
     assert!(
@@ -1478,9 +1478,9 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
     );
     let export_spawn = export
-        .find("thread::spawn")
+        .find("spawn_file_write")
         .expect("export write must leave the UI thread");
-    let export_write = export.find("fs::write").expect("export.md");
+    let export_write = export.find("write_new_file").expect("export.md");
     assert!(
         export_spawn < export_write && export_spawn < wrote,
         "/export must not freeze the cabin formatting an 8MB thread into markdown: {export}"
@@ -2165,6 +2165,33 @@ fn halt_work_stops_a_running_turn() {
     assert!(!cabin.running);
     assert!(!cabin.imagine_pending);
     assert_eq!(cabin.status, "Stopped");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-spares-bg");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let fg_id = format!("native-stop-fg-{}", std::process::id());
+    let bg_id = format!("native-stop-bg-{}", std::process::id());
+    let fg = grokhub_agent::CancelToken::new();
+    let bg = grokhub_agent::CancelToken::new();
+    grokhub_agent::watch_cancel(&fg_id, fg.clone());
+    grokhub_agent::watch_cancel(&bg_id, bg.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let idx = cabin.thread_idx;
+    cabin.threads[idx].grok_session = Some(fg_id.clone());
+    cabin.running = true;
+    cabin.halt_work("Stopped");
+    assert!(fg.is_cancelled(), "Stop ends this chat's run");
+    assert!(!bg.is_cancelled(), "Stop leaves a background run going");
+    cabin.halt_everything("Halted");
+    assert!(bg.is_cancelled(), "tray Halt stops background runs too");
+    grokhub_agent::forget_session(&fg_id);
+    grokhub_agent::forget_session(&bg_id);
+    drop(cabin);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 

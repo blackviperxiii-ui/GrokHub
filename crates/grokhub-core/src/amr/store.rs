@@ -192,6 +192,47 @@ impl AmrStore {
         report
     }
 
+    /// Lines that hold any of `words` (lowercase, case-insensitive
+    /// substring), best first: the most distinct words matched, then the most
+    /// recently updated node, then id and line order. At most 20 hits. Same
+    /// filters as [`Self::recall`]: no tombstoned, superseded, or proposed
+    /// node, and sealed nodes only when they open.
+    pub fn recall_ranked(&self, words: &[String]) -> Vec<NodeHit> {
+        let words: Vec<String> = words
+            .iter()
+            .map(|w| w.trim().to_ascii_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let loaded = self.load_live();
+        let superseded = self.superseded_ids();
+        let mut hits: Vec<(usize, &str, &str, usize, String)> = Vec::new();
+        for node in loaded
+            .nodes
+            .iter()
+            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+        {
+            for (seq, (count, line)) in score_lines(node, &words).into_iter().enumerate() {
+                hits.push((count, node.updated.as_str(), node.id.as_str(), seq, line));
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(a.1))
+                .then_with(|| a.2.cmp(b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
+        hits.truncate(RECALL_CAP);
+        hits.into_iter()
+            .map(|(_, _, id, _, line)| NodeHit {
+                id: id.to_string(),
+                line,
+            })
+            .collect()
+    }
+
     /// True when `nodes/<id>.tombstone` is there.
     pub fn is_forgotten(&self, id: &str) -> bool {
         NodeId::parse(id)
@@ -788,6 +829,36 @@ fn frontmatter_safe(label: &str, value: &str) -> Result<(), AmrError> {
 
 /// Body lines first, then tags. The id is the line only when neither matched,
 /// so a body hit is not repeated as `amr:<id>: <id>`.
+/// [`match_lines`] for several words at once: each matching line with the
+/// number of distinct `words` it holds.
+fn score_lines(node: &Node, words: &[String]) -> Vec<(usize, String)> {
+    let count = |text: &str| {
+        let lower = text.to_ascii_lowercase();
+        words.iter().filter(|w| lower.contains(w.as_str())).count()
+    };
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for line in node.body.lines() {
+        let trimmed = line.trim();
+        let n = count(trimmed);
+        if n > 0 {
+            out.push((n, trimmed.to_string()));
+        }
+    }
+    for tag in &node.tags {
+        let n = count(tag);
+        if n > 0 && !out.iter().any(|(_, line)| line == tag) {
+            out.push((n, tag.clone()));
+        }
+    }
+    if out.is_empty() {
+        let n = count(&node.id);
+        if n > 0 {
+            out.push((n, node.id.clone()));
+        }
+    }
+    out
+}
+
 fn match_lines(node: &Node, query: &str) -> Vec<(String, usize, String)> {
     let mut out = Vec::new();
     let mut seq = 0usize;

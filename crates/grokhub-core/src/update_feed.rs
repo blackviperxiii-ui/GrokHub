@@ -1706,7 +1706,7 @@ fn post_useful_idea(
     }
     let mut card = idea_card(source, title, body, now);
     card.why = Some(if why.trim().is_empty() {
-        "A way this cabin can work for you.".into()
+        format!("A way {} can work for you.", crate::brand::product_name())
     } else {
         why.trim().to_string()
     });
@@ -2040,6 +2040,7 @@ fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
 fn useful_profile_lines(raw: &str) -> Vec<String> {
     const SKIP: &[&str] = &[
         "Who this cabin is. Edit this.",
+        "Who your assistant is. Edit this.",
         "Who you are. Edit this.",
         "Long-term notes.",
     ];
@@ -5390,6 +5391,23 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             companion.companion_card(at),
             "Deep Rock Galactic",
         ));
+        let mut poe = crate::game_watch_poe::PoeSession::default();
+        poe.character = Some("Testwitch".into());
+        poe.deaths = 2;
+        rows.push((
+            "session_card",
+            crate::game_watch_poe::session_card("Path of Exile", &poe, at),
+            "Path of Exile",
+        ));
+        let mc = crate::game_watch_minecraft::McSession {
+            deaths: 1,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_minecraft::session_card(&mc, at),
+            "Minecraft",
+        ));
         rows.push((
             "recap_card",
             crate::game_watch::recap_card(
@@ -5403,6 +5421,57 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 at,
             ),
             "Counter-Strike 2",
+        ));
+        let elite = crate::game_watch_elite::EliteSession {
+            jumps: 3,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_elite::session_card(&elite, at),
+            "Elite Dangerous",
+        ));
+        let farm = crate::stardew_saves::StardewFarm {
+            farm: Some("Pickle".into()),
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::stardew_saves::session_card(
+                &crate::stardew_saves::FarmSession {
+                    before: None,
+                    after: farm,
+                },
+                at,
+            ),
+            "Stardew Valley",
+        ));
+        rows.push((
+            "session_card",
+            crate::eso_addon::session_card(
+                &crate::eso_addon::EsoSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "The Elder Scrolls Online",
+        ));
+        rows.push((
+            "match_card",
+            crate::game_watch_rl::match_card(&Default::default(), at),
+            "Rocket League",
+        ));
+        rows.push((
+            "session_card",
+            crate::factorio_state::session_card(
+                &crate::factorio_state::FactorioSession {
+                    before: None,
+                    after: Default::default(),
+                },
+                at,
+            ),
+            "Factorio",
         ));
         rows
     }

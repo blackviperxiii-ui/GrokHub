@@ -91,6 +91,20 @@ pub fn set_enabled(on: bool) {
     }
 }
 
+static PROMPT_CLEANUP: AtomicBool = AtomicBool::new(false);
+
+/// LO-48: the cabin sets this from `app.json` `promptCleanup` (default
+/// `false`) next to [`set_enabled`]. [`super::cleanup::tidy`] runs only while
+/// it is on.
+pub fn set_prompt_cleanup(on: bool) {
+    PROMPT_CLEANUP.store(on, Ordering::SeqCst);
+}
+
+/// The "Tidy typos on this computer" switch, as last set.
+pub fn prompt_cleanup() -> bool {
+    PROMPT_CLEANUP.load(Ordering::SeqCst)
+}
+
 /// The Settings toggle alone, for the governor's sampler.
 pub fn switched_on() -> bool {
     ENABLED.load(Ordering::SeqCst)
@@ -169,7 +183,9 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
     };
     let takes = match gov {
         Level::Unload => "nothing until the machine frees up",
-        Level::Throttle => "offline work and cloud outages only; background work goes to Grok",
+        Level::Throttle => {
+            "offline work and cloud outages only; background work goes to the cloud model"
+        }
         Level::Normal => {
             "background work, offline work and cloud outages; heavy steps wait for idle time"
         }
@@ -410,6 +426,8 @@ pub struct LocalGate {
     pub hard_tool: bool,
     /// Connectivity is offline (PR B): chat may go local too.
     pub offline: bool,
+    /// Offline only is on (LU-13): no step may go to the cloud at all.
+    pub offline_switch: bool,
     /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
@@ -428,6 +446,7 @@ impl LocalGate {
             cloud_grant,
             hard_tool,
             offline: super::connectivity::state().prefer_local(),
+            offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
         }
     }
@@ -481,7 +500,14 @@ pub fn offline_only(gate: &LocalGate) -> bool {
 
 /// Online after a failed on-device verify: leave local and pick a cloud model.
 pub fn escalate_after_verify(gate: &LocalGate) -> bool {
-    gate.enabled && !gate.offline && gate.local_verify_failed
+    gate.enabled && !gate.offline && !gate.offline_switch && gate.local_verify_failed
+}
+
+/// The on-device model could take chat with Offline only on: Local AI is on
+/// and an engine and model are installed. `false` ⇒ the toggle should warn
+/// (with [`unavailable_reason`]) before it turns the switch on.
+pub fn ready_for_offline() -> bool {
+    LocalCapacity::now().ready
 }
 
 /// Hard or long work should stay on the cloud when online (PR E).
@@ -517,7 +543,9 @@ pub fn tier_meta(id: &str) -> ModelMeta {
     ModelMeta {
         id: id.into(),
         context_length: Some(ctx_cap().max(c.context)),
-        // No effort menu: a local route sends no effort.
+        // No effort menu: the router picks no effort for a local route. The
+        // sidecar maps the turn's own effort onto the levels the model's
+        // template renders (`local_effort`).
         efforts: Some(Vec::new()),
         // Chat turns can return OpenAI-compatible tool_calls (web_search / web_fetch).
         tool_calling: Some(true),
@@ -573,6 +601,26 @@ pub trait LocalRuntime: Send + Sync {
         Err("local chat is not available on this runtime".into())
     }
 
+    /// [`Self::chat_stream`] at a reasoning effort from [`EFFORT_LADDER`]
+    /// (`None`: the template's default). A runtime that can't say how hard
+    /// the model thinks ignores it.
+    ///
+    /// [`EFFORT_LADDER`]: grokhub_core::model_registry::EFFORT_LADDER
+    fn chat_stream_at(
+        &self,
+        messages: &[ChatMessage],
+        effort: Option<&str>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        let _ = effort;
+        self.chat_stream(messages, on_delta)
+    }
+
+    /// The model's context window in tokens, when the runtime can tell.
+    fn context_tokens(&self) -> Option<u64> {
+        None
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -585,11 +633,12 @@ pub trait LocalRuntime: Send + Sync {
         }
         let (text, _) = super::live::last_user_text(&req.input);
         let mut deltas = String::new();
-        let out = self.chat_stream(
+        let out = self.chat_stream_at(
             &[ChatMessage {
                 role: "user".into(),
                 content: text,
             }],
+            req.effort.as_deref(),
             &mut |d| deltas.push_str(d),
         )?;
         let text = if out.is_empty() { deltas } else { out };
@@ -610,6 +659,20 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     }
     let busy = ensure_production_runtime()?;
     super::local_http::from_global_sidecar(busy)
+}
+
+/// [`runtime`], but only while the model is already loaded (a test fake, or a
+/// running sidecar). It never starts or restarts the sidecar, so it returns at
+/// once; a cold start could not answer a short call in time anyway.
+pub fn warm_runtime() -> Option<Arc<dyn LocalRuntime>> {
+    if !available() {
+        return None;
+    }
+    if let Some(rt) = test_runtime() {
+        return Some(rt);
+    }
+    super::local_sidecar::global_endpoint()?;
+    super::local_http::from_global_sidecar(super::local_sidecar::busy())
 }
 
 /// Start the sidecar if needed; the guard marks this caller's request in
@@ -741,14 +804,31 @@ pub fn serve_request(
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
     if req.tools.is_empty() {
-        return serve_within(class, &text, HEAVY_WAIT, cancel);
+        return serve_within_at(class, &text, req.effort.as_deref(), HEAVY_WAIT, cancel);
     }
-    rt.chat_tools(req, cancel).map_err(ClientError::Protocol)
+    // The device window is often 4k to 16k: send only what fits, with room to answer.
+    let n_ctx = rt
+        .context_tokens()
+        .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    let (fitted, _) = super::local_fit::fit(req, n_ctx);
+    rt.chat_tools(&fitted, cancel)
+        .map_err(ClientError::Protocol)
 }
 
 pub(crate) fn serve_within(
     class: &str,
     text: &str,
+    heavy_wait: std::time::Duration,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    serve_within_at(class, text, None, heavy_wait, cancel)
+}
+
+/// [`serve_within`] with the turn's reasoning effort, which only chat uses.
+fn serve_within_at(
+    class: &str,
+    text: &str,
+    effort: Option<&str>,
     heavy_wait: std::time::Duration,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
@@ -769,11 +849,12 @@ pub(crate) fn serve_within(
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
         let mut deltas = String::new();
         let out = rt
-            .chat_stream(
+            .chat_stream_at(
                 &[ChatMessage {
                     role: "user".into(),
                     content: text.into(),
                 }],
+                effort,
                 &mut |d| deltas.push_str(d),
             )
             .map_err(ClientError::Protocol)?;

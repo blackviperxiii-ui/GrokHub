@@ -8,9 +8,16 @@ param(
     [string]$Exe = 'target/release/grokhub.exe',
     [string]$Slide = '02',
     [string]$UpgradeSlide = '08',
-    [string]$Out = 'target/deck-shots'
+    [string]$Out = 'target/deck-shots',
+    # Wildcard on shot names (deck-shots.list.ps1), e.g. 'chattabs-*'.
+    [string]$Only = '*',
+    # Stop taking new shots after this many minutes (0 = no cap) and exit 0
+    # with a warning, so a long list or a hang can't use up the job.
+    [int]$BudgetMinutes = 0
 )
 $ErrorActionPreference = 'Stop'
+$script:deckClock = [Diagnostics.Stopwatch]::StartNew()
+$script:deckSkipped = 0
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
@@ -323,6 +330,12 @@ function Write-ModelDrop([string]$root) {
 # $localModels turns the local model suggestions on and runs the weekly check
 # on a fixed 24 GB GPU and a canned reply (GROKHUB_DECK_LOCAL_MODELS).
 function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [switch]$pinBehavior, [switch]$screenshotOffer, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$gameLaunch, [switch]$achievements, [switch]$localModels, [switch]$radar, [switch]$modelDrop, [string]$windDown = '', [switch]$netLog, [string]$chat = '', [switch]$ageCheck, [switch]$backup, [string]$nav = '', [string]$tidy = '', [switch]$askOffer, [switch]$pedestal) {
+    if ($name -notlike $Only) { return }
+    if ($BudgetMinutes -gt 0 -and $script:deckClock.Elapsed.TotalMinutes -ge $BudgetMinutes) {
+        if ($script:deckSkipped -eq 0) { Write-Host "::warning::deck shots: $BudgetMinutes-minute budget used; skipping the remaining shots" }
+        $script:deckSkipped++
+        return
+    }
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -555,3 +568,4 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
 # The shot list is its own file so changes that add shots don't conflict.
 . (Join-Path $PSScriptRoot 'deck-shots.list.ps1')
 Get-ChildItem $Out | Format-Table Name, Length
+if ($script:deckSkipped -gt 0) { Write-Host "deck shots: skipped $($script:deckSkipped) shots over the budget" }

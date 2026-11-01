@@ -5,7 +5,10 @@ use std::time::Duration;
 use crate::ClientError;
 
 pub const RATE_LIMIT_RETRY_THRESHOLD: u32 = 2;
-pub const DEFAULT_MAX_RETRIES: u32 = 15;
+/// Attempts per model call, the first included. Six keeps the worst silent
+/// wait near a minute (0.2 + 4 + 8 + 16 + 30 s) instead of about six minutes,
+/// and stops a dropped stream from being re-sent (and re-billed) 14 times.
+pub const DEFAULT_MAX_RETRIES: u32 = 6;
 pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 pub const TRANSPORT_REBUILD_BACKOFF: Duration = Duration::from_millis(200);
 
@@ -92,6 +95,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_failing_connection_gives_up_within_about_a_minute() {
+        let server = ClientError::Server {
+            status: 503,
+            message: "down".into(),
+            retry_after_secs: None,
+        };
+        let mut waited = Duration::ZERO;
+        let mut tries = 1u32;
+        while let Some(wait) = decide_retry(&server, tries - 1, DEFAULT_MAX_RETRIES) {
+            waited += wait;
+            tries += 1;
+        }
+        assert_eq!(tries, DEFAULT_MAX_RETRIES);
+        assert!(waited <= Duration::from_secs(75), "{waited:?}");
+    }
+
+    #[test]
     fn resolve_max_retries_env_model_and_default() {
         assert_eq!(resolve_max_retries_with_env(Some("9"), Some(3)), 9);
         assert_eq!(resolve_max_retries_with_env(None, Some(7)), 7);
@@ -156,8 +176,8 @@ mod tests {
             first >= Duration::from_millis(160) && first <= Duration::from_millis(240),
             "{first:?}"
         );
-        assert!(decide_retry(&transport, 14, DEFAULT_MAX_RETRIES).is_none());
-        assert!(decide_retry(&transport, 13, DEFAULT_MAX_RETRIES).is_some());
+        assert!(decide_retry(&transport, 5, DEFAULT_MAX_RETRIES).is_none());
+        assert!(decide_retry(&transport, 4, DEFAULT_MAX_RETRIES).is_some());
 
         let oauth = ClientError::KeyOffer {
             status: 401,

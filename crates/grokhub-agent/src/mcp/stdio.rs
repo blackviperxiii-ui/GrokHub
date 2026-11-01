@@ -11,7 +11,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::rpc::{self, RawTool};
+use super::rpc::{self, Era, RawTool};
+
+/// How long the probe waits on `server/discover` before `initialize` goes out
+/// anyway (a quiet server is session era). A later discover answer still wins.
+const PROBE_WAIT: Duration = Duration::from_secs(2);
 
 enum IoMsg {
     Msg(Value),
@@ -25,6 +29,8 @@ pub(crate) struct StdioConn {
     rx: Receiver<IoMsg>,
     reader: Option<JoinHandle<()>>,
     next_id: u64,
+    /// The stateless revision sent in every request's `_meta`; `None` after `initialize`.
+    stateless: Option<&'static str>,
     #[cfg(unix)]
     pgid: i32,
     #[cfg(windows)]
@@ -41,14 +47,57 @@ pub(crate) fn connect(
     timeout: Duration,
 ) -> Result<(StdioConn, Vec<RawTool>), String> {
     let mut conn = spawn(server, command, args, env, cwd)?;
-    let init = conn.roundtrip("initialize", rpc::initialize_params(), timeout)?;
-    let _ = init;
-    conn.write_value(&rpc::notification(
-        "notifications/initialized",
-        serde_json::json!({}),
-    ))?;
+    if let Era::Stateless(version) = open_era(&mut conn, timeout)? {
+        conn.stateless = Some(version);
+    }
     let tools = list_tools(&mut conn, timeout)?;
     Ok((conn, tools))
+}
+
+/// Probe with `server/discover` first, then fall back to `initialize` (stdio
+/// "Backward Compatibility", MCP 2026-07-28). A server quiet past
+/// [`PROBE_WAIT`] gets `initialize`; if its discover answer still arrives
+/// first, that answer decides. The session handshake closes with
+/// `notifications/initialized`.
+fn open_era(conn: &mut StdioConn, timeout: Duration) -> Result<Era, String> {
+    let deadline = Instant::now() + timeout;
+    let discover = rpc::with_meta(serde_json::json!({}), rpc::STATELESS);
+    let probe = conn.send("server/discover", discover)?;
+    let first = conn.wait_for(&[probe], PROBE_WAIT.min(timeout), false)?;
+    let mut probe_open = first.is_none();
+    if let Some(reply) = first {
+        if let era @ Era::Stateless(_) = rpc::pick_era(&conn.server, Some(&reply))? {
+            return Ok(era);
+        }
+    }
+    let init = conn.send("initialize", rpc::initialize_params())?;
+    loop {
+        let waiting = [init, probe];
+        let ids = if probe_open {
+            &waiting[..]
+        } else {
+            &waiting[..1]
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        let msg = conn.wait_for(ids, left, true)?.unwrap_or_default();
+        if rpc::id_matches(&msg, probe) {
+            probe_open = false;
+            if let era @ Era::Stateless(_) = rpc::pick_era(&conn.server, Some(&msg))? {
+                return Ok(era);
+            }
+            continue;
+        }
+        if let Some(err) = rpc::rpc_error(&msg) {
+            return Err(err);
+        }
+        // Stdio has no version header; an unknown answer still ends the session.
+        rpc::negotiate(&conn.server, msg.get("result").unwrap_or(&Value::Null))?;
+        conn.write_value(&rpc::notification(
+            "notifications/initialized",
+            serde_json::json!({}),
+        ))?;
+        return Ok(Era::Session);
+    }
 }
 
 impl StdioConn {
@@ -58,6 +107,12 @@ impl StdioConn {
         args: &Value,
         timeout: Duration,
     ) -> Result<(String, bool), String> {
+        if self.stateless.is_some() {
+            let server = self.server.clone();
+            return rpc::call_tool(&server, name, args, &mut |params| {
+                self.roundtrip("tools/call", params, timeout)
+            });
+        }
         let result = self.roundtrip(
             "tools/call",
             serde_json::json!({"name": name, "arguments": args}),
@@ -66,8 +121,14 @@ impl StdioConn {
         Ok(rpc::tool_output(&result))
     }
 
+    /// `ping` in the session era; the stateless era dropped it, so `server/discover`.
     pub(crate) fn ping(&mut self, timeout: Duration) -> Result<(), String> {
-        self.roundtrip("ping", serde_json::json!({}), timeout)
+        let method = if self.stateless.is_some() {
+            "server/discover"
+        } else {
+            "ping"
+        };
+        self.roundtrip(method, serde_json::json!({}), timeout)
             .map(|_| ())
     }
 
@@ -88,9 +149,34 @@ impl StdioConn {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, String> {
+        let id = self.send(method, params)?;
+        let msg = self.wait_for(&[id], timeout, true)?.unwrap_or_default();
+        if let Some(err) = rpc::rpc_error(&msg) {
+            return Err(err);
+        }
+        Ok(msg.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Write one request (with `_meta` in the stateless era) and return its id.
+    fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id = self.next_id.saturating_add(1);
         let id = self.next_id;
+        let params = match self.stateless {
+            Some(version) => rpc::with_meta(params, version),
+            None => params,
+        };
         self.write_value(&rpc::request(id, method, params))?;
+        Ok(id)
+    }
+
+    /// The first reply to any of `ids`. At the deadline: kill the tree and
+    /// fail when `kill`, else `None` and the child keeps running.
+    fn wait_for(
+        &mut self,
+        ids: &[u64],
+        timeout: Duration,
+        kill: bool,
+    ) -> Result<Option<Value>, String> {
         let deadline = Instant::now() + timeout;
         loop {
             if self.child_exited() {
@@ -98,16 +184,16 @@ impl StdioConn {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                if !kill {
+                    return Ok(None);
+                }
                 self.kill_tree();
                 return Err(format!("MCP server `{0}` timed out", self.server));
             }
             match self.rx.recv_timeout(left.min(Duration::from_millis(200))) {
                 Ok(IoMsg::Msg(msg)) => {
-                    if rpc::id_matches(&msg, id) {
-                        if let Some(err) = rpc::rpc_error(&msg) {
-                            return Err(err);
-                        }
-                        return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
+                    if ids.iter().any(|id| rpc::id_matches(&msg, *id)) {
+                        return Ok(Some(msg));
                     }
                     if let Some(reply) = super::elicit::answer_elicitation(&self.server, &msg) {
                         self.write_value(&reply)?;
@@ -193,7 +279,10 @@ fn list_tools(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, S
         if let Some(token) = &cursor {
             params["cursor"] = serde_json::json!(token);
         }
-        let result = conn.roundtrip("tools/list", params, timeout)?;
+        let mut result = conn.roundtrip("tools/list", params, timeout)?;
+        if conn.stateless.is_some() {
+            result = rpc::complete(&conn.server, result)?;
+        }
         let (page, next) = rpc::parse_tools(&result);
         all.extend(page);
         match next {
@@ -263,6 +352,7 @@ fn spawn(
         rx,
         reader: Some(reader),
         next_id: 0,
+        stateless: None,
         #[cfg(unix)]
         pgid,
         #[cfg(windows)]

@@ -45,11 +45,11 @@ pub(super) struct WatchState {
     toast_gate: ToastGate,
     /// Tests listen on a free port and use a temp Steam folder.
     port: Option<u16>,
-    steam_root: Option<PathBuf>,
+    pub(super) steam_root: Option<PathBuf>,
 }
 
 impl WatchState {
-    fn steam_root(&self) -> Option<PathBuf> {
+    pub(super) fn steam_root(&self) -> Option<PathBuf> {
         self.steam_root
             .clone()
             .or_else(grokhub_core::steam::detect_root)
@@ -203,7 +203,7 @@ impl Cabin {
 
     /// One match event from any game's adapter: a new pointer becomes a
     /// quiet toast, the match's end the recap card.
-    fn note_watch_event(&mut self, game: &'static str, event: WatchEvent, now: u64) {
+    pub(super) fn note_watch_event(&mut self, game: &'static str, event: WatchEvent, now: u64) {
         let w = &mut self.focus.watch;
         if w.match_game != Some(game) {
             w.tracker = MatchTracker::default();
@@ -269,9 +269,12 @@ impl Cabin {
         ) {
             self.set_game_watch(on);
         }
+        ui_supported_games(ui);
         if !self.cfg.game_watch {
             return;
         }
+        let elite = self.elite_line();
+        let stardew = self.stardew_line();
         let w = &self.focus.watch;
         let listening = match (&w.server, w.listening_for) {
             (Some(_), Some(game)) => format!("Listening while {} runs.", game.name()),
@@ -288,7 +291,18 @@ impl Cabin {
             _ => String::new(),
         };
         let note = w.note.clone();
+        let games: Vec<String> = [self.poe_line(), self.minecraft_line()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let rl = self.rl_line();
         ui.indent("game-watch", |ui| {
+            if let Some(elite) = &elite {
+                crate::cards::help_text(ui, elite);
+            }
+            if let Some(stardew) = &stardew {
+                crate::cards::help_text(ui, stardew);
+            }
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
             }
@@ -296,13 +310,56 @@ impl Cabin {
             if !heard.is_empty() {
                 crate::cards::help_text(ui, &heard);
             }
+            for line in &games {
+                crate::cards::help_text(ui, line);
+            }
+            if let Some((line, how_to)) = &rl {
+                crate::cards::help_text(ui, line);
+                if *how_to && crate::cards::ghost_pill(ui, "Copy the setting") {
+                    ui.ctx()
+                        .copy_text(grokhub_core::game_watch_rl::INI_LINE.to_string());
+                }
+            }
         });
+        self.ui_eso(ui);
+        self.ui_factorio(ui);
+        self.ui_gw2(ui);
+        self.ui_destiny(ui);
+        self.ui_osrs(ui);
     }
+}
+
+/// The games Loadout can read and how, folded away under the game watcher.
+fn ui_supported_games(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Games Loadout can read, and how")
+        .id_salt("game-integrations")
+        .default_open(false)
+        .show(ui, |ui| {
+            for game in grokhub_core::game_integrations::ALL {
+                crate::cards::help_text(ui, &supported_line(game));
+            }
+            crate::cards::help_text(
+                ui,
+                "All read-only: nothing reads game memory, hooks the game or sends it input.",
+            );
+        });
+}
+
+fn supported_line(game: &grokhub_core::game_integrations::Integration) -> String {
+    format!("{}: {}.", game.name, game.how())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_supported_games_list_names_each_game_and_its_way_in() {
+        let wow = grokhub_core::game_integrations::by_id("wow").unwrap();
+        let line = supported_line(wow);
+        assert!(line.starts_with("World of Warcraft: Loadout's WoW addon"));
+        assert!(line.ends_with("Read-only alongside Warden."));
+    }
     use std::io::{Read, Write};
 
     #[test]

@@ -1,0 +1,1 @@
+- Security: when a connector's tool fails, its error message now reaches the model as untrusted data inside the same fence as its normal results, so a server can no longer slip instructions in through an error. The tool row in the app still shows the plain message, and successful connector and web page rows now show their text instead of the fence header.

@@ -120,7 +120,8 @@ impl NativeEngine {
         }
     }
 
-    /// Let an unclear ask's Brief come from one fast-model call.
+    /// Let an ask that neither the rules nor the local scorer can sort get its
+    /// Brief from one fast-model call (the app's opt-in `briefModelFallback`).
     pub fn set_brief_model(&mut self, on: bool) {
         self.brief_model = on;
     }
@@ -173,30 +174,49 @@ impl NativeEngine {
         self.auth_kind = auth_kind;
     }
 
+    /// The model's window in tokens, when the caller knows it better than the
+    /// built-in default (a local model's context size). [`Self::set_route`] resets it.
+    pub fn set_context_length(&mut self, tokens: u64) {
+        self.context_length = tokens;
+    }
+
     pub fn set_halt(&mut self, halt: Box<dyn HaltCheck + Send>) {
         self.halt = halt;
     }
 
-    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
-    /// The Brief changes nothing about the run or its reply.
-    fn write_brief(&self, text: &str, has_image: bool) {
+    /// A scheduled, proactive, self-manage or `/bg` run: nobody is waiting on it.
+    fn is_background(&self) -> bool {
         use crate::harness::Origin;
-        let recent: Vec<String> = self
-            .history
+        !self.reopen_tasks
+            || matches!(
+                self.origin,
+                Origin::Automation | Origin::Proactive | Origin::SelfManage
+            )
+    }
+
+    /// The last two user texts in this chat, oldest first, as the Brief reads them.
+    fn recent_user_texts(&self) -> Vec<String> {
+        self.history
             .iter()
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
-            .map(crate::compact::message_text)
+            .map(|item| {
+                let text = crate::compact::message_text(item);
+                crate::prefix_cache::visible_user_text(&text).to_string()
+            })
             .rev()
             .take(2)
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
-            .collect();
-        let background = !self.reopen_tasks
-            || matches!(
-                self.origin,
-                Origin::Automation | Origin::Proactive | Origin::SelfManage
-            );
+            .collect()
+    }
+
+    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
+    /// The Brief changes nothing about the run or its reply. It is returned so
+    /// the turn's router can read its intent, care, domain and confidence.
+    fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
+        let recent = self.recent_user_texts();
+        let background = self.is_background();
         let input = crate::brain::BriefInput {
             text,
             files: usize::from(has_image),
@@ -289,6 +309,7 @@ impl NativeEngine {
             playbook_id,
         };
         let _ = crate::brain::record_brief(&dir, &line);
+        line.brief
     }
 
     /// Replace the in-memory transcript with a session file. The next prompt continues it.
@@ -345,7 +366,22 @@ impl Engine for NativeEngine {
             });
             return Ok(());
         }
-        self.write_brief(text, image.is_some());
+        let brief = self.write_brief(text, image.is_some());
+        crate::tools::note_turn_brief(&self.conversation_id, &brief);
+        // LO-43: a plain read-only ask ("list my skills") runs its one tool
+        // and answers from a template, with no model call.
+        let turn = crate::brain::instant::Turn {
+            image: image.is_some(),
+            background: self.is_background(),
+            episode: self.episode_seed.is_some(),
+        };
+        let pick = crate::brain::instant::route(text, &brief, turn, crate::repair::Os::current());
+        let instant = pick.is_some();
+        if let Some(pick) = pick {
+            if self.answer_instantly(text, pick, emit) {
+                return Ok(());
+            }
+        }
         if let Some(seed) = self
             .episode_seed
             .clone()
@@ -353,6 +389,23 @@ impl Engine for NativeEngine {
         {
             return self.prompt_episode(text, &seed, emit);
         }
+        // LO-48: with "Tidy typos on this computer" on, the on-device model may
+        // fix typos first (at most 300 ms). The model reads the tidied text;
+        // the saved chat keeps what was typed.
+        let typed = text;
+        let tidied = crate::route::cleanup::switched_on()
+            .then(|| {
+                crate::route::cleanup::tidy(&crate::route::cleanup::TidyIn {
+                    text,
+                    brief: &brief,
+                    recent: &self.recent_user_texts(),
+                    image: image.is_some(),
+                    background: self.is_background(),
+                    instant,
+                })
+            })
+            .flatten();
+        let text = tidied.as_deref().unwrap_or(typed);
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
         let input = LoopIn {
@@ -399,11 +452,13 @@ impl Engine for NativeEngine {
                 started,
                 usage,
                 error,
+                server,
             } => {
                 emit(AcpEvent::Compact {
                     started,
                     usage: grok_usage(&usage, kind, meter_used, meter_limit),
                     error,
+                    server,
                 });
             }
             LoopEvent::Usage(total) => {
@@ -434,9 +489,12 @@ impl Engine for NativeEngine {
                 meter,
             );
         } else {
-            let fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+            let mut fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+            if let Some(sent) = &tidied {
+                crate::route::cleanup::restore_typed(&mut fresh, sent, typed);
+            }
             let _ =
-                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, text);
+                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, typed);
         }
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),
@@ -594,6 +652,162 @@ impl NativeEngine {
         Ok(())
     }
 
+    /// LO-43: make the instant answer's one call and reply without a model.
+    /// `false` means nothing was shown or stored and the model takes the turn:
+    /// a turn hook, a gate or PreToolUse answer other than a plain Run,
+    /// diagnose without System state, a failed tool, or a cancel.
+    fn answer_instantly(
+        &mut self,
+        text: &str,
+        pick: crate::brain::instant::Pick,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> bool {
+        use crate::gate::{decide_with, Decision, PermMode};
+        let session = self.conversation_id.clone();
+        if crate::hooks::has_turn_hooks(&session) {
+            return false;
+        }
+        let config_dir = crate::perm::config_dir();
+        // A chat's first turn starts with the system prompt. Only the prefix
+        // cache's stable one can be written without the model loop.
+        let first = self.history.is_empty();
+        if first && !crate::prefix_cache::enabled(&config_dir) {
+            return false;
+        }
+        if pick.tool == crate::repair::DIAGNOSE_TOOL
+            && !crate::repair::system_state_allowed(&config_dir)
+        {
+            return false;
+        }
+        let call = crate::FunctionCall {
+            // Letters, digits and `_` only: strict providers check tool ids.
+            call_id: format!("instant_{}_{}", grokhub_core::now_ms(), pick.tool),
+            name: pick.tool.to_string(),
+            arguments: pick.args.to_string(),
+        };
+        let mut gate = self.gate;
+        if crate::session_tools::plan_on(&session) {
+            gate.readonly_session = true;
+        }
+        let policy = crate::perm::Policy::load(&self.workspace);
+        let base = decide_with(
+            &gate,
+            &call.name,
+            &call.arguments,
+            gate.mode == PermMode::Always,
+            None,
+            &self.workspace,
+            Some(&policy),
+        );
+        if base != Decision::Run {
+            return false;
+        }
+        let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
+            session: &session,
+            workspace: &self.workspace,
+            attended: gate.attended,
+            decision: base,
+            ask_reason: String::new(),
+            name: &call.name,
+            arguments: &call.arguments,
+            tool_use_id: &call.call_id,
+        });
+        // Hook context is written for the model, so a call that gets some goes there.
+        if constrained.decision != Decision::Run || !constrained.context.is_empty() {
+            return false;
+        }
+        let output = {
+            let _origin = crate::harness::OriginScope::enter(self.origin);
+            let cancel = self.cancel.clone();
+            let stop = move || cancel.is_cancelled();
+            let ctx = crate::tools::ToolCtx {
+                workspace: &self.workspace,
+                desktop: None,
+                stop: &stop,
+                tasks: None,
+                owner: None,
+                session: Some(&session),
+            };
+            crate::tools::dispatch(&ctx, &call.name, &call.arguments)
+        };
+        if output.failed
+            || output.text.trim() == crate::repair::SCOPE_ASK
+            || self.cancel.is_cancelled()
+        {
+            return false;
+        }
+        let (kind, limit) = (self.auth_kind, self.context_length);
+        let reply = pick.reply(&crate::tools::fence::display_text(&output.text));
+        {
+            let mut on_event = |ev: LoopEvent| {
+                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                    emit(acp);
+                }
+            };
+            let id = call.call_id.clone();
+            crate::run::emit_tool(
+                &mut on_event,
+                &id,
+                &call,
+                "in_progress",
+                &call.arguments,
+                None,
+            );
+            crate::run::emit_tool(
+                &mut on_event,
+                &id,
+                &call,
+                "completed",
+                &output.text,
+                output.image_data_url.clone(),
+            );
+        }
+        emit(AcpEvent::Text(reply.clone()));
+        // The next model turn sees the ask, the call, its output and the reply,
+        // paired by call id like any tool turn.
+        let before = self.history.len();
+        if first {
+            crate::prefix_cache::push_stable_system(&mut self.history, &self.system);
+        }
+        self.history.push(InputItem::Message {
+            role: "user".into(),
+            content: vec![crate::ContentPart::InputText(text.to_string())],
+        });
+        self.history.push(InputItem::FunctionCall {
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+        });
+        crate::run::push_output(&mut self.history, &session, &call, output);
+        self.history.push(InputItem::Message {
+            role: "assistant".into(),
+            content: vec![crate::ContentPart::InputText(reply)],
+        });
+        let fresh = self.history.get(before..).unwrap_or(&[]).to_vec();
+        let cwd = self.workspace.display().to_string();
+        let _ = crate::session::record_turn(
+            &session,
+            &cwd,
+            &self.model,
+            &fresh,
+            &Usage::default(),
+            kind.meter(),
+            text,
+        );
+        let used = crate::compact::estimate_input_tokens(&self.history);
+        emit(turn_usage_event(
+            &self.usage,
+            &Usage::default(),
+            kind,
+            used,
+            limit,
+        ));
+        emit(AcpEvent::Done {
+            stop_reason: "end_turn".into(),
+        });
+        true
+    }
+
     /// Manual `/compact`. The command is not stored as a user turn.
     /// A failure or cancel leaves `history` as it was.
     fn compact_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
@@ -609,6 +823,7 @@ impl NativeEngine {
             started: true,
             usage: grok_usage(&self.usage, kind, used, limit),
             error: None,
+            server: None,
         });
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
         let compact_result = crate::compact::compact_after_flush(
@@ -630,8 +845,8 @@ impl NativeEngine {
             ));
         }
         match compact_result {
-            Ok(extra) => {
-                self.usage.add(&extra);
+            Ok(done) => {
+                self.usage.add(&done.usage);
                 let delta = self.usage.saturating_delta(&before);
                 let _ = crate::session::record_compaction(
                     &session,
@@ -647,6 +862,7 @@ impl NativeEngine {
                     started: false,
                     usage: usage.clone(),
                     error: None,
+                    server: done.server,
                 });
                 emit(AcpEvent::Usage(usage));
                 emit(AcpEvent::Done {
@@ -658,6 +874,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some("cancelled".into()),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "cancelled".into(),
@@ -668,6 +885,7 @@ impl NativeEngine {
                     started: false,
                     usage: grok_usage(&self.usage, kind, used, limit),
                     error: Some(message),
+                    server: None,
                 });
                 emit(AcpEvent::Done {
                     stop_reason: "end_turn".into(),
@@ -969,6 +1187,8 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1340,7 +1560,7 @@ mod tests {
         )));
         assert!(events.iter().any(|ev| matches!(
             ev,
-            AcpEvent::Compact { started: false, error: None, usage }
+            AcpEvent::Compact { started: false, error: None, usage, server: None }
                 if usage.cost_in_usd_ticks == 4
                     && usage.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
                     && usage.context_tokens_used > 0
@@ -1359,7 +1579,10 @@ mod tests {
                 .contains("This session is being continued")));
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "remember the harbor"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "remember the harbor"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item).contains("/compact")));
@@ -1397,7 +1620,10 @@ mod tests {
         let input = loaded.input();
         assert!(input
             .iter()
-            .any(|item| crate::compact::message_text(item) == "keep this"));
+            .any(
+                |item| crate::prefix_cache::visible_user_text(&crate::compact::message_text(item))
+                    == "keep this"
+            ));
         assert!(!input
             .iter()
             .any(|item| crate::compact::message_text(item)

@@ -8,7 +8,6 @@ Modes (argv[1]):
 
 Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID (Notion API 2025-09-03 data source id),
 GITHUB_TOKEN, GITHUB_REPOSITORY, CARDS_PROJECT (board Project option, default Loadout),
-COPILOT_ASSIGN_TOKEN (optional user token; GITHUB_TOKEN may not assign Copilot),
 JULES_API_KEY (optional; Jules sessions are started through the Jules API,
 the 'jules' label alone does not start Jules).
 """
@@ -31,7 +30,6 @@ MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
 CODERS = {
     "claude": {"label": "claude", "authors": set(), "branch": "claude/"},
-    "copilot": {"label": "copilot", "authors": {"Copilot", "copilot-swe-agent", "app/copilot-swe-agent"}, "branch": "copilot/"},
     "jules": {"label": "jules", "authors": {"google-labs-jules", "google-labs-jules[bot]", "app/google-labs-jules"}, "branch": ""},
 }
 RULES = """## Rules
@@ -168,16 +166,6 @@ def query_ready():
     return notion(f"/data_sources/{ds}/query", "POST", body).get("results", [])
 
 
-def assign_copilot(number):
-    token = os.environ.get("COPILOT_ASSIGN_TOKEN") or None
-    try:
-        gh(f"/repos/{REPO}/issues/{number}/assignees", "POST", {"assignees": ["Copilot"]}, token)
-        return True
-    except RuntimeError as e:
-        print(f"copilot assign failed for #{number}: {e}")
-        return False
-
-
 JULES = "https://jules.googleapis.com/v1alpha"
 JULES_MARK = "<!-- jules-session: "
 JULES_DONE = {"COMPLETED", "FAILED", "CANCELLED", "STATE_UNSPECIFIED"}
@@ -272,7 +260,7 @@ def sync():
         if coder not in CODERS:
             print(f"card {pid} '{title}': Assigned '{coder}' is not a GitHub coder; skipped")
             continue
-        if load[coder] >= CAP:
+        if coder != "claude" and load[coder] >= CAP:
             print(f"card {pid} '{title}': {coder} is at cap {CAP}; left queued")
             continue
         body = page_body(card["id"]) or "_No card body._"
@@ -283,8 +271,6 @@ def sync():
         print(f"card {pid} -> #{issue['number']} ({coder})")
         load[coder] += 1
         open_issues[pid] = issue
-        if coder == "copilot":
-            assign_copilot(issue["number"])
         if coder == "claude":
             dispatch_claude(issue["number"])
         set_card(card["id"], "Doing", issue["html_url"])

@@ -20,6 +20,7 @@ mod search_replace;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;
 mod write;
@@ -125,6 +126,12 @@ pub fn begin_deferred_turn(session: &str) {
     registry::begin_turn(session);
 }
 
+/// LO-45: give the chat's Brief to the tool router. The first Brief picks the
+/// chat's tool profile; a later work Brief upgrades a Talk chat.
+pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
+    registry::note_brief(session, brief);
+}
+
 pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
     if !is_readonly(name) {
         return ToolOutput::err(gate::readonly_refusal(name));
@@ -201,7 +208,7 @@ pub fn dispatch_for_job(
         }
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
-            None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
+            None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
         },
         other => ToolOutput::err(gate::readonly_refusal(other)),
     }
@@ -358,7 +365,7 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
     Ok(media::build_media_call("image_generate", args)?.body)
 }
 
-pub(crate) use media::ImagineApi;
+pub use media::{imagine_client, run_media_tool, ImagineApi};
 
 /// Install fetch and Imagine clients for this thread. An empty bearer installs
 /// adapters that refuse without dialing. The guard restores the previous ports.
@@ -493,6 +500,8 @@ mod tests {
     /// tools share a name, so chat fails before the first token.
     #[test]
     fn schemas_for_has_no_duplicate_names() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         for readonly_session in [false, true] {
             for desktop in [false, true] {
                 let gate = Gate {

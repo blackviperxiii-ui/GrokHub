@@ -1,0 +1,82 @@
+name: Deck shots
+
+# Windows screenshots of the cabin, on request only (they used to run in
+# ci.yml's windows-release and took over 30 minutes):
+# - deck shots: grokhub.exe at the deck-match sizes beside the deck slides
+#   (scripts/deck-shots.ps1, shot list in scripts/deck-shots.list.ps1);
+# - web search shots: live DuckDuckGo Lite cites in OpenRouter and local chats
+#   (scripts/web-search-shots.ps1).
+# Evidence only, so neither script fails the run. The full shot list takes
+# more than 30 minutes, so deck shots stop after 6 minutes (exit 0 with a
+# warning) and the job ends within 20: pick the shots you need with `only`.
+# Run it with: gh workflow run deck-shots.yml -r beta -f only='chattabs-*'
+
+on:
+  workflow_dispatch:
+    inputs:
+      slide:
+        description: Deck slide the main shots sit beside
+        default: "02"
+        type: string
+      only:
+        description: Shot names to take (wildcard, e.g. chattabs-*)
+        default: "*"
+        type: string
+      web_search:
+        description: Also take the web search shots
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deck-shots
+  cancel-in-progress: true
+
+jobs:
+  shots:
+    name: deck shots
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      # Reuses ci.yml windows-release's cache (saved by the nightly); never saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: windows-release
+          save-if: false
+      - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
+      - name: Deck shots
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          SLIDE: ${{ inputs.slide }}
+          ONLY: ${{ inputs.only }}
+        run: ./scripts/deck-shots.ps1 -Slide $env:SLIDE -Only $env:ONLY -BudgetMinutes 6
+      - name: Upload deck shots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deck-shots
+          path: target/deck-shots/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Web search shots
+        if: inputs.web_search
+        continue-on-error: true
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./scripts/web-search-shots.ps1
+      - name: Upload web search shots
+        if: always() && inputs.web_search
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-search-shots
+          path: target/web-search-shots/
+          if-no-files-found: ignore
+          retention-days: 7

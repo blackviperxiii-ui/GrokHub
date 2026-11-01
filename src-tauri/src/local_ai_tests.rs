@@ -352,7 +352,7 @@ fn a_third_party_or_abliterated_file_needs_the_notice_once() {
     let catalog = file_row(
         Path::new(catalog_path),
         5 * 1_024 * 1_024 * 1_024,
-        "GrokHub models",
+        "Loadout models",
         &[],
     );
     assert_eq!(

@@ -101,7 +101,11 @@ lockfile in step, and `bump --check` fails if they drift.
   replaced this with the agent loop, below.)
 - Settings: model and close-to-tray in `shell.json` in the GrokHub config
   folder. The xAI API key lives in the OS keychain (service `GrokHub`, account
-  `shell-console-key`). Grok sign-in (OAuth) comes with Phase 3.
+  `shell-console-key`). Sign in with Grok (device code) is in Settings →
+  Account on desktop and iOS; its tokens live in the keychain under account
+  `shell-xai-oauth`, and a live sign-in is used before the key. Android gets
+  it once the keyring has an Android store. `GROKHUB_SHELL_OAUTH_URL` points
+  sign-in at a loopback mock auth server for tests (plain-http loopback only).
 - Tray: Show GrokHub and Quit. A left click shows the window.
 - `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
   plain-http loopback URLs are accepted, so it cannot move real traffic.
@@ -163,13 +167,40 @@ app shows in both.
   and the page stays mounted so a run in flight is not lost on a tab change.
 - Edits take a lock and reload the file first, and a cabin row with no id gets
   one written back, so Pause or Remove always finds the row it showed.
-- The cabin's pulse still fires jobs on schedule. The shell runs no second
-  scheduler, so a job never fires twice. Firing from the shell waits until
-  the shell replaces the cabin.
-- Tests: Rust tests for add, refusing text with no time, pause, resume,
+- Edit opens a box on the row with the job's words (`describe_automation`,
+  the parser's inverse) and saves new words in place: the id, pause state,
+  run count, health and any cabin check command stay. Words with no time are
+  refused and nothing is written. Weekly, monthly, one-off and several-times
+  jobs have no Edit, since the words cannot say their schedule.
+- Scheduled jobs fire from the shell (`src-tauri/src/scheduler.rs`, desktop
+  only) with the window open or in the tray, but only while the cabin is
+  closed. The cabin writes a beat to `{config}/scheduler-lease.json`
+  (`{owner, pid, beat_ms}`, `grokhub_core::scheduler_lease`) every 30 s from
+  its pulse. A beat under 90 s old keeps the shell from firing, so the cabin
+  keeps priority while it is open. Otherwise the shell beats as `shell` (a
+  second shell process defers to it) and checks for due jobs every 30 s.
+- A due job is claimed before it runs: its last run, run count and next run
+  are saved first, so a second tick, or a cabin that opens, finds it done.
+  After a laptop sleep each job runs once, for its latest missed slot, and
+  its next run is the next slot to come. The run is the same unattended,
+  read-only Ask run as Run now, whatever the approvals setting, and its end
+  goes to the window as `automations://ran` (the chat notice, the Activity
+  Dock and the row's reply).
+- A job with a check command is left to the cabin, which runs the command
+  first. Its row says "Runs in the cabin".
+- The scheduler needs the local time. The window reports its clock at start
+  and every 5 minutes (`set_scheduler_clock`); a paired browser does not,
+  since it may be in another time zone. Until the window reports, nothing
+  fires.
+- Tests: Rust tests for add, edit, refusing text with no time, pause, resume,
   remove, a broken file, rows the cabin wrote, and a Run now whose write is
-  refused. vitest covers the page. The smoke test adds a job through the UI,
-  checks `automations.json`, runs it and waits for the reply.
+  refused; for the scheduler, a claim saved before the run, no second fire on
+  the next tick, a fresh cabin lease holding every job, a stale one letting
+  the shell fire, missed slots firing once, a check-command job left alone
+  and a scheduled run whose write is refused. Core tests cover the lease and
+  the `describe_automation` round trip. vitest covers the page. The smoke
+  test adds a job through the UI, checks `automations.json`, runs it and
+  waits for the reply.
 
 **3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
 cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the
@@ -218,8 +249,19 @@ approve, the cabin's three permission modes.
   entry out of `mcp.json`, through the same change ledger the cabin uses, and
   deletes its sign-in and saved token. Computer-use servers can't be
   disconnected here.
-- Not yet: signing in to an HTTP server and adding new connectors. The shell
-  has no browser opener, so the page points to the cabin for both.
+- Add… opens a sheet with the catalog the cabin ships (search, Add) and
+  Paste config for an `mcpServers` block. Refresh reads newer names and
+  descriptions from the official MCP registry, only when clicked. New entries
+  are written enabled through the change ledger and start on Check or first
+  use. Names already set up are kept as they are.
+- A key connector shows a password field once added. Save key posts a
+  credentials card through the harness park; only Save on that card seals the
+  key and names it in `mcp.json`, and Deny or a timeout saves nothing.
+- Sign in opens an HTTP server's https sign-in page in the browser and
+  reconnects it with the new token. The switch on each row writes `enabled`
+  through the change ledger; a server that is off is listed and never started.
+- The web remote lists, checks, reconnects, signs out and disconnects. Adding,
+  signing in, keys and the switch stay on the computer.
 - Rust tests run a real stdio server (`ui/e2e/fake-mcp.mjs` under node) and a
   missing command. The smoke test writes an entry for that server, checks it
   connects with one tool, and checks the entry leaves `mcp.json` only after
@@ -285,18 +327,56 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Risky steps (delete, send, money, credentials) wait for an OK in every
   approvals mode, Always included. Ordinary steps follow the approvals
   setting. A halt stamp (the cabin's Halt) stops a running prompt.
+- Halt stops desktop control and every running prompt at once, the way the
+  cabin's tray Halt does (`agent::halt`, `halt_now` in `src-tauri/src/lib.rs`).
+  It's a red button in the top bar while desktop control is on or anything
+  runs, Ctrl+Alt+H in the window, a Halt item in the tray, and Super+Shift+Esc
+  from any app. Super+Shift+Esc is best effort: when another app (the cabin)
+  holds it or the desktop has no system-wide keys, Settings → General says so
+  and the other three still work. Halt writes the halt stamp, lets go of held
+  keys, stops unattended runs, and cancels every chat. A waiting card reads
+  "Not run: halted", and the chat says it stopped. Desktop steps stay off until
+  the app restarts, as in the cabin. A prompt sent after the Halt still runs.
+  Halt only listens and stops; it never types or clicks. Phones and the web
+  app don't get it (`halt_desktop` is not in `remote::WEB_COMMANDS`).
 - The shell is the crate's host: its config folder, its switch, and on Linux
   the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
   (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
-- Not yet: desktop episodes (the cabin's observe, act, verify loop), the
-  Cua driver, and a Halt button in the shell. macOS has no desktop backend
+- Not yet: desktop episodes (the cabin's observe, act, verify loop) and the
+  Cua driver. macOS has no desktop backend
   yet, so desktop calls fail there with the no-display error.
 - Rust tests cover the switch, a refused call while it's off, a typed delete
   that waits in Always and is denied, and an allowed step that runs. The
   smoke test turns the switch on with approvals at Always, has the model
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
+  Halt's Rust tests park a desktop step, halt, and check that the turn ends
+  as halted, the step never runs and the stamp is written; a prompt sent after
+  the Halt still runs. The smoke test has no Halt walk yet.
 
+**3h, chat history.** Chats now survive New chat, a reload and quitting
+(`src-tauri/src/history.rs`, `ui/src/History.tsx`).
+
+- The engine already saved every turn to `sessions/<id>.jsonl` in the config
+  folder. The History page lists the shell's own chats (ids starting
+  `shell-`) under Today, This week and Older, newest first, with a search
+  over titles and words in the chat (250 ms after typing stops, at most 200
+  rows). A row's menu renames it or deletes it; Delete asks first and stops a
+  reply still running in that chat.
+- A click opens the chat in Chat: its newest 200 lines, with Show earlier for
+  the rest. Tool steps come back as one muted "Tools ran" line, not cards.
+  The next message carries the chat on: a new worker resumes the engine from
+  the saved turns, as the cabin does.
+- The chat open at the last close comes back at launch (`lastChat` in
+  `shell.json`); New chat clears it.
+- Cabin threads stay on the cabin's own History page, so no session file has
+  two writers. History is desktop-only: it isn't in `WEB_COMMANDS`, and a
+  browser sees only the chats it started.
+- Rust tests cover listing, the transcript with folded tool steps, a second
+  worker sending the first turn again, search, rename, delete and that cabin
+  sessions stay out. vitest covers the page, its search and delete prompt,
+  and Chat reopening the last chat. Not yet: the smoke test does not walk
+  History.
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
@@ -390,7 +470,8 @@ The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
 automations, memory, connectors and Pulse (`get_pulse`, `pulse_act`,
 `pulse_discuss`, `pulse_why`, `get_feed_prompt`, `save_feed_prompt`,
-`pulse_image`). Everything else gets `ok: false`: the key, settings changes,
+`pulse_image`) and Nyx's picture (`nyx_look`, gated by the desktop's
+Adults-only setting). Everything else gets `ok: false`: the key, settings changes,
 Local AI and desktop control.
 
 **5b, the desktop side.** Settings → Web access in the shell

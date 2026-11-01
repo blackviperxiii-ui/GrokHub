@@ -12,6 +12,8 @@ import {
   type MemoryHit,
   type MemoryNotes,
 } from "./api";
+import { Toggle } from "./Toggle";
+import { StatusLine, useNote } from "./ui";
 
 type Scope = "workspace" | "global";
 const SCOPES: Scope[] = ["workspace", "global"];
@@ -30,7 +32,7 @@ export function Memory() {
   const [lineGlobal, setLineGlobal] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MemoryHit[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail } = useNote();
   const [editId, setEditId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -49,12 +51,13 @@ export function Memory() {
     });
   }
 
+  // Runs each time Memory shows; an editor with unsaved changes keeps them.
   useEffect(() => {
     getMemory().then(
-      (next) => show(next, SCOPES),
-      (err) => setNote(String(err)),
+      (next) => show(next, []),
+      fail,
     );
-  }, []);
+  }, [fail]);
 
   async function save(scope: Scope) {
     setSaving(true);
@@ -65,9 +68,9 @@ export function Memory() {
         files[scope].base,
       );
       show(next, [scope]);
-      setNote(redacted ? "Saved. A secret was replaced with [redacted]." : "Saved.");
+      ok(redacted ? "Saved. A secret was replaced with [redacted]." : "Saved.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
       // The file may have changed under the editor; show what it holds now.
       await getMemory().then(
         (next) => show(next, [scope]),
@@ -85,9 +88,9 @@ export function Memory() {
       const { status, notes: next } = await addMemory(line.trim(), lineGlobal);
       show(next, []);
       setLine("");
-      setNote(`${status}.`);
+      ok(`${status}.`);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -95,9 +98,9 @@ export function Memory() {
     try {
       show(await next, []);
       setEditId(null);
-      setNote(done);
+      ok(done);
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
@@ -106,12 +109,12 @@ export function Memory() {
     try {
       setHits(await searchMemory(query));
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
   if (!notes) {
-    return <section className="memory">{note ?? "Loading memory…"}</section>;
+    return <section className="memory">{note?.text ?? "Loading memory…"}</section>;
   }
 
   const editor = (scope: Scope, title: string, path: string) => (
@@ -147,22 +150,17 @@ export function Memory() {
           The cabin keeps memory in its AMR store, so chat recall does not read these files.
         </p>
       )}
-      <label className="check">
-        <input
-          type="checkbox"
-          aria-label="Remember new lines"
-          checked={notes.writesOn}
-          onChange={(e) =>
-            void apply(
-              setMemoryWrites(e.target.checked),
-              e.target.checked
-                ? "Memory is on."
-                : "Memory is off. Nothing new is written.",
-            )
-          }
-        />
+      <Toggle
+        checked={notes.writesOn}
+        onChange={(on) =>
+          void apply(
+            setMemoryWrites(on),
+            on ? "Memory is on." : "Memory is off. Nothing new is written.",
+          )
+        }
+      >
         Remember new lines
-      </label>
+      </Toggle>
       {notes.rows.length > 0 && (
         <ul className="rows" aria-label="Learned lines">
           {notes.rows.map((row) => (
@@ -236,23 +234,14 @@ export function Memory() {
           value={line}
           onChange={(e) => setLine(e.target.value)}
         />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={lineGlobal}
-            onChange={(e) => setLineGlobal(e.target.checked)}
-          />
+        <Toggle checked={lineGlobal} onChange={setLineGlobal}>
           Global
-        </label>
+        </Toggle>
         <button type="submit" disabled={!line.trim()}>
           Remember
         </button>
       </form>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
+      <StatusLine note={note} className="note" />
       {editor("workspace", "Project notes", notes.workspacePath)}
       {editor("global", "Global notes", notes.globalPath)}
       <form className="add" onSubmit={search}>

@@ -1,0 +1,1 @@
+- Local AI: when the GPU backend crashes the engine at start (a bad or missing GPU driver), Loadout starts it again on the CPU with every GPU left out (`--device none`) and remembers that for this model and driver, so Local AI still answers. Out-of-memory keeps its own retry with fewer GPU layers.

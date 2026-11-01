@@ -2,6 +2,7 @@
 //! unattended receivers.
 
 use super::*;
+use grokhub_core::work_resume::InterruptCause;
 
 impl Cabin {
     pub(super) fn fail_turn_start(&mut self, detail: &str) {
@@ -124,6 +125,7 @@ impl Cabin {
                         self.store_hub_frame(url);
                     }
                     self.ingest_tool_card(&card);
+                    self.log_run_tool(&card);
                     let watched = card.clone();
                     if self.stream_here() {
                         self.scrub_live_blocks();
@@ -155,6 +157,7 @@ impl Cabin {
                     started,
                     usage,
                     error,
+                    ..
                 } => {
                     if self.stream_here() {
                         self.apply_compact_status(started, usage, error);
@@ -265,6 +268,14 @@ impl Cabin {
                     }
                     self.running = false;
                     self.acp = None;
+                    // xAI turned the sign-in away: with Local AI ready, the
+                    // same turn runs again on the device instead of failing.
+                    if self.note_cloud_rejection(&e) && !self.turn_retried {
+                        self.turn_retried = true;
+                        self.kick_model(false);
+                        self.status = super::native_engine::LOCAL_FALLBACK_NOTE.into();
+                        continue;
+                    }
                     if grokhub_core::proc_util::is_sigterm_status(&e) && !self.turn_retried {
                         self.turn_retried = true;
                         self.status = "Retrying…".into();
@@ -276,7 +287,7 @@ impl Cabin {
                     }
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();
                     self.maybe_continue_ptt();
@@ -297,7 +308,7 @@ impl Cabin {
         self.confirm = None;
         self.perm_ask = Some(p);
         if self.chrome_here() {
-            self.status = "Grok wants permission".into();
+            self.status = format!("{} wants permission", grokhub_core::brand::product_name());
         }
     }
 
@@ -354,7 +365,9 @@ impl Cabin {
             }
         }
         if !self.job_is_idea_talk() {
-            remember_chip_outcome(&mut self.chip_memory, true, now_ms());
+            if let Some(key) = self.chip_turn_key.take() {
+                remember_chip_turn_outcome(&mut self.chip_memory, &key, true, now_ms());
+            }
             record_turn(&mut self.learning);
             self.absorb_turn_learning(&text);
         }
@@ -552,7 +565,7 @@ impl Cabin {
                             self.status.clear();
                         }
                         self.post_turn_crash();
-                        self.abandon_turn_card();
+                        self.interrupt_turn_card(InterruptCause::WorkerGone);
                         self.chat_job_thread = None;
                         self.persist();
                     }
@@ -563,7 +576,7 @@ impl Cabin {
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();
                 }
@@ -593,7 +606,7 @@ impl Cabin {
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
-                    self.abandon_turn_card();
+                    self.interrupt_turn_card(InterruptCause::WorkerGone);
                     self.chat_job_thread = None;
                     self.persist();
                 }

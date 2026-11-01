@@ -177,6 +177,7 @@ pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
 /// Any fetch, timeout or ref error is `Err` — callers must not flip the
 /// channel then, and there is no fallback to stale cached refs.
 pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree".into());
     }
@@ -327,6 +328,7 @@ pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, Stri
 }
 
 fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
+    crate::offline::refuse()?;
     let want = channel.branch();
     let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
     let (ok, _) = git_stdout_within(
@@ -480,6 +482,8 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// Same plan as `update_cmds`, for the host the caller named, so a Windows
 /// test can still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
+    // Every plan pulls from GitHub (or downloads a release): none run offline.
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err(format!(
             "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
@@ -552,6 +556,7 @@ pub fn update_cmds_for_host_in(
     windows: bool,
     channel: Channel,
 ) -> Result<Vec<String>, String> {
+    crate::offline::refuse()?;
     match source {
         Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),
@@ -705,7 +710,7 @@ pub fn parse_github_latest_tag(body: &str) -> Option<String> {
 
 pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     format!(
-        "{product} {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart.", product = crate::brand::product_name()
+        "{product} {latest} is on GitHub Latest (running {running}). Update installs over this copy, then Restart.", product = crate::brand::product_name()
     )
 }
 
@@ -740,7 +745,7 @@ pub fn pending_from_versions(running_cabin: &str, cabin_latest: Option<&str>) ->
 pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
     match pending {
         UpdatePending::None => None,
-        UpdatePending::Cabin => Some("Update cabin"),
+        UpdatePending::Cabin => Some(crate::brand::filled("Update {product}")),
     }
 }
 
@@ -779,7 +784,7 @@ pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
 /// Pending-state copy. `None` is the `grokhub --update` exit line (no overlay).
 pub fn update_hint(pending: UpdatePending) -> &'static str {
     match pending {
-        UpdatePending::Cabin => "Updates the cabin, then Restart.",
+        UpdatePending::Cabin => crate::brand::filled("Updates {product}, then Restart."),
         UpdatePending::None => crate::brand::filled("{product} is current."),
     }
 }
@@ -1468,10 +1473,10 @@ mod tests {
         assert_eq!(pending_from_versions("2.10.92", Option::None), None);
         assert_eq!(pending_for_manual_update(None), Cabin);
         assert_eq!(update_chip_label(None), Option::None);
-        assert_eq!(update_chip_label(Cabin), Some("Update cabin"));
+        assert_eq!(update_chip_label(Cabin), Some("Update Loadout"));
         assert_eq!(settings_update_label(None), "Update");
         assert_eq!(update_hint(None), "Loadout is current.");
-        assert_eq!(update_hint(Cabin), "Updates the cabin, then Restart.");
+        assert_eq!(update_hint(Cabin), "Updates Loadout, then Restart.");
         assert_eq!(
             settings_update_hint(None),
             "Loadout looks current. Update still overlays so a missed probe can land."

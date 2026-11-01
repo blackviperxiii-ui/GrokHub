@@ -1,0 +1,2 @@
+- Right-click the Main chat tab and pick Clear chat to wipe Main's whole history for good, after a confirm that says it's permanent. Other chats, the Workboard, memory and settings stay.
+- In the shell, right-click the Chat tab and pick Clear chat to delete the open chat's saved history for good, after a confirm that says it's permanent.

@@ -329,7 +329,7 @@ fn nightly_review_stays_quiet() {
         .and_then(|s| s.split("fn open_history_hit(").next())
         .expect("history search");
     assert!(
-        search.contains("write_memory")
+        search.contains("save_memory_file")
             && search.contains("mem_body")
             && search.contains("scratch()"),
         "History Search must flush the Memory editor before reading disk: {search}"
@@ -405,9 +405,9 @@ fn nightly_review_stays_quiet() {
     assert!(
         kick.contains("self.fail_turn_start(")
             && fn_src(&src, "fail_turn_start").contains("abandon_turn_card")
-            && fn_src(&src, "poll_acp").contains("abandon_turn_card")
-            && fn_src(&src, "poll_single").contains("abandon_turn_card"),
-        "prompt and stream failures undo the Doing card"
+            && fn_src(&src, "poll_acp").contains("interrupt_turn_card")
+            && fn_src(&src, "poll_single").contains("interrupt_turn_card"),
+        "a prompt failure undoes the Doing card; a stream failure interrupts it (KB-03)"
     );
     let finish = fn_src(&src, "finish_acp_turn");
     assert!(
@@ -552,7 +552,7 @@ fn nightly_review_stays_quiet() {
         .next()
         .expect("connectors body");
     assert!(
-        connectors.contains("\"This cabin\"")
+        connectors.contains("section_label(ui, grokhub_core::brand::product_name())")
             && !connectors.contains("\"Grok Build\"")
             && !connectors.contains("run_grok_user_cmd")
             && !connectors.contains("run_mcp_doctor"),
@@ -655,9 +655,8 @@ fn background_model_calls_run_at_low_effort() {
             "{name} runs on its own and must use low effort: {body}"
         );
     }
-    // Chips, the greeting, ideas and the feed digest go through `fast_once`.
+    // The greeting, ideas and the feed digest go through `fast_once`.
     for name in [
-        "spawn_native_chips",
         "spawn_native_greeting",
         "spawn_native_ideas",
         "spawn_native_digest",

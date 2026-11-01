@@ -36,10 +36,32 @@ pub(super) struct FocusState {
     pub game: super::game_companion_ui::GameUi,
     /// The game watcher's GSI file and listener.
     pub watch: super::game_watch_ui::WatchState,
+    /// Battle.net games and the WoW combat log follow.
+    pub wow: super::wow_ui::WowState,
+    /// Path of Exile's own log, followed while it runs.
+    pub poe: super::poe_ui::PoeState,
+    /// Minecraft's own logs, followed while the game watcher is on.
+    pub minecraft: super::minecraft_ui::McState,
     /// New 3D models in Downloads.
     pub models: super::model_drop_ui::ModelDropState,
     /// The screenshot Explain offer's folder scan and image load.
     pub shot: super::screenshot_offer_ui::ShotState,
+    /// Elite Dangerous's Player Journal, followed while it runs.
+    pub elite: super::elite_ui::EliteState,
+    /// Stardew Valley's farm saves, compared across a play session.
+    pub stardew: super::stardew_ui::StardewState,
+    /// The Loadout ESO addon and what it saved.
+    pub eso: super::eso_ui::EsoUi,
+    /// Rocket League's Stats API, read while the game runs.
+    pub rl: super::rl_ui::RlUi,
+    /// The Loadout Factorio mod and what it wrote.
+    pub factorio: super::factorio_ui::FactorioUi,
+    /// Guild Wars 2 through ArenaNet's web API.
+    pub gw2: super::gw2_ui::Gw2Ui,
+    /// Destiny 2 through Bungie.net's web API.
+    pub destiny: super::destiny_ui::DestinyUi,
+    /// Old School RuneScape through Jagex's hiscores.
+    pub osrs: super::osrs_ui::OsrsUi,
 }
 
 impl Cabin {
@@ -51,11 +73,25 @@ impl Cabin {
         self.tick_wind_down();
         self.tick_downloads_tidy();
         self.tick_backup();
+        self.tick_board_store();
+        self.tick_board_notices();
+        self.tick_work_resume();
         self.tick_net_log();
         self.tick_game_companion();
         self.tick_game_watch();
+        self.tick_wow();
+        self.tick_poe();
+        self.tick_minecraft();
         self.tick_model_drop();
         self.poll_screenshot_offer();
+        self.tick_elite();
+        self.tick_stardew();
+        self.tick_eso();
+        self.tick_rl();
+        self.tick_factorio();
+        self.tick_gw2();
+        self.tick_destiny();
+        self.tick_osrs();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

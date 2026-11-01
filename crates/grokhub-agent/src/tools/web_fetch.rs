@@ -49,7 +49,7 @@ impl PageFetch for BlockedFetch {
 }
 
 pub(crate) struct UreqFetch {
-    agent: ureq::Agent,
+    agent: grokhub_core::http::Agent,
 }
 
 impl Default for UreqFetch {
@@ -60,12 +60,13 @@ impl Default for UreqFetch {
 
 impl UreqFetch {
     pub(crate) fn new() -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .redirects(0)
-            .resolver(public_only_resolve)
-            .build();
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+            connect: Duration::from_secs(10),
+            overall: Some(Duration::from_secs(30)),
+            redirects: 0,
+            public_only: true,
+            ..Default::default()
+        });
         Self { agent }
     }
 }
@@ -92,31 +93,22 @@ impl PageFetch for UreqFetch {
         match self
             .agent
             .get(url)
-            .set("User-Agent", crate::USER_AGENT)
-            .set(
+            .header("User-Agent", crate::USER_AGENT)
+            .header(
                 "Accept",
                 "text/html, text/plain, application/json;q=0.9, */*;q=0.1",
             )
+            .any_status()
             .call()
         {
+            // A 4xx/5xx is never a redirect, so it reads as `HTTP {status}` here.
             Ok(resp) => owned_response(resp.status(), resp),
-            Err(ureq::Error::Status(status, resp)) => {
-                if is_redirect(status) {
-                    return Ok(FetchResp {
-                        status,
-                        location: resp.header("location").map(str::to_string),
-                        content_type: resp.header("content-type").unwrap_or("").to_string(),
-                        body: Vec::new(),
-                    });
-                }
-                Err(format!("HTTP {status}"))
-            }
-            Err(ureq::Error::Transport(err)) => Err(format!("fetch failed: {err}")),
+            Err(err) => Err(format!("fetch failed: {err}")),
         }
     }
 }
 
-fn owned_response(status: u16, resp: ureq::Response) -> Result<FetchResp, String> {
+fn owned_response(status: u16, resp: grokhub_core::http::Response) -> Result<FetchResp, String> {
     let location = resp.header("location").map(str::to_string);
     let content_type = resp.header("content-type").unwrap_or("").to_string();
     if is_redirect(status) {
@@ -528,7 +520,7 @@ fn check_ssrf(url: &UrlParts, fetch: &dyn PageFetch) -> Result<(), String> {
     Ok(())
 }
 
-/// The resolver ureq dials with. Implemented in `grokhub_core::ssrf`.
+/// The resolver a `public_only` agent dials with. Implemented in `grokhub_core::ssrf`.
 pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
     core_public_only_resolve(netloc)
 }
@@ -877,6 +869,8 @@ mod tests {
 
     #[test]
     fn web_fetch_rules_deny_ask_allow_and_unattended() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let url = r#"{"url":"https://example.com/a"}"#;
         let ws = Path::new(".");
         let deny = parse_rule("WebFetch(domain:example.com)", Action::Deny).unwrap();

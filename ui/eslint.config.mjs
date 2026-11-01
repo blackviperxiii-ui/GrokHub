@@ -54,10 +54,11 @@ export default [
         },
       },
     },
-    plugins: { "react-hooks": reactHooks, local: usesTypesAndJsx },
+    // Rules of Hooks plus the React Compiler's checks (refs, purity, setState in effects…).
+    plugins: { ...reactHooks.configs.flat.recommended.plugins, local: usesTypesAndJsx },
     rules: {
       ...eslint.configs.recommended.rules,
-      // Names come from tsc (`npm run build`); this parser has no type info.
+      ...reactHooks.configs.flat.recommended.rules,
       "no-undef": "off",
       "local/uses-types-and-jsx": "error",
       "no-unused-vars": [
@@ -69,8 +70,6 @@ export default [
           ignoreRestSiblings: true,
         },
       ],
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
     },
   },
 ];

@@ -33,7 +33,8 @@ pub fn diagnostics_bundle(
     // The status line can echo a pasted key; it never leaves in the bundle.
     let notes = redact_secrets(&notes.chars().take(400).collect::<String>());
     format!(
-        "app GrokHub\nversion {version}\nos {} {}\nauth {}\nhub {hub_kind}\nskills {skill_count}\nlastHost {receipt}\nworkboardOpen {workboard_open}\nnotes {notes}\n",
+        "app {}\nversion {version}\nos {} {}\nauth {}\nhub {hub_kind}\nskills {skill_count}\nlastHost {receipt}\nworkboardOpen {workboard_open}\nnotes {notes}\n",
+        crate::brand::product_name(),
         std::env::consts::OS,
         std::env::consts::ARCH,
         if auth { "present" } else { "missing" },
@@ -194,7 +195,7 @@ pub struct DiagnosticsExport {
 impl DiagnosticsExport {
     pub fn with_defaults(version: &str, chat_id: &str, chat_title: &str) -> Self {
         Self {
-            app: "GrokHub".into(),
+            app: crate::brand::product_name().into(),
             version: version.into(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),

@@ -1,3 +1,4 @@
+use grokhub_core::http;
 use grokhub_core::{
     apply_profile, merge_refreshed, parse_device_start, parse_poll_result, parse_token_json,
     parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
@@ -40,13 +41,24 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
+fn read_json_capped(resp: http::Response) -> Result<Value, String> {
     let mut buf = Vec::new();
     resp.into_reader()
         .take(TEXT_FILE_CAP as u64)
         .read_to_end(&mut buf)
         .map_err(|e| e.to_string())?;
     serde_json::from_slice(&buf).map_err(|e| e.to_string())
+}
+
+// An error answer's body is read to the same cap as an OK one (`post_form`).
+const _: () = assert!(http::STATUS_BODY_CAP == TEXT_FILE_CAP);
+
+/// Every sign-in call: 20 s for the whole request, ureq 2's other defaults.
+fn auth_agent() -> http::Agent {
+    http::agent(http::Opts {
+        overall: Some(Duration::from_secs(20)),
+        ..Default::default()
+    })
 }
 
 /// EgressGuard (Spike-4c): sign-in talks to xAI's auth host with codes and
@@ -58,10 +70,10 @@ fn egress(url: &str) -> Result<(), String> {
 
 fn discovery() -> Result<Discovery, String> {
     egress(XAI_OAUTH_DISCOVERY)?;
-    let resp = ureq::get(XAI_OAUTH_DISCOVERY)
-        .set("accept", "application/json")
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20))
+    let resp = auth_agent()
+        .get(XAI_OAUTH_DISCOVERY)
+        .header("accept", "application/json")
+        .header("user-agent", UA)
         .call()
         .map_err(|e| e.to_string())?;
     let v = read_json_capped(resp)?;
@@ -81,20 +93,20 @@ fn discovery() -> Result<Discovery, String> {
 
 fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
     egress(url)?;
-    let resp = ureq::post(url)
-        .set("content-type", "application/x-www-form-urlencoded")
-        .set("accept", "application/json")
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20))
+    let resp = auth_agent()
+        .post(url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .header("user-agent", UA)
         .send_string(body);
     match resp {
         Ok(r) => {
             let v = read_json_capped(r)?;
             Ok((true, v))
         }
-        Err(ureq::Error::Status(code, r)) => {
-            let v = read_json_capped(r).unwrap_or(Value::Null);
-            let _ = code;
+        // The facade keeps the error body's first STATUS_BODY_CAP bytes.
+        Err(http::Error::Status { body, .. }) => {
+            let v = serde_json::from_str(&body).unwrap_or(Value::Null);
             Ok((false, v))
         }
         Err(e) => Err(e.to_string()),
@@ -165,6 +177,15 @@ fn cabin_oauth_refresh_state() -> &'static Mutex<CabinOauthRefresh> {
             ready: None,
         })
     })
+}
+
+/// The last renewal of the Grok sign-in failed and none has worked since.
+/// Settings → Account then offers Sign in with Grok again.
+pub fn cabin_refresh_failed() -> bool {
+    cabin_oauth_refresh_state()
+        .lock()
+        .map(|held| held.fail_at.is_some())
+        .unwrap_or(false)
 }
 
 /// Refresh cabin OAuth off the UI thread. Returns a completed refresh if one is ready.
@@ -326,11 +347,11 @@ pub fn poll_until_ready(device_code: &str, interval_s: u64) -> Result<XaiOAuthTo
 pub fn fetch_userinfo(access: &str) -> Result<grokhub_core::OAuthProfile, String> {
     let url = trusted_xai_url(XAI_OAUTH_USERINFO)?;
     egress(&url)?;
-    let resp = ureq::get(&url)
-        .set("authorization", &format!("Bearer {access}"))
-        .set("accept", "application/json")
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20))
+    let resp = auth_agent()
+        .get(&url)
+        .header("authorization", &format!("Bearer {access}"))
+        .header("accept", "application/json")
+        .header("user-agent", UA)
         .call()
         .map_err(|e| e.to_string())?;
     let v = read_json_capped(resp)?;
@@ -365,21 +386,21 @@ pub fn fetch_profile_photo(url: &str, access: &str) -> Result<Vec<u8>, String> {
         .unwrap_or("")
         .to_ascii_lowercase();
     egress(&url)?;
-    let mut req = ureq::get(&url)
-        .set(
+    let mut req = auth_agent()
+        .get(&url)
+        .header(
             "accept",
             "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
         )
-        .set("user-agent", UA)
-        .timeout(Duration::from_secs(20));
+        .header("user-agent", UA);
     if host == "x.ai"
         || host.ends_with(".x.ai")
         || host == "grok.com"
         || host.ends_with(".grok.com")
     {
         req = req
-            .set("authorization", &format!("Bearer {access}"))
-            .set("referer", "https://grok.com/");
+            .header("authorization", &format!("Bearer {access}"))
+            .header("referer", "https://grok.com/");
     }
     let resp = req.call().map_err(|e| e.to_string())?;
     let mut buf = Vec::new();

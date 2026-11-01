@@ -25,6 +25,8 @@ struct LiveCfg {
     episode: Option<grokhub_agent::EpisodeSeed>,
     /// Cabin chat thread that owns this native session (G4 panel drain).
     cabin_thread_id: String,
+    /// `briefModelFallback`: an ask the rules and local scorer can't sort asks the model.
+    brief_model_fallback: bool,
 }
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
@@ -229,6 +231,66 @@ impl Cabin {
         self.scheduled_perm || self.has_key() || self.imagine_native.tokens.is_some()
     }
 
+    /// Can a chat turn start? [`Self::agent_ready`], or no sign-in or key but
+    /// Local AI is on, installed and not paused: the router sends the turn to
+    /// the device (`local:no_keys`), online or offline.
+    pub(super) fn chat_ready(&self) -> bool {
+        self.agent_ready() || local_chat_available()
+    }
+
+    /// Signed out, and chats run on Local AI until a sign-in or key is added.
+    pub(super) fn local_only_chat(&self) -> bool {
+        !self.agent_ready() && local_chat_available()
+    }
+
+    /// Is this the bearer xAI last turned away?
+    fn bearer_rejected(&self, bearer: &str) -> bool {
+        self.rejected_bearer.as_deref() == Some(bearer)
+    }
+
+    /// Remember that xAI turned away the bearer this chat runs on, when the
+    /// engine error says so. True when it did and Local AI can take the turn.
+    pub(super) fn note_cloud_rejection(&mut self, err: &str) -> bool {
+        if !is_cloud_rejection(err) {
+            return false;
+        }
+        if let Ok((bearer, _)) = self.native_cred() {
+            self.rejected_bearer = Some(bearer);
+        }
+        local_chat_available()
+    }
+
+    /// The Grok sign-in or key can carry a turn right now, as far as the cabin
+    /// can tell without calling xAI: a key, a live token, or a token that can
+    /// still be renewed, and nothing xAI has turned away.
+    pub(super) fn cloud_cred_usable(&self) -> bool {
+        let now = grokhub_core::now_ms();
+        let rejected = |b: &str| self.bearer_rejected(b);
+        let key = self.console_key().trim();
+        if !key.is_empty() && !rejected(key) {
+            return true;
+        }
+        if self.imagine_native.tokens.as_ref().is_some_and(|t| {
+            grokhub_core::imagine_access_usable(t, now) && !rejected(&t.access_token)
+        }) {
+            return true;
+        }
+        let Some(t) = self.secrets.oauth.as_ref() else {
+            return false;
+        };
+        if t.access_token.trim().is_empty() || rejected(&t.access_token) {
+            return false;
+        }
+        if grokhub_core::oauth_access_live(t, now) {
+            return true;
+        }
+        let renewable = t
+            .refresh_token
+            .as_deref()
+            .is_some_and(|r| !r.trim().is_empty());
+        renewable && !crate::oauth::cabin_refresh_failed()
+    }
+
     /// Why a turn did not start, naming the engine's own missing piece.
     pub(super) fn no_agent_note(&self) -> &'static str {
         grokhub_core::XAI_NEED_SIGNIN
@@ -335,7 +397,20 @@ impl Cabin {
     }
 
     fn publish_native_cfg_for(&mut self, session_id: &str) -> Result<(), String> {
-        let (bearer, auth_kind) = self.native_cred()?;
+        let (bearer, auth_kind) = match self.native_cred() {
+            Ok(cred) if !self.bearer_rejected(&cred.0) || !local_chat_available() => cred,
+            // No usable sign-in or key (none, expired, its renewal failed, or
+            // xAI turned it away): with Local AI ready the router answers on
+            // the device, so the engine starts with no bearer at all.
+            _ if local_chat_available() => {
+                if self.agent_ready() {
+                    self.status = LOCAL_FALLBACK_NOTE.into();
+                }
+                (String::new(), AuthKind::ApiKey)
+            }
+            Ok(cred) => cred,
+            Err(err) => return Err(err),
+        };
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let workspace = self.native_workspace();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
@@ -365,6 +440,7 @@ impl Cabin {
             origin: self.harness.turn_origin,
             episode: self.native_episode_seed(),
             cabin_thread_id,
+            brief_model_fallback: self.cfg.brief_model_fallback,
         };
         live_map()
             .lock()
@@ -693,9 +769,9 @@ fn serve_native(
         engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
-        // Brain 1: an unclear ask's Brief costs one fast call. App tests
-        // script each reply, so they keep the rules-only default.
-        engine.set_brief_model(!cfg!(test));
+        // Brain 1: the rules and the local scorer sort the ask in-process; a
+        // model call for what they can't sort is opt-in (off by default).
+        engine.set_brief_model(cfg.brief_model_fallback);
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         #[cfg(test)]
         let client = match test_responses_url() {
@@ -728,6 +804,46 @@ fn serve_native(
         .unwrap_or_else(|err| err.into_inner())
         .remove(&session_id);
     grokhub_agent::mcp::detach_elicit(&session_id);
+}
+
+/// Local AI is on, installed and not paused, so a chat can answer on the device.
+/// Shown when a sign-in or key is on file but can't be used and Local AI
+/// takes the chat instead of the turn failing.
+pub(super) const LOCAL_FALLBACK_NOTE: &str =
+    "Your Grok sign-in needs renewing, so Local AI is answering. Sign in again in Settings → AI models to use Grok.";
+
+/// xAI turned the bearer away (`client::ClientError` 401/403 wording).
+fn is_cloud_rejection(err: &str) -> bool {
+    err.contains("sign-in was rejected (HTTP") || err.contains("API key rejected (HTTP")
+}
+
+fn local_chat_available() -> bool {
+    #[cfg(test)]
+    if let Some(on) = LOCAL_READY_TEST.with(std::cell::Cell::get) {
+        return on;
+    }
+    grokhub_agent::route::local::available()
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOCAL_READY_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: say Local AI is (or isn't) ready on this thread; `None` reads the real gate.
+#[cfg(test)]
+pub(super) fn set_local_ready_for_test(on: Option<bool>) {
+    LOCAL_READY_TEST.with(|c| c.set(on));
+}
+
+/// Test-only: the bearer the native engine was handed for `session_id`.
+#[cfg(test)]
+pub(super) fn published_bearer_for_test(session_id: &str) -> Option<String> {
+    live_map()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(session_id)
+        .map(|cfg| cfg.bearer.clone())
 }
 
 #[cfg(test)]

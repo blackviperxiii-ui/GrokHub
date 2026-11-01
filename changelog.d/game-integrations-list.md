@@ -1,0 +1,1 @@
+- Settings: under the game watcher, "Games Loadout can read, and how" lists each supported game and its read-only way in: a file the game writes, the maker's local API, or Loadout's own addon through the game's official addon system. Games with kernel anti-cheat (League of Legends) get no addon or mod from Loadout, and a test holds every entry to that.

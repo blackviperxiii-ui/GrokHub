@@ -56,6 +56,8 @@ pub use client::{
 };
 pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;
+pub use eval::efficiency::{render_bench, run_bench, BenchRow};
+pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
@@ -119,10 +121,11 @@ pub use run::{
     LoopOut, SteerQueue, StopReason, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
-    attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,
-    history_generation, list_sessions, load_session, local_title, merge_history, record_compaction,
-    record_turn, rename_session, resume_input, session_file, transcript_pairs, usage_label,
-    HistoryRow, RunGuard, SessionInfo,
+    attach_run, cancel_session, delete_forks_of, delete_session, export_markdown, forget_message,
+    fork_session, format_cost_ticks, history_generation, list_sessions, load_session, local_title,
+    merge_history, record_compaction, record_turn, rename_session, resume_input, session_file,
+    session_intact, transcript_pairs, usage_label, Forget, Forgotten, HistoryRow, RunGuard,
+    SessionInfo, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
@@ -133,13 +136,14 @@ pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{
     forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child,
-    session_is_live, watch_cancel,
+    session_is_live, watch_cancel, TaskRow, TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
-    is_readonly, public_only_resolve, schemas_for, schemas_for_job, seal_brave_key, tool_schemas,
-    tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet,
-    WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
+    imagine_client, is_readonly, public_only_resolve, run_media_tool, schemas_for, schemas_for_job,
+    seal_brave_key, tool_schemas, tool_set_for_kind, tool_set_refusal, DeferredToolsSettings,
+    DesktopOps, ImagineApi, ToolOutput, ToolSet, WebSearchBackend, WebSearchSettings,
+    READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

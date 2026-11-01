@@ -1,11 +1,15 @@
 //! Library (deck slide 11, layout C): the Steam games on this PC as a cover
 //! grid with filter tabs and a search, and the picked game's detail column
-//! with Play. The games come from the local library `steam.rs` reads. Each
+//! with Play. The games come from the local library `steam.rs` reads, plus
+//! the Battle.net games `wow_ui` finds, one tile each in the same grid. Each
 //! cover is the game's real art ([`game_art`]) over a painted cover that
 //! stays when a game has none.
 
 mod game_art;
 
+use std::path::PathBuf;
+
+use grokhub_core::battlenet::BnetGame;
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
 use grokhub_core::steam::{CoverKind, SteamGame};
 
@@ -49,12 +53,59 @@ impl LibraryTab {
     }
 }
 
+/// The picked tile: a Steam game by app id, or a Battle.net game by its
+/// install folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Pick {
+    Steam(u32),
+    Bnet(PathBuf),
+}
+
+/// One tile in the grid.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Tile<'a> {
+    Steam(&'a SteamGame),
+    Bnet(&'a BnetGame),
+}
+
+impl Tile<'_> {
+    pub(super) fn pick(&self) -> Pick {
+        match self {
+            Tile::Steam(g) => Pick::Steam(g.app_id),
+            Tile::Bnet(g) => Pick::Bnet(g.install.clone()),
+        }
+    }
+
+    pub(super) fn name(&self) -> String {
+        match self {
+            Tile::Steam(g) => g.name.clone(),
+            Tile::Bnet(g) => super::wow_ui::bnet_title(g),
+        }
+    }
+
+    /// The Steam app id for cover art; a Battle.net game paints its own.
+    fn app_id(&self) -> Option<u32> {
+        match self {
+            Tile::Steam(g) => Some(g.app_id),
+            Tile::Bnet(_) => None,
+        }
+    }
+
+    /// What picks the painted cover's colour and motif.
+    fn seed(&self) -> u32 {
+        match self {
+            Tile::Steam(g) => g.app_id,
+            Tile::Bnet(g) => super::wow_ui::cover_seed(g),
+        }
+    }
+}
+
 /// What the page keeps between frames.
 #[derive(Clone, Debug, Default)]
 struct LibraryView {
     tab: LibraryTab,
     query: String,
-    picked: Option<u32>,
+    picked: Option<Pick>,
 }
 
 /// Deck shots set `GROKHUB_DECK_LIBRARY_PICK` to an app id, so Library opens on
@@ -64,7 +115,9 @@ const DECK_PICK_ENV: &str = "GROKHUB_DECK_LIBRARY_PICK";
 /// The view on first open: the deck shot's pick, else the first game.
 fn first_view() -> LibraryView {
     LibraryView {
-        picked: super::loadout_home::deck_switch(DECK_PICK_ENV).and_then(|v| v.parse().ok()),
+        picked: super::loadout_home::deck_switch(DECK_PICK_ENV)
+            .and_then(|v| v.parse().ok())
+            .map(Pick::Steam),
         ..Default::default()
     }
 }
@@ -88,6 +141,33 @@ pub(super) fn filter_games<'a>(
         })
         .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
         .collect()
+}
+
+/// The Steam games the tab and search keep, then the Battle.net ones. The
+/// launcher keeps no play time, so Battle.net games sit out Backlog.
+pub(super) fn filter_tiles<'a>(
+    games: &'a [SteamGame],
+    bnet: &[&'a BnetGame],
+    tab: LibraryTab,
+    query: &str,
+    objective: &str,
+) -> Vec<Tile<'a>> {
+    let q = query.trim().to_lowercase();
+    let mut out: Vec<Tile<'a>> = filter_games(games, tab, query, objective)
+        .into_iter()
+        .map(Tile::Steam)
+        .collect();
+    out.extend(
+        bnet.iter()
+            .map(|g| Tile::Bnet(g))
+            .filter(|t| match tab {
+                LibraryTab::All | LibraryTab::Installed => true,
+                LibraryTab::Backlog => false,
+                LibraryTab::OnObjective => names_game(objective, &t.name()),
+            })
+            .filter(|t| q.is_empty() || t.name().to_lowercase().contains(&q)),
+    );
+    out
 }
 
 /// Whether `text` names the game, ignoring case.
@@ -252,15 +332,18 @@ pub(super) fn paint_cover_at(painter: &egui::Painter, rect: egui::Rect, app_id: 
 }
 
 /// One cover in the grid. The picked one gets the red outline.
-fn cover_tile(ui: &mut egui::Ui, game: &SteamGame, size: egui::Vec2, picked: bool) -> bool {
+fn cover_tile(ui: &mut egui::Ui, tile: Tile<'_>, size: egui::Vec2, picked: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter_at(rect);
-    paint_cover(&painter, rect, game.app_id);
-    if let Some(cover) = game_art::game_cover(ui.ctx(), game.app_id, CoverKind::Tall) {
+    paint_cover(&painter, rect, tile.seed());
+    if let Some(cover) = tile
+        .app_id()
+        .and_then(|id| game_art::game_cover(ui.ctx(), id, CoverKind::Tall))
+    {
         game_art::paint_art(ui, rect, &cover, crate::theme::RADIUS_SM);
     }
-    let name = game.name.to_uppercase();
+    let name = tile.name().to_uppercase();
     let font = crate::theme::loadout_font(14.0);
     let galley = ui.fonts_mut(|f| f.layout(name, font, crate::theme::fg(), rect.width() - 24.0));
     painter.galley(
@@ -299,7 +382,7 @@ impl Cabin {
     /// Opens Library on one game, with the tabs and search cleared.
     pub(super) fn show_in_library(&mut self, ctx: &egui::Context, app_id: u32) {
         let view = LibraryView {
-            picked: Some(app_id),
+            picked: Some(Pick::Steam(app_id)),
             ..Default::default()
         };
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(LIBRARY_VIEW_ID), view));
@@ -312,32 +395,51 @@ impl Cabin {
         let now = now_ms();
         let (found, games) = self.steam_library(now);
         let games = games.to_vec();
+        if self.sources.steam.reading() {
+            // Steam is there but its first library read is still on its thread:
+            // paint the page background and come back, no "No Steam library" flash.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+            egui::Frame::NONE.fill(crate::theme::bg()).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+            });
+            return;
+        }
         let mission = self.dock_mission(ui.ctx());
         let objective = objective_text(mission.as_ref());
+        let bnet_all = self.bnet_games();
+        let bnet = super::wow_ui::library_rows(&bnet_all);
+        if self.focus.wow.scanning() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        }
         egui::Frame::NONE
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                if !found || games.is_empty() {
-                    if crate::ui_kit::empty_state(
-                        ui,
-                        "No Steam library",
-                        "Games you install with Steam on this PC show up here.",
-                        Some("Open Steam"),
-                    ) {
+                if (!found || games.is_empty()) && bnet.is_empty() {
+                    // Nothing installed is not a dead end: the header and its
+                    // Skills button stay, and the empty state says what the
+                    // library reads and where to go next.
+                    self.library_empty_header(ui);
+                    ui.add_space(16.0);
+                    let (title, body) = library_empty_copy(found);
+                    if crate::ui_kit::empty_state(ui, title, body, Some("Open Steam")) {
                         let _ = crate::desktop::open_path("steam://");
                     }
                     return;
                 }
                 self.library_header(ui, &mut view);
                 ui.add_space(16.0);
-                let shown = filter_games(&games, view.tab, &view.query, &objective);
+                let shown = filter_tiles(&games, &bnet, view.tab, &view.query, &objective);
+                let all = filter_tiles(&games, &bnet, LibraryTab::All, "", "");
                 if view
                     .picked
-                    .is_none_or(|p| !games.iter().any(|g| g.app_id == p))
+                    .as_ref()
+                    .is_none_or(|p| !all.iter().any(|t| t.pick() == *p))
                 {
-                    view.picked = games.first().map(|g| g.app_id);
+                    view.picked = all.first().map(Tile::pick);
                 }
                 let full = ui.available_width();
                 let detail_w = (full * 0.3).clamp(DETAIL_MIN_W, DETAIL_W);
@@ -349,7 +451,8 @@ impl Cabin {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(grid_w);
-                            if let Some(p) = library_grid(ui, &shown, grid_w, view.picked) {
+                            if let Some(p) = library_grid(ui, &shown, grid_w, view.picked.as_ref())
+                            {
                                 view.picked = Some(p);
                             }
                         },
@@ -359,15 +462,38 @@ impl Cabin {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(detail_w);
-                            if let Some(game) = games.iter().find(|g| Some(g.app_id) == view.picked)
-                            {
-                                self.library_detail(ui, game, mission.as_ref());
+                            match all.iter().find(|t| Some(t.pick()) == view.picked) {
+                                Some(Tile::Steam(game)) => {
+                                    self.library_detail(ui, game, mission.as_ref());
+                                }
+                                Some(Tile::Bnet(game)) => {
+                                    let game = (*game).clone();
+                                    self.bnet_detail(ui, &game);
+                                }
+                                None => {}
                             }
                         },
                     );
                 });
             });
         ui.ctx().data_mut(|d| d.insert_temp(id, view));
+    }
+
+    /// The header with no games to filter: the title and the Skills button,
+    /// which used to vanish with the rest of the page when Steam wasn't found.
+    fn library_empty_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Library")
+                    .font(crate::theme::title_font(28.0))
+                    .color(crate::theme::fg()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, "Skills") {
+                    self.set_nav_id("skills");
+                }
+            });
+        });
     }
 
     fn library_header(&mut self, ui: &mut egui::Ui, view: &mut LibraryView) {
@@ -502,10 +628,10 @@ impl Cabin {
 /// The cover grid, in a scroll area. Returns the app id of a clicked cover.
 fn library_grid(
     ui: &mut egui::Ui,
-    shown: &[&SteamGame],
+    shown: &[Tile<'_>],
     w: f32,
-    picked: Option<u32>,
-) -> Option<u32> {
+    picked: Option<&Pick>,
+) -> Option<Pick> {
     if shown.is_empty() {
         ui.label(
             egui::RichText::new("Nothing here yet.")
@@ -525,15 +651,33 @@ fn library_grid(
             ui.spacing_mut().item_spacing = egui::vec2(GRID_GAP, GRID_GAP);
             for row in shown.chunks(cols) {
                 ui.horizontal(|ui| {
-                    for game in row {
-                        if cover_tile(ui, game, size, picked == Some(game.app_id)) {
-                            clicked = Some(game.app_id);
+                    for tile in row {
+                        let pick = tile.pick();
+                        if cover_tile(ui, *tile, size, picked == Some(&pick)) {
+                            clicked = Some(pick);
                         }
                     }
                 });
             }
         });
     clicked
+}
+
+/// Empty-state title and body, shown when neither Steam nor Battle.net has
+/// installed games. The library reads their own files on this PC (nothing
+/// touches a running game).
+pub(super) fn library_empty_copy(steam_found: bool) -> (&'static str, &'static str) {
+    if steam_found {
+        (
+            "No games installed yet",
+            "Steam is on this PC but has no installed games yet. Games you install with Steam or Battle.net show up here.",
+        )
+    } else {
+        (
+            "No games found",
+            "The library reads the games Steam and Battle.net have installed on this PC. Install or open either one and your games show up here.",
+        )
+    }
 }
 
 #[cfg(test)]
@@ -548,7 +692,7 @@ mod tests {
         std::env::remove_var(DECK_PICK_ENV);
         assert_eq!(first_view().picked, None, "the first game by default");
         std::env::set_var(DECK_PICK_ENV, " 1086940 ");
-        assert_eq!(first_view().picked, Some(1086940));
+        assert_eq!(first_view().picked, Some(Pick::Steam(1086940)));
         std::env::remove_var("GROKHUB_DECK_SHOT");
         assert_eq!(first_view().picked, None, "ignored outside a deck shot");
         match before {
@@ -644,5 +788,15 @@ mod tests {
         assert_eq!(cabin.nav_id(), "library");
         cabin.set_nav_id("skills");
         assert_eq!(cabin.nav, Nav::Skills);
+    }
+
+    #[test]
+    fn empty_library_says_what_it_reads_whether_or_not_steam_is_there() {
+        let (t, b) = super::library_empty_copy(false);
+        assert_eq!(t, "No games found");
+        assert!(b.contains("Steam and Battle.net have installed"));
+        let (t, b) = super::library_empty_copy(true);
+        assert_eq!(t, "No games installed yet");
+        assert!(b.contains("no installed games yet"));
     }
 }

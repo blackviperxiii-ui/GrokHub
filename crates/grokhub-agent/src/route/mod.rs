@@ -12,6 +12,7 @@ pub mod attention;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
+pub mod cleanup;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
@@ -24,6 +25,8 @@ pub mod live;
 pub mod local;
 pub mod local_autoconfig;
 pub mod local_bench;
+pub mod local_effort;
+pub mod local_fit;
 pub mod local_gov;
 pub mod local_health;
 pub mod local_http;
@@ -840,8 +843,12 @@ impl Router {
             offline: true,
             ..input.local.clone()
         };
-        let last_resort =
-            !too_hard && (elig || local::eligible(&as_offline, input.class, input.ctx_tokens));
+        let any_elig = elig || local::eligible(&as_offline, input.class, input.ctx_tokens);
+        let last_resort = !too_hard && any_elig;
+        // No sign-in or key at all: the device is the only model there is, so it
+        // takes hard work too while the step fits its context (the gate still
+        // keeps prepare:hard, cloud-only and hard-tool steps off it).
+        let no_keys_ok = any_elig;
         let local_id = reg.models.keys().map(String::as_str).find(|id| {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit, &input.spend, now_ms)
@@ -924,7 +931,7 @@ impl Router {
             } else if no_keys {
                 // No sign-in or key: there is no cloud model to escalate to, so
                 // the device keeps the step when it may take it.
-                if let Some(id) = local_id.filter(|_| last_resort) {
+                if let Some(id) = local_id.filter(|_| no_keys_ok) {
                     rules.push("local:no_keys".into());
                     pick = ModelPick {
                         model: id.to_string(),
@@ -975,7 +982,8 @@ impl Router {
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
-            } else if (((pick.no_route && cloud_down) || no_keys) && last_resort)
+            } else if (pick.no_route && cloud_down && last_resort)
+                || (no_keys && no_keys_ok)
                 || cloud_pool_empty_local
             {
                 // Plan models down / no healthy cloud route / no keys: fall back to local.
@@ -1003,6 +1011,19 @@ impl Router {
             }
             pick
         };
+        // Offline only (LU-13): whatever branch picked a cloud model (verify
+        // escalate, no keys, cloud down, hard work), nothing goes to the cloud.
+        let chosen =
+            if input.local.offline_switch && !chosen.no_route && !local::is_local(&chosen.model) {
+                rules.push("offline:switch".into());
+                ModelPick {
+                    model: input.current_model.trim().to_string(),
+                    no_route: true,
+                    replaced: None,
+                }
+            } else {
+                chosen
+            };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
             Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,
@@ -1229,6 +1250,9 @@ mod r3b_tests;
 mod goal_tests;
 
 #[cfg(test)]
+mod ladder_steady_tests;
+
+#[cfg(test)]
 mod speed_bench_tests;
 
 #[cfg(test)]
@@ -1239,6 +1263,19 @@ mod tests {
     use super::*;
     use crate::client::{ContentPart, StreamEvent};
     use std::sync::Mutex;
+
+    #[test]
+    fn routing_reads_what_was_typed_not_the_cabin_notes() {
+        let stored = crate::prefix_cache::user_message_text(
+            "Playbook for this turn: Code changes. Reproduce first, run the tests.",
+            "hi",
+        );
+        let input = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(stored)],
+        }];
+        assert_eq!(live::last_user_text(&input), ("hi".to_string(), false));
+    }
 
     struct Echo(Mutex<Vec<ResponsesRequest>>);
 

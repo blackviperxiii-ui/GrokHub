@@ -1,5 +1,0 @@
-- Pulse no longer follows small talk: chats titled "How are you" or "Good morning" don't become interest topics.
-- A topic you skipped stays skipped; chat mentions alone no longer bring it back under its starting weight.
-- Ignoring a card over and over stops lowering it at a floor; only a real dismissal goes lower.
-- Closing a digest, run report or other report card counts as seen, not as "show fewer of these".
-- Monitor brightness chatter (powerdevil i2c/DDC errors, ddcutil) no longer shows up as an app crashing.

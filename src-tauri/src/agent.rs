@@ -4,6 +4,7 @@
 //! permission gate in Ask mode: a risky step parks until the UI answers.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -123,6 +124,12 @@ pub enum UiEvent {
         action: String,
         reason: String,
     },
+    /// A permission card answered away from the page, such as Deny on its
+    /// notification. `answer` is a word `parse_answer` reads.
+    Answered {
+        id: String,
+        answer: String,
+    },
     Error {
         message: String,
     },
@@ -216,6 +223,17 @@ pub fn parse_answer(answer: &str) -> Result<PermAnswer, String> {
     }
 }
 
+/// The word [`parse_answer`] reads for `answer`; a cancel reads as deny,
+/// since the step did not run. Notifications are desktop only.
+#[cfg(desktop)]
+pub fn answer_word(answer: PermAnswer) -> &'static str {
+    match answer {
+        PermAnswer::Allow => "allow",
+        PermAnswer::Always => "always",
+        PermAnswer::Deny | PermAnswer::Cancel => "deny",
+    }
+}
+
 /// The model, credential and folder for one prompt. Read fresh for every
 /// prompt, so a Settings change applies to the next message.
 pub struct Route {
@@ -236,10 +254,17 @@ pub struct Route {
 
 struct Job {
     text: String,
+    /// Files from the composer (`crate::attach`), in order.
+    attachments: Vec<crate::attach::Staged>,
     route: Route,
+    /// When the person sent it: a Halt after this stops the turn.
+    asked_ms: u64,
     emit: Box<dyn FnMut(UiEvent) + Send>,
     done: Sender<Result<String, String>>,
 }
+
+/// The stop reason of a turn Halt ended.
+pub const HALTED: &str = "halted";
 
 pub struct NeverHalted;
 
@@ -256,6 +281,10 @@ pub struct Session {
     permits: Sender<PermitNote>,
     elicits: Sender<ElicitNote>,
     cancel: CancelToken,
+    /// A prompt is running.
+    busy: AtomicBool,
+    /// Halt stopped the running prompt; its turn ends as `halted`.
+    halted: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -278,14 +307,23 @@ impl Session {
         grokhub_agent::attach_elicit(conversation_id, answers);
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
-        let id = conversation_id.to_string();
-        std::thread::spawn(move || serve(id, config_dir, desktop, worker_cancel, inbox, rx));
+        let halted = Arc::new(AtomicBool::new(false));
+        let worker = Worker {
+            id: conversation_id.to_string(),
+            config_dir,
+            desktop,
+            cancel: worker_cancel,
+            halted: Arc::clone(&halted),
+        };
+        std::thread::spawn(move || serve(worker, inbox, rx));
         Self {
             id: conversation_id.to_string(),
             jobs,
             permits,
             elicits,
             cancel,
+            busy: AtomicBool::new(false),
+            halted,
         }
     }
 
@@ -294,23 +332,33 @@ impl Session {
     pub fn prompt(
         &self,
         text: &str,
+        attachments: Vec<crate::attach::Staged>,
         route: Route,
         emit: Box<dyn FnMut(UiEvent) + Send>,
     ) -> Result<String, String> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && attachments.is_empty() {
             return Err("Type a message first.".into());
         }
         let (done, wait) = channel();
-        self.jobs
+        self.halted.store(false, Ordering::SeqCst);
+        self.busy.store(true, Ordering::SeqCst);
+        let ran = self
+            .jobs
             .send(Job {
                 text: text.to_string(),
+                attachments,
                 route,
+                asked_ms: grokhub_core::now_ms(),
                 emit,
                 done,
             })
-            .map_err(|_| "The chat worker stopped.".to_string())?;
-        wait.recv()
-            .map_err(|_| "The chat worker stopped.".to_string())?
+            .map_err(|_| "The chat worker stopped.".to_string())
+            .and_then(|()| {
+                wait.recv()
+                    .map_err(|_| "The chat worker stopped.".to_string())?
+            });
+        self.busy.store(false, Ordering::SeqCst);
+        ran
     }
 
     pub fn answer(&self, call_id: &str, answer: PermAnswer) {
@@ -339,6 +387,39 @@ impl Session {
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
+
+    /// Halt for this chat: the running prompt ends as `halted` and a waiting
+    /// tool does not run. True when a prompt was running.
+    pub fn halt(&self) -> bool {
+        self.halted.store(true, Ordering::SeqCst);
+        self.cancel.cancel();
+        self.busy.load(Ordering::SeqCst)
+    }
+}
+
+/// Halt, as the cabin's tray Halt: the halt stamp stops desktop steps (one
+/// mid-action included) and every prompt started before it, held keys are
+/// let go, unattended runs and their tasks stop, and so does every chat.
+/// Desktop steps stay off until the app restarts, as in the cabin. Nothing is
+/// typed or clicked. Returns the chats that were mid-reply.
+#[cfg(desktop)]
+pub fn halt<'a>(
+    config_dir: &std::path::Path,
+    chats: impl IntoIterator<Item = &'a Arc<Session>>,
+) -> Vec<String> {
+    {
+        let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+        grokhub_desktop::write_halt_stamp();
+    }
+    grokhub_desktop::note_halt();
+    grokhub_agent::halt_all_sessions();
+    let mut busy: Vec<String> = chats
+        .into_iter()
+        .filter(|session| session.halt())
+        .map(|session| session.id.clone())
+        .collect();
+    busy.sort();
+    busy
 }
 
 impl Drop for Session {
@@ -373,24 +454,45 @@ fn native_desktop() -> Box<dyn DesktopOps> {
     Box::new(NoDesktop)
 }
 
-fn serve(
-    conversation_id: String,
+/// What a chat's worker thread owns besides its queues.
+struct Worker {
+    id: String,
     config_dir: PathBuf,
     desktop: fn() -> Box<dyn DesktopOps>,
     cancel: CancelToken,
-    inbox: PermitInbox,
-    jobs: Receiver<Job>,
-) {
+    halted: Arc<AtomicBool>,
+}
+
+fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
+    let Worker {
+        id: conversation_id,
+        config_dir,
+        desktop,
+        cancel,
+        halted,
+    } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
     let mut engine: Option<NativeEngine> = None;
     let mut inbox = Some(inbox);
     while let Ok(job) = jobs.recv() {
         let Job {
             text,
+            attachments,
             route,
+            asked_ms,
             mut emit,
             done,
         } = job;
+        // The first picture goes as image input; a file the model can't
+        // read stops the send with the cabin's note.
+        let mods = crate::attach::modalities(&config_dir, &route.model);
+        let message = match crate::attach::compose(&text, &attachments, &mods) {
+            Ok(message) => message,
+            Err(err) => {
+                let _ = done.send(Err(err));
+                continue;
+            }
+        };
         let system = system_prompt_for(
             &route.workspace,
             route.desktop,
@@ -413,7 +515,7 @@ fn serve(
                     let _ = done.send(Err("The chat worker stopped.".into()));
                     return;
                 };
-                none.insert(NativeEngine::new(EngineParts {
+                let engine = none.insert(NativeEngine::new(EngineParts {
                     client: route.client,
                     workspace: route.workspace,
                     model: route.model,
@@ -428,28 +530,42 @@ fn serve(
                     gate,
                     desktop: Some(desktop()),
                     permits: Arc::new(inbox),
-                }))
+                }));
+                // A chat saved earlier (opened from History, or the last chat
+                // after a restart) goes on from its saved turns, as the cabin's does.
+                if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                    engine.resume(info.input(), info.usage);
+                }
+                engine
             }
         };
         // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
         #[cfg(desktop)]
         engine.set_halt(Box::new(grokhub_agent::StampHalt {
-            started_ms: grokhub_core::now_ms(),
+            started_ms: asked_ms,
             read: grokhub_desktop::read_halt_stamp,
         }));
+        #[cfg(mobile)]
+        let _ = asked_ms;
         let mut stop = String::new();
         let mut error = None;
         let mut reply = String::new();
-        let ran = engine.prompt(&text, None, &mut |event| {
-            let Some(ui) = ui_event(event) else {
+        let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
+            let Some(mut ui) = ui_event(event) else {
                 return;
             };
+            if let UiEvent::Done { stop: s } = &mut ui {
+                // Halt cancels a waiting tool too; the turn reads as halted.
+                if halted.load(Ordering::SeqCst) {
+                    *s = HALTED.into();
+                }
+            }
             match &ui {
                 UiEvent::Text { text } => reply.push_str(text),
                 UiEvent::Done { stop: s } => {
                     stop = s.clone();
                     // Btw asks only look, so they get no follow-ups.
-                    if route.session != SessionMode::Btw && s != "cancelled" {
+                    if route.session != SessionMode::Btw && s != "cancelled" && s != HALTED {
                         let failed = s == "error" || error.is_some();
                         if let Some(card) = suggestions_for(&text, &reply, failed) {
                             emit(card);
@@ -462,6 +578,7 @@ fn serve(
             emit(ui);
         });
         let result = match (ran, error) {
+            _ if halted.load(Ordering::SeqCst) => Ok(HALTED.to_string()),
             (Err(err), _) => Err(err),
             (Ok(()), Some(message)) if stop == "error" => Err(message),
             (Ok(()), _) => Ok(stop),
@@ -474,7 +591,8 @@ fn serve(
 mod tests {
     use super::*;
     use grokhub_agent::{
-        ClientError, FunctionCall, InputItem, ResponsesRequest, StreamEvent, TurnOutput,
+        ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest, StreamEvent,
+        TurnOutput,
     };
     use std::sync::Mutex;
     use std::time::Duration;
@@ -638,6 +756,7 @@ mod tests {
         let result = std::thread::spawn(move || {
             runner.prompt(
                 "do the thing",
+                Vec::new(),
                 route,
                 Box::new(move |event| sink.lock().expect("events").push(event)),
             )
@@ -1135,7 +1254,7 @@ mod tests {
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
         assert_eq!(
             client.tool_output().as_deref(),
-            Some(grokhub_core::desktop_mcp::OFF_MSG)
+            Some(*grokhub_core::desktop_mcp::OFF_MSG)
         );
         assert!(!desk_ran("type hello from off"));
     }
@@ -1233,5 +1352,199 @@ mod tests {
             std::fs::read_to_string(workspace.join("notes.txt")).expect("kept"),
             "keep me"
         );
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn halt_ends_a_waiting_desktop_step_and_it_never_runs() {
+        let (workspace, config) = (temp_dir("halt-ws"), temp_dir("halt-cfg"));
+        let client = OneTool::new("type", serde_json::json!({"text": "halt me"}));
+        let run = start_desk(
+            PermMode::Ask,
+            true,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+
+        wait_for_permission(&run);
+        assert_parked(&run, &client);
+        assert_eq!(halt(&config, [&run.session]), vec!["gate-test".to_string()]);
+        assert_eq!(run.result.join().expect("join"), Ok("halted".to_string()));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!desk_ran("type halt me"));
+        assert_eq!(client.calls(), 1);
+        assert_eq!(
+            run.events.lock().expect("events").last(),
+            Some(&UiEvent::Done {
+                stop: "halted".into()
+            })
+        );
+        assert!(config.join("desktop-halt.stamp").is_file());
+        // An idle chat is not counted as stopped.
+        assert_eq!(halt(&config, [&run.session]), Vec::<String>::new());
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn a_prompt_sent_after_halt_still_runs() {
+        let (workspace, config) = (temp_dir("after-ws"), temp_dir("after-cfg"));
+        assert_eq!(halt(&config, std::iter::empty()), Vec::<String>::new());
+        assert!(config.join("desktop-halt.stamp").is_file());
+        std::thread::sleep(Duration::from_millis(20));
+        let client = OneTool::new("type", serde_json::json!({"text": "after halt"}));
+        let run = start_desk(
+            PermMode::Always,
+            true,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert!(desk_ran("type after halt"));
+        assert_eq!(client.tool_output().as_deref(), Some("typed"));
+    }
+
+    /// Answers every turn with one line and keeps each request.
+    struct Answers {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Answers {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            sink(StreamEvent::TextDelta("Seen.".into()));
+            Ok(TurnOutput {
+                text: "Seen.".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    /// Sends `text` with `files` through a fresh chat and returns the user
+    /// message the model got.
+    fn send_with(
+        name: &str,
+        text: &str,
+        files: Vec<crate::attach::Staged>,
+    ) -> (Result<String, String>, Vec<ContentPart>) {
+        let (workspace, config) = (temp_dir(&format!("{name}-ws")), temp_dir(name));
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let session = Session::spawn_with(name, config, fake_desktop);
+        let route = Route {
+            client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            model: "grok-4.7".into(),
+            workspace,
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+        };
+        let result = session.prompt(text, files, route, Box::new(|_| {}));
+        let requests = client.requests.lock().expect("requests");
+        let user = requests
+            .first()
+            .and_then(|r| {
+                r.input.iter().rev().find_map(|item| match item {
+                    InputItem::Message { role, content } if role == "user" => Some(content.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        (result, user)
+    }
+
+    fn png_bytes() -> Vec<u8> {
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(b"IHDR");
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        out
+    }
+
+    fn texts(parts: &[ContentPart]) -> String {
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::InputText(t) => Some(t.as_str()),
+                ContentPart::InputImage(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_text_file_reaches_the_model_as_its_send_line() {
+        let config = temp_dir("attach-text-stage");
+        let trays = crate::attach::Trays::default();
+        let notes = trays
+            .stage(
+                &config,
+                "attach-text",
+                "notes.md",
+                b"# plan",
+                &["text", "image"],
+            )
+            .expect("staged");
+        let line = format!(
+            "File notes.md is on this computer at {}. Read it yourself. Do not ask for the contents to be pasted.",
+            notes.path
+        );
+        let (result, user) = send_with("attach-text", "summarize this", vec![notes]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        assert!(
+            texts(&user).contains(&format!("summarize this\n{line}")),
+            "{user:?}"
+        );
+        assert!(!user.iter().any(|p| matches!(p, ContentPart::InputImage(_))));
+    }
+
+    #[test]
+    fn a_picture_reaches_the_model_as_image_input() {
+        use base64::Engine as _;
+        let config = temp_dir("attach-image-stage");
+        let trays = crate::attach::Trays::default();
+        let shot = trays
+            .stage(
+                &config,
+                "attach-image",
+                "shot.png",
+                &png_bytes(),
+                &["text", "image"],
+            )
+            .expect("staged");
+        let (result, user) = send_with("attach-image", "what is this", vec![shot]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        let url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png_bytes())
+        );
+        assert!(user.contains(&ContentPart::InputImage(url)), "{user:?}");
+        assert!(texts(&user).contains("what is this\nfrom reference shot.png"));
+    }
+
+    #[test]
+    fn files_alone_send_and_an_empty_message_does_not() {
+        let config = temp_dir("attach-alone-stage");
+        let trays = crate::attach::Trays::default();
+        let notes = trays
+            .stage(&config, "attach-alone", "a.txt", b"x", &["text"])
+            .expect("staged");
+        let (result, user) = send_with("attach-alone", "  ", vec![notes]);
+        assert_eq!(result, Ok("end_turn".to_string()));
+        assert!(texts(&user).contains("File a.txt is on this computer"));
+        let (empty, _) = send_with("attach-none", "  ", Vec::new());
+        assert_eq!(empty, Err("Type a message first.".to_string()));
     }
 }

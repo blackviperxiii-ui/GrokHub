@@ -6,21 +6,32 @@ import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
 
+export interface SignedIn {
+  name: string | null;
+  email: string | null;
+}
+
 export interface Settings {
   model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
+  /** Signed in with Grok: who, when xAI said. */
+  signedIn?: SignedIn | null;
   /** The folder picked in Settings, empty for the default. */
   workspace: string;
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
-  /** Settings → Let Grok control the desktop. */
+  /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
   theme: Theme;
   /** Settings → About. */
   version: string;
+  /** Settings → General → the summon hotkey. */
+  summonHotkey: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications: boolean;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -33,6 +44,18 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** Settings → Account → Sign in with Grok (desktop and iOS). */
+  grokSignIn?: boolean;
+  /** Settings → General → start at login. */
+  autostart?: boolean;
+  /** Settings → General → the summon hotkey; off on Wayland. */
+  summonHotkey?: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications?: boolean;
+  /** The composer's push-to-talk mic (desktops and phones). */
+  voice?: boolean;
+  /** The Library page: this computer's Steam games. */
+  library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -45,6 +68,7 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
   webAccess: false,
   plugins: false,
+  library: false,
 };
 
 /** The web app gets chat, memory, automations, connectors and Pulse. */
@@ -62,6 +86,8 @@ export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  /** A permission card answered away from the page, such as Deny on its notification. */
+  | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
@@ -70,7 +96,7 @@ export type ChatEvent =
   | {
       kind: "elicit";
       id: string;
-      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      /** "Plan" for a plan to approve, "Question" for the agent's question, or the connector. */
       server: string;
       message: string;
       mode: "form" | "url";
@@ -78,7 +104,7 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
-      /** Answers to tap for Grok's question, the recommended one first. */
+      /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
     };
 
@@ -127,6 +153,46 @@ export function saveSettings(
   });
 }
 
+/** Whether the OS starts the app at login. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Resolves with what the OS has after the change. */
+export function setAutostart(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { on });
+}
+
+export function setSummonHotkey(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_summon_hotkey", { on });
+}
+
+export function setNotifications(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_notifications", { on });
+}
+
+/** Where a model in the picker came from. */
+export type ModelSource = "catalog" | "account" | "custom";
+
+export type ModelOption = { id: string; label: string; source: ModelSource };
+
+export type ModelList = {
+  current: string;
+  options: ModelOption[];
+  /** Why the account's models are missing, when they are. */
+  note: string | null;
+};
+
+/** The chat models to pick from; `refresh` skips the 10-minute cache. */
+export function listModels(refresh = false): Promise<ModelList> {
+  return invoke<ModelList>("list_models", { refresh });
+}
+
+/** Saves the chat model for the next message. */
+export function setModel(id: string): Promise<Settings> {
+  return invoke<Settings>("set_model", { id });
+}
+
 export function setApiKey(key: string): Promise<Settings> {
   return invoke<Settings>("set_api_key", { key });
 }
@@ -135,13 +201,67 @@ export function clearApiKey(): Promise<Settings> {
   return invoke<Settings>("clear_api_key");
 }
 
-/** Runs one prompt through the agent loop; resolves with the stop reason. */
+/** Runs one prompt through the agent loop; resolves with the stop reason.
+ * `attachments`: paths from `stageAttachment`, in the chips' order. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode: SessionMode = "chat",
+  attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+}
+
+/** A file waiting on the composer (src-tauri/src/attach.rs). */
+export interface Staged {
+  /** The copy in the chat's folder; send it back with the message. */
+  path: string;
+  name: string;
+  kind: "image" | "text" | "document";
+  /** "Picture shot.png", "File notes.md". */
+  label: string;
+  /** The note when the chat's model can't read it; it won't send. */
+  status: string | null;
+}
+
+/** One picked or dropped file: staged, or why not. */
+export interface StageOutcome {
+  staged: Staged | null;
+  error: string | null;
+}
+
+/** A pasted or dropped file's bytes, as base64. */
+export function stageAttachment(conversationId: string, name: string, data: string): Promise<Staged> {
+  return invoke<Staged>("stage_attachment", { conversationId, name, data });
+}
+
+/** Files dropped on the window, by path (the desktop window only). */
+export function stageAttachmentPaths(conversationId: string, paths: string[]): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("stage_attachment_paths", { conversationId, paths });
+}
+
+/** The + button: the system file picker, then each pick is staged. */
+export function pickAttachments(conversationId: string): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("pick_attachments", { conversationId });
+}
+
+export function removeAttachment(conversationId: string, path: string): Promise<void> {
+  return invoke<void>("remove_attachment", { conversationId, path });
+}
+
+/** Files dropped on the desktop window arrive as paths. Outside the shell
+ * this never fires; the page's own drop event has the files. */
+export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+  if (!inShell()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
+  });
+}
+
+/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
+export function transcribe(wav: string): Promise<string> {
+  return invoke<string>("transcribe", { wav });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -171,8 +291,106 @@ export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
 
+/** A saved chat on the History page (src-tauri/src/history.rs). */
+export interface ChatRow {
+  id: string;
+  title: string;
+  /** Unix ms the chat started. */
+  created: number;
+  /** Unix ms of its last saved turn. */
+  updated: number;
+  model: string;
+}
+
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
+export type LineRole = "user" | "assistant" | "tools";
+
+export interface TranscriptLine {
+  role: LineRole;
+  text: string;
+}
+
+/** A saved chat as Chat shows it: the newest lines, and how many older ones were left out. */
+export interface Transcript {
+  id: string;
+  title: string;
+  lines: TranscriptLine[];
+  earlier: number;
+}
+
+/** History is this computer's; the web app never calls these. */
+export function listChats(): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("list_chats");
+}
+
+export function searchChats(query: string): Promise<ChatRow[]> {
+  return invoke<ChatRow[]>("search_chats", { query });
+}
+
+/** Opens a saved chat; the next message in it carries on from its saved turns. */
+export function loadChat(id: string, limit?: number): Promise<Transcript> {
+  return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
+}
+
+/** The chat open when the app last closed, if it is still saved. */
+export function getLastChat(): Promise<Transcript | null> {
+  return invoke<Transcript | null>("get_last_chat");
+}
+
+export function renameChat(id: string, title: string): Promise<void> {
+  return invoke<void>("rename_chat", { id, title });
+}
+
+/** Deletes the saved chat; a reply still running in it stops. */
+export function deleteChat(id: string): Promise<void> {
+  return invoke<void>("delete_chat", { id });
+}
+
+/** Takes one message out of a saved chat after the page asked: the ask
+ * `text`, or with `reply` the reply to it (no `text`: the reply before any
+ * ask). False when the saved chat had no copy. A running reply refuses. */
+export function forgetMessage(
+  id: string,
+  cut: { reply: boolean; text: string | null; later: number },
+): Promise<boolean> {
+  return invoke<boolean>("forget_message", { id, reply: cut.reply, text: cut.text, later: cut.later });
+}
+
+/** Opens a reply's http(s) link in the default browser (`open_url`, which
+ * refuses anything else). Shell only: in the web app links open in a new tab
+ * and never reach the computer. */
+export function openUrl(url: string): Promise<void> {
+  if (!inShell()) return Promise.reject(new Error("Links open in this browser's own tabs."));
+  return invoke<void>("open_url", { url });
+}
+
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
+}
+
+/** Sent after every Halt (top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc). */
+export const HALT_EVENT = "halt://done";
+
+/** Halt: stops desktop control and every running prompt at once. Resolves
+ * with the chats it stopped mid-reply. Desktop only; the web app and phones
+ * are refused. */
+export function haltDesktop(): Promise<string[]> {
+  if (!inShell()) return Promise.reject(new Error("Halt runs on the computer itself."));
+  return invoke<string[]>("halt_desktop");
+}
+
+/** The chats a Halt stopped, whichever way it was pressed. */
+export function onHalt(handler: (stopped: string[]) => void): Promise<UnlistenFn> {
+  return subscribe<string[]>(HALT_EVENT, handler);
+}
+
+export interface HaltKeys {
+  /** Super+Shift+Esc works from any app, not only this window. */
+  global: boolean;
+}
+
+export function getHaltKeys(): Promise<HaltKeys> {
+  return invoke<HaltKeys>("get_halt_keys");
 }
 
 /** The web app's stream was down longer than the desktop keeps events for. */
@@ -187,6 +405,10 @@ export interface AutomationRow {
   enabled: boolean;
   summary: string;
   health: string | null;
+  /** The words for the Edit box; null when words can't say the schedule. */
+  describe: string | null;
+  /** It has a check command, so only the cabin runs it. */
+  cabinOnly: boolean;
 }
 
 export interface RunResult {
@@ -218,6 +440,30 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+export function editAutomation(id: string, text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("edit_automation", { id, text, clock: wallClock() });
+}
+
+/** A scheduled run the shell fired, from `automations://ran`. */
+export interface ScheduledRun {
+  id: string;
+  name: string;
+  result: RunResult;
+}
+
+export const AUTOMATION_RAN_EVENT = "automations://ran";
+
+export function onAutomationRan(handler: (run: ScheduledRun) => void): Promise<UnlistenFn> {
+  return subscribe<ScheduledRun>(AUTOMATION_RAN_EVENT, handler);
+}
+
+/** Tells the shell's scheduler the local time, so jobs fire at local times.
+ * Only the desktop window sends it; a paired browser may be elsewhere. */
+export function shareSchedulerClock(): Promise<void> {
+  if (!inShell()) return Promise.resolve();
+  return invoke<void>("set_scheduler_clock", { clock: wallClock() });
 }
 
 export interface MemoryRow {
@@ -261,6 +507,57 @@ export function saveMemory(
   base: string,
 ): Promise<{ notes: MemoryNotes; redacted: boolean }> {
   return invoke("save_memory", { global, text, base });
+}
+
+/** Sign in with Grok, step one: the code to type at xAI's page. */
+export interface GrokSignInStart {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  interval: number;
+  expiresIn: number;
+}
+
+export type GrokSignInPoll =
+  | { status: "pending"; interval: number }
+  | { status: "ready"; signedIn: SignedIn }
+  | { status: "failed"; error: string };
+
+export function startGrokSignIn(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("start_grok_sign_in");
+}
+
+export function pollGrokSignIn(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("poll_grok_sign_in");
+}
+
+export function grokSignOut(): Promise<Settings> {
+  return invoke<Settings>("grok_sign_out");
+}
+
+/** A row of the composer's command list. `disabled` says why it can't run. */
+export interface SlashHit {
+  cmd: string;
+  hint: string;
+  insert: string;
+  runOnPick: boolean;
+  disabled: string | null;
+}
+
+/** What a slash line asked the chat to do. Slash lines never reach the model. */
+export type SlashEffect =
+  | { kind: "newChat" }
+  | { kind: "mode"; mode: SessionMode; text: string | null }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
+  | { kind: "modelSet"; id: string; text: string }
+  | { kind: "notice"; text: string };
+
+export function slashHits(draft: string): Promise<SlashHit[]> {
+  return invoke<SlashHit[]>("slash_hits", { draft });
+}
+
+export function runSlash(line: string): Promise<SlashEffect> {
+  return invoke<SlashEffect>("run_slash", { line });
 }
 
 export function addMemory(
@@ -307,6 +604,8 @@ export interface ConnectorRow {
   account: string;
   needsSignIn: boolean;
   canDisconnect: boolean;
+  /** False once its switch turned it off. */
+  enabled: boolean;
 }
 
 export interface ConnectorsChanged {
@@ -336,6 +635,64 @@ export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
 }
 
+/** One connector in the Add sheet's catalog. */
+export interface CatalogRow {
+  id: string;
+  name: string;
+  publisher: string;
+  category: string;
+  description: string;
+  auth: "none" | "oauth" | "key" | "google" | "own";
+  keyHint: string;
+  target: string;
+  installed: boolean;
+}
+
+export interface CatalogView {
+  rows: CatalogRow[];
+  /** What Refresh did, when it ran. */
+  note: string | null;
+}
+
+/** A key waiting on its approval card. */
+export interface KeyCard {
+  id: string;
+  name: string;
+  action: string;
+}
+
+/** `refresh` reads the official registry; only from the Refresh click. */
+export function connectorCatalog(refresh = false): Promise<CatalogView> {
+  return invoke<CatalogView>("connector_catalog", { refresh });
+}
+
+export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+}
+
+/** A pasted `mcpServers` config; names already set up are kept. */
+export function addConnectorConfig(text: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_connector_config", { text });
+}
+
+export function setConnectorEnabled(name: string, on: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Opens the server's sign-in page in the browser and waits for it. */
+export function signInConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("sign_in_connector", { name });
+}
+
+/** Posts the approval card; nothing is saved until `answerConnectorKey`. */
+export function saveConnectorKey(name: string, key: string): Promise<KeyCard> {
+  return invoke<KeyCard>("save_connector_key", { name, key });
+}
+
+export function answerConnectorKey(id: string, approve: boolean): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("answer_connector_key", { id, approve });
+}
+
 /** One Feed post: something that happened or was found. */
 export interface PulsePost {
   id: string;
@@ -356,6 +713,14 @@ export interface PulsePost {
   /** The first source link, empty when there is none. */
   link: string;
   loved: boolean;
+  /** What the card's numbers mean, when it has a read of them. */
+  verdict: PulseVerdict | null;
+}
+
+/** A card's one-line read of its own numbers, and how worried to be. */
+export interface PulseVerdict {
+  tone: "fine" | "watch" | "act";
+  line: string;
 }
 
 /** One Ideas row: something GrokHub could do next. */
@@ -370,6 +735,46 @@ export interface PulseIdea {
   kind: string;
   /** What Let's do it puts in the chat box. */
   action: string;
+  verdict: PulseVerdict | null;
+  /** "Fix it" or "Options" on a PC health card: its main button opens the
+   * options window. Empty on other ideas. */
+  fix: string;
+}
+
+export type FixKind =
+  | "compare"
+  | "fpsCap"
+  | "upscale"
+  | "airflow"
+  | "fanCurve"
+  | "repaste"
+  | "quietWhenNormal"
+  | "warnLines"
+  | "pause"
+  | "ask";
+
+export interface FixOption {
+  kind: FixKind;
+  title: string;
+  why: string;
+  /** Steps the person follows; empty for rows that act in the app. */
+  steps: string[];
+}
+
+export interface CompareRow {
+  session: string;
+  time: string;
+  gpuPeak: string;
+  cpuPeak: string;
+  gpuBusy: string;
+}
+
+/** A PC health card's options window. */
+export interface FixView {
+  title: string;
+  verdict: PulseVerdict | null;
+  options: FixOption[];
+  compare: CompareRow[];
 }
 
 export interface PulsePage {
@@ -416,6 +821,11 @@ export function pulseWhy(id: string): Promise<string> {
   return invoke<string>("pulse_why", { id });
 }
 
+/** A PC health card's options window. Read only. */
+export function pulseFix(id: string): Promise<FixView> {
+  return invoke<FixView>("pulse_fix", { id });
+}
+
 /** The Feed prompt the writer follows, and what its last run did. */
 export interface FeedPrompt {
   text: string;
@@ -435,6 +845,57 @@ export function saveFeedPrompt(text: string): Promise<FeedPrompt> {
 /** A cached gallery image as a data URL; pages never load it from its site. */
 export function pulseImage(name: string): Promise<string> {
   return invoke<string>("pulse_image", { name });
+}
+
+/** The Imagine page (src-tauri/src/imagine.rs). Its gallery is the cabin's wall. */
+export type ImagineKind = "image" | "video";
+
+export interface ImagineTile {
+  id: string;
+  /** Read it with `imagineImage`. */
+  name: string;
+  title: string;
+  prompt: string;
+  createdMs: number;
+  video: boolean;
+  tall: boolean;
+}
+
+export interface ImaginePage {
+  /** Newest first. */
+  tiles: ImagineTile[];
+  /** A Grok sign-in or a key is there, so Make can run. */
+  ready: boolean;
+}
+
+export interface ImagineMade {
+  page: ImaginePage;
+  made: number;
+  /** Empty, or which results could not be saved. */
+  note: string;
+}
+
+export function getImagine(): Promise<ImaginePage> {
+  return invoke<ImaginePage>("get_imagine");
+}
+
+/** Resolves once the results are saved; `imagineCancel` ends it early. */
+export function imagineGenerate(
+  prompt: string,
+  aspect: string,
+  count: number,
+  kind: ImagineKind,
+): Promise<ImagineMade> {
+  return invoke<ImagineMade>("imagine_generate", { prompt, aspect, count, kind });
+}
+
+export function imagineCancel(): Promise<boolean> {
+  return invoke<boolean>("imagine_cancel");
+}
+
+/** A gallery file as a data URL, by its bare name. */
+export function imagineImage(name: string): Promise<string> {
+  return invoke<string>("imagine_image", { name });
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */
@@ -487,6 +948,279 @@ export function journalAct(id: string, act: JournalAct): Promise<JournalPage> {
 
 export function journalToMission(id: string, conversationId: string): Promise<JournalMission> {
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
+}
+
+/** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
+export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
+
+export interface WorkStepView {
+  text: string;
+  status: "planned" | "doing" | "done" | "skipped" | "failed";
+}
+
+export interface BoardCard {
+  id: string;
+  title: string;
+  detail: string;
+  /** Your notes for the agent; Work hands them over. */
+  notes: string;
+  priority: string;
+  /** A new report you have not opened yet. */
+  fresh: boolean;
+  /** A Follow up card's latest report. */
+  report: string;
+  /** Who owns it, as the cabin's badge reads. */
+  owner: "Agent" | "You";
+  /** Automation, Background, Episode or Flow; a plain task has none. */
+  kind: string | null;
+  /** Where the work left off. */
+  leftOff: string | null;
+  steps: WorkStepView[];
+  checkpoint: { goal: string; next: string; blocker: string; refs: string[] } | null;
+  /** Steps done and in all. */
+  progress: [number, number];
+  /** A paused or interrupted run: Resume and Hand back apply. */
+  canResume: boolean;
+  /** The cabin chat that works it. */
+  chat: string | null;
+  updatedMs: number;
+  /** When it was archived; 0 for a card on the board. */
+  archivedMs: number;
+  /** "Queued", "Queued · 2nd": waiting for the agent; null when not queued. */
+  queued: string | null;
+  /** The flow started on it: "Playbook · Linux repair". */
+  flow: string | null;
+  /** You edited the steps, so the agent works from your version. */
+  userSteps: boolean;
+  /** The steps as the editor shows them, one a line with its mark. */
+  stepsText: string;
+}
+
+export interface BoardColumn {
+  lane: BoardLane;
+  label: string;
+  cards: BoardCard[];
+}
+
+export interface BoardPage {
+  /** Follow up, then Todo, Doing, Blocked, Done. */
+  columns: BoardColumn[];
+  archived: BoardCard[];
+  /** The file's mtime, for the change check. */
+  stamp: number;
+  /** The last sweep's notice, until Undo or Dismiss: "Archived 2 finished cards". */
+  swept: BoardSwept | null;
+  /** Cards wait in the queue and the cabin, which starts them, is closed. */
+  queueNote: string | null;
+}
+
+export interface BoardSwept {
+  text: string;
+  ids: string[];
+  at: number;
+}
+
+/** Settings → Workboard tidy. */
+export interface BoardTidy {
+  /** Days with no activity before a card is archived. */
+  autoArchiveDays: number;
+  /** 0 is off (the default); else 30 or 90. */
+  autoDeleteDays: number;
+}
+
+export type BoardAct =
+  | { kind: "edit"; title: string; detail: string }
+  | { kind: "notes"; notes: string }
+  | { kind: "move"; to: BoardLane }
+  | { kind: "rank"; up: boolean }
+  | { kind: "handBack" }
+  | { kind: "archive" }
+  | { kind: "restore" }
+  | { kind: "delete" }
+  | { kind: "queue" }
+  | { kind: "unqueue" }
+  | { kind: "priority"; priority: "high" | "normal" | "low" }
+  | { kind: "block"; reason: string }
+  | { kind: "unblock" }
+  | { kind: "steps"; text: string }
+  | { kind: "place"; to: BoardLane; before: string | null };
+
+/** Make it recurring: the schedules offered, in the order the shell's
+ * `work_triage::RECUR_CHOICES` keeps them. */
+export const RECUR_CHOICES = ["Every day at 9 AM", "Every weekday at 9 AM", "Every day at 6 PM"] as const;
+
+export interface WorkLogLine {
+  at: number;
+  kind: string;
+  text: string;
+}
+
+/** What Work puts in the chat box, and the board after the card moved. */
+export interface BoardWork {
+  prompt: string;
+  page: BoardPage;
+}
+
+/** What Resume puts in the chat box, and the chat it goes to. */
+export interface BoardResume {
+  conversationId: string;
+  prompt: string;
+  page: BoardPage;
+}
+
+export function getWorkboard(): Promise<BoardPage> {
+  return invoke<BoardPage>("get_workboard");
+}
+
+/** The board file's mtime; cheap enough to poll. */
+export function workboardStamp(): Promise<number> {
+  return invoke<number>("workboard_stamp");
+}
+
+/** A card's progress log tail. Read only when you open its log. */
+export function workboardLog(id: string): Promise<WorkLogLine[]> {
+  return invoke<WorkLogLine[]>("workboard_log", { id });
+}
+
+export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_add", { title, detail });
+}
+
+export function workboardAct(id: string, act: BoardAct): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_act", { id, act });
+}
+
+export function workboardWork(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_work", { id });
+}
+
+/** Start a playbook on a card: it links the playbook, then starts as Work. */
+export function workboardPlaybook(id: string, playbook: string, name: string): Promise<BoardWork> {
+  return invoke<BoardWork>("workboard_playbook", { id, playbook, name });
+}
+
+/** Make it recurring: an automation from the card, `choice` in RECUR_CHOICES. */
+export function workboardRecur(id: string, choice: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_recur", { id, choice, clock: wallClock() });
+}
+
+/** Delete archived cards archived `days` ago or more (0: all of them), with
+ * their logs. Cards on the board are never touched. */
+export function workboardDeleteArchived(days: number): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_delete_archived", { days });
+}
+
+/** Undo on the sweep notice: its cards go back to Todo. */
+export function workboardSweepUndo(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_undo");
+}
+
+export function workboardSweepDismiss(): Promise<BoardPage> {
+  return invoke<BoardPage>("workboard_sweep_dismiss");
+}
+
+export function getWorkboardTidy(): Promise<BoardTidy> {
+  return invoke<BoardTidy>("get_workboard_tidy");
+}
+
+export function setWorkboardTidy(autoDeleteDays: number): Promise<BoardTidy> {
+  return invoke<BoardTidy>("set_workboard_tidy", { autoDeleteDays });
+}
+
+/** Resume a paused run. A stub until KB-03 fills in the real resume. */
+export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
+  return invoke<BoardResume>("workboard_resume", { id, conversationId });
+}
+
+/** Home and Objectives (src-tauri/src/home.rs): the cabin's tiles from
+ * home_layout.json, and the open chat's checklist with level and XP. */
+export type StepStatus = "planned" | "attempted" | "verified" | "unverified" | "cancelled";
+
+export interface MissionStep {
+  id: string;
+  text: string;
+  status: StepStatus;
+}
+
+export interface Mission {
+  conversationId: string;
+  title: string;
+  /** active, needs_approval, paused, blocked or done. */
+  status: string;
+  steps: MissionStep[];
+  done: number;
+  total: number;
+  /** Every step is closed and the result is not accepted yet. */
+  canAccept: boolean;
+  /** The newest outcome is a success, so Undo has something to undo. */
+  accepted: boolean;
+}
+
+export interface Xp {
+  level: number;
+  xp: number;
+  nextLevelXp: number;
+  /** Progress into the level, 0 to 1. */
+  frac: number;
+  today: number;
+  /** The last seven days, today last: true when a task finished. */
+  streak: boolean[];
+}
+
+export interface MissionPage {
+  mission: Mission | null;
+  xp: Xp;
+}
+
+export type HomeTile =
+  | { kind: "objectives"; mission: Mission | null; xp: Xp }
+  | { kind: "streak"; xp: Xp }
+  | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
+  | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
+  | {
+      kind: "pulse";
+      post: { id: string; title: string; summary: string; ago: string } | null;
+      idea: { id: string; title: string; action: string } | null;
+    }
+  | { kind: "personality"; name: string; picture: string | null }
+  | { kind: "upNext"; games: { appId: number; name: string }[] }
+  | { kind: "error"; message: string }
+  /** Only the cabin paints it. */
+  | { kind: "cabin" }
+  /** A paired browser can't read it. */
+  | { kind: "desktop" };
+
+export type SlotSize = "large" | "medium" | "small";
+
+export interface HomeSlot {
+  /** "large", "medium-1" … "small-4". */
+  slot: string;
+  size: SlotSize;
+  module: string;
+  name: string;
+  purpose: string;
+  tile: HomeTile;
+}
+
+export interface HomePage {
+  preset: string;
+  xpBar: boolean;
+  slots: HomeSlot[];
+  xp: Xp;
+  glance: { memories: number | null; proposed: number; connectors: number; connected: number; failing: number };
+}
+
+export function getHome(conversationId?: string): Promise<HomePage> {
+  return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
+}
+
+export function getMission(conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
+}
+
+/** Accept as done (`done`) or Undo. Desktop only. */
+export function setMissionDone(done: boolean, conversationId?: string): Promise<MissionPage> {
+  return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
@@ -700,6 +1434,39 @@ export function getWebAccess(): Promise<WebAccess> {
 
 export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
+}
+
+/** A browser paired with Web access right now (src-tauri/src/remote_devices.rs). */
+export interface PairedBrowser {
+  /** The browser and its system, like "Firefox on Android". */
+  name: string;
+  /** Unix ms. */
+  firstSeen: number;
+  /** Unix ms. */
+  lastCall: number;
+  /** Chats it sent a message in. */
+  chats: number;
+}
+
+/** The Devices page; desktop only, kept in memory only. */
+export interface Devices {
+  /** This computer's name. */
+  computer: string;
+  /** Whether web access is on. */
+  on: boolean;
+  /** The web app's LAN address without the code; empty while off. */
+  lan: string;
+  /** The most recently used first. */
+  browsers: PairedBrowser[];
+}
+
+export function getDevices(): Promise<Devices> {
+  return invoke<Devices>("get_devices");
+}
+
+/** Signs out every browser: a new pairing code ends every pairing. */
+export function forgetAllDevices(): Promise<Devices> {
+  return invoke<Devices>("forget_all_devices");
 }
 
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
@@ -917,4 +1684,206 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
+}
+
+/** Settings → About → Updates (src-tauri/src/shell_update.rs). */
+export type UpdateChannel = "stable" | "beta";
+
+export interface UpdateView {
+  version: string;
+  channel: UpdateChannel;
+  /** The AppImage and the Windows installer update themselves. */
+  updatable: boolean;
+  /** Why this install doesn't update itself. */
+  note: string | null;
+  /** The version a check found, ready to install. */
+  available: string | null;
+}
+
+/** Emitted when the background check (every 2 hours) finds an update. */
+export const UPDATE_EVENT = "update://available";
+
+export function getUpdateStatus(): Promise<UpdateView> {
+  return invoke<UpdateView>("get_update_status");
+}
+
+export function setUpdateChannel(channel: UpdateChannel): Promise<UpdateView> {
+  return invoke<UpdateView>("set_update_channel", { channel });
+}
+
+export function checkShellUpdate(): Promise<UpdateView> {
+  return invoke<UpdateView>("check_shell_update");
+}
+
+/** Downloads, verifies and installs the update, then restarts into it. */
+export function installShellUpdate(): Promise<void> {
+  return invoke<void>("install_shell_update");
+}
+
+export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
+  return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** The Skills page (src-tauri/src/skills.rs). Read only. */
+export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** What Use puts in the chat box. */
+  trigger: string;
+  source: SkillSource;
+  /** The skill's folder, empty for a built-in. */
+  folder: string;
+}
+
+export interface SkillPage {
+  rows: SkillRow[];
+}
+
+export function getSkills(): Promise<SkillPage> {
+  return invoke<SkillPage>("get_skills");
+}
+
+/** The shell finds the folder from the source and name itself. */
+export function openSkillFolder(source: SkillSource, name: string): Promise<void> {
+  return invoke<void>("open_skill_folder", { source, name });
+}
+
+/** A background task's status on the Agents page (src-tauri/src/queue.rs). */
+export type TaskStatus = "running" | "failed" | "done" | "stopped";
+
+/** A background command, subagent or monitor of the open chat. */
+export interface QueueTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Still going, so Stop has something to stop. */
+  live: boolean;
+}
+
+/** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
+export interface QueueTodo {
+  id: string;
+  content: string;
+  status: string;
+}
+
+export interface Queue {
+  todos: QueueTodo[];
+  tasks: QueueTask[];
+}
+
+export function getQueue(conversationId: string): Promise<Queue> {
+  return invoke<Queue>("get_queue", { conversationId });
+}
+
+/** Stops one task, or every task of the chat when `taskId` is left out. */
+export function stopTask(conversationId: string, taskId?: string): Promise<Queue> {
+  return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** Settings → Behavior, saved in shell.json. Everything starts off. */
+export interface Behavior {
+  autocomplete: boolean;
+  /** Quiet hours for automations as HH:MM; both empty is none. */
+  quietStart: string;
+  quietEnd: string;
+  /** Tokens a day, one of `budgets`; 0 is off. */
+  dailyTokenBudget: number;
+  pauseOverBudget: boolean;
+}
+
+export interface BehaviorPage {
+  closeToTray: boolean;
+  behavior: Behavior;
+  budgets: { value: number; label: string }[];
+}
+
+export function getBehavior(): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("get_behavior");
+}
+
+export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
+}
+
+/** Settings → Defaults: the work folder and the approvals. */
+export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+  return invoke<Settings>("save_defaults", { workspace, approvals });
+}
+
+/** Settings → Privacy & data (src-tauri/src/privacy.rs). */
+export interface PrivacyPage {
+  offlineOnly: boolean;
+  /** An on-device model can take the chat while Offline only is on. */
+  localReady: boolean;
+  /** "3 calls sent off-device this week". */
+  sent: string;
+  hosts: { host: string; calls: number }[];
+  encrypted: boolean;
+  encryptedNote: string;
+  dataFolder: string;
+  canOpenFolder: boolean;
+}
+
+export function getPrivacy(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("get_privacy");
+}
+
+export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("set_offline_only", { on });
+}
+
+export function openDataFolder(): Promise<void> {
+  return invoke<void>("open_data_folder");
+}
+
+/** Settings → Background (src-tauri/src/background.rs). */
+export interface BackgroundPage {
+  runner: string;
+  nextDue: string | null;
+  quiet: string;
+  budget: string;
+  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+}
+
+export function getBackground(): Promise<BackgroundPage> {
+  return invoke<BackgroundPage>("get_background");
+}
+
+/** One Steam game on this computer (src-tauri/src/library.rs). */
+export interface LibraryGame {
+  appId: number;
+  name: string;
+  /** False while Steam downloads or updates it. */
+  installed: boolean;
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  /** Minutes played, 0 when never played. */
+  playtimeMin: number;
+}
+
+export interface LibraryPage {
+  /** A Steam library folder was found on this computer. */
+  steamFound: boolean;
+  /** Most recently played first. */
+  games: LibraryGame[];
+}
+
+/** Tall box art for the grid, the wide store header for the detail column. */
+export type CoverShape = "tall" | "wide";
+
+export function getLibrary(): Promise<LibraryPage> {
+  return invoke<LibraryPage>("get_library");
+}
+
+/** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
+export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+  return invoke<string | null>("library_cover", { appId, shape });
+}
+
+/** Ask Steam to start the game. Resolves to a line to show. */
+export function libraryPlay(appId: number): Promise<string> {
+  return invoke<string>("library_play", { appId });
 }

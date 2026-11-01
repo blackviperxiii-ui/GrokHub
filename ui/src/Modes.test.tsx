@@ -41,12 +41,12 @@ describe("ModeChips", () => {
     render(chips());
     const tips = screen.getAllByRole("button").map((b) => [b.textContent, b.title]);
     expect(tips).toEqual([
-      ["Chat", "Normal chat. Grok can edit files and use tools in your work folder. Everyday work."],
+      ["Chat", "Normal chat. Loadout can edit files and use tools in your work folder. Everyday work."],
       [
         "Plan",
-        "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
+        "Loadout writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
       ],
-      ["btw", "A look-only side ask. Grok can read and answer, but changes nothing."],
+      ["btw", "A look-only side ask. Loadout can read and answer, but changes nothing."],
       ["Ask", "It asks before it changes a file or runs a command."],
       ["Auto", "A quick check approves routine steps and asks you about the rest."],
       [
@@ -54,7 +54,9 @@ describe("ModeChips", () => {
         "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
       ],
     ]);
-    expect(screen.getByText("Auto effort")).toHaveAttribute("title", EFFORT_TIP);
+    // Effort is automatic: a label with its tip, not a button.
+    expect(screen.getByText("Effort: auto")).toHaveAttribute("title", EFFORT_TIP);
+    expect(screen.queryByRole("button", { name: /effort/i })).not.toBeInTheDocument();
   });
 
   it("picks a mode and an approval", async () => {
@@ -98,7 +100,12 @@ describe("ElicitCard", () => {
         onAnswer={onAnswer}
       />,
     );
-    expect(screen.getByText("https://example.com/auth")).toBeVisible();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const link = screen.getByRole("link", { name: "Open https://example.com/auth" });
+    expect(link).toHaveAttribute("href", "https://example.com/auth");
+    await userEvent.click(link);
+    expect(open).toHaveBeenCalledWith("https://example.com/auth", "_blank", "noopener,noreferrer");
+    open.mockRestore();
     await userEvent.click(screen.getByRole("button", { name: "I've finished" }));
     await userEvent.click(screen.getByRole("button", { name: "Decline" }));
     expect(onAnswer.mock.calls).toEqual([

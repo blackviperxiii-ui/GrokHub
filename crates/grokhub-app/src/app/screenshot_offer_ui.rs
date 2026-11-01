@@ -49,6 +49,9 @@ pub(super) struct ShotState {
     scan: Option<mpsc::Receiver<Option<ImageMeta>>>,
     /// The offer's path and its loading image with its tray thumbnail.
     explain: Option<(String, mpsc::Receiver<ShotLoad>)>,
+    /// The ledger in memory: read from disk on first use and on the 30 s
+    /// tick, written back on every change. Paint never reads the disk.
+    ledger: Option<ScreenshotOfferLedger>,
 }
 
 impl ShotState {
@@ -59,6 +62,19 @@ impl ShotState {
 }
 
 impl Cabin {
+    /// The cached ledger, read from disk only the first time.
+    fn shot_ledger(&mut self) -> &mut ScreenshotOfferLedger {
+        self.focus
+            .shot
+            .ledger
+            .get_or_insert_with(load_screenshot_offer_ledger)
+    }
+
+    /// Write the cached ledger back after a change.
+    fn save_shot_ledger(&mut self) {
+        save_screenshot_offer_ledger(self.shot_ledger());
+    }
+
     /// Each frame: take a finished folder scan or Explain load.
     pub(super) fn poll_screenshot_offer(&mut self) {
         if let Some(rx) = self.focus.shot.scan.take() {
@@ -80,26 +96,27 @@ impl Cabin {
     }
 
     fn finish_screenshot_scan(&mut self, newest: Option<ImageMeta>, now: u64) {
-        let mut ledger = load_screenshot_offer_ledger();
-        let _ = tick_screenshot_offer(&mut ledger, &self.cfg.screenshot_explain, newest, now);
-        save_screenshot_offer_ledger(&ledger);
+        let cfg = self.cfg.screenshot_explain.clone();
+        let _ = tick_screenshot_offer(self.shot_ledger(), &cfg, newest, now);
+        self.save_shot_ledger();
     }
 
     pub(super) fn tick_screenshot_offer(&mut self) {
         let now = now_ms();
-        let mut ledger = load_screenshot_offer_ledger();
-        if now.saturating_sub(ledger.last_tick_ms()) < TICK_EVERY_MS {
+        if now.saturating_sub(self.shot_ledger().last_tick_ms()) < TICK_EVERY_MS {
             return;
         }
-        ledger.set_last_tick_ms(now);
+        // The 30 s tick is the one time the ledger is read again.
+        self.focus.shot.ledger = Some(load_screenshot_offer_ledger());
+        self.shot_ledger().set_last_tick_ms(now);
         if !self.cfg.screenshot_explain.enabled {
-            if ledger.pending.take().is_some() {
-                save_screenshot_offer_ledger(&ledger);
+            if self.shot_ledger().pending.take().is_some() {
+                self.save_shot_ledger();
             }
             return;
         }
         let Some(home) = user_home() else {
-            save_screenshot_offer_ledger(&ledger);
+            self.save_shot_ledger();
             return;
         };
         let os = if cfg!(windows) {
@@ -109,7 +126,7 @@ impl Cabin {
         } else {
             "linux"
         };
-        save_screenshot_offer_ledger(&ledger);
+        self.save_shot_ledger();
         if self.focus.shot.scan.is_some() {
             return;
         }
@@ -127,26 +144,26 @@ impl Cabin {
             return;
         }
         let now = now_ms();
-        let ledger = load_screenshot_offer_ledger();
-        let Some(offer) = ledger.offer_live(now) else {
+        let Some(path) = self.shot_ledger().offer_live(now).map(|o| o.path.clone()) else {
             return;
         };
-        let path = offer.path.clone();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if ui
-                .button(CHIP_LABEL)
-                .on_hover_text("Read this screenshot and explain it in chat")
-                .clicked()
-            {
-                self.accept_screenshot_explain(path);
-            }
-            if ui.button(DISMISS_LABEL).clicked() {
-                let mut ledger = load_screenshot_offer_ledger();
-                dismiss_screenshot_offer(&mut ledger);
-                save_screenshot_offer_ledger(&ledger);
-            }
-        });
+        // Same pills and spacing as the composer chips under it.
+        ui.add_space(6.0);
+        let (explain, dismiss) = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                (
+                    crate::cards::ghost_pill(ui, CHIP_LABEL),
+                    crate::cards::ghost_pill(ui, DISMISS_LABEL),
+                )
+            })
+            .inner;
+        if explain {
+            self.accept_screenshot_explain(path);
+        } else if dismiss {
+            dismiss_screenshot_offer(self.shot_ledger());
+            self.save_shot_ledger();
+        }
     }
 
     /// Explain: read and encode the image off the UI thread. The offer stays
@@ -204,10 +221,14 @@ impl Cabin {
                 self.status = "That screenshot is gone.".into();
             }
         }
-        let mut ledger = load_screenshot_offer_ledger();
-        if ledger.pending.as_ref().is_some_and(|p| p.path == path) {
-            dismiss_screenshot_offer(&mut ledger);
-            save_screenshot_offer_ledger(&ledger);
+        if self
+            .shot_ledger()
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.path == path)
+        {
+            dismiss_screenshot_offer(self.shot_ledger());
+            self.save_shot_ledger();
         }
     }
 
@@ -217,9 +238,8 @@ impl Cabin {
         if ui.checkbox(&mut on, "Screenshot explain").changed() {
             self.cfg.screenshot_explain.enabled = on;
             if !on {
-                let mut ledger = load_screenshot_offer_ledger();
-                dismiss_screenshot_offer(&mut ledger);
-                save_screenshot_offer_ledger(&ledger);
+                dismiss_screenshot_offer(self.shot_ledger());
+                self.save_shot_ledger();
             }
             self.persist_cfg();
         }
@@ -312,6 +332,47 @@ mod tests {
             "the offer stays so Explain can be tapped after making room"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The offer paints from the ledger in memory: once read, a paint does
+    /// not go back to the disk, and Dismiss writes the change through.
+    #[test]
+    fn the_offer_paints_from_memory_and_dismiss_writes_through() {
+        let (_pin, root) = pinned("shot-cache");
+        let shot = root.join("shot.png");
+        offer(&shot);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.screenshot_explain.enabled = true;
+        assert!(cabin.shot_ledger().offer_live(now_ms()).is_some());
+        // Gone from disk; paint keeps the copy it has.
+        std::fs::remove_file(ledger_path()).unwrap();
+        let ctx = egui::Context::default();
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+            cabin.ui_screenshot_offer_chip(ui)
+        });
+        assert!(
+            !ledger_path().exists(),
+            "painting the offer neither reads nor writes the ledger file"
+        );
+        assert!(cabin.focus.shot.ledger.as_ref().unwrap().pending.is_some());
+        dismiss_screenshot_offer(cabin.shot_ledger());
+        cabin.save_shot_ledger();
+        assert!(load_screenshot_offer_ledger().pending.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_offer_uses_the_app_pills() {
+        let src = include_str!("screenshot_offer_ui.rs").replace("\r\n", "\n");
+        let paint = src
+            .split("fn ui_screenshot_offer_chip(")
+            .nth(1)
+            .and_then(|s| s.split("fn accept_screenshot_explain(").next())
+            .expect("offer paint");
+        assert!(paint.contains("ghost_pill(ui, CHIP_LABEL)"), "{paint}");
+        assert!(paint.contains("ghost_pill(ui, DISMISS_LABEL)"), "{paint}");
+        assert!(!paint.contains("ui.button("), "{paint}");
+        assert!(!paint.contains("load_screenshot_offer_ledger"), "{paint}");
     }
 
     #[test]

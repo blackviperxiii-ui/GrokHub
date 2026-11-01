@@ -3,7 +3,8 @@
 //! seven-day ledger of off-device calls. The counts come from the egress log,
 //! which records every call but not its size, so the ledger counts calls.
 
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
@@ -30,6 +31,94 @@ pub(super) const HERO_IDLE: &str = "Nothing left this PC this week.";
 pub(super) const LEDGER_HEAD: &str = "Off-device ledger · 7 days";
 pub(super) const PC_TILES: [&str; 4] = ["Local model", "Memory", "Files", "Game data"];
 const WIPE_ARMED_ID: &str = "privacy-wipe-armed";
+const OFFLINE_ROW_ID: &str = "privacy-offline-row";
+
+pub(super) const OFFLINE_TITLE: &str = "Offline only";
+pub(super) static OFFLINE_HINT: LazyLock<&'static str> = LazyLock::new(|| {
+    grokhub_core::brand::filled(
+        "{product} stays off the internet and uses your local model. Web search, cloud models and online connectors pause.",
+    )
+});
+pub(super) const OFFLINE_NOT_READY: &str =
+    "No local model is ready, and nothing can be downloaded while Offline only is on.";
+
+/// Save Offline only to `{dir}/offline.toml` and apply it, then reload the MCP
+/// slots so online connectors pause or come back.
+pub(super) fn switch_offline(dir: &Path, on: bool) -> Result<(), String> {
+    grokhub_core::offline::set_in(dir, on)?;
+    grokhub_agent::mcp::invalidate();
+    Ok(())
+}
+
+/// The Offline only row between frames: the not-ready confirm, and what the
+/// last save said.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct OfflineRow {
+    /// Waiting on Turn on anyway / Cancel because no local model is ready.
+    pub confirming: bool,
+    /// A save that failed, shown under the switch.
+    pub error: Option<String>,
+}
+
+impl OfflineRow {
+    /// The switch was flipped to `on`. Turning it on with no local model ready
+    /// asks first; `local_ready` is read only then.
+    pub(super) fn flip(&mut self, dir: &Path, on: bool, local_ready: impl FnOnce() -> bool) {
+        self.error = None;
+        self.confirming = on && !local_ready();
+        if !self.confirming {
+            self.save(dir, on);
+        }
+    }
+
+    pub(super) fn turn_on_anyway(&mut self, dir: &Path) {
+        self.confirming = false;
+        self.save(dir, true);
+    }
+
+    pub(super) fn cancel(&mut self) {
+        self.confirming = false;
+    }
+
+    fn save(&mut self, dir: &Path, on: bool) {
+        self.error = switch_offline(dir, on).err();
+    }
+}
+
+/// Privacy points to the one page that holds Offline only and the on-device model.
+pub(super) const MODELS_MOVED: &str =
+    "Offline only and the on-device model are in Settings → AI models.";
+
+/// The Offline only switch, its confirm, and any save error.
+pub(super) fn paint_offline_row(ui: &mut egui::Ui) {
+    let id = egui::Id::new(OFFLINE_ROW_ID);
+    let mut row: OfflineRow = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+    // The cabin's config dir (the same folder `offline::set` uses outside tests).
+    let dir = crate::config::config_dir();
+    let mut on = grokhub_core::offline::enabled();
+    if crate::cards::settings_toggle(ui, OFFLINE_TITLE, *OFFLINE_HINT, &mut on) {
+        row.flip(&dir, on, grokhub_agent::route::local::ready_for_offline);
+    }
+    if row.confirming {
+        crate::cards::settings_note(ui, OFFLINE_NOT_READY);
+        let size = egui::vec2(180.0, 40.0);
+        ui.horizontal(|ui| {
+            if crate::ui_kit::recipe::button(ui, None, "TURN ON ANYWAY", true, size, true).clicked()
+            {
+                row.turn_on_anyway(&dir);
+            }
+            if crate::ui_kit::recipe::button(ui, None, "CANCEL", false, size, true).clicked() {
+                row.cancel();
+            }
+        });
+        ui.add_space(10.0);
+    }
+    if let Some(err) = &row.error {
+        ui.label(RichText::new(err).size(13.0).color(crate::theme::offline()));
+        ui.add_space(8.0);
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, row));
+}
 
 /// What the egress log says about the last seven days.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,9 +198,9 @@ pub(super) fn cloud_line(cloud: Cloud) -> &'static str {
     if !cloud.signed_in {
         "Grok isn't signed in, so nothing can leave this PC."
     } else if cloud.local_jobs {
-        "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
+        "Chat and background tasks send their prompts to the cloud model. This PC's model takes over only when no cloud model answers or you're offline."
     } else {
-        "Chat and background tasks send their prompts to Grok in the cloud."
+        "Chat and background tasks send their prompts to the cloud model."
     }
 }
 
@@ -123,17 +212,6 @@ pub(super) fn cloud_state(week: &Week, cloud: Cloud) -> &'static str {
         Some(0) => "OFF",
         Some(_) => "ON",
         None => "—",
-    }
-}
-
-/// The On-device model switch's hint, by what the router really does.
-pub(super) fn local_hint(on: bool, installed: bool) -> &'static str {
-    match (on, installed) {
-        (false, _) => "Background tasks use Grok in the cloud",
-        (true, false) => {
-            "On, but the on-device model isn't installed, so background tasks still use Grok"
-        }
-        (true, true) => "Used only when no cloud model answers or you're offline",
     }
 }
 
@@ -513,14 +591,7 @@ impl Cabin {
     }
 
     fn privacy_switches(&mut self, ui: &mut egui::Ui, week: &Week, now: u64) {
-        let mut local = self.cfg.local_model;
-        let hint = local_hint(local, local && grokhub_agent::route::local::installed());
-        if crate::cards::settings_toggle(ui, "On-device model", hint, &mut local) {
-            self.set_local_model(local);
-        }
-        for line in local_notes(local, grokhub_agent::route::local::installed()) {
-            crate::cards::settings_note(ui, line);
-        }
+        crate::cards::settings_note(ui, MODELS_MOVED);
         let mut asks = self.permission_mode == PermissionMode::Ask;
         if crate::cards::settings_toggle(
             ui,
@@ -661,30 +732,18 @@ mod tests {
         assert_eq!(cloud_state(&Week::Loading, CLOUD_ONLY), "—");
         assert_eq!(
             cloud_line(CLOUD_ONLY),
-            "Chat and background tasks send their prompts to Grok in the cloud."
+            "Chat and background tasks send their prompts to the cloud model."
         );
         assert_eq!(
             cloud_line(Cloud {
                 signed_in: true,
                 local_jobs: true
             }),
-            "Chat and background tasks send their prompts to Grok in the cloud. This PC's model takes over only when no cloud model answers or you're offline."
+            "Chat and background tasks send their prompts to the cloud model. This PC's model takes over only when no cloud model answers or you're offline."
         );
         assert_eq!(
             cloud_line(SIGNED_OUT),
             "Grok isn't signed in, so nothing can leave this PC."
-        );
-        assert_eq!(
-            local_hint(false, true),
-            "Background tasks use Grok in the cloud"
-        );
-        assert_eq!(
-            local_hint(true, false),
-            "On, but the on-device model isn't installed, so background tasks still use Grok"
-        );
-        assert_eq!(
-            local_hint(true, true),
-            "Used only when no cloud model answers or you're offline"
         );
         assert_eq!(
             local_notes(true, true),
@@ -760,7 +819,7 @@ mod tests {
             "LOCAL FIRST",
             "Nothing left this PC this week.",
             "\nREADY\n",
-            "Chat and background tasks send their prompts to Grok in the cloud.",
+            "Chat and background tasks send their prompts to the cloud model.",
         ] {
             assert!(ready.contains(want), "missing {want:?} in {ready}");
         }
@@ -841,7 +900,7 @@ mod tests {
                 .clone()
         };
         let (_, hero_rect, hero_justified) = find(HERO_SENT);
-        let (_, switch_rect, _) = find("On-device model");
+        let (_, switch_rect, _) = find("Agent asks before changes");
         assert!(!hero_justified, "the hero is ragged right");
         assert!(
             hero_rect.right() + STORY_GUTTER - 1.0 <= switch_rect.left(),
@@ -854,6 +913,153 @@ mod tests {
             .expect("Encrypted memory row");
         let (hint, _, hint_justified) = &texts[at + 1];
         assert!(!hint_justified, "{hint} is ragged right");
+    }
+
+    fn offline_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-app-offline-{tag}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Leaves Offline only off for the rest of this test process.
+    struct OffAfter(std::path::PathBuf);
+
+    impl Drop for OffAfter {
+        fn drop(&mut self) {
+            let _ = grokhub_core::offline::set_in(&self.0, false);
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn saved(dir: &Path) -> Option<String> {
+        std::fs::read_to_string(dir.join("offline.toml")).ok()
+    }
+
+    #[test]
+    fn the_offline_switch_writes_offline_toml_and_flips_enabled() {
+        let dir = offline_dir("flip");
+        let _off = OffAfter(dir.clone());
+        let mut row = OfflineRow::default();
+        row.flip(&dir, true, || true);
+        assert_eq!(row, OfflineRow::default(), "a ready model needs no confirm");
+        assert_eq!(saved(&dir).as_deref(), Some("offline_only = true\n"));
+        assert!(grokhub_core::offline::enabled());
+        row.flip(&dir, false, || panic!("turning it off never asks"));
+        assert_eq!(row, OfflineRow::default());
+        assert_eq!(saved(&dir).as_deref(), Some("offline_only = false\n"));
+        assert!(!grokhub_core::offline::enabled());
+    }
+
+    #[test]
+    fn with_no_local_model_it_asks_first_and_cancel_leaves_it_off() {
+        let dir = offline_dir("confirm");
+        let _off = OffAfter(dir.clone());
+        grokhub_core::offline::set_in(&dir, false).unwrap();
+        let mut row = OfflineRow::default();
+        row.flip(&dir, true, || false);
+        assert_eq!(
+            row,
+            OfflineRow {
+                confirming: true,
+                error: None
+            }
+        );
+        assert_eq!(saved(&dir).as_deref(), Some("offline_only = false\n"));
+        assert!(!grokhub_core::offline::enabled());
+        row.cancel();
+        assert_eq!(row, OfflineRow::default());
+        assert_eq!(saved(&dir).as_deref(), Some("offline_only = false\n"));
+        assert!(!grokhub_core::offline::enabled());
+        row.flip(&dir, true, || false);
+        row.turn_on_anyway(&dir);
+        assert_eq!(row, OfflineRow::default());
+        assert_eq!(saved(&dir).as_deref(), Some("offline_only = true\n"));
+        assert!(grokhub_core::offline::enabled());
+    }
+
+    #[test]
+    fn a_failed_save_shows_under_the_switch() {
+        let dir = offline_dir("broken");
+        let _off = OffAfter(dir.clone());
+        grokhub_core::offline::set_in(&dir, false).unwrap();
+        // A file where the config folder should be: the save can't land.
+        let blocked = dir.join("not-a-dir");
+        std::fs::write(&blocked, "x").unwrap();
+        let mut row = OfflineRow::default();
+        row.flip(&blocked, true, || true);
+        let err = row.error.clone().expect("the error is kept for the row");
+        assert!(err.starts_with("Couldn't save Offline only: "), "{err}");
+        assert!(!row.confirming);
+        assert!(!grokhub_core::offline::enabled());
+    }
+
+    fn paint_row(row: Option<OfflineRow>) -> String {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        if let Some(row) = row {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new(OFFLINE_ROW_ID), row));
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(600.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, paint_offline_row);
+        });
+        fn walk(shape: &egui::Shape, out: &mut String) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, out)),
+                _ => {}
+            }
+        }
+        let mut s = String::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut s);
+        }
+        s
+    }
+
+    #[test]
+    fn the_offline_row_paints_its_sentence_and_the_confirm_only_when_asked() {
+        let _off = grokhub_core::offline::force_for_thread(false);
+        let quiet = paint_row(None);
+        assert!(quiet.contains("Offline only\n"), "{quiet}");
+        assert!(
+            quiet.contains("Loadout stays off the internet and uses your local model. Web search, cloud models and online connectors pause."),
+            "{quiet}"
+        );
+        assert!(!quiet.contains("TURN ON ANYWAY"), "{quiet}");
+        let asking = paint_row(Some(OfflineRow {
+            confirming: true,
+            error: None,
+        }));
+        for want in [
+            "No local model is ready, and nothing can be downloaded while Offline only is on.",
+            "TURN ON ANYWAY",
+            "CANCEL",
+        ] {
+            assert!(asking.contains(want), "missing {want:?} in {asking}");
+        }
+        let failed = paint_row(Some(OfflineRow {
+            confirming: false,
+            error: Some("Couldn't save Offline only: disk full".into()),
+        }));
+        assert!(
+            failed.contains("Couldn't save Offline only: disk full"),
+            "{failed}"
+        );
     }
 
     #[test]

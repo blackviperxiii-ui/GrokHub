@@ -27,24 +27,26 @@ const POLL: Duration = Duration::from_millis(250);
 
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
-    "The agent's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+    "The agent's deny rule stopped this. Approve re-runs this one step with the agent's own Allow. Esc denies.";
 /// Path D: Grok Build's own computer use ran a hard step with no ask.
 const UNASKED_NOTE: &str =
-    "The agent did this without asking, so the turn was stopped. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+    "The agent did this without asking, so the turn was stopped. Approve re-runs this one step with the agent's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
 /// Why a ladder pause or an ask was denied from a card or the inbox.
 pub(super) const SOFT_DENY: &str = "user denied";
 pub(super) const HALT_DENY: &str = "halted — fail-closed Deny";
 const SOFT_EYEBROW: &str = "Paused";
 const SOFT_NOTE: &str =
-    "Grok stopped after a step didn't work. Approve lets it try again; Deny stops it.";
+    "The agent stopped after a step didn't work. Approve lets it try again; Deny stops it.";
 /// What a path B credential card and its spans say instead of GB's action line.
 const CREDENTIAL_ACTION: &str = "type into a credential field (value hidden)";
 /// The span tool and args for a `/sync` publish (no content).
 const HUB_SYNC_TOOL: &str = "hub_sync";
 const HUB_SYNC_ARGS: &str = r#"{"dest":"hub","data":["chat","personal"]}"#;
 const FULL_EYEBROW: &str = "Session access · Desktop control is on";
-const FULL_TITLE: &str = "Let Grok click and type without asking for this session?";
+static FULL_TITLE: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled("Let {product} click and type without asking for this session?")
+});
 const FULL_NOTE: &str = "Deletes, sends, money and credentials still ask.";
 
 /// One outer width for every approval card. Short content does not hug; long commands wrap.
@@ -270,6 +272,9 @@ pub(super) struct HarnessState {
     pub work_rows: Vec<super::change_undo::ChangeRow>,
     /// The rows of the last day were read back from disk.
     pub work_rows_loaded: bool,
+    /// Which chat each Work-tree row belongs to, by [`super::change_undo::work_row_key`].
+    /// A row paints only in its own chat.
+    pub work_row_chat: std::collections::HashMap<String, String>,
     /// Ledger lines another process wrote (`grokhub --mcp-self`, Spike-5c).
     pub ledger_watch: super::change_undo::LedgerWatch,
     /// True only while `send_from_composer` hands the user's own typed line
@@ -595,7 +600,9 @@ impl Cabin {
                 None
             }
             _ if is_desktop_ask(&p) && !self.access_mode().allows_computer() => {
-                let why = "Access is Readonly: turn on Let Grok control the desktop first";
+                let why = grokhub_core::brand::filled(
+                    "Access is Readonly: turn on Let {product} control the desktop first",
+                );
                 self.write_span(
                     hx::Span::deny(
                         &trace,
@@ -1664,7 +1671,7 @@ impl Cabin {
         if self.harness.full_card.is_some() {
             let text = CardText {
                 eyebrow: FULL_EYEBROW,
-                title: FULL_TITLE,
+                title: *FULL_TITLE,
                 action: "",
                 note: FULL_NOTE,
                 primary: "Grant full",
@@ -2126,7 +2133,7 @@ mod tests {
         );
         assert_eq!(
             cabin.status,
-            "Access is Readonly: turn on Let Grok control the desktop first"
+            "Access is Readonly: turn on Let Loadout control the desktop first"
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2616,13 +2623,13 @@ mod tests {
         assert!(HEADLESS_NOTE.ends_with(" Esc denies."));
         assert_eq!(
             HEADLESS_NOTE,
-            "The agent's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies."
+            "The agent's deny rule stopped this. Approve re-runs this one step with the agent's own Allow. Esc denies."
         );
         assert_eq!(HARD_EYEBROW, "Hard action");
         assert_eq!(FULL_EYEBROW, "Session access · Desktop control is on");
         assert_eq!(
-            FULL_TITLE,
-            "Let Grok click and type without asking for this session?"
+            *FULL_TITLE,
+            "Let Loadout click and type without asking for this session?"
         );
         assert_eq!(
             FULL_NOTE,
@@ -2635,7 +2642,7 @@ mod tests {
         assert_eq!(perm_card_eyebrow(&ask("bash", "ls")), "Tool");
         assert_eq!(
             super::super::settings::DESKTOP_CONTROL_HINT.as_str(),
-            "Grok can see the screen and use the mouse and keyboard through Loadout. Ask still asks first. Deletes, sends, money and credentials always ask."
+            "Loadout can see the screen and use the mouse and keyboard. Ask still asks first. Deletes, sends, money and credentials always ask."
         );
         assert_eq!(
             crate::motion::CURSOR_OUTLINE,
@@ -2713,13 +2720,13 @@ mod tests {
         assert!(texts.iter().any(|t| t == "Hard action"));
         assert!(texts.iter().any(|t| t == "Delete"));
         assert!(texts.iter().any(|t| t == "Desktop"));
-        assert!(texts.iter().any(|t| t == "Grok wants permission"));
+        assert!(texts.iter().any(|t| t == "Loadout wants permission"));
         assert!(texts
             .iter()
             .any(|t| t == "Session access · Desktop control is on"));
         assert!(texts
             .iter()
-            .any(|t| t == "Let Grok click and type without asking for this session?"));
+            .any(|t| t == "Let Loadout click and type without asking for this session?"));
         assert!(texts
             .iter()
             .any(|t| t == "Deletes, sends, money and credentials still ask."));
@@ -2851,7 +2858,7 @@ mod tests {
         );
         assert_eq!(
             cabin.status,
-            "Grok tried to type into a credential field without asking"
+            "Loadout tried to type into a credential field without asking"
         );
         let spans = path_d(&root);
         let rows: Vec<_> = spans
@@ -2895,7 +2902,7 @@ mod tests {
         assert!(
             texts
                 .iter()
-                .any(|t| t == "Grok tried to type into a credential field without asking"),
+                .any(|t| t == "Loadout tried to type into a credential field without asking"),
             "{texts:?}"
         );
         assert!(texts.iter().any(|t| t == UNASKED_NOTE), "{texts:?}");
@@ -3293,10 +3300,12 @@ mod tests {
             approve_x < left + 40.0 && approve_x < deny_x,
             "buttons start on the left: {approve_x} {deny_x}"
         );
-        let (_, count_x, _, _) = x_of("1 thing needs a decision. Everything else is on track.");
+        // Activity in the titlebar counts this park, so the chat prints no
+        // second "1 thing needs a decision" line (LO-21).
+        assert!(cabin.inbox_counted_by_activity());
         assert!(
-            (count_x - column.left()).abs() < 1.0,
-            "the count line is left-aligned too: {count_x}"
+            !texts.iter().any(|t| t.0.contains("needs a decision")),
+            "no duplicate count line: {texts:?}"
         );
         let _ = std::fs::remove_dir_all(root);
     }

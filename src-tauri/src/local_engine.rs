@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use grokhub_agent::public_only_resolve;
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
@@ -318,17 +317,18 @@ pub fn draft_progress() -> Option<DraftProgress> {
     })
 }
 
-struct HttpEngineFetch {
-    url: String,
-}
+/// The engine archive download; `download_engine` names each asset's URL.
+struct HttpEngineFetch;
 
-fn runtime_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(120))
-        .resolver(public_only_resolve)
-        .build()
+fn runtime_agent() -> grokhub_core::http::Agent {
+    // Redirects are followed by hand so every hop is checked; public IPs only.
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(20),
+        read: Some(Duration::from_secs(120)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 fn redirect_target(from: &str, location: &str) -> String {
@@ -349,27 +349,18 @@ fn is_redirect(status: u16) -> bool {
 }
 
 impl rd::Fetch for HttpEngineFetch {
-    fn open(&self, offset: u64) -> Result<md::Opened, String> {
-        let mut url = self.url.clone();
+    fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
+        let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
             runtime_download_url_ok(&url)?;
             let mut req = runtime_agent()
                 .get(&url)
-                .set("user-agent", grokhub_agent::USER_AGENT);
+                .header("user-agent", grokhub_agent::USER_AGENT);
             if hop == 0 && offset > 0 {
-                req = req.set("range", &format!("bytes={offset}-"));
+                req = req.header("range", &format!("bytes={offset}-"));
             }
-            let resp = match req.call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(status, resp)) if is_redirect(status) => {
-                    let loc = resp.header("location").ok_or_else(|| {
-                        format!("engine download redirect missing Location (HTTP {status})")
-                    })?;
-                    url = redirect_target(&url, loc);
-                    continue;
-                }
-                Err(e) => return Err(e.to_string()),
-            };
+            // With redirects: 0 a 3xx comes back as the answer, handled below.
+            let resp = req.call().map_err(|e| e.to_string())?;
             let status = resp.status();
             if is_redirect(status) {
                 let loc = resp.header("location").ok_or_else(|| {
@@ -432,35 +423,33 @@ fn model_download_url_ok(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Like [`runtime_agent`], plus the proxy from the environment (the cabin's
-/// Hub fetch honours it too): no automatic redirects, public addresses only.
-fn hf_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .redirects(0)
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(60))
-        .resolver(public_only_resolve)
-        .build()
+/// Like [`runtime_agent`]: no automatic redirects, public addresses only.
+/// A public-only agent never dials an env proxy (the proxy, not the Hub,
+/// would reach the public-only resolver).
+fn hf_agent() -> grokhub_core::http::Agent {
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(15),
+        read: Some(Duration::from_secs(60)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 /// GET `url`, following redirects by hand so every hop passes
 /// [`model_download_url_ok`]. The Range header only goes to the first hop.
-fn hf_get(url: &str, range: Option<&str>) -> Result<ureq::Response, String> {
+fn hf_get(url: &str, range: Option<&str>) -> Result<grokhub_core::http::Response, String> {
     let mut url = url.to_string();
     for hop in 0..=REDIRECTS_MAX {
         model_download_url_ok(&url)?;
         let mut req = hf_agent()
             .get(&url)
-            .set("user-agent", grokhub_agent::USER_AGENT);
+            .header("user-agent", grokhub_agent::USER_AGENT);
         if let (0, Some(range)) = (hop, range) {
-            req = req.set("range", range);
+            req = req.header("range", range);
         }
-        let resp = match req.call() {
-            Ok(resp) => resp,
-            Err(ureq::Error::Status(status, resp)) if is_redirect(status) => resp,
-            Err(e) => return Err(e.to_string()),
-        };
+        // With redirects: 0 a 3xx comes back as the answer, handled below.
+        let resp = req.call().map_err(|e| e.to_string())?;
         let status = resp.status();
         if !is_redirect(status) {
             return Ok(resp);
@@ -617,9 +606,7 @@ pub fn start_engine(app: AppHandle, config_dir: PathBuf) -> Result<EngineInfo, S
             message: None,
         },
     );
-    let fetch = HttpEngineFetch {
-        url: manifest.asset.url.clone(),
-    };
+    let fetch = HttpEngineFetch;
     let man = manifest.clone();
     let cfg = config_dir.clone();
     let app2 = app.clone();

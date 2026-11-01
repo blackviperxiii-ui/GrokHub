@@ -28,8 +28,11 @@ mod scan;
 pub mod ab;
 pub mod care_first;
 pub mod close_check;
+pub mod efficiency;
 pub mod longmem;
+pub mod memory_index;
 pub mod metrics;
+pub mod recall_set;
 pub mod sycophancy;
 pub mod turn_endings;
 
@@ -1200,6 +1203,7 @@ fn request_blob(req: &ResponsesRequest) -> String {
                 out.push_str(arguments);
                 out.push('\n');
             }
+            InputItem::ServerCompaction { .. } => {}
         }
     }
     out

@@ -13,7 +13,9 @@
 //! - `/dream` writes `MEMORY.md.dream.bak` next to the file it rewrites.
 //! - The index is shared, but recall only returns entries from the global file,
 //!   this workspace's `MEMORY.md`, and this workspace's flush file. Each file is
-//!   reindexed when its size or mtime changes.
+//!   reindexed when its size or mtime changes, in one transaction: only the
+//!   paragraphs that were added or removed change rows, and triggers keep the
+//!   FTS index in step row by row, so an edit never rebuilds the whole index.
 //!
 //! Config is the GrokHub config dir (`GROKHUB_CONFIG`, then the perm override).
 //! Nothing here is written outside that dir or the workspace.
@@ -57,6 +59,27 @@ pub const INJECT_TOKEN_CAP: u64 = 1_024;
 
 /// Temporal half-life. The score halves every 30 days at equal FTS rank.
 pub const HALF_LIFE_SECS: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+/// Most index chunks one recall pack carries.
+const LEGACY_PACK_CAP: usize = 5;
+/// A chunk scoring under this share of the best hit is left out of the pack.
+const LEGACY_MIN_SHARE: f64 = 0.25;
+/// Most AMR lines one recall pack carries.
+const AMR_PACK_CAP: usize = 8;
+/// A paragraph longer than this is indexed as several chunks, split at line breaks.
+const CHUNK_BYTES: usize = 600;
+/// What a prompt with no content words searches for.
+const FALLBACK_QUERY: &str = "project conventions preferences architecture";
+/// Words that say nothing about what to recall. Dropped from every query.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as", "at",
+    "be", "been", "before", "being", "but", "by", "can", "could", "did", "do", "does", "dont",
+    "for", "from", "get", "got", "had", "has", "have", "he", "her", "here", "him", "his", "how",
+    "i", "if", "im", "in", "into", "is", "it", "its", "ive", "just", "me", "mine", "my", "no",
+    "not", "now", "of", "on", "or", "our", "out", "please", "she", "should", "so", "some", "tell",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they", "this", "those",
+    "to", "too", "up", "us", "very", "was", "we", "were", "what", "whats", "when", "where",
+    "wheres", "which", "who", "why", "will", "with", "would", "you", "your",
+];
 
 const OPEN_TAG: &str = "<memory-context>";
 const CLOSE_TAG: &str = "</memory-context>";
@@ -258,15 +281,23 @@ pub fn dream(
 /// always dual-read when the user's text asks about a library, games, Steam,
 /// installed apps, or similar — even when the memory backend is still legacy.
 /// Those facts live in AMR regardless of `memory_backend`.
+///
+/// Both entry points record the speed span `turn:memory_recall`. Measured in
+/// release on 34 to 314 notes and up to 200 AMR nodes: p50 0.4 to 1.6 ms,
+/// p95 0.5 to 2.6 ms, so recall is not prepared ahead of Enter (LO-46). The
+/// first recall after a memory file changes also reindexes that one file in
+/// one transaction (`examples/memory_index_bench.rs` times it).
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
-    inject_snippets(workspace, user_text, true)
+    let _lap = crate::timing::lap("turn:memory_recall");
+    format_injection(&collect_snippets(workspace, user_text, &[]))
 }
 
 /// Later-turn recall. Same pack as the first turn, minus lines already in
 /// `already` (the fenced bodies from earlier turns). `None` when nothing new
 /// matched. Library asks still include sealed installed-app lines.
 pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
-    let fresh: Vec<String> = collect_snippets(workspace, user_text, true)
+    let _lap = crate::timing::lap("turn:memory_recall");
+    let fresh: Vec<String> = collect_snippets(workspace, user_text, already)
         .into_iter()
         .filter(|body| !already_has(already, body))
         .collect();
@@ -298,22 +329,16 @@ fn normalize_hit(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
-fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Option<String> {
-    format_injection(&collect_snippets(workspace, user_text, include_legacy))
-}
-
-fn collect_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Vec<String> {
+/// Sealed library lines, then AMR lines, then index chunks. `already` holds
+/// lines an earlier turn injected, so the index pack fills with new chunks.
+fn collect_snippets(workspace: &Path, user_text: &str, already: &[String]) -> Vec<String> {
     let amr = if amr_enabled() {
         amr_injection_lines(user_text)
     } else {
         Vec::new()
     };
     let scope = scope_library_lines(user_text);
-    let legacy = if include_legacy {
-        legacy_injection_bodies(workspace, user_text)
-    } else {
-        None
-    };
+    let legacy = legacy_injection_bodies(workspace, user_text, already);
     let mut seen = std::collections::HashSet::new();
     let source: Vec<String> = if amr.is_empty() && scope.is_empty() {
         match legacy {
@@ -487,9 +512,13 @@ fn scope_library_lines(user_text: &str) -> Vec<String> {
     out
 }
 
-/// Index hits for the first turn, or `None` when there are no files or the
+/// Index chunks for the pack, or `None` when there are no files or the
 /// index won't open.
-fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<String>> {
+fn legacy_injection_bodies(
+    workspace: &Path,
+    user_text: &str,
+    already: &[String],
+) -> Option<Vec<String>> {
     if !memory_files_present(workspace) {
         return None;
     }
@@ -498,7 +527,21 @@ fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<Stri
     }
     let query = injection_query(user_text);
     let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
-    Some(hits.into_iter().map(|hit| hit.body).collect())
+    Some(pack_legacy(hits, already))
+}
+
+/// At most [`LEGACY_PACK_CAP`] chunks from `hits` (best first), skipping
+/// chunks under [`LEGACY_MIN_SHARE`] of the top score, repeats, and chunks
+/// an earlier turn already injected.
+fn pack_legacy(hits: Vec<Hit>, already: &[String]) -> Vec<String> {
+    let top = hits.first().map_or(0.0, |hit| hit.score);
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter()
+        .filter(|hit| hit.score >= top * LEGACY_MIN_SHARE)
+        .map(|hit| hit.body)
+        .filter(|body| !already_has(already, body) && seen.insert(normalize_hit(body)))
+        .take(LEGACY_PACK_CAP)
+        .collect()
 }
 
 /// AMR is on when `app.json` is missing (a new install) or sets
@@ -642,25 +685,21 @@ pub(crate) fn inject_token_cap_at(dir: &Path) -> u64 {
         .unwrap_or(INJECT_TOKEN_CAP)
 }
 
-/// AMR lines for the words in the first message (4+ letters), at most 8.
-/// `recall` never creates the store and skips tombstoned and locked nodes.
+/// AMR lines for the message's content words (3+ letters), at most
+/// [`AMR_PACK_CAP`]: lines matching the most distinct words first, then the
+/// newest. Recall never creates the store and skips tombstoned and locked nodes.
 fn amr_injection_lines(user_text: &str) -> Vec<String> {
-    let store = amr_store();
-    let query = injection_query(user_text).to_lowercase();
-    let mut words: Vec<&str> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 4)
+    let words: Vec<String> = content_words(&injection_query(user_text))
+        .into_iter()
+        .filter(|w| w.chars().count() >= 3)
         .collect();
-    words.dedup();
     let mut out: Vec<String> = Vec::new();
-    for word in words {
-        for hit in store.recall(word) {
-            if out.len() >= 8 {
-                return out;
-            }
-            if !out.contains(&hit.line) {
-                out.push(hit.line);
-            }
+    for hit in amr_store().recall_ranked(&words) {
+        if out.len() >= AMR_PACK_CAP {
+            break;
+        }
+        if !out.contains(&hit.line) {
+            out.push(hit.line);
         }
     }
     out
@@ -715,14 +754,55 @@ fn fenced_lines(history: &[crate::InputItem], system_only: bool) -> Vec<String> 
 #[cfg(test)]
 fn rebuild(workspace: &Path) -> Result<usize, String> {
     let conn = open_db()?;
-    conn.execute_batch("DELETE FROM entries; DELETE FROM files;")
-        .map_err(|err| err.to_string())?;
-    let mut n = 0;
-    for (path, scope) in scoped_files(workspace) {
-        n += index_file_conn(&conn, &path, scope)?;
+    immediate(&conn, || {
+        conn.execute_batch("DELETE FROM entries; DELETE FROM files;")
+            .map_err(|err| err.to_string())?;
+        let mut n = 0;
+        for (path, scope) in scoped_files(workspace) {
+            n += index_file_conn(&conn, &path, scope)?;
+        }
+        rebuild_fts(&conn)?;
+        Ok(n)
+    })
+}
+
+/// Throw the index away and build it again from this workspace's files, then
+/// put back each paragraph's `created_at`: the reference an incrementally
+/// kept index must match.
+#[cfg(test)]
+pub(crate) fn rebuild_keeping_dates(workspace: &Path) -> Result<usize, String> {
+    let mut dates = Vec::new();
+    {
+        let conn = open_db()?;
+        let mut stmt = conn
+            .prepare("SELECT path, content_hash, created_at FROM entries")
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|err| err.to_string())?;
+        for row in rows {
+            dates.push(row.map_err(|err| err.to_string())?);
+        }
     }
-    rebuild_fts(&conn)?;
-    Ok(n)
+    fs::remove_file(index_path()).map_err(|err| err.to_string())?;
+    let n = rebuild(workspace)?;
+    let conn = open_db()?;
+    immediate(&conn, || {
+        for (path, hash, created) in &dates {
+            conn.execute(
+                "UPDATE entries SET created_at = ?3 WHERE path = ?1 AND content_hash = ?2",
+                params![path, hash, created],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        Ok(n)
+    })
 }
 
 /// Insert one entry with an explicit timestamp. Tests use this for decay.
@@ -739,8 +819,25 @@ fn index_entry(scope: &str, body: &str, created_at: i64) -> Result<(), String> {
         params![scope, format!("memory://{scope}"), body, created_at, hash],
     )
     .map_err(|err| err.to_string())?;
-    rebuild_fts(&conn)?;
     Ok(())
+}
+
+/// Move this workspace's index rows that contain `needle` `secs` into the
+/// past, so evals can plant an older note beside a newer one.
+#[cfg(test)]
+pub(crate) fn backdate_entries(workspace: &Path, needle: &str, secs: i64) -> Result<usize, String> {
+    rebuild_if_stale(workspace)?;
+    let conn = open_db()?;
+    let mut n = 0;
+    for path in scope_paths(workspace) {
+        n += conn
+            .execute(
+                "UPDATE entries SET created_at = created_at - ?1 WHERE path = ?2 AND instr(body, ?3) > 0",
+                params![secs, path, needle],
+            )
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(n)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -754,6 +851,8 @@ pub struct Hit {
 
 /// Ranked hits whose source file is one of `paths`. An empty `paths` returns
 /// nothing, so one workspace never recalls another workspace's notes.
+/// Equal FTS ranks fall back to file, then text, so the order depends only
+/// on the notes, never on which rows were reindexed last.
 pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, String> {
     let match_q = fts_query(query);
     if match_q.is_empty() || paths.is_empty() {
@@ -766,6 +865,7 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
          FROM entries_fts \
          JOIN entries e ON e.id = entries_fts.rowid \
          WHERE entries_fts MATCH ?1 AND e.path IN ({}) \
+         ORDER BY bm25(entries_fts), e.path, e.body \
          LIMIT 24",
         slots.join(", ")
     );
@@ -806,11 +906,16 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
 /// Search the notes one workspace may recall from (global, this workspace's
 /// `MEMORY.md`, its flush file), best first. Stale files are reindexed first.
 pub fn search(workspace: &Path, query: &str) -> Result<Vec<Hit>, String> {
+    search_at(workspace, query, now_secs())
+}
+
+/// [`search`] scored at `now` (seconds), so two index states compare hit for hit.
+pub(crate) fn search_at(workspace: &Path, query: &str, now: i64) -> Result<Vec<Hit>, String> {
     if !memory_files_present(workspace) {
         return Ok(Vec::new());
     }
     rebuild_if_stale(workspace)?;
-    recall(query, now_secs(), &scope_paths(workspace))
+    recall(query, now, &scope_paths(workspace))
 }
 
 pub fn global_memory_path() -> PathBuf {
@@ -877,13 +982,36 @@ fn split_scope(text: &str) -> (bool, &str) {
     (false, text)
 }
 
+/// The prompt itself when it has a content word, else [`FALLBACK_QUERY`].
 fn injection_query(user_text: &str) -> String {
-    let trimmed = user_text.trim();
-    if trimmed.chars().count() < 20 {
-        "project conventions preferences architecture".to_string()
+    if content_words(user_text).is_empty() {
+        FALLBACK_QUERY.to_string()
     } else {
-        trimmed.to_string()
+        user_text.trim().to_string()
     }
+}
+
+/// Lowercase words of 2+ characters that are not [`STOPWORDS`], first
+/// occurrence order, no repeats.
+fn content_words(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in query_words(text) {
+        if !STOPWORDS.contains(&word.as_str()) && !out.contains(&word) {
+            out.push(word);
+        }
+    }
+    out
+}
+
+/// Lowercase alphanumeric runs of 2+ characters. Apostrophes join a word
+/// ("don't" is "dont").
+fn query_words(text: &str) -> Vec<String> {
+    text.replace(['\'', '\u{2019}'], "")
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 2)
+        .map(str::to_string)
+        .collect()
 }
 
 fn format_injection(snippets: &[String]) -> Option<String> {
@@ -942,29 +1070,41 @@ fn memory_files_present(workspace: &Path) -> bool {
 }
 
 /// Reindex each of this workspace's files whose size or mtime differs from the
-/// stamp stored when it was last indexed. Other workspaces' rows are left alone.
+/// stamp stored when it was last indexed, all in one transaction. Unchanged
+/// files and other workspaces' rows are left alone.
 fn rebuild_if_stale(workspace: &Path) -> Result<(), String> {
     let conn = open_db()?;
-    let mut changed = false;
+    if stale_files(&conn, workspace)?.is_empty() {
+        return Ok(());
+    }
+    immediate(&conn, || {
+        // Another process may have reindexed while this one waited for the lock.
+        for (path, scope) in stale_files(&conn, workspace)? {
+            index_file_conn(&conn, &path, scope)?;
+        }
+        Ok(())
+    })
+}
+
+/// This workspace's files whose stamp differs from the one in the index.
+fn stale_files(
+    conn: &Connection,
+    workspace: &Path,
+) -> Result<Vec<(PathBuf, &'static str)>, String> {
+    let mut stmt = conn
+        .prepare_cached("SELECT stamp FROM files WHERE path = ?1")
+        .map_err(|err| err.to_string())?;
+    let mut out = Vec::new();
     for (path, scope) in scoped_files(workspace) {
-        let path_text = path.display().to_string();
-        let known: Option<String> = conn
-            .query_row(
-                "SELECT stamp FROM files WHERE path = ?1",
-                params![path_text],
-                |row| row.get(0),
-            )
+        let known: Option<String> = stmt
+            .query_row(params![path.display().to_string()], |row| row.get(0))
             .optional()
             .map_err(|err| err.to_string())?;
         if known.as_deref() != Some(file_stamp(&path).as_str()) {
-            index_file_conn(&conn, &path, scope)?;
-            changed = true;
+            out.push((path, scope));
         }
     }
-    if changed {
-        rebuild_fts(&conn)?;
-    }
-    Ok(())
+    Ok(out)
 }
 
 /// `len:mtime_ns`, or `missing`.
@@ -1168,57 +1308,94 @@ fn ensure_allowed(path: &Path, workspace: &Path) -> Result<(), String> {
     }
 }
 
+/// Reindex one file right after this module wrote it, so the next recall
+/// finds the index fresh.
 fn reindex_file(path: &Path, file_scope: &str) -> Result<(), String> {
     let conn = open_db()?;
-    index_file_conn(&conn, path, file_scope)?;
-    rebuild_fts(&conn)
+    immediate(&conn, || {
+        index_file_conn(&conn, path, file_scope).map(|_| ())
+    })
 }
 
+/// Bring one file's rows in line with its paragraphs. Callers hold a
+/// transaction (see [`immediate`]). A paragraph already indexed keeps its row
+/// (and its `created_at`); only removed paragraphs are deleted and new ones
+/// inserted, and the `entries_fts` triggers apply just those rows to the FTS
+/// index. Returns the file's paragraph count.
 fn index_file_conn(conn: &Connection, path: &Path, file_scope: &str) -> Result<usize, String> {
     let path_text = path.display().to_string();
-    let mut existing = std::collections::HashMap::<String, i64>::new();
+    // Indexed rows by body: (id, scope) for each copy of that paragraph.
+    let mut indexed = std::collections::HashMap::<String, Vec<(i64, String)>>::new();
+    let mut created_by_hash = std::collections::HashMap::<String, i64>::new();
     {
         let mut stmt = conn
-            .prepare("SELECT content_hash, created_at FROM entries WHERE path = ?1")
+            .prepare_cached(
+                "SELECT id, scope, body, content_hash, created_at FROM entries WHERE path = ?1",
+            )
             .map_err(|err| err.to_string())?;
         let rows = stmt
             .query_map(params![path_text], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
             })
             .map_err(|err| err.to_string())?;
         for row in rows {
-            let (hash, created) = row.map_err(|err| err.to_string())?;
-            existing.insert(hash, created);
+            let (id, scope, body, hash, created) = row.map_err(|err| err.to_string())?;
+            indexed.entry(body).or_default().push((id, scope));
+            created_by_hash.insert(hash, created);
         }
     }
-    conn.execute("DELETE FROM entries WHERE path = ?1", params![path_text])
+    // Stamp before the read: a write racing this one leaves the file stale.
+    conn.prepare_cached("INSERT OR REPLACE INTO files (path, stamp) VALUES (?1, ?2)")
+        .and_then(|mut stmt| stmt.execute(params![path_text, file_stamp(path)]))
         .map_err(|err| err.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO files (path, stamp) VALUES (?1, ?2)",
-        params![path_text, file_stamp(path)],
-    )
-    .map_err(|err| err.to_string())?;
     let text = read_capped(path);
-    let now = now_secs();
+    let mut fresh = Vec::new();
     let mut n = 0;
     for paragraph in paragraphs(&text) {
-        let hash = format!("{:016x}", fnv(paragraph.as_bytes()));
-        let created = existing.get(&hash).copied().unwrap_or(now);
+        n += 1;
         let scope = if paragraph.contains("<!-- flush:") {
             "session"
         } else {
             file_scope
         };
-        conn.execute(
+        let kept = indexed.get_mut(&paragraph).and_then(|copies| {
+            let at = copies.iter().position(|(_, s)| s == scope)?;
+            Some(copies.swap_remove(at))
+        });
+        if kept.is_none() {
+            fresh.push((scope, paragraph));
+        }
+    }
+    let mut delete = conn
+        .prepare_cached("DELETE FROM entries WHERE id = ?1")
+        .map_err(|err| err.to_string())?;
+    for (id, _) in indexed.into_values().flatten() {
+        delete.execute(params![id]).map_err(|err| err.to_string())?;
+    }
+    let now = now_secs();
+    let mut insert = conn
+        .prepare_cached(
             "INSERT INTO entries (scope, path, body, created_at, content_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![scope, path_text, paragraph, created, hash],
         )
         .map_err(|err| err.to_string())?;
-        n += 1;
+    for (scope, paragraph) in fresh {
+        let hash = format!("{:016x}", fnv(paragraph.as_bytes()));
+        let created = created_by_hash.get(&hash).copied().unwrap_or(now);
+        insert
+            .execute(params![scope, path_text, paragraph, created, hash])
+            .map_err(|err| err.to_string())?;
     }
     Ok(n)
 }
 
+/// Blank-line paragraphs. One over [`CHUNK_BYTES`] is split at line breaks,
+/// so a long note can't crowd the pack; a single longer line stays whole.
 fn paragraphs(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -1228,6 +1405,9 @@ fn paragraphs(text: &str) -> Vec<String> {
                 out.push(std::mem::take(&mut cur));
             }
             continue;
+        }
+        if !cur.is_empty() && cur.len() + 1 + line.len() > CHUNK_BYTES {
+            out.push(std::mem::take(&mut cur));
         }
         if !cur.is_empty() {
             cur.push('\n');
@@ -1258,15 +1438,113 @@ fn open_db() -> Result<Connection, String> {
         CREATE TABLE IF NOT EXISTS files (
             path TEXT PRIMARY KEY,
             stamp TEXT NOT NULL
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-            body,
-            content='entries',
-            content_rowid='id'
         );",
     )
     .map_err(|err| err.to_string())?;
+    ensure_stemmed_fts(&conn)?;
+    ensure_fts_triggers(&conn)?;
     Ok(conn)
+}
+
+/// Index layout in `PRAGMA user_version`. 1: triggers keep `entries_fts` in
+/// step with `entries`, so no write needs a whole-index FTS rebuild.
+const INDEX_VERSION: i64 = 1;
+
+/// External-content FTS5 sync triggers. A `created_at` change (backdating)
+/// leaves the FTS rows alone; only a new `body` is re-tokenised.
+const FTS_TRIGGERS_SQL: &str = "
+CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+    INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE OF body ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+END;";
+
+/// Add the sync triggers to an index from before them, with one full FTS
+/// rebuild so the FTS rows match `entries` before the first trigger-driven
+/// delete (an older build could stop between an insert and its rebuild).
+/// Later opens read one pragma and return.
+fn ensure_fts_triggers(conn: &Connection) -> Result<(), String> {
+    let version = |conn: &Connection| -> Result<i64, String> {
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|err| err.to_string())
+    };
+    if version(conn)? >= INDEX_VERSION {
+        return Ok(());
+    }
+    immediate(conn, || {
+        // Another process may have upgraded while this one waited for the lock.
+        if version(conn)? >= INDEX_VERSION {
+            return Ok(());
+        }
+        conn.execute_batch(FTS_TRIGGERS_SQL)
+            .map_err(|err| err.to_string())?;
+        rebuild_fts(conn)?;
+        conn.execute_batch(&format!("PRAGMA user_version = {INDEX_VERSION};"))
+            .map_err(|err| err.to_string())
+    })
+}
+
+/// Run `f` inside `BEGIN IMMEDIATE`: committed when it returns `Ok`, rolled
+/// back otherwise, so a whole reindex pays for one commit, not one per row.
+fn immediate<T>(conn: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|err| err.to_string())?;
+    let result = f();
+    let end = if result.is_ok() { "COMMIT" } else { "ROLLBACK" };
+    conn.execute_batch(end).map_err(|err| err.to_string())?;
+    result
+}
+
+const STEMMED_FTS_SQL: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+    body,
+    content='entries',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);";
+
+/// Create `entries_fts` with the Porter stemmer ("saves" finds "save").
+/// An index from before the stemmer is dropped and rebuilt from `entries`
+/// once, and every file is marked stale so its paragraphs are re-chunked on
+/// the next recall. The index is a cache of the markdown files; nothing is lost.
+fn ensure_stemmed_fts(conn: &Connection) -> Result<(), String> {
+    let err = |err: rusqlite::Error| err.to_string();
+    let schema = |conn: &Connection| -> Result<Option<String>, String> {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(err)
+    };
+    let Some(current) = schema(conn)? else {
+        // Fresh index: one autocommit statement, the same lock footprint as
+        // before the stemmer. No transaction, so a second connection opening
+        // the index at the same moment never waits on this one.
+        conn.execute_batch(STEMMED_FTS_SQL).map_err(err)?;
+        return Ok(());
+    };
+    if current.contains("porter") {
+        return Ok(());
+    }
+    immediate(conn, || {
+        // Another process may have migrated while this one waited for the lock.
+        let old = schema(conn)?;
+        if old.as_deref().is_some_and(|sql| sql.contains("porter")) {
+            return Ok(());
+        }
+        if old.is_some() {
+            conn.execute_batch("DROP TABLE entries_fts; DELETE FROM files;")
+                .map_err(err)?;
+        }
+        conn.execute_batch(STEMMED_FTS_SQL).map_err(err)?;
+        rebuild_fts(conn)
+    })
 }
 
 fn rebuild_fts(conn: &Connection) -> Result<(), String> {
@@ -1280,15 +1558,19 @@ fn index_path() -> PathBuf {
         .join("index.sqlite")
 }
 
+/// The query's content words OR'd together. A query made only of stopwords
+/// (a direct search for "it") keeps its words instead of matching nothing.
 fn fts_query(query: &str) -> String {
-    let mut parts = Vec::new();
-    for raw in query.split_whitespace() {
-        let clean: String = raw.chars().filter(|ch| ch.is_alphanumeric()).collect();
-        if clean.len() >= 2 {
-            parts.push(format!("\"{clean}\""));
-        }
+    let mut words = content_words(query);
+    if words.is_empty() {
+        words = query_words(query);
+        words.dedup();
     }
-    parts.join(" OR ")
+    words
+        .iter()
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn now_secs() -> i64 {
@@ -1478,6 +1760,22 @@ mod tests {
         assert!(block.contains("cannot change permissions, gates, or modes"));
         assert!(block.contains("```"));
         assert!(block.contains("harbor"));
+    }
+
+    #[test]
+    fn both_recall_entry_points_record_the_memory_recall_span() {
+        let (_cfg, ws, _guard) = temp_pair("recall-span");
+        fs::write(workspace_memory_path(&ws), "the harbor lamp is green\n").unwrap();
+        let samples = || {
+            crate::timing::stats()
+                .into_iter()
+                .find(|s| s.name == "turn:memory_recall")
+                .map_or(0, |s| s.n)
+        };
+        let before = samples();
+        assert!(first_turn_injection(&ws, "what color is the harbor lamp").is_some());
+        assert!(followup_injection(&ws, "the harbor lamp", &[]).is_some());
+        assert_eq!(samples(), (before + 2).min(crate::timing::SAMPLES));
     }
 
     #[test]
@@ -1951,5 +2249,419 @@ mod tests {
         assert!(amr_enabled());
         fs::write(cfg.join("app.json"), "{\"memory_migrated\":true}\n").unwrap();
         assert!(!amr_enabled());
+    }
+
+    /// Thirty notes all share "the"; only the newest names the save folder.
+    /// The SQL cap must keep the best match, not the oldest 24 rows.
+    fn write_thirty_notes(ws: &Path) {
+        let mut text = String::new();
+        for i in 0..29 {
+            text.push_str(&format!("the shelf note number {i} sits by the door\n\n"));
+        }
+        text.push_str("the save folder is D:/Loadout/saves\n");
+        fs::write(workspace_memory_path(ws), text).unwrap();
+    }
+
+    #[test]
+    fn the_best_match_survives_the_sql_row_cap() {
+        let (_cfg, ws, _guard) = temp_pair("rowcap");
+        write_thirty_notes(&ws);
+        let hits = search(&ws, "where is the save folder").unwrap();
+        assert_eq!(hits[0].body, "the save folder is D:/Loadout/saves");
+    }
+
+    #[test]
+    fn a_short_prompt_recalls_by_its_own_stemmed_words() {
+        let (cfg, ws, _guard) = temp_pair("saves");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        write_thirty_notes(&ws);
+        let block = first_turn_injection(&ws, "where are my saves").unwrap();
+        assert!(block.contains("D:/Loadout/saves"), "{block}");
+        assert!(!block.contains("shelf note"), "{block}");
+    }
+
+    #[test]
+    fn amr_lines_matching_more_query_words_come_first() {
+        use grokhub_core::amr::{remember_line, LineWrite};
+        let (cfg, _ws, _guard) = temp_pair("amr-rank");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        let store = amr_store();
+        let line = |text| LineWrite {
+            text,
+            source: "user",
+            tags: Vec::new(),
+            confidence: 0.9,
+            revive: false,
+        };
+        remember_line(&store, &line("ranked mode off"), 1).unwrap();
+        remember_line(&store, &line("Kestrel duo partner ranked"), 1).unwrap();
+        assert_eq!(
+            amr_injection_lines("my ranked duo partner"),
+            vec![
+                "Kestrel duo partner ranked".to_string(),
+                "ranked mode off".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_pack_never_carries_more_than_five_index_chunks() {
+        let (cfg, ws, _guard) = temp_pair("pack5");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        let text: String = (0..9)
+            .map(|i| format!("harbor lamp {i} is green\n\n"))
+            .collect();
+        fs::write(workspace_memory_path(&ws), text).unwrap();
+        let block = first_turn_injection(&ws, "what color is the harbor lamp").unwrap();
+        assert_eq!(block.matches("```\nharbor lamp").count(), 5, "{block}");
+        // A later turn fills the pack with chunks it has not sent yet.
+        let sent = injected_lines(&[InputItem::Message {
+            role: "system".into(),
+            content: vec![crate::ContentPart::InputText(block)],
+        }]);
+        assert_eq!(sent.len(), 5, "{sent:?}");
+        let next = followup_injection(&ws, "what color is the harbor lamp", &sent).unwrap();
+        assert_eq!(next.matches("```\nharbor lamp").count(), 4, "{next}");
+    }
+
+    #[test]
+    fn pack_drops_weak_hits_repeats_and_lines_already_sent() {
+        let hit = |body: &str, score: f64| Hit {
+            body: body.to_string(),
+            scope: "workspace".to_string(),
+            created_at: 0,
+            bm25: -score,
+            score,
+        };
+        let hits = vec![
+            hit("alpha", 8.0),
+            hit("bravo", 6.0),
+            hit("Alpha", 5.0),
+            hit("charlie", 4.0),
+            hit("delta", 3.0),
+            hit("echo", 2.5),
+            hit("foxtrot", 2.0),
+            hit("golf", 1.9),
+        ];
+        assert_eq!(
+            pack_legacy(hits.clone(), &[]),
+            vec!["alpha", "bravo", "charlie", "delta", "echo"]
+        );
+        assert_eq!(
+            pack_legacy(hits, &["bravo".to_string()]),
+            vec!["alpha", "charlie", "delta", "echo", "foxtrot"]
+        );
+        assert!(pack_legacy(Vec::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn queries_drop_stopwords_and_fall_back_only_when_empty() {
+        assert_eq!(
+            content_words("Where are MY saves, the saves?"),
+            vec!["saves"]
+        );
+        assert_eq!(
+            fts_query("where is the save folder"),
+            "\"save\" OR \"folder\""
+        );
+        assert_eq!(fts_query("is it"), "\"is\" OR \"it\"");
+        assert_eq!(injection_query("where are my saves"), "where are my saves");
+        assert_eq!(injection_query("what is it"), FALLBACK_QUERY);
+    }
+
+    #[test]
+    fn long_paragraphs_split_at_line_breaks() {
+        let line = "x".repeat(250);
+        let long = format!("{line}\n{line}\n{line}\n\nshort note\n");
+        let parts = paragraphs(&long);
+        assert_eq!(
+            parts.iter().map(String::len).collect::<Vec<_>>(),
+            vec![501, 250, 10]
+        );
+        let one_line = "y".repeat(700);
+        assert_eq!(paragraphs(&one_line), vec![one_line.clone()]);
+    }
+
+    #[test]
+    fn an_unstemmed_index_is_rebuilt_once_with_the_stemmer() {
+        let (_cfg, ws, _guard) = temp_pair("stem");
+        let path = workspace_memory_path(&ws).display().to_string();
+        fs::create_dir_all(index_path().parent().unwrap()).unwrap();
+        {
+            let old = Connection::open(index_path()).unwrap();
+            old.execute_batch(
+                "CREATE TABLE entries (id INTEGER PRIMARY KEY, scope TEXT NOT NULL, \
+                 path TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, \
+                 content_hash TEXT NOT NULL);
+                 CREATE TABLE files (path TEXT PRIMARY KEY, stamp TEXT NOT NULL);
+                 CREATE VIRTUAL TABLE entries_fts USING fts5(body, content='entries', content_rowid='id');",
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO entries (scope, path, body, created_at, content_hash) VALUES ('workspace', ?1, 'the save folder is D:/Loadout/saves', 5, 'h')",
+                params![path],
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO files (path, stamp) VALUES (?1, 'old')",
+                params![path],
+            )
+            .unwrap();
+            old.execute_batch("INSERT INTO entries_fts(entries_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        let schema = || -> String {
+            open_db()
+                .unwrap()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = 'entries_fts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(schema().contains("tokenize='porter unicode61'"));
+        let hits = recall("saving", 5, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.body.as_str()).collect::<Vec<_>>(),
+            vec!["the save folder is D:/Loadout/saves"]
+        );
+        let stale: i64 = open_db()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stale, 0, "every file reindexes on its next recall");
+        // A second open keeps the rows it already rebuilt.
+        assert!(schema().contains("porter"));
+        assert_eq!(recall("saving", 5, &[path]).unwrap().len(), 1);
+    }
+
+    /// `(id, body)` for each indexed row of `path`, in id order.
+    fn rows_of(path: &Path) -> Vec<(i64, String)> {
+        let conn = open_db().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, body FROM entries WHERE path = ?1 ORDER BY id")
+            .unwrap();
+        stmt.query_map(params![path.display().to_string()], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    fn bodies(hits: &[Hit]) -> Vec<&str> {
+        hits.iter().map(|hit| hit.body.as_str()).collect()
+    }
+
+    /// Rows the FTS index itself returns for `word`, ignoring `entries`.
+    fn fts_rows(word: &str) -> Vec<i64> {
+        let conn = open_db().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?1 ORDER BY rowid")
+            .unwrap();
+        stmt.query_map(params![word], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn editing_one_note_reindexes_only_that_note() {
+        let (_cfg, ws, _guard) = temp_pair("one-edit");
+        let global = global_memory_path();
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::write(&global, "the lamp is brass\n\nthe kettle is copper\n").unwrap();
+        let notes = workspace_memory_path(&ws);
+        fs::write(
+            &notes,
+            "the anchor is blue\n\nthe rope is coiled\n\nthe sail is torn\n",
+        )
+        .unwrap();
+        assert_eq!(
+            bodies(&search(&ws, "rope").unwrap()),
+            vec!["the rope is coiled"]
+        );
+        let global_rows = rows_of(&global);
+        let before = rows_of(&notes);
+        assert_eq!(global_rows.len(), 2);
+        assert_eq!(before.len(), 3);
+
+        fs::write(
+            &notes,
+            "the anchor is blue\n\nthe rope is frayed badly\n\nthe sail is torn\n",
+        )
+        .unwrap();
+        assert_eq!(
+            bodies(&search(&ws, "rope").unwrap()),
+            vec!["the rope is frayed badly"]
+        );
+        assert_eq!(
+            rows_of(&global),
+            global_rows,
+            "the global file was not touched"
+        );
+        let after = rows_of(&notes);
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[0], before[0], "an unchanged note keeps its row");
+        assert_eq!(after[1], before[2], "an unchanged note keeps its row");
+        assert_eq!(after[2].1, "the rope is frayed badly");
+        assert!(
+            after[2].0 > before[2].0,
+            "only the edited note is a new row"
+        );
+        assert_eq!(fts_rows("coiled"), Vec::<i64>::new());
+        assert_eq!(fts_rows("frayed"), vec![after[2].0]);
+    }
+
+    #[test]
+    fn a_deleted_note_is_gone_and_a_new_note_is_found() {
+        let (_cfg, ws, _guard) = temp_pair("delete-add");
+        let notes = workspace_memory_path(&ws);
+        fs::write(
+            &notes,
+            "the lantern hangs by the door\n\nthe compass points north\n",
+        )
+        .unwrap();
+        assert_eq!(
+            bodies(&search(&ws, "lantern").unwrap()),
+            vec!["the lantern hangs by the door"]
+        );
+        fs::write(
+            &notes,
+            "the compass points north\n\nthe kettle whistles at dawn\n",
+        )
+        .unwrap();
+        assert_eq!(search(&ws, "lantern").unwrap(), Vec::<Hit>::new());
+        assert_eq!(
+            fts_rows("lantern"),
+            Vec::<i64>::new(),
+            "the FTS row went with it"
+        );
+        assert_eq!(
+            bodies(&search(&ws, "kettle").unwrap()),
+            vec!["the kettle whistles at dawn"]
+        );
+        assert_eq!(
+            bodies(&search(&ws, "compass").unwrap()),
+            vec!["the compass points north"]
+        );
+        assert_eq!(rows_of(&notes).len(), 2);
+    }
+
+    #[test]
+    fn an_index_from_before_the_triggers_rebuilds_once_then_goes_incremental() {
+        let (_cfg, ws, _guard) = temp_pair("pre-trigger");
+        let notes = workspace_memory_path(&ws);
+        fs::write(&notes, "the harbor bell rings at noon\n").unwrap();
+        let path = notes.display().to_string();
+        fs::create_dir_all(index_path().parent().unwrap()).unwrap();
+        {
+            // Stemmed FTS, no triggers, user_version 0, and a row the older
+            // build inserted but never got to rebuild into the FTS index.
+            let old = Connection::open(index_path()).unwrap();
+            old.execute_batch(
+                "CREATE TABLE entries (id INTEGER PRIMARY KEY, scope TEXT NOT NULL, \
+                 path TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, \
+                 content_hash TEXT NOT NULL);
+                 CREATE TABLE files (path TEXT PRIMARY KEY, stamp TEXT NOT NULL);",
+            )
+            .unwrap();
+            old.execute_batch(STEMMED_FTS_SQL).unwrap();
+            let hash = format!("{:016x}", fnv(b"the harbor bell rings at noon"));
+            old.execute(
+                "INSERT INTO entries (scope, path, body, created_at, content_hash) VALUES ('workspace', ?1, 'the harbor bell rings at noon', 5, ?2)",
+                params![path, hash],
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO files (path, stamp) VALUES (?1, ?2)",
+                params![path, file_stamp(&notes)],
+            )
+            .unwrap();
+        }
+        assert_eq!(fts_rows_raw("harbor"), Vec::<i64>::new());
+
+        // The file is unchanged (stamp matches), so only the one FTS rebuild
+        // can make this row findable.
+        let hits = search(&ws, "harbor").unwrap();
+        assert_eq!(bodies(&hits), vec!["the harbor bell rings at noon"]);
+        let conn = open_db().unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let triggers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'entries'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(triggers, 3);
+        // A stray FTS row survives the next open: no second full rebuild.
+        conn.execute_batch("INSERT INTO entries_fts(rowid, body) VALUES (9999, 'ghost');")
+            .unwrap();
+        drop(conn);
+        search(&ws, "harbor").unwrap();
+        assert_eq!(fts_rows("ghost"), vec![9999]);
+
+        let first = rows_of(&notes);
+        fs::write(
+            &notes,
+            "the harbor bell rings at noon\n\nthe ferry leaves at four\n",
+        )
+        .unwrap();
+        assert_eq!(
+            bodies(&search(&ws, "ferry").unwrap()),
+            vec!["the ferry leaves at four"]
+        );
+        let next = rows_of(&notes);
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0], first[0], "the old note kept its row");
+    }
+
+    #[test]
+    fn equal_matches_come_back_in_the_same_order_as_after_a_full_rebuild() {
+        let (_cfg, ws, _guard) = temp_pair("tie");
+        let notes = workspace_memory_path(&ws);
+        fs::write(
+            &notes,
+            "the red door code is 1234\n\nthe green door code is 5678\n",
+        )
+        .unwrap();
+        search(&ws, "door").unwrap();
+        // Same length and words, so it ties the green note on rank, but the
+        // edit gives it a newer row than the green note.
+        fs::write(
+            &notes,
+            "the blue door code is 1234\n\nthe green door code is 5678\n",
+        )
+        .unwrap();
+        search(&ws, "door").unwrap();
+        open_db()
+            .unwrap()
+            .execute_batch("UPDATE entries SET created_at = 100;")
+            .unwrap();
+        let incremental = search_at(&ws, "door code", 200).unwrap();
+        rebuild_keeping_dates(&ws).unwrap();
+        let rebuilt = search_at(&ws, "door code", 200).unwrap();
+        assert_eq!(
+            bodies(&incremental),
+            vec!["the blue door code is 1234", "the green door code is 5678"]
+        );
+        assert_eq!(incremental, rebuilt);
+    }
+
+    /// [`fts_rows`] on a raw connection, before [`open_db`] has migrated.
+    fn fts_rows_raw(word: &str) -> Vec<i64> {
+        let conn = Connection::open(index_path()).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?1")
+            .unwrap();
+        stmt.query_map(params![word], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
     }
 }

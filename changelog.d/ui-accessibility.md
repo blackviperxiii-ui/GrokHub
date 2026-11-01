@@ -1,0 +1,1 @@
+Text and controls are easier to see in every theme: error text uses a lighter red in the dark themes, text fields and switches get a clearer border, buttons show a solid focus ring when you tab to them, and a new test keeps the theme colors above WCAG contrast. Also fixes the Memory screen, where the note field shrank to nothing next to the new "Global" switch.

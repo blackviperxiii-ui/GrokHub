@@ -14,8 +14,8 @@ use super::pages::{BoardAct, BoardDrag};
 use super::*;
 use crate::ui_kit::{badge, card_frame, BadgeTone, CardVariant};
 use grokhub_core::{
-    encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, ThoughtFold,
-    UpdateAction,
+    encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, StepStatus,
+    ThoughtFold, UpdateAction, WorkKind, WorkLogEvent, WorkOrigin,
 };
 
 /// Chat height inside an open card: a column card, and a full-width Follow up card.
@@ -41,6 +41,101 @@ pub(super) struct BoardView {
     pub keys_held: bool,
     /// A line under one card: why Send or Work on it did not go through.
     pub note: Option<(String, String)>,
+    /// The card whose log drawer is open, and its lines as read when it opened.
+    /// The log is read from disk only then (and on Refresh), never per frame.
+    pub log: Option<(String, Vec<WorkLogEvent>)>,
+    /// Paused runs already told to the bell. `None` until the first look, so
+    /// cards that were paused before this session stay quiet.
+    pub paused_seen: Option<std::collections::HashSet<String>>,
+    /// A sweep running off the UI thread; it fills the slot when it ends.
+    pub sweep: Option<SweepSlot>,
+    /// The Archived view is open under the board.
+    pub show_archived: bool,
+    /// What you typed to find an archived card.
+    pub archived_query: String,
+    /// A delete in the Archived view waiting for its confirm click.
+    pub confirm: Option<ArchivedDelete>,
+    /// Settings' tidy row, read from `workboard-tidy.json` when first shown and
+    /// again after each sweep, never per frame.
+    pub tidy: Option<grokhub_core::work_file::BoardTidy>,
+    /// The queue and the block and steps editors.
+    pub triage: super::board_triage::TriageView,
+}
+
+/// A sweep's result once its thread ends: `Some(None)` when another writer
+/// swept recently or the board could not be read.
+pub(super) type SweepSlot =
+    std::sync::Arc<std::sync::Mutex<Option<Option<grokhub_core::work_file::TidyRun>>>>;
+
+/// A delete in the Archived view that asks first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ArchivedDelete {
+    /// One archived card.
+    One(String),
+    /// Every archived card archived at least this many days ago; 0 is all.
+    Older(u32),
+}
+
+/// The bulk deletes the Archived view offers: all, then older than 30 or 90 days.
+pub(super) const BULK_DELETE_DAYS: [u32; 3] = [0, 30, 90];
+
+/// Archived cards, newest first, whose title, detail or notes hold `query`
+/// (any case). An empty query keeps them all.
+pub(super) fn archived_rows<'a>(cards: &'a [BoardCard], query: &str) -> Vec<&'a BoardCard> {
+    let q = query.trim().to_lowercase();
+    let mut rows: Vec<&BoardCard> = cards
+        .iter()
+        .filter(|c| c.status == BoardStatus::Dismissed)
+        .filter(|c| {
+            q.is_empty()
+                || [&c.title, &c.detail, &c.notes]
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&q))
+        })
+        .collect();
+    rows.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
+    rows
+}
+
+/// How many archived cards a bulk delete of `days` would take, by the same rule
+/// as `delete_archived`: all of them for 0, else those archived `days` ago or more.
+pub(super) fn archived_older_count(cards: &[BoardCard], days: u32, now: u64) -> usize {
+    let age = u64::from(days) * grokhub_core::work_item::DAY_MS;
+    cards
+        .iter()
+        .filter(|c| {
+            c.status == BoardStatus::Dismissed
+                && c.archived_ms > 0
+                && now.saturating_sub(c.archived_ms) >= age
+        })
+        .count()
+}
+
+/// The pill for a bulk delete.
+pub(super) fn bulk_delete_label(days: u32) -> String {
+    if days == 0 {
+        "Delete all archived".into()
+    } else {
+        format!("Delete archived older than {days} days")
+    }
+}
+
+/// The confirm line, with the count, before a delete.
+pub(super) fn confirm_delete_text(n: usize) -> String {
+    if n == 1 {
+        "Delete 1 archived card and its log for good?".into()
+    } else {
+        format!("Delete {n} archived cards and their logs for good?")
+    }
+}
+
+/// Settings: the auto-delete choice as a label.
+pub(super) fn auto_delete_label(days: u32) -> String {
+    if days == 0 {
+        "Off".into()
+    } else {
+        format!("After {days} days")
+    }
 }
 
 pub(super) fn board_chat_edit_id(id: &str) -> egui::Id {
@@ -51,9 +146,15 @@ fn board_notes_edit_id(id: &str) -> egui::Id {
     egui::Id::new(("board-notes-edit", id))
 }
 
-/// The short line under a card's title: what it has, not buttons.
+/// The short line under a card's title: where it left off, then what it has.
 pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
+    if let Some(next) = card_left_off(card) {
+        parts.push(format!(
+            "Left off: {}",
+            grokhub_core::work_item::clip_line(&next, META_LEFT_OFF_MAX)
+        ));
+    }
     if card.automation.is_some() {
         parts.push(if card.updated_ms == 0 {
             "From an automation".into()
@@ -72,6 +173,212 @@ pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
         parts.push("Notes".into());
     }
     parts.join(" · ")
+}
+
+/// Longest "Left off" text on a compact card's meta line, in bytes.
+const META_LEFT_OFF_MAX: usize = 60;
+/// Lines the log drawer shows, newest last.
+pub(super) const LOG_DRAWER_LINES: usize = 20;
+/// Most of a progress log the drawer reads: its tail, never the whole file.
+pub(super) const LOG_DRAWER_READ_MAX: u64 = 32 * 1024;
+
+/// Where the work left off: the checkpoint's next step, else the step being
+/// done, else the first step not started yet. Done and archived cards have none.
+pub(super) fn card_left_off(card: &BoardCard) -> Option<String> {
+    if matches!(card.status, BoardStatus::Done | BoardStatus::Dismissed) {
+        return None;
+    }
+    let next = card
+        .checkpoint
+        .as_ref()
+        .map(|c| c.next.trim())
+        .filter(|n| !n.is_empty());
+    if let Some(n) = next {
+        return Some(n.to_string());
+    }
+    let step = |want: StepStatus| card.steps.iter().find(|s| s.status == want);
+    step(StepStatus::Doing)
+        .or_else(|| step(StepStatus::Planned))
+        .map(|s| s.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Who owns the card: the agent filed it, or it is yours.
+pub(super) fn card_owner_label(card: &BoardCard) -> &'static str {
+    match card.origin {
+        Some(WorkOrigin::Agent) => "Agent",
+        Some(WorkOrigin::User) | None => "You",
+    }
+}
+
+/// The kind chip. A plain task shows none.
+pub(super) fn work_kind_label(kind: WorkKind) -> Option<&'static str> {
+    match kind {
+        WorkKind::Task => None,
+        WorkKind::Automation => Some("Automation"),
+        WorkKind::Background => Some("Background"),
+        WorkKind::Episode => Some("Episode"),
+        WorkKind::Flow => Some("Flow"),
+    }
+}
+
+/// The owner badge, then the kind chip, as the compact card paints them.
+pub(super) fn card_badges(card: &BoardCard) -> Vec<(&'static str, BadgeTone)> {
+    let owner = card_owner_label(card);
+    let tone = if owner == "Agent" {
+        BadgeTone::Accent
+    } else {
+        BadgeTone::Neutral
+    };
+    let mut out = vec![(owner, tone)];
+    if let Some(kind) = work_kind_label(card.kind) {
+        out.push((kind, BadgeTone::Neutral));
+    }
+    if grokhub_core::work_triage::is_queued(card) {
+        out.push(("Queued", BadgeTone::Accent));
+    }
+    match grokhub_core::work_triage::priority_label(&card.priority) {
+        "High" => out.push(("High", BadgeTone::Warning)),
+        "Low" => out.push(("Low", BadgeTone::Neutral)),
+        _ => {}
+    }
+    out
+}
+
+/// Ring fill: the card's steps when it has any (done and skipped count as
+/// filled), else its column. A Done card is always full.
+pub(super) fn card_progress(card: &BoardCard) -> (u32, u32) {
+    if card.steps.is_empty() {
+        return board_card_progress(card.status);
+    }
+    let total = card.steps.len() as u32;
+    if card.status == BoardStatus::Done {
+        return (total, total);
+    }
+    let filled = card
+        .steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped))
+        .count() as u32;
+    (filled, total)
+}
+
+/// A run that stopped part way (Paused or Interrupted): it sits in Blocked and
+/// either was a run or saved where it left off. Only these show Resume.
+pub(super) fn card_can_resume(card: &BoardCard) -> bool {
+    card.status == BoardStatus::Blocked
+        && (card.run || card.checkpoint.as_ref().is_some_and(|c| !c.is_empty()))
+}
+
+/// The mark in front of a step in the open card.
+pub(super) fn step_mark(status: StepStatus) -> &'static str {
+    match status {
+        StepStatus::Done => "✓",
+        StepStatus::Doing => "→",
+        StepStatus::Planned => "·",
+        StepStatus::Skipped => "–",
+        StepStatus::Failed => "×",
+    }
+}
+
+/// The live card for a chat, so an Activity row can open it.
+pub(super) fn board_card_for_chat(cards: &[BoardCard], chat_id: &str) -> Option<String> {
+    if chat_id.is_empty() {
+        return None;
+    }
+    cards
+        .iter()
+        .rev()
+        .find(|c| c.status != BoardStatus::Dismissed && c.thread_id.as_deref() == Some(chat_id))
+        .map(|c| c.id.clone())
+}
+
+/// What the Home Workboard module counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct BoardCounts {
+    pub doing: usize,
+    /// Paused or interrupted runs: Resume brings them back.
+    pub interrupted: usize,
+    /// Blocked on you, or a Follow up waiting for you to read it.
+    pub needs_you: usize,
+}
+
+pub(super) fn board_counts(cards: &[BoardCard]) -> BoardCounts {
+    let mut n = BoardCounts::default();
+    for c in cards {
+        match c.status {
+            BoardStatus::InProgress => n.doing += 1,
+            BoardStatus::Blocked if card_can_resume(c) => n.interrupted += 1,
+            BoardStatus::Blocked | BoardStatus::FollowUp => n.needs_you += 1,
+            _ => {}
+        }
+    }
+    n
+}
+
+/// The bell line for a sweep, or none when it archived nothing.
+pub(super) fn sweep_notice_text(report: &grokhub_core::SweepReport) -> Option<String> {
+    let done = report.archived_done.len();
+    let idle = report.archived_idle.len();
+    let plural = |n: usize| if n == 1 { "card" } else { "cards" };
+    match (done, idle) {
+        (0, 0) => None,
+        (d, 0) => Some(format!("Archived {d} finished {}", plural(d))),
+        (0, i) => Some(format!("Archived {i} {} idle for 30 days", plural(i))),
+        (d, i) => Some(format!(
+            "Archived {} {}: {d} finished, {i} idle for 30 days",
+            d + i,
+            plural(d + i)
+        )),
+    }
+}
+
+/// One log drawer line: "5m ago · step · Wrote the parser".
+pub(super) fn log_line_text(ev: &WorkLogEvent, now_ms: u64) -> String {
+    let ago = grokhub_core::pulse::ago_label(ev.at, now_ms);
+    if ev.kind.trim().is_empty() {
+        format!("{ago} · {}", ev.text)
+    } else {
+        format!("{ago} · {} · {}", ev.kind, ev.text)
+    }
+}
+
+/// The newest `lines` events of a card's progress log, reading at most the last
+/// `max_bytes` of the file. Called when the drawer opens, never per frame.
+pub(super) fn read_log_tail(
+    dir: &std::path::Path,
+    id: &str,
+    max_bytes: u64,
+    lines: usize,
+) -> Vec<WorkLogEvent> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Some(name) = grokhub_core::work_item::work_log_file_name(id) else {
+        return Vec::new();
+    };
+    let Ok(mut f) = std::fs::File::open(dir.join(name)) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(max_bytes);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if f.take(max_bytes).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let mut body = String::from_utf8_lossy(&buf).into_owned();
+    if start > 0 {
+        // The first line was cut by the seek.
+        body = body
+            .split_once('\n')
+            .map(|(_, r)| r.to_string())
+            .unwrap_or_default();
+    }
+    let mut events = grokhub_core::work_item::parse_work_log(&body);
+    let skip = events.len().saturating_sub(lines);
+    events.drain(..skip);
+    events
 }
 
 /// Flo status chip copy for a board column status.
@@ -417,7 +724,8 @@ impl Cabin {
         let id = card.id.clone();
         let dragging = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let meta = card_meta_line(card, now_ms());
-        let (filled, total) = board_card_progress(card.status);
+        let (filled, total) = card_progress(card);
+        let badges = card_badges(card);
         let chips = board_presence_chips(card);
         // Flo compact cards used `sheet_shadow()`; kit `card_frame` paints lift via `kit_shadow`.
         let _ = crate::theme::sheet_shadow();
@@ -459,6 +767,9 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
                         paint_status_chip(ui, card.status);
+                        for (label, tone) in &badges {
+                            badge(ui, label, *tone);
+                        }
                         if !meta.is_empty() {
                             ui.add(
                                 egui::Label::new(
@@ -497,6 +808,34 @@ impl Cabin {
             egui::DragAndDrop::set_payload(ui.ctx(), BoardDrag(id.clone()));
         } else if resp.clicked() {
             *act = Some(BoardAct::Expand(id.clone()));
+        }
+        // A drop on a card lands just above it, in its column. Follow up keeps
+        // its newest-first order.
+        if let Some(column) = card
+            .status
+            .column()
+            .filter(|c| *c != KanbanColumn::FollowUp)
+        {
+            if resp
+                .dnd_hover_payload::<BoardDrag>()
+                .is_some_and(|d| d.0 != id)
+            {
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.top() - 4.0,
+                    egui::Stroke::new(2.0_f32, crate::theme::link()),
+                );
+            }
+            if let Some(drag) = resp
+                .dnd_release_payload::<BoardDrag>()
+                .filter(|d| d.0 != id)
+            {
+                *act = Some(BoardAct::Place {
+                    id: drag.0.clone(),
+                    column,
+                    before: Some(id.clone()),
+                });
+            }
         }
         if dragging {
             super::pages::paint_drag_ghost(ui.ctx(), &card.title);
@@ -635,6 +974,7 @@ impl Cabin {
                     .wrap(),
                 );
             }
+            self.paint_card_work(ui, card, busy_here, act);
             ui.add_space(8.0);
             let chat_h = if wide { FOLLOW_CHAT_H } else { CARD_CHAT_H };
             match thread.as_deref() {
@@ -665,6 +1005,433 @@ impl Cabin {
         resp.rect
     }
 
+    /// The work part of an open card: its steps, where it left off, Resume and
+    /// Hand back on a paused run, a way to its live row in Activity, and the log
+    /// drawer. Nothing here goes to the model.
+    fn paint_card_work(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &BoardCard,
+        busy_here: bool,
+        act: &mut Option<BoardAct>,
+    ) {
+        let id = card.id.clone();
+        let small = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text)
+                        .size(crate::theme::FONT_TIP)
+                        .color(color),
+                )
+                .wrap(),
+            );
+        };
+        let label = |ui: &mut egui::Ui, text: &str| {
+            ui.add_space(crate::theme::SPACING_4);
+            ui.label(
+                RichText::new(text)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::subtle()),
+            );
+        };
+        self.paint_card_triage(ui, card, act);
+        if !card.steps.is_empty() {
+            let (filled, total) = card_progress(card);
+            let mine = if card.user_steps { " · your plan" } else { "" };
+            label(ui, &format!("Steps {filled} / {total}{mine}"));
+            for step in &card.steps {
+                let color = match step.status {
+                    StepStatus::Done | StepStatus::Skipped => crate::theme::muted(),
+                    StepStatus::Failed => crate::theme::setup(),
+                    StepStatus::Doing | StepStatus::Planned => crate::theme::fg(),
+                };
+                small(
+                    ui,
+                    &format!("{} {}", step_mark(step.status), step.text),
+                    color,
+                );
+            }
+        }
+        if let Some(cp) = card.checkpoint.as_ref().filter(|c| !c.is_empty()) {
+            label(ui, "Where it left off");
+            for (name, value) in [
+                ("Goal", cp.goal.as_str()),
+                ("Next", cp.next.as_str()),
+                ("Blocked by", cp.blocker.as_str()),
+            ] {
+                if !value.trim().is_empty() {
+                    small(ui, &format!("{name}: {value}"), crate::theme::fg());
+                }
+            }
+            if !cp.refs.is_empty() {
+                small(
+                    ui,
+                    &format!("Refs: {}", cp.refs.join(", ")),
+                    crate::theme::muted(),
+                );
+            }
+        }
+        ui.add_space(crate::theme::SPACING_4);
+        ui.horizontal_wrapped(|ui| {
+            if card_can_resume(card) {
+                let resume = ui
+                    .push_id(("board-resume", id.as_str()), |ui| {
+                        crate::cards::white_pill(ui, "Resume")
+                    })
+                    .inner;
+                if resume {
+                    *act = Some(BoardAct::Resume(id.clone()));
+                }
+                let hand_back = ui
+                    .push_id(("board-hand-back", id.as_str()), |ui| {
+                        crate::cards::ghost_pill(ui, "Hand back")
+                    })
+                    .inner;
+                if hand_back {
+                    *act = Some(BoardAct::HandBack(id.clone()));
+                }
+            }
+            if busy_here && crate::cards::ghost_pill(ui, "Show in Activity") {
+                self.activity.open = true;
+            }
+            let log_open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
+            let log_label = if log_open { "Hide log" } else { "Log" };
+            let log = ui
+                .push_id(("board-log", id.as_str()), |ui| {
+                    crate::cards::ghost_pill(ui, log_label)
+                })
+                .inner;
+            if log {
+                *act = Some(BoardAct::ToggleLog(id.clone()));
+            }
+        });
+        let lines = self
+            .board_view
+            .log
+            .as_ref()
+            .filter(|(l, _)| *l == id)
+            .map(|(_, lines)| lines.clone());
+        if let Some(lines) = lines {
+            let now = now_ms();
+            if lines.is_empty() {
+                small(ui, "No progress logged yet", crate::theme::muted());
+            }
+            for ev in &lines {
+                small(ui, &log_line_text(ev, now), crate::theme::muted());
+            }
+            if crate::cards::ghost_pill(ui, "Refresh log") {
+                self.board_view.log = Some((id.clone(), self.read_card_log(&id)));
+            }
+        }
+    }
+
+    /// The tail of a card's progress log, for the drawer.
+    pub(super) fn read_card_log(&self, id: &str) -> Vec<WorkLogEvent> {
+        read_log_tail(
+            &crate::work_store::work_dir(),
+            id,
+            LOG_DRAWER_READ_MAX,
+            LOG_DRAWER_LINES,
+        )
+    }
+
+    /// Resume a paused or interrupted card from its checkpoint (KB-03): the
+    /// capped resume block goes once in the resume turn's input, never in the
+    /// system prompt. A refusal (a chat already running, no agent, a game
+    /// running for a desktop step) lands in the bell as "Resume failed" with a
+    /// way back to the card.
+    pub(super) fn resume_work_card(&mut self, id: &str) -> bool {
+        self.board_view.open = Some(id.to_string());
+        let why = match self.resume_card_now(id, false) {
+            Ok(()) => return true,
+            Err(why) => why,
+        };
+        self.board_view.note = Some((id.to_string(), why.clone()));
+        let title = self
+            .board
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.trim().to_string())
+            .unwrap_or_default();
+        self.notify(
+            super::notices::NoticeKind::Error,
+            format!("Resume failed: {title}. {why}"),
+            Some(super::notices::NoticeAction::OpenCard(id.to_string())),
+        );
+        false
+    }
+
+    /// Each frame, from memory only: a run that just paused or was interrupted
+    /// goes to the bell once, with a way to its card. Cards already paused when
+    /// this session first looked stay quiet, and so do cards you touched.
+    pub(super) fn tick_board_notices(&mut self) {
+        let now = now_ms();
+        let paused: Vec<(String, String)> = self
+            .board
+            .iter()
+            .filter(|c| card_can_resume(c) && !c.touched)
+            // The agent's own interrupted work resumes on its own first; the
+            // bell speaks only if that is used up (KB-03).
+            .filter(|c| grokhub_core::work_resume::auto_resume_decision(c, now).is_none())
+            .map(|c| (c.id.clone(), c.title.trim().to_string()))
+            .collect();
+        let Some(seen) = self.board_view.paused_seen.as_mut() else {
+            self.board_view.paused_seen = Some(paused.into_iter().map(|(id, _)| id).collect());
+            return;
+        };
+        let fresh: Vec<(String, String)> = paused
+            .iter()
+            .filter(|(id, _)| !seen.contains(id))
+            .cloned()
+            .collect();
+        seen.retain(|id| paused.iter().any(|(p, _)| p == id));
+        for (id, _) in &fresh {
+            seen.insert(id.clone());
+        }
+        for (id, title) in fresh {
+            self.notify(
+                super::notices::NoticeKind::Info,
+                format!("Interrupted: {title}. Resume it from the Workboard."),
+                Some(super::notices::NoticeAction::OpenCard(id)),
+            );
+        }
+    }
+
+    /// The cabin's sweep timer, from the per-frame board tick: at start, then
+    /// every six hours. The sweep runs off the UI thread on the board file under
+    /// the lock the shell and the agent's tools share, so it never runs twice
+    /// when both apps are open. Local only: no model client, nothing in a prompt.
+    pub(super) fn tick_board_sweep(&mut self, now: u64) {
+        if let Some(slot) = &self.board_view.sweep {
+            let done = slot.lock().ok().and_then(|mut g| g.take());
+            if let Some(run) = done {
+                self.board_view.sweep = None;
+                self.apply_board_tidy(run);
+            }
+            return;
+        }
+        let path = config::workboard_path();
+        let Some(every) = crate::work_store::sweep_due(&path, now) else {
+            return;
+        };
+        let live = self.live_card_ids();
+        let slot: SweepSlot = Default::default();
+        self.board_view.sweep = Some(slot.clone());
+        std::thread::spawn(move || {
+            let run = crate::work_store::sweep(&path, now, &live, every)
+                .ok()
+                .flatten();
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(run);
+            }
+        });
+    }
+
+    /// A sweep ended: take its cards from disk at once, so Undo finds them, and
+    /// raise one bell notice for what it archived (with Undo) and one for what
+    /// auto-delete removed.
+    pub(super) fn apply_board_tidy(&mut self, run: Option<grokhub_core::work_file::TidyRun>) {
+        self.board_view.tidy = None;
+        let Some(run) = run else {
+            return;
+        };
+        if run.report.is_empty() && run.deleted.is_empty() {
+            return;
+        }
+        crate::work_store::reload_now(&config::workboard_path(), &mut self.board);
+        for id in &run.deleted {
+            self.forget_board_card_view(id);
+        }
+        self.note_board_sweep(&run.report);
+        if !run.deleted.is_empty() {
+            let n = run.deleted.len();
+            self.notify(
+                super::notices::NoticeKind::Info,
+                format!(
+                    "Auto-delete removed {n} old archived {}",
+                    if n == 1 { "card" } else { "cards" }
+                ),
+                None,
+            );
+        }
+    }
+
+    /// Settings: the Workboard tidy. Auto-archive is fixed at 30 days idle (and
+    /// a day after an agent's finished card you never touched); auto-delete is
+    /// off unless you choose 30 or 90 days. Both apps read the same choice.
+    pub(super) fn ui_workboard_tidy_row(&mut self, ui: &mut egui::Ui) {
+        let path = config::workboard_path();
+        let tidy = *self
+            .board_view
+            .tidy
+            .get_or_insert_with(|| grokhub_core::work_file::read_tidy(&path));
+        crate::cards::help_text(
+            ui,
+            "Workboard: auto-archive after 30 days with no activity. An agent's finished card you never opened goes after a day. Archived cards stay until you delete them.",
+        );
+        let labels: Vec<String> = grokhub_core::work_item::AUTO_DELETE_DAYS
+            .iter()
+            .map(|d| auto_delete_label(*d))
+            .collect();
+        if let Some(i) = crate::cards::settings_dropdown(
+            ui,
+            "Auto-delete archived",
+            "Delete archived cards and their logs this long after they were archived. Off by default.",
+            &auto_delete_label(tidy.auto_delete_days),
+            &labels,
+        ) {
+            let days = grokhub_core::work_item::AUTO_DELETE_DAYS[i];
+            match grokhub_core::work_file::set_auto_delete_days(&path, days) {
+                Ok(t) => {
+                    self.board_view.tidy = Some(t);
+                    self.status = "Saved".into();
+                }
+                Err(e) => self.status = e,
+            }
+        }
+    }
+
+    /// The Archived view under the board: newest first, a search, Restore and
+    /// Delete on each card, and the bulk deletes. Every delete asks first with
+    /// the count, and none touches a card on the board.
+    pub(super) fn ui_board_archived(&mut self, ui: &mut egui::Ui, act: &mut Option<BoardAct>) {
+        let total = self
+            .board
+            .iter()
+            .filter(|c| c.status == BoardStatus::Dismissed)
+            .count();
+        if total == 0 {
+            self.board_view.show_archived = false;
+            return;
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            crate::cards::section_label(ui, &format!("Archived · {total}"));
+            let label = if self.board_view.show_archived {
+                "Hide"
+            } else {
+                "Show"
+            };
+            if crate::cards::ghost_pill(ui, label) {
+                self.board_view.show_archived = !self.board_view.show_archived;
+                self.board_view.confirm = None;
+            }
+        });
+        if !self.board_view.show_archived {
+            return;
+        }
+        let now = grokhub_core::now_ms();
+        ui.add(
+            egui::TextEdit::singleline(&mut self.board_view.archived_query)
+                .hint_text("Find an archived card")
+                .desired_width(280.0),
+        );
+        ui.add_space(4.0);
+        // The bulk deletes, or the one waiting for its confirm.
+        let pending = self.board_view.confirm.clone();
+        ui.horizontal_wrapped(|ui| match &pending {
+            Some(ArchivedDelete::Older(days)) => {
+                let n = archived_older_count(&self.board, *days, now);
+                ui.label(
+                    RichText::new(confirm_delete_text(n))
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::fg()),
+                );
+                if n > 0 && crate::cards::danger_pill(ui, "Delete") {
+                    *act = Some(BoardAct::DeleteArchived(*days));
+                }
+                if crate::cards::ghost_pill(ui, "Cancel") {
+                    self.board_view.confirm = None;
+                }
+            }
+            _ => {
+                for days in BULK_DELETE_DAYS {
+                    if archived_older_count(&self.board, days, now) > 0
+                        && crate::cards::ghost_pill(ui, &bulk_delete_label(days))
+                    {
+                        self.board_view.confirm = Some(ArchivedDelete::Older(days));
+                    }
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let rows: Vec<(String, String, u64)> =
+            archived_rows(&self.board, &self.board_view.archived_query)
+                .into_iter()
+                .map(|c| (c.id.clone(), c.title.clone(), c.archived_ms))
+                .collect();
+        if rows.is_empty() {
+            crate::cards::help_text(ui, "No archived card matches.");
+        }
+        for (id, title, archived_ms) in rows {
+            let asking = pending == Some(ArchivedDelete::One(id.clone()));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(&title)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::muted()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "archived {}",
+                        grokhub_core::pulse::ago_label(archived_ms, now)
+                    ))
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::subtle()),
+                );
+                if asking {
+                    ui.label(
+                        RichText::new(confirm_delete_text(1))
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::fg()),
+                    );
+                    if crate::cards::danger_pill(ui, "Delete") {
+                        self.board_view.confirm = None;
+                        *act = Some(BoardAct::Delete(id.clone()));
+                    }
+                    if crate::cards::ghost_pill(ui, "Keep") {
+                        self.board_view.confirm = None;
+                    }
+                } else {
+                    if crate::cards::ghost_pill(ui, "Restore") {
+                        *act = Some(BoardAct::Restore(id.clone()));
+                    }
+                    if crate::cards::ghost_pill(ui, "Delete") {
+                        self.board_view.confirm = Some(ArchivedDelete::One(id.clone()));
+                    }
+                }
+            });
+        }
+    }
+
+    /// The sweep archived cards: say so in the bell, with Undo.
+    pub(super) fn note_board_sweep(&mut self, report: &grokhub_core::SweepReport) {
+        let Some(text) = sweep_notice_text(report) else {
+            return;
+        };
+        let ids: Vec<String> = report
+            .archived_done
+            .iter()
+            .chain(&report.archived_idle)
+            .cloned()
+            .collect();
+        self.notify(
+            super::notices::NoticeKind::Info,
+            text,
+            Some(super::notices::NoticeAction::RestoreCards(ids)),
+        );
+    }
+
+    /// Open one card on the Workboard (from the bell or an Activity row).
+    pub(super) fn open_board_card(&mut self, id: &str) {
+        if !self.board.iter().any(|c| c.id == id) {
+            self.status = "That card is gone".into();
+            return;
+        }
+        self.select_main_nav("workboard");
+        self.board_view.open = Some(id.to_string());
+    }
+
     /// Everything that is not talking to the agent.
     fn board_card_menu(
         &mut self,
@@ -682,6 +1449,15 @@ impl Cabin {
         } else if card.status != BoardStatus::Done && ui.button("Work on it").clicked() {
             chosen = Some(BoardAct::Work(id.clone()));
         }
+        if card_can_resume(card) {
+            if ui.button("Resume").clicked() {
+                chosen = Some(BoardAct::Resume(id.clone()));
+            }
+            if ui.button("Hand back").clicked() {
+                chosen = Some(BoardAct::HandBack(id.clone()));
+            }
+        }
+        self.board_triage_menu(ui, card, &mut chosen);
         let notes_label = if card.notes.trim().is_empty() {
             "Add notes"
         } else {
@@ -767,6 +1543,7 @@ impl Cabin {
             views.extend(visible_chat_refs([("assistant", turn.as_str())]));
         }
         let mut act = ChatBlockAct::None;
+        let mut delete_view: Option<usize> = None;
         egui::ScrollArea::vertical()
             .id_salt(("board-chat", thread_id))
             .stick_to_bottom(true)
@@ -799,8 +1576,10 @@ impl Cabin {
                     if view.kind == ChatKind::Thought && painted.thought_fold != fold {
                         write_thought_fold(ui.ctx(), fold_id, painted.thought_fold);
                     }
-                    if !matches!(painted.act, ChatBlockAct::None) {
-                        act = painted.act;
+                    match painted.act {
+                        ChatBlockAct::None => {}
+                        ChatBlockAct::Delete => delete_view = Some(i),
+                        other => act = other,
                     }
                     if painted.drawn {
                         ui.add_space(grokhub_core::CHAT_BLOCK_GAP);
@@ -830,7 +1609,10 @@ impl Cabin {
                 ui.memory_mut(|m| m.request_focus(board_chat_edit_id(card_id)));
             }
             ChatBlockAct::SaveDiagnostics(_) => {}
-            ChatBlockAct::None => {}
+            ChatBlockAct::Delete | ChatBlockAct::None => {}
+        }
+        if let Some(view) = delete_view {
+            self.ask_delete_bubble_in(thread_id, &views, view);
         }
     }
 
@@ -943,6 +1725,7 @@ impl Cabin {
         } else {
             text.trim().to_string()
         };
+        self.work_resume.follow = None;
         // Notes and a Follow up card's newest report go with this message, once each.
         self.card_notes_follow = grokhub_core::take_card_notes_block(&mut self.board, &thread_id);
         self.bg.results_follow = None;
@@ -971,6 +1754,9 @@ impl Cabin {
         }
         if v.note.as_ref().is_some_and(|(n, _)| n == id) {
             v.note = None;
+        }
+        if v.log.as_ref().is_some_and(|(n, _)| n == id) {
+            v.log = None;
         }
         if self.board_edit.as_deref() == Some(id) {
             self.board_edit = None;
