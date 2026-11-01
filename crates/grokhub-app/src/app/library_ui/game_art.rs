@@ -128,7 +128,8 @@ pub(in crate::app) enum NetArt {
     Unreachable,
 }
 
-/// One cover from Steam's store CDN, kept on disk when it decodes.
+/// One cover from Steam's store CDN, kept on disk when it decodes: the plain
+/// names for both shapes, then the hashed header the store details name.
 pub(in crate::app) fn resolve_net(
     app_id: u32,
     kind: CoverKind,
@@ -149,6 +150,30 @@ pub(in crate::app) fn resolve_net(
             Fetched::NotFound => {}
             Fetched::Failed => unreachable = true,
         }
+    }
+    if unreachable {
+        return NetArt::Unreachable;
+    }
+    // Newer games keep their art under hashed paths the plain names miss;
+    // the store's details name them (header shape only).
+    match fetch(&steam::store_details_url(app_id)) {
+        Fetched::Bytes(details) => {
+            for url in steam::store_art_urls(&details, app_id) {
+                match fetch(&url) {
+                    Fetched::Bytes(bytes) => {
+                        if let Ok(img) = image::load_from_memory(&bytes) {
+                            keep(config_dir, app_id, CoverKind::Wide, &bytes);
+                            let _ = std::fs::remove_file(miss_path(config_dir, app_id, kind));
+                            return NetArt::Found(img, CoverKind::Wide);
+                        }
+                    }
+                    Fetched::NotFound => {}
+                    Fetched::Failed => unreachable = true,
+                }
+            }
+        }
+        Fetched::NotFound => {}
+        Fetched::Failed => unreachable = true,
     }
     if unreachable {
         return NetArt::Unreachable;
@@ -596,6 +621,62 @@ mod tests {
     }
 
     #[test]
+    fn a_game_with_only_hashed_store_art_still_gets_its_header() {
+        let cfg = temp("hashed");
+        let hashed = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2001/9a8b/header.jpg?t=5";
+        let mut asked = Vec::new();
+        let got = resolve_art(2001, CoverKind::Tall, None, &cfg, &mut |url| {
+            asked.push(url.to_string());
+            if url.contains("appdetails") {
+                bytes(
+                    format!(
+                        r#"{{"2001":{{"success":true,"data":{{"header_image":"{hashed}"}}}}}}"#
+                    )
+                    .into_bytes(),
+                )
+            } else if url == hashed {
+                bytes(jpeg())
+            } else {
+                Fetched::NotFound
+            }
+        });
+        assert_eq!(got, Some(CoverKind::Wide));
+        assert_eq!(
+            asked.len(),
+            4,
+            "tall, header, store details, hashed header: {asked:?}"
+        );
+        assert!(art_path(&cfg, 2001, CoverKind::Wide).is_file());
+        assert!(!miss_path(&cfg, 2001, CoverKind::Tall).exists());
+        // Kept: the next launch reads it from disk.
+        let got = resolve_art(2001, CoverKind::Tall, None, &cfg, &mut |_| {
+            panic!("no network once the hashed header is kept")
+        });
+        assert_eq!(got, Some(CoverKind::Wide));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn store_details_never_send_the_fetch_off_steams_image_hosts() {
+        let cfg = temp("details-odd");
+        let mut asked = Vec::new();
+        let got = resolve_art(2002, CoverKind::Wide, None, &cfg, &mut |url| {
+            asked.push(url.to_string());
+            if url.contains("appdetails") {
+                bytes(br#"{"2002":{"success":true,"data":{"header_image":"https://tracker.example/h.jpg"}}}"#.to_vec())
+            } else {
+                Fetched::NotFound
+            }
+        });
+        assert!(got.is_none());
+        assert_eq!(asked.len(), 3, "{asked:?}");
+        assert!(asked.iter().all(|u| !u.contains("tracker.example")));
+        // Nothing anywhere: noted, so the next launches skip it for a week.
+        assert!(miss_path(&cfg, 2002, CoverKind::Wide).exists());
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
     fn offline_or_bad_art_falls_back_to_the_painted_cover() {
         let cfg = temp("offline");
         let mut tried = 0;
@@ -627,12 +708,12 @@ mod tests {
             resolve_art(9, CoverKind::Tall, None, &cfg, &mut fetch),
             None
         );
-        assert_eq!(calls.get(), 2);
+        assert_eq!(calls.get(), 3, "tall, header, store details");
         assert_eq!(
             resolve_art(9, CoverKind::Tall, None, &cfg, &mut fetch),
             None
         );
-        assert_eq!(calls.get(), 2, "a fresh miss is not asked again");
+        assert_eq!(calls.get(), 3, "a fresh miss is not asked again");
         let eight_days = now_secs() - 8 * 24 * 60 * 60;
         std::fs::write(miss_path(&cfg, 9, CoverKind::Tall), eight_days.to_string()).unwrap();
         let got = resolve_art(9, CoverKind::Tall, None, &cfg, &mut |_| bytes(jpeg()));

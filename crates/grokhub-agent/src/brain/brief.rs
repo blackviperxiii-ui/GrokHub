@@ -1,5 +1,6 @@
-//! The Brief: plain rules on the ask, and one fast-model call only when the
-//! rules can't tell. The ask's text is read here and never stored: a Brief
+//! The Brief: plain rules on the ask, then a local scorer (`local_sort`) when
+//! the rules can't tell, and one fast-model call only when that scorer is
+//! unsure and the opt-in fallback is on. The ask's text is read here and never stored: a Brief
 //! holds only fixed words (intent, care, mood, domain, and a done list from a
 //! fixed table), so `brain/briefs.jsonl` carries nothing the user typed.
 
@@ -101,8 +102,14 @@ pub struct Brief {
     /// `system`, `code`, `files`, `desktop`, `web`, `media`, `gaming`,
     /// `game-help`, `loadout`, `library`, `planning` or `general`.
     pub domain: String,
-    /// `rules`, `model`, or `default` (unclear and no model call).
+    /// `rules`, `local` (the in-process scorer), `model`, or `default`
+    /// (unclear and no model call).
     pub by: String,
+    /// 0..=100: how sure the in-process sort is. The rules are 100; otherwise
+    /// it is the local scorer's lead over its runner-up, kept on a `model` or
+    /// `default` Brief too so a reader can see the guess was weak.
+    #[serde(default)]
+    pub confidence: u8,
 }
 
 impl Brief {
@@ -495,7 +502,7 @@ fn is_plan_day(t: &str) -> bool {
     any_phrase(t, PLAN_DAY_PHRASES)
 }
 
-fn words(t: &str) -> Vec<&str> {
+pub(super) fn words(t: &str) -> Vec<&str> {
     t.split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
         .collect()
@@ -778,14 +785,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     } else {
         return None;
     };
-    let destructive = any_word(&ws, DESTRUCTIVE_WORDS) || t.contains("rm -rf");
-    let care = if system || intent == Intent::Repair || (destructive && intent == Intent::Task) {
-        Care::Critical
-    } else if matches!(intent, Intent::Task | Intent::Research) {
-        Care::Careful
-    } else {
-        Care::Casual
-    };
+    let care = care_for(intent, system, destructive(&t, &ws), false);
     let domain = domain_of(&t, &ws, input, intent, system);
     Some(Brief {
         intent,
@@ -794,8 +794,31 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         done: done_for(intent, domain),
         domain: domain.into(),
         by: "rules".into(),
+        confidence: 100,
     })
 }
+
+fn destructive(t: &str, ws: &[&str]) -> bool {
+    any_word(ws, DESTRUCTIVE_WORDS) || t.contains("rm -rf")
+}
+
+/// How careful the run must be, on every path. A system change or a repair is
+/// critical, and so is a destructive word on a task. When the intent is only
+/// `guessed` (local scorer, model or default), a destructive word is critical
+/// whatever the guess, since the guess may be wrong.
+fn care_for(intent: Intent, system: bool, destructive: bool, guessed: bool) -> Care {
+    if system || intent == Intent::Repair || (destructive && (guessed || intent == Intent::Task)) {
+        Care::Critical
+    } else if matches!(intent, Intent::Task | Intent::Research) {
+        Care::Careful
+    } else {
+        Care::Casual
+    }
+}
+
+/// The local scorer leads its runner-up by at least this much before its
+/// guess is the Brief; under it the model (if on) or the default decides.
+const LOCAL_SURE: u8 = 60;
 
 /// The model's one-line JSON, checked word by word. Anything off is `None`.
 fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
@@ -818,17 +841,41 @@ fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
     Some((intent, care, mood, domain))
 }
 
-/// Rules first. When they can't tell and `ask` is given, one call to it with
-/// [`BRIEF_PROMPT`] decides; a bad or failed answer gives the default Brief.
-/// The rules always catch a system change, so the model never rates one.
+/// Rules first, then the local scorer. When neither is sure and `ask` is
+/// given (the opt-in model fallback), one call to it with [`BRIEF_PROMPT`]
+/// decides; a bad or failed answer, or no `ask`, gives the default Brief.
+/// The rules always catch a system change, so neither the scorer nor the
+/// model ever rates one.
 pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
     if let Some(b) = rules(input) {
         return b;
     }
+    let t = input.text.trim().to_lowercase();
+    let ws = words(&t);
+    let destructive = destructive(&t, &ws);
+    let sorted = super::local_sort::sort(&t);
+    let confidence = sorted.map_or(0, |s| s.confidence);
+    if let Some(s) = sorted.filter(|s| s.confidence >= LOCAL_SURE) {
+        let domain = match domain_of(&t, &ws, input, s.intent, false) {
+            "general" => s.domain,
+            named => named,
+        };
+        return Brief {
+            intent: s.intent,
+            care: care_for(s.intent, false, destructive, true),
+            mood: mood_of(input.text, &ws).into(),
+            done: done_for(s.intent, domain),
+            domain: domain.into(),
+            by: "local".into(),
+            confidence,
+        };
+    }
     let fallback = || Brief {
+        care: care_for(Intent::Chat, false, destructive, true),
         mood: "calm".into(),
         domain: "general".into(),
         by: "default".into(),
+        confidence,
         ..Default::default()
     };
     let Some(ask) = ask else {
@@ -840,11 +887,13 @@ pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
     };
     Brief {
         intent,
-        care,
+        // The model may rate higher than the rules would, never lower.
+        care: care.max(care_for(intent, false, destructive, true)),
         mood,
         done: done_for(intent, &domain),
         domain,
         by: "model".into(),
+        confidence,
     }
 }
 
@@ -1393,14 +1442,9 @@ mod tests {
                     .to_string(),
             )
         };
-        let b = classify(
-            &input("the thing from yesterday, the spreadsheet one"),
-            Some(&mut ask),
-        );
-        assert_eq!(
-            calls,
-            vec!["the thing from yesterday, the spreadsheet one".to_string()]
-        );
+        // Nothing the rules or the local scorer know: the fallback is asked once.
+        let b = classify(&input("zxq blorp"), Some(&mut ask));
+        assert_eq!(calls, vec!["zxq blorp".to_string()]);
         assert_eq!(
             b,
             Brief {
@@ -1410,6 +1454,18 @@ mod tests {
                 done: vec!["files in place".into(), "nothing lost".into()],
                 domain: "files".into(),
                 by: "model".into(),
+                confidence: 18,
+            }
+        );
+        // Fallback off: the same ask gets the default Brief, with no call to make.
+        assert_eq!(
+            classify(&input("zxq blorp"), None),
+            Brief {
+                mood: "calm".into(),
+                domain: "general".into(),
+                by: "default".into(),
+                confidence: 18,
+                ..Default::default()
             }
         );
 
@@ -1420,16 +1476,125 @@ mod tests {
         };
         assert_eq!(classify(&input("hello"), Some(&mut count)).by, "rules");
         assert_eq!(n.get(), 0);
-        let bad = classify(&input("the thing from yesterday"), Some(&mut count));
+        // The rules can't tell, but the local scorer is sure: still no call.
+        assert_eq!(
+            classify(
+                &input("the thing from yesterday, the spreadsheet one"),
+                Some(&mut count)
+            ),
+            Brief {
+                intent: Intent::Task,
+                care: Care::Careful,
+                mood: "calm".into(),
+                done: vec!["files in place".into(), "nothing lost".into()],
+                domain: "files".into(),
+                by: "local".into(),
+                confidence: 100,
+            }
+        );
+        assert_eq!(n.get(), 0);
+        let bad = classify(&input("zxq blorp"), Some(&mut count));
         assert_eq!(n.get(), 1);
         assert_eq!(short(&bad), (Intent::Chat, Care::Casual, "general", "calm"));
         assert_eq!(bad.by, "default");
-        let none = classify(&input("the thing from yesterday"), None);
-        assert_eq!((none.intent, none.by.as_str()), (Intent::Chat, "default"));
         let mut fail = |_: &str| Err::<String, _>("offline".to_string());
+        assert_eq!(classify(&input("zxq blorp"), Some(&mut fail)).by, "default");
+    }
+
+    #[test]
+    fn a_destructive_word_is_critical_on_every_guessed_path() {
+        // Local: the scorer's guess, raised to critical by the word.
+        let wipe = classify(&input("wipe the old usb stick"), None);
+        assert_eq!((wipe.by.as_str(), wipe.care), ("local", Care::Critical));
+        // Model: a casual chat rating never lowers it.
+        let mut casual = |_: &str| {
+            Ok::<_, String>(
+                r#"{"intent":"chat","care":"casual","mood":"calm","domain":"general"}"#.to_string(),
+            )
+        };
+        let model = classify(&input("zxq bank blorp"), Some(&mut casual));
         assert_eq!(
-            classify(&input("the thing from yesterday"), Some(&mut fail)).by,
-            "default"
+            (model.by.as_str(), model.intent, model.care),
+            ("model", Intent::Chat, Care::Critical)
+        );
+        // Default: no model, still critical.
+        let none = classify(&input("zxq bank blorp"), None);
+        assert_eq!((none.by.as_str(), none.care), ("default", Care::Critical));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Unclear {
+        text: String,
+        intent: String,
+        care: String,
+    }
+
+    fn unclear_set() -> Vec<Unclear> {
+        include_str!("../../tests/fixtures/brief_unclear.jsonl")
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}")))
+            .collect()
+    }
+
+    #[test]
+    fn local_sort_matches_unclear_set() {
+        let set = unclear_set();
+        assert_eq!(set.len(), 60);
+        let examples: Vec<&str> = super::super::local_sort::EXEMPLARS
+            .iter()
+            .flat_map(|(_, _, texts)| texts.iter().copied())
+            .collect();
+        assert_eq!(examples.len(), 124);
+        let mut right = 0;
+        let mut misses = Vec::new();
+        let mut critical_misses = Vec::new();
+        for case in &set {
+            assert_eq!(
+                rules(&input(&case.text)),
+                None,
+                "{}: rules sorted it",
+                case.text
+            );
+            assert!(
+                !examples.contains(&case.text.as_str()),
+                "{}: also a scorer example",
+                case.text
+            );
+            let want_intent = Intent::parse(&case.intent).unwrap();
+            let want_care = Care::parse(&case.care).unwrap();
+            let b = classify(&input(&case.text), None);
+            if b.intent == want_intent {
+                right += 1;
+            } else {
+                misses.push(case.text.as_str());
+            }
+            if want_care == Care::Critical && b.care != Care::Critical {
+                critical_misses.push(case.text.as_str());
+            }
+        }
+        assert_eq!(critical_misses, Vec::<&str>::new());
+        // Pass bar is 85% (51 of 60); the shipped tables get 56.
+        assert!(
+            right * 100 >= set.len() * 85,
+            "{right}/60, missed {misses:?}"
+        );
+        assert_eq!(right, 56, "missed {misses:?}");
+    }
+
+    #[test]
+    fn a_thousand_unclear_asks_sort_fast() {
+        let set = unclear_set();
+        let _ = classify(&input(&set[0].text), None);
+        let started = std::time::Instant::now();
+        for case in set.iter().cycle().take(1_000) {
+            std::hint::black_box(classify(&input(&case.text), None));
+        }
+        let took = started.elapsed();
+        // Debug bar; about 120 ms measured. Release target is under 50 ms
+        // (about 13 ms measured).
+        assert!(
+            took < std::time::Duration::from_millis(500),
+            "1,000 classify calls took {took:?}"
         );
     }
 
