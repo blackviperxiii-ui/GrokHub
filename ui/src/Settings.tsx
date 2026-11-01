@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
+  getAutostart,
   getSettings,
   saveSettings,
   setApiKey,
+  setAutostart,
+  setNotifications,
+  setSummonHotkey,
   type Capabilities,
   type Settings as Shape,
 } from "./api";
@@ -33,6 +37,12 @@ export const DESKTOP_NOTE =
 export const GENERAL_EMPTY =
   "Nothing here on this device. The model, work folder and approvals are in Defaults.";
 
+/** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
+export const SUMMON_KEYS =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+    ? "⌘+Shift+Space"
+    : "Ctrl+Shift+Space";
+
 /** `goTo`: a section the command palette picked. A new `n` opens it. */
 export function Settings({
   caps,
@@ -46,6 +56,8 @@ export function Settings({
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
+  /** As the OS has it; null until read. */
+  const [autostart, setAutostartShown] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
   const { note, ok, fail, clear } = useNote();
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
@@ -70,6 +82,11 @@ export function Settings({
   useEffect(() => {
     getSettings().then(show, fail);
   }, []);
+
+  useEffect(() => {
+    if (!caps.autostart || caps.remote) return;
+    getAutostart().then(setAutostartShown, fail);
+  }, [caps.autostart, caps.remote]);
 
   // Each section is its own page: it opens at the top, however far the last one was read.
   useEffect(() => {
@@ -98,6 +115,26 @@ export function Settings({
     try {
       show(await saveSettings(model, closeToTray, workspace, approvals, desktopControl));
       ok("Settings saved.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  // These switches apply at once. Only the switch changes, so an unsaved edit
+  // in the form above stays.
+  async function flipAutostart(on: boolean) {
+    try {
+      setAutostartShown(await setAutostart(on));
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function flip(change: () => Promise<Shape>) {
+    try {
+      setSettings(await change());
+      clear();
     } catch (err) {
       fail(err);
     }
@@ -194,17 +231,54 @@ export function Settings({
   );
 
   function general() {
-    if (!caps.desktopControl) return <p className="note">{GENERAL_EMPTY}</p>;
+    const onThisComputer = basics();
+    if (!caps.desktopControl) return onThisComputer ?? <p className="note">{GENERAL_EMPTY}</p>;
     return (
-      <form onSubmit={save}>
-        {caps.desktopControl && (
+      <>
+        <form onSubmit={save}>
           <Toggle checked={desktopControl} onChange={setDesktopControl}>
             Let Grok control the desktop
           </Toggle>
+          {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+          <button type="submit">Save settings</button>
+        </form>
+        {onThisComputer}
+      </>
+    );
+  }
+
+  /** Start at login, the summon hotkey and notifications: desktop only. */
+  function basics() {
+    if (!caps.autostart && !caps.summonHotkey && !caps.notifications) return null;
+    return (
+      <div className="settings-group" role="group" aria-label="On this computer">
+        <h2>On this computer</h2>
+        {caps.autostart && (
+          <Toggle
+            checked={autostart === true}
+            disabled={autostart === null}
+            onChange={(on) => void flipAutostart(on)}
+          >
+            Start {PRODUCT_NAME} when you sign in
+          </Toggle>
         )}
-        {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
-        <button type="submit">Save settings</button>
-      </form>
+        {caps.summonHotkey && (
+          <Toggle
+            checked={loaded.summonHotkey}
+            onChange={(on) => void flip(() => setSummonHotkey(on))}
+          >
+            Bring up {PRODUCT_NAME} from anywhere with {SUMMON_KEYS}
+          </Toggle>
+        )}
+        {caps.notifications && (
+          <Toggle
+            checked={loaded.notifications}
+            onChange={(on) => void flip(() => setNotifications(on))}
+          >
+            Notify me when Grok needs an OK or finishes while {PRODUCT_NAME} is in the background
+          </Toggle>
+        )}
+      </div>
     );
   }
 

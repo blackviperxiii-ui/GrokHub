@@ -5390,6 +5390,23 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             companion.companion_card(at),
             "Deep Rock Galactic",
         ));
+        let mut poe = crate::game_watch_poe::PoeSession::default();
+        poe.character = Some("Testwitch".into());
+        poe.deaths = 2;
+        rows.push((
+            "session_card",
+            crate::game_watch_poe::session_card("Path of Exile", &poe, at),
+            "Path of Exile",
+        ));
+        let mc = crate::game_watch_minecraft::McSession {
+            deaths: 1,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_minecraft::session_card(&mc, at),
+            "Minecraft",
+        ));
         rows.push((
             "recap_card",
             crate::game_watch::recap_card(
@@ -5403,6 +5420,15 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 at,
             ),
             "Counter-Strike 2",
+        ));
+        let elite = crate::game_watch_elite::EliteSession {
+            jumps: 3,
+            ..Default::default()
+        };
+        rows.push((
+            "session_card",
+            crate::game_watch_elite::session_card(&elite, at),
+            "Elite Dangerous",
         ));
         rows
     }

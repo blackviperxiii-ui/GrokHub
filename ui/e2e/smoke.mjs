@@ -219,6 +219,20 @@ async function waitFor(what, fn, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${what}${last ? `: ${last.message}` : ""}`);
 }
 
+// New cards rise in from opacity 0 (styles.css rise-in), and WebDriver reads
+// an invisible element's text as "". Read until the card is visible and says
+// what it should, then return what it said last.
+async function cardText(s, card, ok, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < end) {
+    text = await wd("GET", `${s}/element/${card}/text`);
+    if (ok(text)) break;
+    await sleep(100);
+  }
+  return text;
+}
+
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
@@ -398,7 +412,7 @@ async function connectors(s, config) {
 // For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete takes the first post away. After the post
+// opens in the lightbox. Delete… and its confirm take the first post away. After the post
 // the idea writer adds one idea; its menu holds Let's do it, More like this
 // and Not interested, and More like this is kept for the next run. A click on
 // the seeded idea's row puts its action in the chat box, unsent.
@@ -490,11 +504,20 @@ async function pulse(s, config) {
     value: `${post}//button[@aria-label='More']`,
   });
   await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
+  // The menu's Delete… asks first; the confirm row's Delete takes it away.
   const del = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//button[normalize-space()='Delete']`,
+    value: `${post}//button[@role='menuitem'][normalize-space()='Delete…']`,
   });
   await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
+  const sure = await waitFor("the delete confirm", async () => {
+    const el = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: `${post}//div[contains(@class,'confirm-row')]//button[normalize-space()='Delete']`,
+    });
+    return el.length === 1 ? el[0][ELEMENT] : null;
+  });
+  await wd("POST", `${s}/element/${sure}/click`, {});
   await waitFor("the deleted post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
@@ -676,7 +699,7 @@ async function plan(s, workspace) {
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
   const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
-  const shown = await wd("GET", `${s}/element/${card}/text`);
+  const shown = await cardText(s, card, (t) => t.includes(PLAN_TEXT));
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
   const voiced = mockSeen.find((c) => c.body.includes(PLAN_PROMPT));
@@ -1118,7 +1141,7 @@ async function main() {
       });
       return el[ELEMENT];
     });
-    const asked = await wd("GET", `${s}/element/${card}/text`);
+    const asked = await cardText(s, card, (t) => t.includes("write") && t.includes(NOTE));
     if (!asked.includes("write") || !asked.includes(NOTE)) {
       throw new Error(`permission card said ${JSON.stringify(asked)}`);
     }

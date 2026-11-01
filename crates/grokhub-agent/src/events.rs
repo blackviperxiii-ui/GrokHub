@@ -194,12 +194,9 @@ impl NativeEngine {
             )
     }
 
-    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
-    /// The Brief changes nothing about the run or its reply. It is returned so
-    /// the turn's router can read its intent, care, domain and confidence.
-    fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
-        let recent: Vec<String> = self
-            .history
+    /// The last two user texts in this chat, oldest first, as the Brief reads them.
+    fn recent_user_texts(&self) -> Vec<String> {
+        self.history
             .iter()
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
             .map(|item| {
@@ -211,7 +208,14 @@ impl NativeEngine {
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
-            .collect();
+            .collect()
+    }
+
+    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
+    /// The Brief changes nothing about the run or its reply. It is returned so
+    /// the turn's router can read its intent, care, domain and confidence.
+    fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
+        let recent = self.recent_user_texts();
         let background = self.is_background();
         let input = crate::brain::BriefInput {
             text,
@@ -371,9 +375,9 @@ impl Engine for NativeEngine {
             background: self.is_background(),
             episode: self.episode_seed.is_some(),
         };
-        if let Some(pick) =
-            crate::brain::instant::route(text, &brief, turn, crate::repair::Os::current())
-        {
+        let pick = crate::brain::instant::route(text, &brief, turn, crate::repair::Os::current());
+        let instant = pick.is_some();
+        if let Some(pick) = pick {
             if self.answer_instantly(text, pick, emit) {
                 return Ok(());
             }
@@ -385,6 +389,23 @@ impl Engine for NativeEngine {
         {
             return self.prompt_episode(text, &seed, emit);
         }
+        // LO-48: with "Tidy typos on this computer" on, the on-device model may
+        // fix typos first (at most 300 ms). The model reads the tidied text;
+        // the saved chat keeps what was typed.
+        let typed = text;
+        let tidied = crate::route::cleanup::switched_on()
+            .then(|| {
+                crate::route::cleanup::tidy(&crate::route::cleanup::TidyIn {
+                    text,
+                    brief: &brief,
+                    recent: &self.recent_user_texts(),
+                    image: image.is_some(),
+                    background: self.is_background(),
+                    instant,
+                })
+            })
+            .flatten();
+        let text = tidied.as_deref().unwrap_or(typed);
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
         let input = LoopIn {
@@ -468,9 +489,12 @@ impl Engine for NativeEngine {
                 meter,
             );
         } else {
-            let fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+            let mut fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+            if let Some(sent) = &tidied {
+                crate::route::cleanup::restore_typed(&mut fresh, sent, typed);
+            }
             let _ =
-                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, text);
+                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, typed);
         }
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),

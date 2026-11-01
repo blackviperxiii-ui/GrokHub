@@ -236,7 +236,7 @@ fn add_inner(
         if !command.is_empty() {
             return Err("only an HTTP connection takes a token".into());
         }
-        let message = format!("Token for the {name} connection. It is sealed with your keychain key and never shown to Grok.");
+        let message = format!("Token for the {name} connection. It is sealed with your keychain key and never shown to the model.");
         let token = ask(&message).ok_or("No token was given, so the connection was not added.")?;
         hx::seal_connection_token(&config, &name, &token)?;
         entry.insert("tokenRef".into(), json!(name));
