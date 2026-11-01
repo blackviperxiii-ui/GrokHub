@@ -306,7 +306,13 @@ fn with_no_sign_in_hard_chat_goes_to_the_device_but_prepare_hard_does_not() {
         r.rule_ids
     );
     // prepare:hard still never runs on the device.
-    let r = Router::choose(&ask("prepare:hard", online()), &no_keys, &profiles, &table, 10);
+    let r = Router::choose(
+        &ask("prepare:hard", online()),
+        &no_keys,
+        &profiles,
+        &table,
+        10,
+    );
     assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
     assert!(
         r.rule_ids.contains(&"cost:not_included".into()),

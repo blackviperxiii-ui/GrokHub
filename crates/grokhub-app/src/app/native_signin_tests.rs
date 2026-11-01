@@ -407,7 +407,9 @@ fn signed_out_with_local_ai_ready_starts_the_engine_with_no_bearer() {
     set_local_ready_for_test(Some(true));
     assert!(cabin.chat_ready());
     assert!(cabin.local_only_chat());
-    cabin.ensure_native_engine().expect("engine starts on Local AI");
+    cabin
+        .ensure_native_engine()
+        .expect("engine starts on Local AI");
     let session = cabin
         .acp
         .as_ref()
