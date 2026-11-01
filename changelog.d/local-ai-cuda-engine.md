@@ -1,1 +1,2 @@
 - Settings > Local AI offers a faster engine for NVIDIA GPUs on Windows and Linux (llama.cpp's CUDA build, about 640 to 740 MB with its CUDA runtime). It is never downloaded unasked, and one button switches back to the standard engine.
+- On Windows, the same row offers llama.cpp's ROCm build (about 250 MB) for AMD Radeon RX 5000 cards and newer, and Radeon Pro W6000/W7000. Older Radeons keep the Vulkan engine.

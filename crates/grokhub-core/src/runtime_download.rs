@@ -161,14 +161,37 @@ pub fn variant_for_key(key: &str, backend: &str) -> Option<(Manifest, u32)> {
     ))
 }
 
-/// The CUDA build for this machine when it has an NVIDIA GPU whose driver
-/// is new enough. Never chosen by itself: Settings offers it.
+/// The faster build for this machine, never chosen by itself (Settings
+/// offers it): CUDA when an NVIDIA GPU has a new enough driver, else ROCm
+/// when a discrete AMD card is one the ROCm build targets.
 pub fn faster_engine_for(key: &str, gpus: &[crate::local_profile::Gpu]) -> Option<Manifest> {
     use crate::local_profile::GpuVendor;
-    let (m, min_driver) = variant_for_key(key, "cuda")?;
-    gpus.iter()
-        .any(|g| g.vendor == GpuVendor::Nvidia && driver_major(&g.driver) >= Some(min_driver))
-        .then_some(m)
+    let cuda = variant_for_key(key, "cuda").filter(|(_, min_driver)| {
+        gpus.iter()
+            .any(|g| g.vendor == GpuVendor::Nvidia && driver_major(&g.driver) >= Some(*min_driver))
+    });
+    let rocm = || {
+        variant_for_key(key, "rocm").filter(|_| {
+            gpus.iter()
+                .any(|g| g.vendor == GpuVendor::Amd && !g.integrated && rocm_targets(&g.name))
+        })
+    };
+    cuda.or_else(rocm).map(|(m, _)| m)
+}
+
+/// AMD cards the pinned ROCm build has kernels for: RDNA1 and newer, so
+/// Radeon RX 5000 through 9000 and Radeon Pro W6000/W7000. Polaris (RX 400
+/// and 500) and Vega stay on the Vulkan engine.
+fn rocm_targets(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    let model = |prefix: &str, first: &[u8]| {
+        up.match_indices(prefix).any(|(i, _)| {
+            let rest = up[i + prefix.len()..].trim_start();
+            let digits: Vec<u8> = rest.bytes().take_while(u8::is_ascii_digit).collect();
+            digits.len() == 4 && first.contains(&digits[0])
+        })
+    };
+    model("RX", b"5679") || model("PRO W", b"67")
 }
 
 pub fn faster_engine_for_host(gpus: &[crate::local_profile::Gpu]) -> Option<Manifest> {
@@ -1130,6 +1153,60 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn the_rocm_build_is_offered_only_on_windows_for_a_recent_discrete_radeon() {
+        use crate::local_profile::GpuVendor::*;
+        let amd = |name: &str, integrated: bool| crate::local_profile::Gpu {
+            name: name.into(),
+            integrated,
+            ..gpu(Amd, "32.0.21001.9024")
+        };
+        for name in [
+            "AMD Radeon RX 5700 XT",
+            "AMD Radeon RX 6600",
+            "AMD Radeon RX 7900 XTX",
+            "AMD Radeon RX 9070 XT",
+            "AMD Radeon PRO W7900",
+            "Radeon RX6800",
+        ] {
+            let m = faster_engine_for("windows-x86_64", &[amd(name, false)]).expect(name);
+            assert_eq!(m.variant.as_deref(), Some("rocm"), "{name}");
+            assert!(
+                m.extras.is_empty(),
+                "{name}: the HIP runtime ships in the zip"
+            );
+        }
+        for name in [
+            "AMD Radeon RX 580",
+            "AMD Radeon RX 480",
+            "Radeon RX Vega 64",
+            "AMD Radeon VII",
+            "AMD Radeon 780M Graphics",
+        ] {
+            assert_eq!(
+                faster_engine_for("windows-x86_64", &[amd(name, false)]),
+                None,
+                "{name}"
+            );
+        }
+        // An iGPU shares system RAM, so the standard engine already covers it.
+        assert_eq!(
+            faster_engine_for("windows-x86_64", &[amd("AMD Radeon RX 7600", true)]),
+            None
+        );
+        // Linux's ROCm build needs a system ROCm install, so none is pinned.
+        assert_eq!(
+            faster_engine_for("linux-x86_64", &[amd("AMD Radeon RX 7900 XTX", false)]),
+            None
+        );
+        // With both cards, NVIDIA's CUDA build wins.
+        let both = [amd("AMD Radeon RX 7900 XTX", false), gpu(Nvidia, "560.94")];
+        assert_eq!(
+            faster_engine_for("windows-x86_64", &both).and_then(|m| m.variant),
+            Some("cuda".into())
+        );
     }
 
     fn tmp(label: &str) -> PathBuf {

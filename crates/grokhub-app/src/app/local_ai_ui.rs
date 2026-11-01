@@ -153,22 +153,33 @@ impl RuntimeFetch for HttpRuntimeFetch {
 }
 
 /// The faster-engine row for platform `key`: its note, its button label and
-/// the build the button gets. The CUDA build is offered for an NVIDIA card
-/// with a new enough driver; with it installed, the row offers the way back.
+/// the build the button gets. CUDA is offered for an NVIDIA card with a new
+/// enough driver, ROCm for a recent discrete Radeon; with either installed,
+/// the row offers the way back.
 fn faster_engine_row(
     key: &str,
     installed: Option<&str>,
     gpus: &[grokhub_core::local_profile::Gpu],
 ) -> Option<(String, String, Manifest)> {
     let size = |m: &Manifest| grokhub_core::local_setup::size_label(m.total_size() / MIB);
-    if installed == Some("cuda") {
+    let names = |v: &str| match v {
+        "cuda" => ("CUDA", "NVIDIA"),
+        _ => ("ROCm", "AMD"),
+    };
+    if let Some(v) = installed.filter(|v| matches!(*v, "cuda" | "rocm")) {
         let m = rd::manifest_for_key(key)?;
+        let (build, card) = names(v);
         let label = format!("Use the standard engine ({})", size(&m));
-        return Some(("Engine build: CUDA, for your NVIDIA GPU.".into(), label, m));
+        return Some((
+            format!("Engine build: {build}, for your {card} GPU."),
+            label,
+            m,
+        ));
     }
     let m = rd::faster_engine_for(key, gpus)?;
+    let (build, card) = names(m.variant.as_deref().unwrap_or_default());
     let note = format!(
-        "Faster engine for your NVIDIA GPU: llama.cpp {} CUDA build · {} · from {}",
+        "Faster engine for your {card} GPU: llama.cpp {} {build} build · {} · from {}",
         m.version,
         size(&m),
         m.asset.source_host().unwrap_or("github.com")
@@ -665,6 +676,28 @@ mod tests {
             assert_eq!(back.variant, None);
         }
         assert!(faster_engine_row("macos-aarch64", None, &[card(Nvidia, "560.94")]).is_none());
+    }
+
+    #[test]
+    fn the_faster_engine_is_offered_for_a_recent_radeon_on_windows() {
+        use grokhub_core::local_profile::GpuVendor::Amd;
+        let radeon = grokhub_core::local_profile::Gpu {
+            name: "AMD Radeon RX 7800 XT".into(),
+            ..card(Amd, "32.0.21001.9024")
+        };
+        let (note, _, m) =
+            faster_engine_row("windows-x86_64", None, std::slice::from_ref(&radeon)).unwrap();
+        assert!(
+            note.starts_with("Faster engine for your AMD GPU: llama.cpp "),
+            "{note}"
+        );
+        assert!(note.contains(" ROCm build "), "{note}");
+        assert_eq!(m.variant.as_deref(), Some("rocm"));
+        assert!(faster_engine_row("linux-x86_64", None, &[radeon]).is_none());
+        let (note, label, back) = faster_engine_row("windows-x86_64", Some("rocm"), &[]).unwrap();
+        assert_eq!(note, "Engine build: ROCm, for your AMD GPU.");
+        assert!(label.starts_with("Use the standard engine ("), "{label}");
+        assert_eq!(back.variant, None);
     }
 
     #[test]
