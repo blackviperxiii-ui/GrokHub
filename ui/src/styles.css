@@ -2108,6 +2108,7 @@ label.toggle-row {
   .tabs {
     justify-content: space-between;
   }
+}
 
 /* Workboard: the cabin's kanban, one column each, side by side when there
    is room and stacked on a phone. */

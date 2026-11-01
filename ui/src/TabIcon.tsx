@@ -10,6 +10,7 @@ const PATHS: Record<View, string> = {
   memory: "M12 4c-4 0-7 1.3-7 3v10c0 1.7 3 3 7 3s7-1.3 7-3V7c0-1.7-3-3-7-3zM5 7c0 1.7 3 3 7 3s7-1.3 7-3M5 12c0 1.7 3 3 7 3s7-1.3 7-3",
   connectors: "M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5",
   settings: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+  workboard: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
 };
 
 export function TabIcon({ view }: { view: View }) {
