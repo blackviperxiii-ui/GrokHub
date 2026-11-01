@@ -599,6 +599,15 @@ mod tests {
         let closed = chip_labels(&mut cabin);
         assert!(closed.iter().any(|l| l == "How'd Hades go?"), "{closed:?}");
         assert!(closed.iter().all(|l| !l.starts_with("Fix stutter")));
+        cabin.focus.game.watch.current = Some(7);
+        cabin.focus.game.ended = None;
+        chip_labels(&mut cabin);
+        let home: Vec<&str> = cabin.home_chips.iter().map(|c| c.label.as_str()).collect();
+        assert!(
+            home.contains(&"Fix stutter in Hades"),
+            "Home offers the game fix too: {home:?}"
+        );
+        cabin.focus.game.watch.current = None;
         cabin.focus.game.ended = Some((game(7, "Hades"), now_ms() - NOTE_OFFER_MS - 1));
         let later = chip_labels(&mut cabin);
         assert!(later.iter().all(|l| !l.contains("Hades")), "{later:?}");

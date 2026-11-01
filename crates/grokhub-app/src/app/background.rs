@@ -788,18 +788,12 @@ impl Cabin {
             .filter(|(_, r)| r.thread_id == vis && r.origin != BgOrigin::Scheduled)
             .map(|(i, _)| i)
             .collect();
-        let elsewhere = self
-            .bg
-            .runs
-            .iter()
-            .filter(|r| r.thread_id != vis && r.live() && r.origin != BgOrigin::Scheduled)
-            .count();
         let queued = if self.running {
             self.followup_queue.len()
         } else {
             0
         };
-        if !typing && here.is_empty() && elsewhere == 0 && queued == 0 {
+        if !typing && here.is_empty() && queued == 0 {
             return;
         }
         let steerable = self.can_steer_live_turn();
@@ -868,17 +862,9 @@ impl Cabin {
                     }
                 });
             }
-            if elsewhere > 0 {
-                let s = if elsewhere == 1 {
-                    "1 background task running in another chat".to_string()
-                } else {
-                    format!("{elsewhere} background tasks running in other chats")
-                };
-                meta(ui, &s, crate::theme::subtle());
-            }
         });
         ui.add_space(4.0);
-        if !here.is_empty() || elsewhere > 0 {
+        if !here.is_empty() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(500));
         }

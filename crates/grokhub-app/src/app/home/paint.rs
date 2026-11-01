@@ -49,6 +49,8 @@ pub(super) fn paint_module(
         "game_mode" => paint_game_mode(cabin, ui, size, &mut actions),
         "connection" => paint_connection(ui, size, &mut actions),
         "updates" => paint_updates(cabin, ui, size, &mut actions),
+        "speeds" => paint_speeds(cabin, ui, size, &mut actions),
+        "frame_rate" => paint_frame_rate(ui, size),
         "workboard" => paint_nav_stub(ui, size, name, "Open Workboard", "workboard", &mut actions),
         "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
         _ if data == DataStatus::New => coming_soon_card(ui, name, purpose),
@@ -788,6 +790,117 @@ fn paint_updates(
     if card_clicked(ui, &resp, "home-updates", "Loadout updates") {
         actions.push(ModuleAction::Settings(SettingsSec::Update));
     }
+}
+
+/// The Speeds tile in words, from the opt-in internet log. Nothing is
+/// measured for Home itself: ping comes from the log's once-a-minute check,
+/// download speed only from a test someone tapped.
+pub(super) fn speeds_text(f: &super::super::net_log_ui::NetTileFacts, now: u64) -> TileText {
+    if !f.on {
+        return TileText {
+            big: "Off".into(),
+            caption: "Turn on the internet log to see ping".into(),
+            detail: Some("Nothing is sent until you do".into()),
+            tone: Tone::Quiet,
+        };
+    }
+    if f.down {
+        return TileText {
+            big: "Offline".into(),
+            caption: "Neither public DNS server answered".into(),
+            detail: None,
+            tone: Tone::Alert,
+        };
+    }
+    let (big, tone) = match f.ping_ms {
+        Some(ms) => (
+            format!("{ms} ms"),
+            if ms >= grokhub_core::net_log::SLOW_MS {
+                Tone::Warn
+            } else {
+                Tone::Normal
+            },
+        ),
+        None => ("—".into(), Tone::Quiet),
+    };
+    let caption = match (f.ping_ms, f.jitter_ms) {
+        (Some(_), Some(j)) => format!("Ping · jitter {j} ms"),
+        (Some(_), None) => "Ping".into(),
+        _ => "First check within a minute".into(),
+    };
+    let detail = if f.testing {
+        Some("Testing download speed…".into())
+    } else {
+        f.last_speed.map(|(mbps, at)| {
+            format!(
+                "Down {mbps} Mbps · {}",
+                grokhub_core::pulse::ago_label(at, now)
+            )
+        })
+    };
+    TileText {
+        big,
+        caption,
+        detail,
+        tone,
+    }
+}
+
+fn paint_speeds(
+    cabin: &mut Cabin,
+    ui: &mut egui::Ui,
+    size: ModuleSize,
+    actions: &mut Vec<ModuleAction>,
+) {
+    let f = cabin.net_tile_facts();
+    let t = speeds_text(&f, now_ms());
+    let mut test = false;
+    let resp = card(ui, |ui| {
+        header(ui, false, "Speeds", "", crate::theme::fg());
+        paint_tile_text(ui, &t, size);
+        if size != ModuleSize::Small {
+            if !f.on {
+                if crate::cards::ghost_pill(ui, "Turn on in Settings") {
+                    actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+                }
+            } else if !f.testing && !f.down && crate::cards::ghost_pill(ui, "Test speed") {
+                test = true;
+            }
+        }
+    });
+    if test {
+        cabin.start_speed_test();
+    }
+    if card_clicked(ui, &resp, "home-speeds", "Internet log settings") {
+        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+    }
+}
+
+/// The Frame Rate tile says plainly why there is no number yet. Reading FPS
+/// from a running game means hooking or injecting into it, which is what
+/// anti-cheat flags, so Loadout doesn't.
+pub(super) fn frame_rate_text(windows: bool) -> TileText {
+    TileText {
+        big: "Not read".into(),
+        caption: "Loadout never hooks into games".into(),
+        detail: Some(if windows {
+            "Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely".into()
+        } else {
+            "Steam's in-game FPS counter shows it safely".into()
+        }),
+        tone: Tone::Quiet,
+    }
+}
+
+fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
+    let t = frame_rate_text(cfg!(windows));
+    card(ui, |ui| {
+        header(ui, false, "Frame Rate", "", crate::theme::muted());
+        paint_tile_text(ui, &t, size);
+    })
+    .on_hover_text(
+        "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone.",
+    );
 }
 
 fn paint_game_mode(

@@ -1,0 +1,1 @@
+- Internal: a shared HTTP client module (`grokhub_core::http`) now builds the agents for the MCP registry refresh, the plugin marketplace index, the local model health and `/props` checks, store art and the update check. No app behavior change.

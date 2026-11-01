@@ -146,6 +146,8 @@ impl Cabin {
                         let _ = self.paint_session_actions_menu(ui);
                         // Activity Dock left of the session menu (every view).
                         self.ui_activity_dock(ui);
+                        // Bell just left of Activity (RTL).
+                        self.ui_notice_bell(ui);
                         if !loadout {
                             self.paint_personality_switch(ui);
                         }

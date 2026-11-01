@@ -1253,7 +1253,10 @@ fn emit(
         },
         name: call.name.clone(),
         status: status.into(),
-        detail: detail.chars().take(180).collect(),
+        detail: crate::tools::fence::display_text(detail)
+            .chars()
+            .take(180)
+            .collect(),
         image,
     });
 }

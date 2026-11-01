@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 
 use crate::gate::{self, Decision, Gate, PermMode};
 use crate::perm::{self, Action, Policy};
-use crate::tools::ToolOutput;
+use crate::tools::{fence, ToolOutput};
 
 use config::TransportDef;
 use rpc::RawTool;
@@ -804,25 +804,36 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     let mut inner = lock_slot(&slot);
     let timeout = inner.def.tool_timeout;
     let Some(conn) = inner.conn.as_mut() else {
-        let err = inner
-            .last_error
-            .clone()
-            .unwrap_or_else(|| format!("MCP server `{}` stopped", rec.server));
-        return ToolOutput::err(err);
+        return match inner.last_error.as_deref() {
+            Some(err) => fenced_error(err),
+            None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+        };
     };
     match conn.call(&rec.raw, args, timeout, stop) {
-        Ok((text, true)) => ToolOutput::err(text),
-        Ok((text, false)) => ToolOutput::ok(crate::tools::fence::fence("mcp", &text)),
+        Ok((text, true)) => fenced_error(&text),
+        Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
         Err(err) => {
             inner.conn.take();
             inner.last_error = Some(clip_err(&err));
             // An expired sign-in: the next use reconnects, refreshing the token.
+            // Checked on the raw text, before it is fenced.
             if http::is_unauthorized(&err) {
                 inner.tried = false;
             }
-            ToolOutput::err(err)
+            fenced_error(&err)
         }
     }
+}
+
+/// A failed MCP call for the model. The text can be the server's own words
+/// (an `isError` result, a JSON-RPC error message, a saved error), so it goes
+/// inside the untrusted fence behind a trusted lead, like a successful result.
+fn fenced_error(text: &str) -> ToolOutput {
+    ToolOutput::err(format!(
+        "{}\n{}",
+        fence::ERROR_LEAD,
+        fence::fence("mcp", text)
+    ))
 }
 
 /// `Title: description (server hint: …)` for the model, the description

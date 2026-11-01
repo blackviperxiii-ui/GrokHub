@@ -381,11 +381,12 @@ pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
     )?;
     // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
     // on the target (same as web_fetch / Pulse).
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
-        .redirects(0)
-        .resolver(crate::public_only_resolve)
-        .build();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        overall: Some(Duration::from_secs(20)),
+        redirects: 0,
+        public_only: true,
+        ..Default::default()
+    });
     let response = agent
         .get(url)
         .call()
@@ -2538,8 +2539,9 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("pub fn load_marketplace_file(").next())
             .expect("fetch_marketplace");
+        // `public_only` dials through public_only_resolve (grokhub_core::http tests).
         assert!(
-            arm.contains(".resolver(crate::public_only_resolve)"),
+            arm.contains("grokhub_core::http::agent(") && arm.contains("public_only: true"),
             "marketplace index must dial through public_only_resolve: {arm}"
         );
         assert!(

@@ -24,6 +24,8 @@ pub(super) enum ActivityStatus {
 pub(super) enum ActivityKind {
     Chat,
     Routine,
+    /// A `/bg` run you started; key `bg:{run id}`.
+    Background,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +147,19 @@ pub(super) fn routine_finished(item: ActivityItem, ok: bool, text: &str, now: u6
         at: now,
         ..item
     }
+}
+
+/// The chat an item opens: `chat:{id}` items name it, a background run's
+/// item finds its run.
+fn item_chat_id(runs: &[super::background::BgRun], item: &ActivityItem) -> String {
+    if let Some(id) = item.key.strip_prefix("chat:") {
+        return id.to_string();
+    }
+    item.key
+        .strip_prefix("bg:")
+        .and_then(|id| runs.iter().find(|r| r.id.to_string() == id))
+        .map(|r| r.thread_id.clone())
+        .unwrap_or_default()
 }
 
 fn upsert(map: &mut HashMap<String, ActivityItem>, item: ActivityItem) {
@@ -318,6 +333,36 @@ impl Cabin {
         }
 
         for run in &self.bg.runs {
+            if run.origin == BgOrigin::Scheduled {
+                continue;
+            }
+            let key = format!("bg:{}", run.id);
+            let item = |status, detail| ActivityItem {
+                key: key.clone(),
+                kind: ActivityKind::Background,
+                title: run.title.clone(),
+                status,
+                detail,
+                steps: 0,
+                at: now,
+            };
+            match &run.end {
+                None => {
+                    let detail = if !run.action.is_empty() {
+                        clip(&run.action)
+                    } else {
+                        "Running now…".into()
+                    };
+                    upsert(&mut map, item(ActivityStatus::Running, detail));
+                }
+                Some(grokhub_core::BgEnd::Failed(why)) => {
+                    upsert(&mut map, item(ActivityStatus::Failed, clip(why)));
+                }
+                Some(grokhub_core::BgEnd::Done | grokhub_core::BgEnd::Stopped) => {}
+            }
+        }
+
+        for run in &self.bg.runs {
             if run.origin != BgOrigin::Scheduled {
                 continue;
             }
@@ -379,12 +424,17 @@ impl Cabin {
         }
     }
 
+    /// A decision waits and the Activity chip already counts it.
+    pub(super) fn activity_shows_waiting(&self) -> bool {
+        self.activity_items()
+            .iter()
+            .any(|i| i.status == ActivityStatus::Waiting)
+    }
+
+    /// Always drawn, so nothing left of it moves when work starts. Empty is a
+    /// quiet "Activity" with no dot.
     pub(super) fn ui_activity_dock(&mut self, ui: &mut egui::Ui) {
         let items = self.activity_items();
-        if items.is_empty() {
-            self.activity.open = false;
-            return;
-        }
         let waiting = items.iter().any(|i| i.status == ActivityStatus::Waiting);
         let summary = dock_summary(&items);
         let loadout = crate::theme::is_loadout_paint();
@@ -414,6 +464,7 @@ impl Cabin {
                 .corner_radius(crate::ui_kit::recipe::BUTTON_RADIUS),
         );
         let top = toggle.rect;
+        let toggle_rect = toggle.rect;
         if toggle.clicked() {
             self.activity.open = !self.activity.open;
         }
@@ -431,10 +482,11 @@ impl Cabin {
         if !self.activity.open {
             return;
         }
+        let total = items.len();
         let listed: Vec<ActivityItem> = items.into_iter().take(DOCK_MAX).collect();
-        let more = self.activity_items().len().saturating_sub(listed.len());
+        let more = total.saturating_sub(listed.len());
         let mut act: Option<(ActivityKind, String, bool)> = None;
-        egui::Area::new(egui::Id::new("activity-dock-list"))
+        let list = egui::Area::new(egui::Id::new("activity-dock-list"))
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(
                 top.right() - 340.0,
@@ -454,6 +506,13 @@ impl Cabin {
                     .show(ui, |ui| {
                         ui.set_width(316.0);
                         ui.spacing_mut().item_spacing.y = 8.0;
+                        if listed.is_empty() {
+                            ui.label(
+                                RichText::new("Nothing running right now")
+                                    .size(11.0)
+                                    .color(crate::theme::muted()),
+                            );
+                        }
                         for (i, item) in listed.iter().enumerate() {
                             if i > 0 {
                                 ui.painter().hline(
@@ -513,6 +572,7 @@ impl Cabin {
                                 (ActivityKind::Chat, ActivityStatus::Waiting) => "Review",
                                 (ActivityKind::Chat, _) => "Open chat",
                                 (ActivityKind::Routine, _) => "Open result",
+                                (ActivityKind::Background, _) => "Open chat",
                             };
                             if ui
                                 .add(
@@ -524,8 +584,7 @@ impl Cabin {
                                 )
                                 .clicked()
                             {
-                                let chat_id =
-                                    item.key.strip_prefix("chat:").unwrap_or("").to_string();
+                                let chat_id = item_chat_id(&self.bg.runs, item);
                                 act = Some((
                                     item.kind,
                                     chat_id,
@@ -542,10 +601,20 @@ impl Cabin {
                         }
                     });
             });
+        let shut = ui.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || (i.pointer.any_pressed()
+                    && i.pointer.interact_pos().is_some_and(|p| {
+                        !list.response.rect.contains(p) && !toggle_rect.contains(p)
+                    }))
+        });
+        if shut {
+            self.activity.open = false;
+        }
         if let Some((kind, chat_id, waiting)) = act {
             self.activity.open = false;
             match kind {
-                ActivityKind::Chat => {
+                ActivityKind::Chat | ActivityKind::Background => {
                     self.select_main_nav("chat");
                     if !chat_id.is_empty() && chat_id != self.visible_thread_id() {
                         if let Some(idx) = self.threads.iter().position(|t| t.id == chat_id) {
@@ -554,6 +623,9 @@ impl Cabin {
                     }
                     if waiting {
                         self.harness.jump = Some("ask");
+                        // The chat no longer prints a count line; open the
+                        // rows when there is more than the one card.
+                        self.harness.inbox_open = self.decisions_waiting() > 1;
                     }
                 }
                 ActivityKind::Routine => {
@@ -667,6 +739,75 @@ mod tests {
         let cabin = Cabin::quiet_for_test();
         assert!(cabin.activity_items().is_empty());
         assert!(!cabin.activity.open);
+    }
+
+    #[test]
+    fn the_chip_is_always_drawn_and_closes_on_esc_and_outside_click() {
+        let src = include_str!("activity_dock.rs").replace("\r\n", "\n");
+        let dock = src
+            .split("pub(super) fn ui_activity_dock(")
+            .nth(1)
+            .and_then(|s| s.split("pub(super) fn seed_activity_dock_for_deck(").next())
+            .expect("dock");
+        assert!(
+            !dock.contains("if items.is_empty() {"),
+            "an empty dock still draws its chip: {dock}"
+        );
+        assert!(dock.contains("Key::Escape") && dock.contains("any_pressed"));
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.activity.open = true;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let mut esc = egui::RawInput::default();
+        esc.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        });
+        let _ = crate::theme::test_pass(&ctx, esc, |ui| cabin.ui_activity_dock(ui));
+        assert!(!cabin.activity.open, "Esc closes the list");
+    }
+
+    #[test]
+    fn a_background_run_you_started_shows_in_activity() {
+        let mut cabin = Cabin::quiet_for_test();
+        let thread_id = cabin.visible_thread_id();
+        cabin.bg.runs.push(super::super::background::BgRun {
+            id: 7,
+            thread_id,
+            title: "tidy the notes".into(),
+            origin: BgOrigin::User,
+            rx: None,
+            say: String::new(),
+            action: "Reading notes.md".into(),
+            started: std::time::Instant::now(),
+            end: None,
+            session: String::new(),
+            resumed: None,
+            fork_hold: false,
+            native_session: None,
+            automation: None,
+        });
+        let shown = cabin.activity_items();
+        let run = &cabin.bg.runs[0];
+        let item = shown
+            .iter()
+            .find(|i| i.kind == ActivityKind::Background)
+            .expect("the run is listed");
+        assert_eq!(item.key, format!("bg:{}", run.id));
+        assert_eq!(item.status, ActivityStatus::Running);
+        assert_eq!(item.detail, "Reading notes.md");
+        assert_eq!(item_chat_id(&cabin.bg.runs, item), run.thread_id);
+        cabin.bg.runs[0].end = Some(grokhub_core::BgEnd::Done);
+        assert!(
+            cabin
+                .activity_items()
+                .iter()
+                .all(|i| i.kind != ActivityKind::Background),
+            "a finished run leaves Activity; its reply posts in the chat"
+        );
     }
 
     #[test]

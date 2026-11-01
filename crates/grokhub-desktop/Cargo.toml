@@ -2,7 +2,7 @@
 name = "grokhub-desktop"
 version.workspace = true
 rust-version.workspace = true
-edition.workspace = true
+edition = "2024"
 license.workspace = true
 description = "Desktop tools behind the hard gate, shared by the cabin and the Tauri shell"
 publish = false

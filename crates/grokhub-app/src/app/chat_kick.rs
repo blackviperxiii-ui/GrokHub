@@ -106,7 +106,7 @@ impl Cabin {
             );
         }
         remember_home_surface(&mut self.chip_memory, "chat", now_ms());
-        if !persist_user_turn(self.agent_ready()) {
+        if !persist_user_turn(self.chat_ready()) {
             self.hands_attach = false;
             self.eyes_attach = false;
             self.speak_next = false;
@@ -207,7 +207,7 @@ impl Cabin {
         // A card from an attempt that never reached Done (error, retry, halt)
         // must not land under this reply.
         self.harness.pending_findings = None;
-        if !self.agent_ready() {
+        if !self.chat_ready() {
             self.running = false;
             self.chat_job_thread = None;
             self.status = self.no_agent_note().into();

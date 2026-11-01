@@ -298,6 +298,15 @@ impl Cabin {
         self.harness.jump = Some(key.card());
     }
 
+    /// Every waiting decision is one Activity lists (asks, approvals,
+    /// parks), so its "N waiting" stands in for the chat's count line. Full
+    /// cards and indexer scope asks are not in Activity and keep the line.
+    pub(super) fn inbox_counted_by_activity(&self) -> bool {
+        self.harness.full_card.is_none()
+            && self.harness.indexer.asks.is_empty()
+            && self.activity_shows_waiting()
+    }
+
     /// The needs-attention line, and the rows under it when open. Nothing
     /// when no decision waits.
     pub(super) fn paint_inbox(&mut self, ui: &mut egui::Ui) {
@@ -307,16 +316,20 @@ impl Cabin {
             return;
         }
         let open = self.harness.inbox_open;
-        let line = egui::Label::new(
-            RichText::new(inbox_line(n))
-                .size(12.0)
-                .color(crate::theme::muted()),
-        )
-        .wrap()
-        .sense(egui::Sense::click());
-        let resp = ui.add(line).on_hover_cursor(egui::CursorIcon::PointingHand);
-        if resp.clicked() {
-            self.harness.inbox_open = !open;
+        // Activity in the titlebar already says "N waiting"; the chat keeps
+        // only the rows (the decisions), opened from Activity's Review.
+        if !self.inbox_counted_by_activity() {
+            let line = egui::Label::new(
+                RichText::new(inbox_line(n))
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            )
+            .wrap()
+            .sense(egui::Sense::click());
+            let resp = ui.add(line).on_hover_cursor(egui::CursorIcon::PointingHand);
+            if resp.clicked() {
+                self.harness.inbox_open = !open;
+            }
         }
         let t = inbox_open_t(ui, self.harness.inbox_open);
         if t <= 0.0 {
