@@ -755,7 +755,7 @@ mod tests {
 
     #[test]
     fn offline_only_refuses_the_internet_with_no_card_and_no_line() {
-        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
         let (d, _g) = dir("offline-only");
         let _on = grokhub_core::offline::force_for_thread(true);
         let refuse = GateOutcome::Refuse { reason: MSG.into() };

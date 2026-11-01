@@ -79,6 +79,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
+    ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
     ("crates/grokhub-app/src/app/gw2_ui.rs", 1, "Guild Wars 2 API: egress_ok"),
     ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
