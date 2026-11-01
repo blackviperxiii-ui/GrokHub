@@ -112,6 +112,8 @@ pub(super) enum ConfirmKind {
     },
     /// The wind-down card's Sleep the PC.
     SleepPc,
+    /// Main tab's Clear chat: Main's whole history goes for good.
+    ClearMainChat,
     /// Legacy Marketplace confirm; CN2 uses the credentials hard card instead.
     #[expect(dead_code)]
     SaveKey {
@@ -130,6 +132,7 @@ impl ConfirmKind {
             | Self::DeleteRecording { .. }
             | Self::Disconnect { .. }
             | Self::SleepPc
+            | Self::ClearMainChat
             | Self::SaveKey { .. } => true,
         }
     }
@@ -201,6 +204,22 @@ pub(super) fn sleep_pc_spec() -> ConfirmSpec {
             "Open windows stay as they are, but save your work first in case the power goes.",
         primary: "Sleep",
         danger: false,
+    }
+}
+
+/// Main tab's right-click item.
+pub(super) const CLEAR_MAIN_LABEL: &str = "Clear chat…";
+
+/// What Clear chat leaves alone, under its warning.
+pub(super) const CLEAR_MAIN_KEEPS: &str =
+    "Your other chats, the Workboard, memory and settings stay as they are.";
+
+pub(super) fn clear_main_chat_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Clear the Main chat?",
+        consequence: "This is permanent. Every message in Main and the history the assistant reads back are deleted from this computer, and they can't be brought back.",
+        primary: "Clear chat",
+        danger: true,
     }
 }
 
@@ -339,6 +358,11 @@ impl Cabin {
                 "Sleep the PC now?".to_string(),
                 String::new(),
             ),
+            ConfirmKind::ClearMainChat => (
+                clear_main_chat_spec(),
+                clear_main_chat_spec().title.to_string(),
+                CLEAR_MAIN_KEEPS.to_string(),
+            ),
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
                 format!("Save the key for {label}?"),
@@ -395,6 +419,7 @@ impl Cabin {
             } => self.delete_recording(&card_id, &dir, &title),
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
             ConfirmKind::SleepPc => self.sleep_pc_confirmed(),
+            ConfirmKind::ClearMainChat => self.clear_main_chat(),
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }

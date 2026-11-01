@@ -1885,3 +1885,107 @@ fn stop_keeps_a_run_streaming_on_another_tab_in_that_tab() {
     assert_eq!(last.0, "assistant");
     assert!(last.1.contains("ranked grind") && last.1.ends_with("*Stopped*"));
 }
+
+fn seed_session(id: &str, text: &str) {
+    let turn = grokhub_agent::InputItem::Message {
+        role: "user".into(),
+        content: vec![grokhub_agent::ContentPart::InputText(text.into())],
+    };
+    grokhub_agent::record_turn(
+        id,
+        "/work",
+        "grok-4.7",
+        &[turn],
+        &grokhub_agent::Usage::default(),
+        "",
+        text,
+    )
+    .expect("seed session");
+}
+
+#[test]
+fn main_tab_clear_chat_asks_first_then_wipes_only_main_for_good() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("clear-main");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    main.messages_mut()
+        .push(("user".into(), "the vault code is kumquat".into()));
+    main.messages_mut()
+        .push(("assistant".into(), "Noted the kumquat".into()));
+    main.grok_session = Some("native-main-now".into());
+    main.retired_sessions = vec!["native-main-old".into()];
+    main.plan_body = "kumquat plan".into();
+    main.native_carry = true;
+    let mut other = crate::threads::ChatThread::new("Pier light", false);
+    other
+        .messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    other.grok_session = Some("native-pier".into());
+    seed_session("native-main-now", "the vault code is kumquat");
+    seed_session("native-main-old", "older kumquat");
+    seed_session("native-pier", "bring the lamp");
+    let bg = grokhub_agent::fork_session("native-main-now").expect("fork");
+    let mut background = crate::threads::ChatThread::new("Background", false);
+    background.background = true;
+    background.retired_sessions = vec![bg.id.clone(), "native-pier".into()];
+    cabin.threads = vec![main, other, background];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    // An older save, as threads.json.bak would hold it after a shrink.
+    crate::threads::save(&cabin.threads).expect("seed save");
+    let saved = cfg.root.join("threads.json");
+    std::fs::copy(&saved, cfg.root.join("threads.json.bak")).expect("seed bak");
+
+    cabin.apply_tab_act(TabAct::ClearMain);
+    assert_eq!(
+        cabin.confirm,
+        Some(super::confirm::ConfirmKind::ClearMainChat),
+        "the right-click item only asks"
+    );
+    assert_eq!(
+        cabin.threads[0].messages.len(),
+        2,
+        "nothing goes before the yes"
+    );
+
+    cabin.confirm = None;
+    cabin.clear_main_chat();
+    join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
+
+    let main = &cabin.threads[0];
+    assert!(main.main && main.title == "Main", "Main stays");
+    assert!(main.messages.is_empty());
+    assert!(
+        main.grok_session.is_none(),
+        "a deleted id stays tombstoned, so Main starts a new one"
+    );
+    assert!(main.retired_sessions.is_empty() && main.plan_body.is_empty() && !main.native_carry);
+    assert_eq!(cabin.status, "Main chat cleared");
+    for gone in ["native-main-now", "native-main-old", bg.id.as_str()] {
+        assert!(
+            !grokhub_agent::session_file(gone).unwrap().exists(),
+            "{gone} must be deleted"
+        );
+    }
+    assert!(grokhub_agent::session_file("native-pier")
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        cabin.threads[1].messages.len(),
+        1,
+        "other chats are untouched"
+    );
+    assert_eq!(
+        cabin.threads[2].retired_sessions,
+        vec!["native-pier".to_string()]
+    );
+    for file in ["threads.json", "threads.json.bak"] {
+        let text = std::fs::read_to_string(cfg.root.join(file)).expect(file);
+        assert!(!text.contains("kumquat"), "{file} still holds Main: {text}");
+        assert!(text.contains("bring the lamp"), "{file} lost another chat");
+    }
+    drop(cfg);
+}

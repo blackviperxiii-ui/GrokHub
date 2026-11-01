@@ -27,6 +27,8 @@ struct Header {
     cwd: String,
     model: String,
     renamed: bool,
+    /// The session this one was forked from (`/bg`, scheduled runs). Empty otherwise.
+    forked_from: String,
 }
 
 /// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
@@ -58,6 +60,8 @@ pub struct SessionInfo {
     pub renamed: bool,
     pub usage: Usage,
     pub meter: String,
+    /// The session this one was forked from. Empty when it wasn't.
+    pub forked_from: String,
     records: Vec<Record>,
 }
 
@@ -486,7 +490,7 @@ pub fn record_usage(
 pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let mut info = load_session(id)?;
     let new_id = format!("native-{}", grokhub_core::uid("n"));
-    info.id = new_id;
+    info.forked_from = std::mem::replace(&mut info.id, new_id);
     info.created = grokhub_core::now_ms();
     write_session(&info)?;
     bump_history();
@@ -515,6 +519,7 @@ pub fn rename_session(id: &str, title: &str) -> Result<(), String> {
                 renamed: true,
                 usage: Usage::default(),
                 meter: String::new(),
+                forked_from: String::new(),
                 records: Vec::new(),
             };
             write_session(&info)?;
@@ -540,6 +545,64 @@ pub fn delete_session(id: &str) -> Result<(), String> {
     crate::tasks::forget_session(&id);
     bump_history();
     Ok(())
+}
+
+/// Delete every saved session forked from one of `ids`, and the forks of
+/// those forks. Returns the ids it deleted. Only the header line of each
+/// file is read.
+pub fn delete_forks_of(ids: &[String]) -> Vec<String> {
+    let mut parents: HashSet<String> = ids.iter().map(|id| id.trim().to_string()).collect();
+    parents.retain(|id| !id.is_empty());
+    let mut deleted = Vec::new();
+    loop {
+        let found: Vec<String> = fork_headers()
+            .into_iter()
+            .filter(|(id, from)| parents.contains(from) && !parents.contains(id))
+            .map(|(id, _)| id)
+            .collect();
+        if found.is_empty() {
+            return deleted;
+        }
+        for id in found {
+            if delete_session(&id).is_ok() {
+                deleted.push(id.clone());
+            }
+            parents.insert(id);
+        }
+    }
+}
+
+/// `(id, forked_from)` for every saved session that was forked.
+fn fork_headers() -> Vec<(String, String)> {
+    let Ok(entries) = fs::read_dir(sessions_dir()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        let mut first = String::new();
+        if std::io::BufRead::read_line(&mut std::io::BufReader::new(file), &mut first).is_err() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(first.trim()) else {
+            continue;
+        };
+        if let Some(header) = parse_header(&value, stem) {
+            if !header.forked_from.is_empty() {
+                out.push((header.id, header.forked_from));
+            }
+        }
+    }
+    out
 }
 
 pub fn export_markdown(id: &str) -> Result<String, String> {
@@ -686,6 +749,7 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
         cwd: cwd.to_string(),
         model: model.to_string(),
         renamed: false,
+        forked_from: String::new(),
     });
     let mut bytes = serde_json::to_vec(&header).map_err(|err| err.to_string())?;
     bytes.push(b'\n');
@@ -734,6 +798,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
             cwd: info.cwd.clone(),
             model: info.model.clone(),
             renamed: info.renamed,
+            forked_from: info.forked_from.clone(),
         }),
     )?;
     for record in &info.records {
@@ -836,6 +901,7 @@ fn assemble(header: Header, records: Vec<Record>) -> SessionInfo {
         renamed: header.renamed,
         usage,
         meter,
+        forked_from: header.forked_from,
         records,
     }
 }
@@ -888,6 +954,7 @@ fn parse_header(value: &Value, fallback_id: &str) -> Option<Header> {
             .get("renamed")
             .and_then(|flag| flag.as_bool())
             .unwrap_or(false),
+        forked_from: string_field(value, "forkedFrom"),
     })
 }
 
@@ -981,7 +1048,7 @@ fn visible_records(records: &[Record]) -> Vec<Record> {
 }
 
 fn header_json(header: &Header) -> Value {
-    json!({
+    let mut value = json!({
         "id": header.id,
         "title": header.title,
         "created": header.created,
@@ -989,7 +1056,11 @@ fn header_json(header: &Header) -> Value {
         "model": header.model,
         "engine": ENGINE,
         "renamed": header.renamed,
-    })
+    });
+    if !header.forked_from.is_empty() {
+        value["forkedFrom"] = json!(header.forked_from);
+    }
+    value
 }
 
 fn item_json(item: &InputItem) -> Value {
@@ -1371,6 +1442,45 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_chat_takes_its_forks_and_their_forks_but_no_other_chat() {
+        let (_dir, _guard) = isolated("forks");
+        let turn = |id: &str| {
+            record_turn(
+                id,
+                "/work",
+                "grok-4.7",
+                &[user("hi")],
+                &Usage::default(),
+                "",
+                "hi",
+            )
+            .unwrap()
+        };
+        turn("native-main");
+        turn("native-other");
+        let fork = fork_session("native-main").unwrap();
+        assert_eq!(fork.forked_from, "native-main");
+        assert_eq!(load_session(&fork.id).unwrap().forked_from, "native-main");
+        let grandchild = fork_session(&fork.id).unwrap();
+        let unrelated = fork_session("native-other").unwrap();
+
+        let mut gone = delete_forks_of(&["native-main".to_string()]);
+        gone.sort();
+        let mut want = vec![fork.id.clone(), grandchild.id.clone()];
+        want.sort();
+        assert_eq!(gone, want);
+        assert!(!session_file(&fork.id).unwrap().exists());
+        assert!(!session_file(&grandchild.id).unwrap().exists());
+        assert!(
+            session_file("native-main").unwrap().is_file(),
+            "the parent is the caller's to delete"
+        );
+        assert!(session_file("native-other").unwrap().is_file());
+        assert!(session_file(&unrelated.id).unwrap().is_file());
+        assert!(delete_forks_of(&["native-main".to_string()]).is_empty());
+    }
+
+    #[test]
     fn merge_history_keeps_cli_rows_read_only() {
         let cli = vec![GrokSession {
             id: "01a01b0f-7e06-74b1-8f22-5236c9d57d45".into(),
@@ -1394,6 +1504,7 @@ mod tests {
                 cached_tokens: 0,
             },
             meter: "SuperGrok pool".into(),
+            forked_from: String::new(),
             records: Vec::new(),
         };
         let mut native_clash = native.clone();

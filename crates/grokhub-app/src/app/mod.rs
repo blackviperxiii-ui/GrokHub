@@ -386,6 +386,8 @@ pub(super) enum TabAct {
     CommitRename(usize),
     CancelRename,
     Delete(usize),
+    /// Main's right-click Clear chat: asks first, see `ConfirmKind::ClearMainChat`.
+    ClearMain,
 }
 
 enum JobOut {
