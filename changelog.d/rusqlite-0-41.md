@@ -1,0 +1,1 @@
+- Internal: updated the SQLite library to rusqlite 0.41, which bundles SQLite 3.54.1 (was 3.46.0). Memory recall, the AMR index and the browser-history reader work the same as before.
