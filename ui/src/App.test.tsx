@@ -54,6 +54,13 @@ vi.mock("./Journal", () => ({
     </button>
   ),
 }));
+vi.mock("./Workboard", () => ({
+  Workboard: ({ onWork }: { onWork: (prompt: string) => void }) => (
+    <button type="button" onClick={() => onWork("Work on this workboard card: Ship it")}>
+      Work
+    </button>
+  ),
+}));
 vi.mock("./Automations", () => ({
   Automations: () => null,
   resultLine: (r: { text: string; error: string }) => r.error || r.text,
@@ -110,6 +117,7 @@ describe("App", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Workboard",
       "Devices",
       "Library",
       "Settings",
@@ -155,14 +163,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Memory", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal off the web app", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Automations", "Memory", "Connectors", "Workboard", "Settings"]);
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
@@ -171,6 +179,15 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Work puts the card's prompt in the chat box and opens Chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Work" }));
+    expect(screen.getByText("Chat page: Work on this workboard card: Ship it in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 

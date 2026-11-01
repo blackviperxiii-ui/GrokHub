@@ -2729,3 +2729,134 @@ label.toggle-row {
     order: -1;
   }
 }
+
+/* Workboard: the cabin's kanban, one column each, side by side when there
+   is room and stacked on a phone. */
+.workboard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  width: 100%;
+}
+
+.workboard-add,
+.board-edit {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workboard-add input,
+.board-edit input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.board-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.board-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 96px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.board-column.follow-up {
+  grid-column: 1 / -1;
+}
+
+.board-column[data-drop="yes"] {
+  border-color: var(--accent);
+}
+
+.board-column h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.board-column .rows,
+.board-archived .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.board-card {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.card.board-card[draggable="true"] {
+  cursor: grab;
+}
+
+.card.board-card.fresh {
+  border-color: var(--accent);
+}
+
+.board-notes {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-notes-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.board-notes-edit textarea {
+  resize: vertical;
+}
+
+.board-move {
+  position: relative;
+}
+
+.board-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
+}
+
+.board-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-archived {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}

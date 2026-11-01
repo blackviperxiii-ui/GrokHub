@@ -54,7 +54,7 @@ pub fn refused() -> String {
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
 /// The web app's commands: chat with approvals, automations, memory,
-/// connectors and Pulse, and reading the settings.
+/// connectors, Pulse and the workboard, and reading the settings.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
@@ -93,6 +93,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_feed_prompt",
     "save_feed_prompt",
     "pulse_image",
+    "get_workboard",
+    "workboard_add",
+    "workboard_act",
+    "workboard_work",
     "get_behavior",
     "get_privacy",
     "get_background",
@@ -917,6 +921,10 @@ mod tests {
             "get_feed_prompt",
             "save_feed_prompt",
             "pulse_image",
+            "get_workboard",
+            "workboard_add",
+            "workboard_act",
+            "workboard_work",
             "stage_attachment",
             "remove_attachment",
         ] {
