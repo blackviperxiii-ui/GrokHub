@@ -660,7 +660,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/update",
-        hint: "Update CLI and cabin when newer",
+        hint: "Update the CLI and the app when newer",
         insert: "/update",
         run_on_pick: true,
     },
@@ -943,7 +943,7 @@ pub fn slash_help() -> String {
         "/inspect — this chat's session: model, tools, MCP servers",
         "/loop [30m] <prompt> — interval scheduler",
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
-        "/skills — skills catalog: cabin skills and project and user skills",
+        "/skills — skills catalog: {product} skills and project and user skills",
         "/skills changes — what {product} changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
@@ -951,7 +951,7 @@ pub fn slash_help() -> String {
         "/automations changes — automations {product} made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
-        "/model <id> — chat model for this cabin",
+        "/model <id> — chat model for {product}",
         "/imagine-video <prompt> — Imagine video",
         "/goal <objective> — pin a Grok goal",
         "Skill slashes such as /create-skill run that skill in chat.",
@@ -972,9 +972,9 @@ pub fn slash_help() -> String {
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
         if cfg!(windows) {
-            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
+            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         } else {
-            "/update — overlay install when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
+            "/update — overlay install when {product} is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
@@ -1008,7 +1008,7 @@ pub fn slash_help() -> String {
         "/tools — same as /host",
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
-        "/usage — today's cabin buckets, tokens spent today, and the last turn",
+        "/usage — today's {product} buckets, tokens spent today, and the last turn",
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
@@ -1023,13 +1023,13 @@ pub fn slash_help() -> String {
         } else {
             "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
         },
-        "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
+        "× to tray; a pinned taskbar click or second grokhub raises {product}.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. Collapsing any thought folds the rest of that session; expanding one opens only that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Copy and Reply under a user bubble stay inside the window. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Shared buttons hover-scale to 1.035 and rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
-        "Account sets a display name and a local profile picture kept in cabin config. The avatar menu, rail, and connected hint do not show the email.",
+        "Account sets a display name and a local profile picture kept in your settings on this PC. The avatar menu, rail, and connected hint do not show the email.",
         "Five chips sit centered over the composer. The attach control is a paperclip. Ask anything is a faint placeholder centered with the mic and send. The home update feed is newest-first event cards (automation_done, schedule_created). Idea and digest cards share updates.json and do not use that three-card cap. Accept on an idea files a workboard Todo. No weather, mail, or calendar stubs.",
     ]
     .join("\n")

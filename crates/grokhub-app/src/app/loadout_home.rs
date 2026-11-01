@@ -1320,7 +1320,13 @@ impl Cabin {
                     if desktop {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let (label, hint) = if undocked {
-                                ("Dock back", format!("Bring {name} back into the cabin"))
+                                (
+                                    "Dock back",
+                                    format!(
+                                        "Bring {name} back into {}",
+                                        grokhub_core::brand::product_name()
+                                    ),
+                                )
                             } else {
                                 ("Pop out", format!("Put {name} on your desktop"))
                             };

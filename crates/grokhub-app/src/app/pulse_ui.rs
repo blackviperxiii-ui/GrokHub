@@ -1040,7 +1040,7 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
         UpdateKind::AutomationDone => "Automation run".into(),
         UpdateKind::ScheduleCreated => "Automations".into(),
         UpdateKind::Digest => "Daily digest".into(),
-        _ => "Cabin".into(),
+        _ => grokhub_core::brand::product_name().into(),
     }
 }
 
@@ -1168,7 +1168,7 @@ impl Cabin {
             });
         });
         ui.label(
-            RichText::new(pc::PULSE_SUBTITLE)
+            RichText::new(*pc::PULSE_SUBTITLE)
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );

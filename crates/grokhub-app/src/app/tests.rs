@@ -2370,7 +2370,7 @@ fn empty_skill_tile_stays_off_a_run() {
 
     cabin.add_suggested_skill(&tile);
 
-    assert_eq!(cabin.status, "Need a cabin-real skill name and steps");
+    assert_eq!(cabin.status, "Need a real skill name and steps");
     assert!(cabin.suggestions.skills.is_empty());
     assert!(!cabin.running);
     assert!(matches!(cabin.nav, super::Nav::Chat));

@@ -878,7 +878,7 @@ impl Cabin {
                 crate::cards::help_text(
                     ui,
                     &format!(
-                        "Saved as personalities/{}.toml in the cabin's settings folder. Tone only: approvals and safety rules still come after it.",
+                        "Saved as personalities/{}.toml in the app's settings folder. Tone only: approvals and safety rules still come after it.",
                         draft.edit.id
                     ),
                 );

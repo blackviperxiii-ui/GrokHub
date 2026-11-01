@@ -171,7 +171,7 @@ impl Cabin {
         }
         if run.no_model {
             self.sources.models.note =
-                "No local model yet. Set one up under Cabin defaults first.".into();
+                "No local model yet. Set one up under Settings → Defaults first.".into();
             self.save_news();
             return;
         }
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(cabin.updates.len(), before);
         assert_eq!(
             cabin.sources.models.note,
-            "No local model yet. Set one up under Cabin defaults first."
+            "No local model yet. Set one up under Settings → Defaults first."
         );
     }
 

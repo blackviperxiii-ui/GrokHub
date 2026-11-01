@@ -1096,7 +1096,7 @@ pub fn load() -> AppConfig {
     cfg
 }
 
-const SOUL_SEED: &str = "# Soul\n\nWho this cabin is. Edit this.\n";
+const SOUL_SEED: &str = "# Soul\n\nWho your assistant is. Edit this.\n";
 const USER_SEED: &str = "# User\n\nWho you are. Edit this.\n";
 pub(crate) const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
 
@@ -1840,7 +1840,7 @@ mod tests {
             "boot must still read a leftover app.json key so Cabin can migrate it"
         );
         ensure_memory_seeds();
-        assert!(read_memory("SOUL.md").contains("Who this cabin is"));
+        assert!(read_memory("SOUL.md").contains("Who your assistant is"));
         assert!(read_memory("USER.md").contains("Who you are"));
         assert!(read_memory("MEMORY.md").contains("Long-term notes"));
         write_memory("SOUL.md", "be useful").expect("mem");
