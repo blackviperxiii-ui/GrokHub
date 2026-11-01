@@ -2854,6 +2854,35 @@ label.toggle-row {
   align-self: center;
 }
 
+/* Halt: the top bar's red stop for desktop control and every reply. */
+.topbar .halt {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
+.topbar .halt:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.halt-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger-text);
+  border-radius: 8px;
+  color: var(--danger-text);
+}
+
+.halted-line {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 0.9em;
+}
+
 .connector-add {
   display: grid;
   gap: 0.6rem;
@@ -3413,4 +3442,338 @@ label.toggle-row {
 .fix-compare th,
 .fix-compare td {
   padding: 2px 8px 2px 0;
+}
+
+/* Home: the cabin's tile grid. A Large tile spans two columns and two rows,
+   a Medium two columns, a Small one; a phone stacks them. */
+.home,
+.objectives {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  width: 100%;
+}
+
+.home-head,
+.objectives-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.home-head h2,
+.objectives-head h2 {
+  margin: 0;
+  font-size: 1.6em;
+}
+
+.home-head .xp-bar,
+.objectives-head .xp-bar {
+  flex: 0 1 360px;
+}
+
+.home-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(140px, auto);
+  grid-auto-flow: row dense;
+  gap: 12px;
+}
+
+.home-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.home-tile.large {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.home-tile.medium {
+  grid-column: span 2;
+}
+
+.home-tile.away {
+  background: transparent;
+  box-shadow: none;
+  border-style: dashed;
+}
+
+.home-tile h3 {
+  margin: 0;
+  font-size: 0.8em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.home-go {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-weight: 400;
+}
+
+.home-go:hover:not(:disabled) {
+  filter: none;
+}
+
+.home-tile:has(.home-go:hover) {
+  border-color: var(--accent);
+}
+
+.home-stack,
+.home-rows,
+.home-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.home-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.home-rows > *,
+.home-steps > * {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-steps > .done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.home-row {
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row:hover:not(:disabled) {
+  filter: none;
+  text-decoration: underline;
+}
+
+.home-strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.home-muted,
+.home-caption {
+  color: var(--muted);
+  margin: 0;
+}
+
+.home-caption {
+  font-size: 0.8em;
+  letter-spacing: 0.1em;
+}
+
+.home-count {
+  font-size: 1.4em;
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.home-cabin {
+  margin-top: auto;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.home-nyx {
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.home-glance {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.home-glance button {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.home-glance button:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+}
+
+.home-foot {
+  font-size: 0.85em;
+}
+
+.xp-bar,
+.home-streak {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.xp-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8em;
+  letter-spacing: 0.06em;
+}
+
+.xp-level {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.xp-amount {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.xp-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--selected);
+  overflow: hidden;
+}
+
+.xp-fill {
+  height: 100%;
+  background: var(--amber);
+}
+
+.streak-days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.streak-days li {
+  height: 24px;
+  border-radius: 4px;
+  background: var(--selected);
+}
+
+.streak-days li.on {
+  background: var(--amber);
+}
+
+.streak-days li.today {
+  background: transparent;
+  border: 1px dashed var(--signal);
+}
+
+/* Objectives: one centered column, as the cabin's page. */
+.objectives > * {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.objectives-card {
+  max-width: 760px;
+  align-self: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 16px;
+}
+
+.objectives-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.objectives-steps li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.objectives-steps li.current {
+  background: var(--selected);
+}
+
+.objectives-steps li.verified .objectives-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.objectives-tag {
+  flex: none;
+  font-size: 0.8em;
+  letter-spacing: 0.06em;
+  color: var(--amber);
+}
+
+.objectives-steps li.verified .objectives-tag {
+  color: var(--muted);
+}
+
+.objectives-back {
+  align-self: center;
+  width: auto;
+}
+
+@media (max-width: 700px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home-tile.large,
+  .home-tile.medium {
+    grid-column: auto;
+    grid-row: auto;
+  }
 }
