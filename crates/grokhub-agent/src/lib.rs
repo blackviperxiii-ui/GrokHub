@@ -57,9 +57,7 @@ pub use client::{
 pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
-pub use eval::memory_index::{
-    render_memory_index_bench, run_memory_index_bench, MemoryIndexBench,
-};
+pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
