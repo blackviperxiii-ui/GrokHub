@@ -5,7 +5,7 @@ use super::*;
 /// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
 pub(super) static DESKTOP_CONTROL_HINT: std::sync::LazyLock<String> = std::sync::LazyLock::new(
     || {
-        format!("Grok can see the screen and use the mouse and keyboard through {}. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
+        format!("{} can see the screen and use the mouse and keyboard. Ask still asks first. Deletes, sends, money and credentials always ask.", grokhub_core::brand::product_name())
     },
 );
 
@@ -392,27 +392,31 @@ pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
 
 const ROW_MODEL: &str = "Default model";
 const ROW_PERMISSION: &str = "Permission";
-const ROW_DESKTOP: &str = "Let Grok control the desktop";
+fn row_desktop() -> &'static str {
+    *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW
+}
 const ROW_DESKTOP_TEST: &str = "Desktop control";
 const ROW_SCREEN_RECORD: &str = "Screen recording";
-const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to Grok only for the diagnosis.";
+const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to the cloud model only for the diagnosis.";
 const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
 /// Settings → Defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
-pub(super) const DEFAULTS_ROWS: &[&str] = &[
-    ROW_MODEL,
-    super::budget_ui::FAST_ROW,
-    super::budget_ui::CAP_ROW,
-    super::budget_ui::CEILING_ROW,
-    ROW_PERMISSION,
-    ROW_DESKTOP,
-    ROW_DESKTOP_TEST,
-    ROW_SCREEN_RECORD,
-    ROW_SESSION,
-    ROW_COLLAPSE,
-];
+pub(super) fn defaults_rows() -> [&'static str; 10] {
+    [
+        ROW_MODEL,
+        super::budget_ui::FAST_ROW,
+        super::budget_ui::CAP_ROW,
+        super::budget_ui::CEILING_ROW,
+        ROW_PERMISSION,
+        row_desktop(),
+        ROW_DESKTOP_TEST,
+        ROW_SCREEN_RECORD,
+        ROW_SESSION,
+        ROW_COLLAPSE,
+    ]
+}
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -628,7 +632,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         self.pull_account_oauth_from_disk();
-        let authed = self.has_key();
+        // The Grok sign-in, not "any key": Sign out here only signs out of Grok.
+        let authed = self.account_chrome_now().connected;
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
@@ -722,7 +727,8 @@ impl Cabin {
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
-        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
+        self.renew_account_oauth();
+        let account_auth = self.account_chrome_now();
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
             "Saved in cabin config."
@@ -1297,7 +1303,7 @@ impl Cabin {
                                                             }
                                                             if settings_toggle(
                                                                 ui,
-                                                                ROW_DESKTOP,
+                                                                row_desktop(),
                                                                 DESKTOP_CONTROL_HINT.as_str(),
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
@@ -2251,21 +2257,21 @@ mod tests {
             grokhub_core::sanitize_chat_model("nope")
         );
         assert_eq!(
-            DEFAULTS_ROWS,
-            &[
+            defaults_rows(),
+            [
                 "Default model",
                 "Use Grok 4.7 Fast when you're waiting",
                 "Weekly spend cap",
                 "Price limit",
                 "Permission",
-                "Let Grok control the desktop",
+                "Let Loadout control the desktop",
                 "Desktop control",
                 "Screen recording",
                 "Session mode",
                 "Always collapse"
             ]
         );
-        assert!(DEFAULTS_ROWS
+        assert!(defaults_rows()
             .iter()
             .all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();

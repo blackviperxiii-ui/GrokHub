@@ -93,6 +93,42 @@ pub enum PoeLine {
     Slain(String),
     /// Someone else came into the player's area (a party member).
     Joined(String),
+    /// The game built a new area instance: its level, its internal id
+    /// (maps start with `Map`) and its seed. The `Entered` line follows.
+    Generated {
+        level: u32,
+        id: String,
+        seed: u64,
+    },
+}
+
+/// Seconds of a line's `2026/10/31 21:14:03` stamp, counted from a fixed
+/// day: only differences between lines are used, so the clock's zone
+/// doesn't matter.
+pub fn line_secs(line: &str) -> Option<i64> {
+    let stamp = line.get(..19)?;
+    let (date, time) = stamp.split_once(' ')?;
+    let mut d = date.split('/').map(|p| p.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.split(':').map(|p| p.parse::<i64>().ok());
+    let (h, min, sec) = (t.next()??, t.next()??, t.next()??);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) || h > 23 || min > 59 || sec > 60 {
+        return None;
+    }
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe;
+    Some(days * 86_400 + h * 3_600 + min * 60 + sec)
+}
+
+/// A map instance, not a town, hideout or campaign zone.
+fn is_map(id: &str) -> bool {
+    id.starts_with("Map") && !id.contains("Hideout")
 }
 
 /// A character name: one word, no spaces.
@@ -111,6 +147,17 @@ pub fn parse_line(line: &str) -> Option<PoeLine> {
         let area = area.strip_suffix(']')?;
         let skip = area.is_empty() || area.starts_with('(');
         return (!skip).then(|| PoeLine::Entered(area.to_owned()));
+    }
+    // `Generating level 83 area "MapWorldsCemetery" with seed 1234`, a
+    // debug line with no name in front, so chat can't make one.
+    if let Some(gen) = rest.strip_prefix("Generating level ") {
+        let (level, gen) = gen.split_once(" area \"")?;
+        let (id, seed) = gen.split_once("\" with seed ")?;
+        return Some(PoeLine::Generated {
+            level: level.parse().ok()?,
+            id: id.to_owned(),
+            seed: seed.trim().parse().ok()?,
+        });
     }
     let msg = rest.strip_prefix(": ")?;
     if let Some(area) = msg.strip_prefix("You have entered ") {
@@ -150,7 +197,24 @@ pub struct PoeSession {
     pub area: Option<String>,
     /// Times the player went into another area.
     pub areas: u32,
+    /// New map instances the player went into.
+    pub maps: u32,
+    /// The level of the area the player is in, and the highest this session.
+    pub area_level: Option<u32>,
+    pub highest_area_level: Option<u32>,
+    /// Seconds spent in maps before the current area.
+    map_secs: i64,
     party: Vec<String>,
+    /// The instance the game built last, not yet entered.
+    generated: Option<(u32, String, u64)>,
+    /// The map instances seen, so a portal back in isn't a new map, and
+    /// their area names, so going back in still counts as time in a map.
+    map_seeds: Vec<u64>,
+    map_areas: Vec<String>,
+    in_map: bool,
+    /// When the current area was entered, and the newest line's time.
+    entered_at: Option<i64>,
+    last_at: Option<i64>,
 }
 
 impl PoeSession {
@@ -165,12 +229,64 @@ impl PoeSession {
         }
     }
 
-    /// Take one line; a death of the player is also a watch event.
+    /// The player went into an instance the game just built.
+    fn entered_new(&mut self, area: &str, level: u32, id: &str, seed: u64) {
+        self.area_level = Some(level);
+        self.highest_area_level = Some(self.highest_area_level.map_or(level, |h| h.max(level)));
+        self.in_map = is_map(id);
+        if self.in_map && !self.map_seeds.contains(&seed) {
+            self.map_seeds.push(seed);
+            self.maps += 1;
+            self.map_areas.retain(|a| a != area);
+            self.map_areas.push(area.to_owned());
+            // Only the last few maps can still have a portal open.
+            if self.map_areas.len() > 6 {
+                self.map_areas.remove(0);
+            }
+        }
+    }
+
+    /// Take one line with no time on it.
     pub fn take(&mut self, line: PoeLine) -> Option<EventKind> {
+        self.take_at(line, None)
+    }
+
+    /// Seconds spent in maps, the current one included up to the newest line.
+    pub fn map_secs(&self) -> i64 {
+        let open = match (self.in_map, self.entered_at, self.last_at) {
+            (true, Some(a), Some(b)) => (b - a).max(0),
+            _ => 0,
+        };
+        self.map_secs + open
+    }
+
+    fn close_area(&mut self) {
+        self.map_secs = self.map_secs();
+        self.in_map = false;
+        self.entered_at = self.last_at;
+    }
+
+    /// Take one line stamped `at` (from `line_secs`); a death of the player
+    /// is also a watch event.
+    pub fn take_at(&mut self, line: PoeLine, at: Option<i64>) -> Option<EventKind> {
+        if let Some(t) = at {
+            // A clock that steps back counts as no time passing.
+            self.last_at = Some(self.last_at.map_or(t, |l| l.max(t)));
+        }
         match line {
+            PoeLine::Generated { level, id, seed } => {
+                self.generated = Some((level, id, seed));
+                None
+            }
             PoeLine::Entered(area) => {
                 if self.area.as_deref() != Some(area.as_str()) {
+                    self.close_area();
                     self.areas += 1;
+                    self.area_level = None;
+                    match self.generated.take() {
+                        Some((level, id, seed)) => self.entered_new(&area, level, &id, seed),
+                        None => self.in_map = self.map_areas.contains(&area),
+                    }
                     self.area = Some(area);
                 }
                 None
@@ -221,15 +337,41 @@ impl PoeSession {
             1 => "1 death".to_owned(),
             n => format!("{n} deaths"),
         });
+        if self.maps > 0 {
+            let maps = if self.maps == 1 { "map" } else { "maps" };
+            let mut line = format!("{} {maps}", self.maps);
+            let mins = self.map_secs() / 60;
+            if mins > 0 {
+                line.push_str(&format!(" in {}", minutes_label(mins)));
+            }
+            parts.push(line);
+        }
         if self.areas > 0 {
             let areas = if self.areas == 1 { "area" } else { "areas" };
             let mut line = format!("{} {areas}", self.areas);
             if let Some(area) = &self.area {
                 line.push_str(&format!(", last in {area}"));
+                if let Some(level) = self.area_level {
+                    line.push_str(&format!(" (area level {level})"));
+                }
             }
             parts.push(line);
         }
+        if let Some(h) = self.highest_area_level {
+            if self.area_level != Some(h) {
+                parts.push(format!("Highest area level {h}"));
+            }
+        }
         parts.join(". ") + "."
+    }
+}
+
+/// `42 min` or `1 h 5 min`.
+fn minutes_label(mins: i64) -> String {
+    if mins >= 60 {
+        format!("{} h {} min", mins / 60, mins % 60)
+    } else {
+        format!("{mins} min")
     }
 }
 
@@ -277,7 +419,8 @@ impl PoeWatcher {
     pub fn poll(&mut self, now_ms: u64) -> io::Result<Vec<WatchEvent>> {
         let mut out = Vec::new();
         for line in self.tail.read_lines()? {
-            if let Some(kind) = parse_line(&line).and_then(|l| self.session.take(l)) {
+            let at = line_secs(&line);
+            if let Some(kind) = parse_line(&line).and_then(|l| self.session.take_at(l, at)) {
                 out.push(WatchEvent {
                     at_ms: now_ms,
                     kind,
@@ -450,5 +593,82 @@ mod tests {
         assert_eq!(PoeGame::from_app_id(238960), Some(PoeGame::Poe1));
         assert_eq!(PoeGame::from_app_id(2694490), Some(PoeGame::Poe2));
         assert_eq!(PoeGame::from_app_id(730), None);
+    }
+
+    fn at(time: &str, rest: &str) -> String {
+        format!("2026/10/31 {time} 123456789 cff94598 [{rest}")
+    }
+
+    #[test]
+    fn maps_area_levels_and_time_in_maps_add_up() {
+        assert_eq!(
+            parse_line(&at(
+                "21:00:00",
+                "DEBUG Client 1234] Generating level 83 area \"MapWorldsCemetery\" with seed 42"
+            )),
+            Some(PoeLine::Generated {
+                level: 83,
+                id: "MapWorldsCemetery".into(),
+                seed: 42,
+            })
+        );
+        // Chat can't pass for one.
+        assert_eq!(
+            parse_line(&at(
+                "21:00:00",
+                "INFO Client 1234] Troll: Generating level 99 area \"MapX\" with seed 1"
+            )),
+            None
+        );
+        let lines = [
+            at(
+                "21:00:00",
+                "DEBUG Client 1] Generating level 68 area \"HideoutFelled\" with seed 1",
+            ),
+            at(
+                "21:00:01",
+                "INFO Client 1] : You have entered Felled Hideout.",
+            ),
+            at(
+                "21:02:00",
+                "DEBUG Client 1] Generating level 81 area \"MapWorldsCemetery\" with seed 42",
+            ),
+            at("21:02:05", "INFO Client 1] : You have entered Cemetery."),
+            at(
+                "21:10:05",
+                "INFO Client 1] : You have entered Felled Hideout.",
+            ),
+            // Back through the same portal: no new instance, same map.
+            at("21:11:05", "INFO Client 1] : You have entered Cemetery."),
+            at("21:15:05", "INFO Client 1] : Testwitch has been slain."),
+            at(
+                "21:16:00",
+                "DEBUG Client 1] Generating level 83 area \"MapWorldsStrand\" with seed 7",
+            ),
+            at("21:16:05", "INFO Client 1] : You have entered Strand."),
+            at(
+                "21:46:05",
+                "INFO Client 1] : Testwitch (Witch) is now level 95",
+            ),
+        ];
+        let mut s = PoeSession::default();
+        for l in &lines {
+            s.take_at(parse_line(l).unwrap(), line_secs(l));
+        }
+        assert_eq!(s.maps, 2);
+        assert_eq!((s.area_level, s.highest_area_level), (Some(83), Some(83)));
+        // 8 min + 5 min in Cemetery, then 30 min so far in Strand.
+        assert_eq!(s.map_secs(), (8 + 5 + 30) * 60);
+        assert_eq!(
+            s.summary(),
+            "Testwitch (Witch), level 94 to 95. 1 death. 2 maps in 43 min. 5 areas, last in Strand (area level 83)."
+        );
+        assert_eq!(
+            line_secs("2026/11/01 00:00:00 x").unwrap()
+                - line_secs("2026/10/31 23:59:30 x").unwrap(),
+            30
+        );
+        assert_eq!(line_secs("garbage"), None);
+        assert_eq!(minutes_label(65), "1 h 5 min");
     }
 }

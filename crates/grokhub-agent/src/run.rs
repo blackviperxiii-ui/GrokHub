@@ -3078,7 +3078,7 @@ mod tests {
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { output, .. }
-                if output.contains(grokhub_core::desktop_mcp::OFF_MSG)
+                if output.contains(*grokhub_core::desktop_mcp::OFF_MSG)
         )));
         let body = crate::responses_body(&crate::ResponsesRequest {
             model: "grok-4.7".into(),

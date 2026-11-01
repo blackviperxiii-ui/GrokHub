@@ -544,7 +544,7 @@ pub fn apply_desk_request(
     let id = req.id();
     if !gate.enabled {
         backend.suspend_input();
-        return DeskResponse::fail(id, OFF_MSG, false);
+        return DeskResponse::fail(id, *OFF_MSG, false);
     }
     if gate.halted {
         backend.release_input();
@@ -655,7 +655,7 @@ pub fn format_probe_line(
 pub fn probe_desktop(backend: &mut dyn DesktopBackend, gate: CallGate) -> Result<String, String> {
     if !gate.enabled {
         backend.suspend_input();
-        return Err(OFF_MSG.to_string());
+        return Err((*OFF_MSG).to_string());
     }
     if gate.halted {
         backend.release_input();

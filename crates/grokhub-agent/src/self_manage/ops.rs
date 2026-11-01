@@ -75,9 +75,10 @@ pub fn run(
             let id = arg(args, "id");
             automation_write(ctx, args, Some(&id))
         }
-        "automation_disable" => {
-            control::disable_automation(&arg(args, "id"), &reason_of(args, "turned off by Grok"))
-        }
+        "automation_disable" => control::disable_automation(
+            &arg(args, "id"),
+            &reason_of(args, grokhub_core::brand::filled("turned off by {product}")),
+        ),
         "automation_delete" => control::delete_automation(&arg(args, "id")),
         "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
         "know_me_tags" => Ok(grokhub_core::know_me::load(
@@ -309,7 +310,7 @@ fn skill_create(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
         instructions,
         ..Default::default()
     };
-    let reason = reason_of(args, "created by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("created by {product}"));
     let done = hx::record_skill_change(
         ctx.config_dir,
         &ctx.skills_dir(),
@@ -344,7 +345,7 @@ fn skill_modify(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     if args.get("instructions").is_some() {
         skill.instructions = arg(args, "instructions");
     }
-    let reason = reason_of(args, "changed by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("changed by {product}"));
     let done = hx::record_skill_change(
         ctx.config_dir,
         &ctx.skills_dir(),
@@ -368,7 +369,7 @@ fn skill_delete(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     if !path.exists() {
         return Err(format!("no skill named {name}"));
     }
-    let reason = reason_of(args, "deleted by Grok");
+    let reason = reason_of(args, grokhub_core::brand::filled("deleted by {product}"));
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let done = hx::record_skill_change(
         ctx.config_dir,
@@ -417,9 +418,9 @@ fn skill_move(ctx: &SelfCtx<'_>, args: &Value, enable: bool) -> Result<String, S
     let reason = reason_of(
         args,
         if enable {
-            "turned back on by Grok"
+            grokhub_core::brand::filled("turned back on by {product}")
         } else {
-            "turned off by Grok"
+            grokhub_core::brand::filled("turned off by {product}")
         },
     );
     let done = hx::record_skill_change(
