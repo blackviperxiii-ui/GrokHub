@@ -567,12 +567,31 @@ describe("applyEvent", () => {
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it("signed out on the web app, it says to add the key on the computer", async () => {
+  it("where Grok sign-in is offered, the card leads with it, and a sign-in hides the card", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
+    const onSignIn = vi.fn();
+    const { unmount } = render(<Chat onOpenSettings={() => {}} onSignIn={onSignIn} grokSignIn />);
+    const card = await screen.findByRole("region", { name: "Sign in" });
+    expect(card).toHaveTextContent("Sign in with your Grok account, or add an xAI API key.");
+    await userEvent.click(within(card).getByRole("button", { name: "Sign in with Grok" }));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    unmount();
+    api.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      hasApiKey: false,
+      signedIn: { name: "Sam", email: null },
+    });
+    render(<Chat onOpenSettings={() => {}} grokSignIn />);
+    expect(await screen.findByText("Ask Grok anything.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
+  });
+
+  it("signed out on the web app, it says to sign in on the computer", async () => {
     api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
     render(<Chat onOpenSettings={() => {}} remote />);
     expect(
       await screen.findByText(
-        "Loadout on your computer has no API key yet. Add one there, then chat here.",
+        "Loadout on your computer isn't signed in yet. Sign in there, then chat here.",
       ),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
