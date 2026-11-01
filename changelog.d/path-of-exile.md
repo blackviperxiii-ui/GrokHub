@@ -1,0 +1,1 @@
+- Loadout now follows Path of Exile and Path of Exile 2 while the game watcher is on: it reads the game's own Client.txt log for the areas you enter, your level-ups and your deaths, shows the session in Settings, and posts a recap to Pulse when the game closes. Party members' lines don't count as yours. Nothing reads the game's memory or touches the game.
