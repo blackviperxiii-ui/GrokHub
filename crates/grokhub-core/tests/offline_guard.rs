@@ -80,6 +80,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("crates/grokhub-app/src/app/gw2_ui.rs", 1, "Guild Wars 2 API: egress_ok"),
     ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
+    ("crates/grokhub-app/src/app/osrs_ui.rs", 1, "OSRS hiscores: egress_ok"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),

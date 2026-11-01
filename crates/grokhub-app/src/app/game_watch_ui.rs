@@ -311,6 +311,7 @@ impl Cabin {
         });
         self.ui_gw2(ui);
         self.ui_destiny(ui);
+        self.ui_osrs(ui);
     }
 }
 

@@ -214,6 +214,7 @@ mod night;
 mod notices;
 mod nudge_watchers_ui;
 mod oauth;
+mod osrs_ui;
 mod pages;
 pub mod panels;
 mod pc_health_ui;
