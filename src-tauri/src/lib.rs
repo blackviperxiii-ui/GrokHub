@@ -5,7 +5,9 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod attach;
 pub mod automations;
+pub mod background;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -13,6 +15,7 @@ pub mod connectors;
 pub mod credential;
 pub mod interests;
 pub mod journal;
+pub mod library;
 pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
@@ -25,6 +28,7 @@ pub mod permissions;
 pub mod personality;
 pub mod playbooks;
 pub mod plugins;
+pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
@@ -55,6 +59,8 @@ struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    /// Files waiting on each chat's composer.
+    trays: attach::Trays,
     sign_in: Arc<oauth::SignIn>,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
@@ -164,7 +170,7 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     Ok(view(&next))
 }
 
-/// Settings → General and the composer chip: the models to pick from.
+/// Settings → Defaults and the composer chip: the models to pick from.
 /// `refresh` reads the account's list again instead of the 10-minute cache.
 #[tauri::command]
 async fn list_models(
@@ -352,19 +358,38 @@ async fn send_chat(
     conversation_id: String,
     text: String,
     mode: Option<agent::SessionMode>,
+    attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
-    chat_turn(app, &state, conversation_id, text, mode, current(&state)).await
+    let turn = Turn {
+        text,
+        mode,
+        attachments: attachments.unwrap_or_default(),
+    };
+    chat_turn(app, &state, conversation_id, turn, current(&state)).await
+}
+
+/// One message from the composer: its text, chip and attached files (paths
+/// from `stage_attachment`).
+struct Turn {
+    text: String,
+    mode: agent::SessionMode,
+    attachments: Vec<String>,
 }
 
 async fn chat_turn(
     app: AppHandle,
     state: &ShellState,
     conversation_id: String,
-    text: String,
-    mode: agent::SessionMode,
+    turn: Turn,
     settings: ShellSettings,
 ) -> Result<String, String> {
+    let Turn {
+        text,
+        mode,
+        attachments,
+    } = turn;
+    let files = state.trays.take(&conversation_id, &attachments)?;
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     if capabilities::current().pulse {
@@ -376,6 +401,7 @@ async fn chat_turn(
         let id = conversation_id.clone();
         session.prompt(
             &text,
+            files,
             route,
             Box::new(move |event| {
                 #[cfg(desktop)]
@@ -472,6 +498,91 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
     if let Some(session) = removed {
         session.cancel();
     }
+    state.trays.forget(&conversation_id);
+}
+
+/// The chat model's input kinds, for the chips' notes.
+fn model_mods(state: &ShellState) -> Vec<String> {
+    attach::modalities(&state.config_dir, &current(state).model)
+}
+
+/// A pasted or dropped file from the webview or the web app, as base64.
+#[tauri::command]
+fn stage_attachment(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    name: String,
+    data: String,
+) -> Result<attach::Staged, String> {
+    let mods = model_mods(&state);
+    let mods: Vec<&str> = mods.iter().map(String::as_str).collect();
+    state
+        .trays
+        .stage_base64(&state.config_dir, &conversation_id, &name, &data, &mods)
+}
+
+/// Files dropped on the window, by path. The window only: the web app sends
+/// bytes.
+#[tauri::command]
+fn stage_attachment_paths(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    paths: Vec<String>,
+) -> Vec<attach::Outcome> {
+    stage_paths(
+        &state,
+        &conversation_id,
+        paths.into_iter().map(PathBuf::from),
+    )
+}
+
+fn stage_paths(
+    state: &ShellState,
+    conversation_id: &str,
+    paths: impl Iterator<Item = PathBuf>,
+) -> Vec<attach::Outcome> {
+    let mods = model_mods(state);
+    let mods: Vec<&str> = mods.iter().map(String::as_str).collect();
+    paths
+        .map(|path| {
+            state
+                .trays
+                .stage_path(&state.config_dir, conversation_id, &path, &mods)
+                .into()
+        })
+        .collect()
+}
+
+/// The composer's + button: the system picker, then each file is staged.
+#[tauri::command]
+async fn pick_attachments(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<Vec<attach::Outcome>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app
+            .dialog()
+            .file()
+            .set_title("Add to chat")
+            .blocking_pick_files()
+            .unwrap_or_default();
+        let paths = picked.into_iter().filter_map(|p| p.into_path().ok());
+        let state = app.state::<ShellState>();
+        Ok(stage_paths(&state, &conversation_id, paths))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, conversation_id);
+        Err(attach::NO_PICKER.into())
+    }
+}
+
+/// The chip's ×.
+#[tauri::command]
+fn remove_attachment(state: State<'_, ShellState>, conversation_id: String, path: String) {
+    state.trays.remove(&conversation_id, &path);
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -935,6 +1046,37 @@ async fn fetch_plugin_market(
 }
 
 #[tauri::command]
+async fn get_library() -> Result<library::Page, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(|| library::page(grokhub_core::steam::detect_root().as_deref())).await
+}
+
+#[tauri::command]
+async fn library_cover(
+    state: State<'_, ShellState>,
+    app_id: u32,
+    shape: library::Shape,
+) -> Result<Option<String>, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let root = grokhub_core::steam::detect_root();
+        let net = library::LiveNet {
+            config_dir: dir.clone(),
+        };
+        let now = grokhub_core::now_ms() / 1000;
+        library::cover(&dir, root.as_deref(), app_id, shape, &net, now)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_play(app_id: u32) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
+}
+
+#[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -1132,6 +1274,83 @@ fn set_web_access(
     )
 }
 
+/// Settings → Behavior: the tray, the composer and the limits on scheduled work.
+#[tauri::command]
+fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
+    settings::behavior_view(&current(&state))
+}
+
+#[tauri::command]
+fn save_behavior(
+    state: State<'_, ShellState>,
+    close_to_tray: bool,
+    behavior: settings::Behavior,
+) -> Result<settings::BehaviorView, String> {
+    let next = ShellSettings {
+        close_to_tray: close_to_tray && capabilities::current().tray,
+        behavior: behavior.checked()?,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(settings::behavior_view(&next))
+}
+
+/// Settings → Defaults: the work folder and how chat handles changes.
+#[tauri::command]
+fn save_defaults(
+    state: State<'_, ShellState>,
+    workspace: String,
+    approvals: settings::Approvals,
+) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        workspace: workspace.trim().to_string(),
+        approvals,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// Settings → Privacy & data. Reads `offline.toml` again and may wait on the
+/// keyring, so it runs off the main thread.
+#[tauri::command]
+async fn get_privacy(state: State<'_, ShellState>) -> Result<privacy::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || privacy::page(&dir, privacy::keyring(&dir), grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn set_offline_only(state: State<'_, ShellState>, on: bool) -> Result<privacy::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        privacy::set_offline(&dir, on)?;
+        Ok(privacy::page(
+            &dir,
+            privacy::keyring(&dir),
+            grokhub_core::now_ms(),
+        ))
+    })
+    .await?
+}
+
+#[tauri::command]
+fn open_data_folder(state: State<'_, ShellState>) -> Result<(), String> {
+    privacy::open_data_folder(&state.config_dir)
+}
+
+/// Settings → Background: who fires automations, and when each runs.
+#[tauri::command]
+fn get_background(state: State<'_, ShellState>) -> Result<background::Page, String> {
+    let list = automations::load(&state.config_dir)?;
+    Ok(background::page(
+        &list,
+        &current(&state).behavior,
+        grokhub_core::now_ms(),
+    ))
+}
+
 fn arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
     serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null))
         .map_err(|err| format!("{name}: {err}"))
@@ -1173,14 +1392,41 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 desktop_control: false,
                 ..current(&state)
             };
+            let turn = Turn {
+                text: arg(args, "text")?,
+                mode: arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
+            };
             out(block_on(chat_turn(
                 app.clone(),
                 &state,
                 conversation_id,
-                arg(args, "text")?,
-                arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                turn,
                 settings,
             ))?)
+        }
+        // A paste or drop in the web app; the body cap keeps it under 1 MB.
+        "stage_attachment" => {
+            let conversation_id: String = arg(args, "conversationId")?;
+            let taken = state
+                .chats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&conversation_id);
+            if taken && !web.owns(&conversation_id) {
+                return Err(remote::NOT_YOURS.into());
+            }
+            web.adopt(&conversation_id);
+            out(stage_attachment(
+                state,
+                conversation_id,
+                arg(args, "name")?,
+                arg(args, "data")?,
+            )?)
+        }
+        "remove_attachment" => {
+            remove_attachment(state, own(args)?, arg(args, "path")?);
+            Ok(Value::Null)
         }
         "answer_elicit" => {
             answer_elicit(
@@ -1266,6 +1512,9 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_behavior" => out(get_behavior(state)),
+        "get_privacy" => out(block_on(get_privacy(state))?),
+        "get_background" => out(get_background(state)?),
         _ => Err(remote::refused()),
     }
 }
@@ -1544,6 +1793,8 @@ fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
     let builder = os_extras::plugins(builder);
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -1573,6 +1824,7 @@ pub fn run() {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                trays: attach::Trays::default(),
                 sign_in: Arc::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
@@ -1621,6 +1873,10 @@ pub fn run() {
             answer_elicit,
             cancel_chat,
             close_chat,
+            stage_attachment,
+            stage_attachment_paths,
+            pick_attachments,
+            remove_attachment,
             list_automations,
             add_automation,
             set_automation_enabled,
@@ -1695,7 +1951,17 @@ pub fn run() {
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
-            os_extras::set_notifications
+            os_extras::set_notifications,
+            get_behavior,
+            save_behavior,
+            save_defaults,
+            get_privacy,
+            set_offline_only,
+            open_data_folder,
+            get_background,
+            get_library,
+            library_cover,
+            library_play
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

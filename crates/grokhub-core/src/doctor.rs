@@ -85,9 +85,9 @@ pub fn doctor_cabin_line(running: bool) -> DoctorLine {
     DoctorLine {
         ok: running,
         text: if running {
-            "cabin running".into()
+            format!("{} running", crate::brand::product_name())
         } else {
-            "cabin not running".into()
+            format!("{} not running", crate::brand::product_name())
         },
     }
 }
