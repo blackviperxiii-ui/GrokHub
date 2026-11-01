@@ -395,6 +395,11 @@ fn games_from(
 const AGENT_DB: &str = "ProgramData/Battle.net/Agent/product.db";
 
 /// Battle.net games in each Wine prefix.
+///
+/// Installs are kept by their real path: several prefixes (a Lutris one, a
+/// Proton one) often reach one shared game folder through their own drive
+/// links or a symlinked `~/Games`, and that folder is one game, not one per
+/// prefix.
 pub fn find_in_prefixes(prefixes: &[PathBuf]) -> Vec<BnetGame> {
     let mut out = Vec::new();
     for prefix in prefixes {
@@ -406,6 +411,11 @@ pub fn find_in_prefixes(prefixes: &[PathBuf]) -> Vec<BnetGame> {
             Some(prefix),
             &map,
         ));
+    }
+    for g in &mut out {
+        if let Ok(real) = std::fs::canonicalize(&g.install) {
+            g.install = real;
+        }
     }
     dedupe(out)
 }
@@ -423,12 +433,22 @@ pub fn find_on_windows(drive_root: &Path) -> Vec<BnetGame> {
 }
 
 /// One entry per install folder; the database's product code wins over the
-/// default-folder guess.
-fn dedupe(games: Vec<BnetGame>) -> Vec<BnetGame> {
+/// default-folder guess. Every WoW product in one folder (Retail, PTR,
+/// Classic) is one game, kept under `wow` when that is one of them; its
+/// flavors come from the folder.
+fn dedupe(mut games: Vec<BnetGame>) -> Vec<BnetGame> {
+    games.sort_by_key(|g| g.product != "wow");
     let mut seen = BTreeSet::new();
     let mut out: Vec<BnetGame> = games
         .into_iter()
-        .filter(|g| seen.insert((g.install.clone(), g.product.clone())))
+        .filter(|g| {
+            let product = if g.is_wow() {
+                "wow"
+            } else {
+                g.product.as_str()
+            };
+            seen.insert((g.install.clone(), product.to_owned()))
+        })
         .collect();
     out.sort_by(|a, b| a.name().cmp(&b.name()).then(a.install.cmp(&b.install)));
     out
@@ -762,12 +782,10 @@ mod tests {
             .iter()
             .map(|g| (g.name(), g.install.as_path()))
             .collect();
+        // Retail and Classic Era share the folder: one game, two flavors.
         assert_eq!(
             found,
-            vec![
-                ("World of Warcraft".to_string(), wow.as_path()),
-                ("World of Warcraft Classic Era".to_string(), wow.as_path()),
-            ]
+            vec![("World of Warcraft".to_string(), wow.as_path())]
         );
         assert!(games
             .iter()
@@ -775,6 +793,41 @@ mod tests {
         assert_eq!(
             wow_flavors(&wow),
             vec![WowFlavor::Retail, WowFlavor::ClassicEra]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_wow_folder_reached_from_several_prefixes_is_one_game() {
+        let home = tmp("shared");
+        let shared = home.join("Library/World of Warcraft");
+        wow_install(&shared, &[("_retail_", "Wow.exe"), ("_ptr_", "WowT.exe")]);
+        let mut prefixes = Vec::new();
+        for name in ["battlenet", "battlenet-2", "lutris-wow"] {
+            let prefix = home.join("Games").join(name);
+            std::fs::create_dir_all(prefix.join("dosdevices")).unwrap();
+            std::os::unix::fs::symlink(home.join("Library"), prefix.join("dosdevices/d:")).unwrap();
+            put(
+                &prefix
+                    .join("drive_c")
+                    .join("ProgramData/Battle.net/Agent/product.db"),
+                &db(&[
+                    install("wow", "wow", "D:/World of Warcraft"),
+                    install("wow_ptr", "wow_ptr", "D:/World of Warcraft"),
+                ]),
+            );
+            prefixes.push(prefix);
+        }
+        // A symlinked ~/Games reaching the same prefix a second way.
+        std::os::unix::fs::symlink(home.join("Games"), home.join("GamesLink")).unwrap();
+        prefixes.push(home.join("GamesLink/battlenet"));
+        let games = find_in_prefixes(&prefixes);
+        assert_eq!(games.len(), 1, "{games:?}");
+        assert_eq!(games[0].product, "wow");
+        assert_eq!(games[0].install, std::fs::canonicalize(&shared).unwrap());
+        assert_eq!(
+            wow_flavors(&games[0].install),
+            vec![WowFlavor::Retail, WowFlavor::Ptr]
         );
     }
 
