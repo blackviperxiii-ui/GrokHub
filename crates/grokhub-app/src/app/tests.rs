@@ -38,6 +38,8 @@ mod board_ideas_tests;
 
 #[path = "work_log_tests.rs"]
 mod work_log_tests;
+#[path = "work_resume_tests.rs"]
+mod work_resume_tests;
 
 #[path = "idle_chat_state_tests.rs"]
 mod idle_chat_state_tests;
@@ -1977,6 +1979,7 @@ fn quiet_cabin() -> Cabin {
         chat_job_thread: None,
         inflight_open: false,
         run_tools_logged: Vec::new(),
+        work_resume: Default::default(),
         hub: std::sync::Arc::new(std::sync::Mutex::new(grokhub_core::HubState::empty())),
         hub_on: false,
         hub_port: grokhub_core::DEFAULT_PORT,

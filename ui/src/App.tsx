@@ -31,6 +31,7 @@ import { TabIcon } from "./TabIcon";
 const loaders = {
   agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   history: () => import("./History").then((m) => ({ default: m.History })),
@@ -43,6 +44,7 @@ const loaders = {
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
+const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
 const History = lazy(loaders.history);
 const Journal = lazy(loaders.journal);
@@ -408,6 +410,11 @@ export function App() {
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
           <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+        </Page>
+      )}
+      {opened.has("imagine") && (
+        <Page shown={view === "imagine"}>
+          <Imagine />
         </Page>
       )}
       {opened.has("agents") && (

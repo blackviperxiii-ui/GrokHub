@@ -66,17 +66,19 @@ fn probe() -> Option<u32> {
 /// Bytes read and milliseconds taken for one speed-test download.
 fn speed_test() -> Result<(u64, u64), String> {
     grokhub_core::offline::refuse()?;
-    let client = grokhub_core::connectivity::default_http_client().map_err(|e| e.to_string())?;
+    let client = grokhub_core::connectivity::default_http_client();
     let start = Instant::now();
-    let mut resp = client
+    let resp = client
         .get(nl::SPEED_URL)
         .timeout(Duration::from_secs(60))
-        .send()
+        .any_status()
+        .call()
         .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
+    if !(200..300).contains(&resp.status()) {
         return Err(format!("the test server answered {}", resp.status()));
     }
-    let bytes = std::io::copy(&mut resp, &mut std::io::sink()).map_err(|e| e.to_string())?;
+    let bytes =
+        std::io::copy(&mut resp.into_reader(), &mut std::io::sink()).map_err(|e| e.to_string())?;
     let ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     Ok((bytes, ms))
 }

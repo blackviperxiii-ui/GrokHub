@@ -2437,6 +2437,80 @@ label.toggle-row {
   }
 }
 
+/* Imagine: the prompt bar on top, the gallery (the cabin's wall) below. */
+.imagine {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.imagine-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.imagine-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.imagine-prompt textarea {
+  resize: vertical;
+  font: inherit;
+}
+
+.imagine-gallery {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.imagine-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.imagine-tile img,
+.imagine-video {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.imagine-tile.tall img,
+.imagine-tile.tall .imagine-video {
+  aspect-ratio: 2 / 3;
+}
+
+.imagine-caption {
+  font-size: 0.85em;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox video {
+  max-width: 100%;
+  max-height: calc(100% - 64px);
+  border-radius: 8px;
+}
+
 /* Settings → General and the composer's model chip. */
 .model-picker {
   position: relative;
