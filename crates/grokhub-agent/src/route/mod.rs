@@ -842,8 +842,12 @@ impl Router {
             offline: true,
             ..input.local.clone()
         };
-        let last_resort =
-            !too_hard && (elig || local::eligible(&as_offline, input.class, input.ctx_tokens));
+        let any_elig = elig || local::eligible(&as_offline, input.class, input.ctx_tokens);
+        let last_resort = !too_hard && any_elig;
+        // No sign-in or key at all: the device is the only model there is, so it
+        // takes hard work too while the step fits its context (the gate still
+        // keeps prepare:hard, cloud-only and hard-tool steps off it).
+        let no_keys_ok = any_elig;
         let local_id = reg.models.keys().map(String::as_str).find(|id| {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit, &input.spend, now_ms)
@@ -926,7 +930,7 @@ impl Router {
             } else if no_keys {
                 // No sign-in or key: there is no cloud model to escalate to, so
                 // the device keeps the step when it may take it.
-                if let Some(id) = local_id.filter(|_| last_resort) {
+                if let Some(id) = local_id.filter(|_| no_keys_ok) {
                     rules.push("local:no_keys".into());
                     pick = ModelPick {
                         model: id.to_string(),
@@ -977,7 +981,8 @@ impl Router {
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
-            } else if (((pick.no_route && cloud_down) || no_keys) && last_resort)
+            } else if (pick.no_route && cloud_down && last_resort)
+                || (no_keys && no_keys_ok)
                 || cloud_pool_empty_local
             {
                 // Plan models down / no healthy cloud route / no keys: fall back to local.

@@ -2,7 +2,9 @@
 //! Every credential here is a fake string in a temp HOME / GROKHUB_CONFIG, and
 //! every request goes to a loopback fake server. Nothing reaches xAI.
 
-use super::native_engine::set_responses_url_for_test;
+use super::native_engine::{
+    published_bearer_for_test, set_local_ready_for_test, set_responses_url_for_test,
+};
 use super::*;
 use grokhub_agent::AuthKind;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -386,6 +388,44 @@ fn native_signin_missing_gives_exact_message() {
     );
     eprintln!("PROOF none: {:?}", "Sign in with Grok or add an API key.");
     eprintln!("PROOF cli-only: {err:?}");
+}
+
+#[test]
+fn signed_out_with_local_ai_ready_starts_the_engine_with_no_bearer() {
+    let sb = Sandbox::new("native-signin-local-only");
+    let mut cabin = sb.cabin();
+    // Online, no sign-in and no key, Local AI off: the send is refused.
+    set_local_ready_for_test(Some(false));
+    assert!(!cabin.chat_ready());
+    assert!(!cabin.local_only_chat());
+    assert_eq!(
+        cabin.ensure_native_engine().unwrap_err(),
+        "Sign in with Grok or add an API key."
+    );
+    // Local AI on and installed: the chat starts, and the engine gets no
+    // bearer, so the router sends the turn to the device (`local:no_keys`).
+    set_local_ready_for_test(Some(true));
+    assert!(cabin.chat_ready());
+    assert!(cabin.local_only_chat());
+    cabin
+        .ensure_native_engine()
+        .expect("engine starts on Local AI");
+    let session = cabin
+        .acp
+        .as_ref()
+        .map(|handle| handle.session_id.clone())
+        .expect("engine handle");
+    assert_eq!(published_bearer_for_test(&session).as_deref(), Some(""));
+    // A sign-in or key still wins: the engine is handed it, not the device path.
+    cabin.secrets.api_key = "test-console-key".into();
+    assert!(!cabin.local_only_chat());
+    cabin.ensure_native_engine().expect("engine on the key");
+    assert_eq!(
+        published_bearer_for_test(&session).as_deref(),
+        Some("test-console-key")
+    );
+    set_local_ready_for_test(None);
+    cabin.acp = None;
 }
 
 #[test]
