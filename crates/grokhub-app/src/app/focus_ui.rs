@@ -50,6 +50,8 @@ pub(super) struct FocusState {
     pub elite: super::elite_ui::EliteState,
     /// Stardew Valley's farm saves, compared across a play session.
     pub stardew: super::stardew_ui::StardewState,
+    /// The Loadout ESO addon and what it saved.
+    pub eso: super::eso_ui::EsoUi,
 }
 
 impl Cabin {
@@ -72,6 +74,7 @@ impl Cabin {
         self.poll_screenshot_offer();
         self.tick_elite();
         self.tick_stardew();
+        self.tick_eso();
         if self.focus.shot.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

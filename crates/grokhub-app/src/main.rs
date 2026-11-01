@@ -154,13 +154,15 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
-                env!("CARGO_PKG_VERSION")
+                "grokhub {} — {}\n\n  grokhub           open the app (close stays in the tray)\n  grokhub --agent   start in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  the agent's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when a newer version is out: GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
+                env!("CARGO_PKG_VERSION"),
+                grokhub_core::brand::product_name()
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
-                env!("CARGO_PKG_VERSION")
+                "grokhub {} — {}\n\n  grokhub           open the app (close stays in the tray)\n  grokhub --agent   start in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  the agent's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when a newer version is out: git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
+                env!("CARGO_PKG_VERSION"),
+                grokhub_core::brand::product_name()
             );
         }
         Launch::Doctor => run_doctor(),
