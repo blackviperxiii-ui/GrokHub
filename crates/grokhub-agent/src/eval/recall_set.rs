@@ -7,7 +7,7 @@
 #![cfg(test)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::perm::ConfigGuard;
@@ -171,9 +171,8 @@ fn hit(row: &Row, pack: &str) -> bool {
     }
 }
 
-/// Each row's ask with whether its pack hit, on the index (legacy) backend.
-fn run() -> Vec<(&'static str, Kind, bool)> {
-    let (cfg, ws, _guard) = pair();
+/// The shared notes file, with the [`OLDER`] notes moved 90 days back.
+fn seed(cfg: &Path, ws: &Path) {
     fs::write(cfg.join("app.json"), "{}\n").unwrap();
     let mut text = String::new();
     for i in 0..20 {
@@ -183,11 +182,17 @@ fn run() -> Vec<(&'static str, Kind, bool)> {
         text.push_str(note);
         text.push_str("\n\n");
     }
-    fs::write(crate::memory::workspace_memory_path(&ws), text).unwrap();
+    fs::write(crate::memory::workspace_memory_path(ws), text).unwrap();
     for note in OLDER {
-        let moved = crate::memory::backdate_entries(&ws, note, 90 * 24 * 60 * 60).unwrap();
+        let moved = crate::memory::backdate_entries(ws, note, 90 * 24 * 60 * 60).unwrap();
         assert_eq!(moved, 1, "{note}");
     }
+}
+
+/// Each row's ask with whether its pack hit, on the index (legacy) backend.
+fn run() -> Vec<(&'static str, Kind, bool)> {
+    let (cfg, ws, _guard) = pair();
+    seed(&cfg, &ws);
     ROWS.iter()
         .map(|row| {
             let pack = crate::memory::first_turn_injection(&ws, row.ask).unwrap_or_default();
@@ -215,6 +220,67 @@ mod tests {
         assert_eq!(counts(Kind::Stemmed), 5);
         assert_eq!(counts(Kind::Recency), 2);
         assert_eq!(counts(Kind::Paraphrase), 5);
+    }
+
+    /// Every ask's hits and pack, scored at `now`.
+    fn recall_all(ws: &Path, now: i64) -> Vec<(Vec<crate::memory::Hit>, String)> {
+        ROWS.iter()
+            .map(|row| {
+                let hits = crate::memory::search_at(ws, row.ask, now).unwrap();
+                let pack = crate::memory::first_turn_injection(ws, row.ask).unwrap_or_default();
+                (hits, pack)
+            })
+            .collect()
+    }
+
+    /// Edits land one file change at a time (each picked up incrementally by
+    /// the next recall); then a from-scratch rebuild must recall the same hits,
+    /// in the same order, with the same scores, and pack the same text.
+    #[test]
+    fn the_incremental_index_recalls_exactly_what_a_full_rebuild_does() {
+        let (cfg, ws, _guard) = pair();
+        seed(&cfg, &ws);
+        let notes = crate::memory::workspace_memory_path(&ws);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let step = |ask: &str| crate::memory::search_at(&ws, ask, now).unwrap();
+        // A new note, appended the way an editor would.
+        let mut text = fs::read_to_string(&notes).unwrap();
+        text.push_str("the shelf by the window holds the spare controller\n\n");
+        fs::write(&notes, &text).unwrap();
+        assert!(step("spare controller")[0]
+            .body
+            .contains("spare controller"));
+        // A deleted note and an edited one.
+        let text = text
+            .replace(
+                "the build server runs nightly at two in the morning\n\n",
+                "",
+            )
+            .replace(
+                "the shelf note number 7 sits",
+                "the shelf note number 7 now sits",
+            );
+        fs::write(&notes, &text).unwrap();
+        assert!(step("build server nightly")
+            .iter()
+            .all(|hit| !hit.body.contains("build server")));
+        // A global note in its own file.
+        let global = crate::memory::global_memory_path();
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::write(&global, "the shelf in the hall keeps the backup drive\n").unwrap();
+        assert_eq!(step("backup drive hall")[0].scope, "global");
+
+        let incremental = recall_all(&ws, now);
+        assert!(incremental.iter().any(|(hits, _)| !hits.is_empty()));
+        crate::memory::rebuild_keeping_dates(&ws).unwrap();
+        let rebuilt = recall_all(&ws, now);
+        for ((row, inc), full) in ROWS.iter().zip(&incremental).zip(&rebuilt) {
+            assert_eq!(inc, full, "{}", row.ask);
+        }
+        assert_eq!(incremental.len(), 20);
     }
 
     /// Paraphrases share no word with their note. Word search misses all five

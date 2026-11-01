@@ -30,6 +30,7 @@ pub mod care_first;
 pub mod close_check;
 pub mod efficiency;
 pub mod longmem;
+pub mod memory_index;
 pub mod metrics;
 pub mod recall_set;
 pub mod sycophancy;
