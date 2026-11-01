@@ -199,11 +199,7 @@ pub(super) const BOARD_DROP_MIN_H: f32 = 180.0;
 impl Cabin {
     pub(super) fn ui_command(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
+            .frame(crate::theme::page_frame())
             .show(ui, |ui| {
                 if crate::cards::page_header(ui, "Command", "Run") {
                     let line = self.cmd_line.trim().to_string();
@@ -306,7 +302,7 @@ impl Cabin {
                     } else {
                         "Project hooks come from this repository and don't run on native chats until you trust this folder."
                     };
-                    ui.label(RichText::new(note).size(12.0).color(crate::theme::muted()));
+                    ui.label(RichText::new(note).size(crate::theme::TYPE_CAPTION).color(crate::theme::muted()));
                     let label = if trusted {
                         "Stop trusting this folder"
                     } else {
@@ -345,7 +341,7 @@ impl Cabin {
                 } else {
                     for h in &hooks {
                         ui.add_space(8.0);
-                        ui.label(RichText::new(&h.event).size(14.0).color(crate::theme::fg()));
+                        ui.label(RichText::new(&h.event).size(crate::theme::TYPE_LABEL).color(crate::theme::fg()));
                         let target_line = match (h.kind.is_empty(), h.command.is_empty()) {
                             (true, true) => String::new(),
                             (true, false) => h.command.clone(),
@@ -355,7 +351,7 @@ impl Cabin {
                         if !target_line.is_empty() {
                             ui.label(
                                 RichText::new(target_line)
-                                    .size(13.0)
+                                    .size(crate::theme::TYPE_BODY)
                                     .color(crate::theme::fg()),
                             );
                         }
@@ -367,13 +363,13 @@ impl Cabin {
                         };
                         ui.label(
                             RichText::new(origin)
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                         let matcher = if h.matcher.is_empty() { "any" } else { h.matcher.as_str() };
                         ui.label(
                             RichText::new(format!("matcher {matcher}"))
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                     }
@@ -388,11 +384,7 @@ impl Cabin {
 
     pub(super) fn ui_agents(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
+            .frame(crate::theme::page_frame())
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Queue", "");
                 ui.label(
@@ -505,11 +497,7 @@ impl Cabin {
 
     pub(super) fn ui_devices(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
+            .frame(crate::theme::page_frame())
             .show(ui, |ui| {
                 if crate::cards::page_header(
                     ui,
@@ -583,7 +571,7 @@ impl Cabin {
                     } else if sharing {
                         ui.label(
                             RichText::new("Paired. Make a new code after another computer joins.")
-                                .size(13.0)
+                                .size(crate::theme::TYPE_BODY)
                                 .color(crate::theme::muted()),
                         );
                         ui.add_space(8.0);
@@ -645,9 +633,7 @@ impl Cabin {
     pub(super) fn ui_memory(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
+                crate::theme::page_frame(),
             )
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Memory", "");
@@ -709,13 +695,13 @@ impl Cabin {
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new("Last reflect")
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::subtle()),
                     );
                     ui.label(
                         RichText::new(&self.reflect_diff)
                             .monospace()
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                 }
@@ -795,17 +781,20 @@ impl Cabin {
         if want == self.notices.auth_note {
             return;
         }
-        let before = std::mem::replace(&mut self.notices.auth_note, want);
+        self.notices.auth_note = want;
         let Some(text) = want else {
             return;
         };
-        // Still signed out, new wording (Local AI got ready): the one note
-        // says the new thing instead of a second note piling up.
-        if let Some(item) =
-            before.and_then(|old| self.notices.items.iter_mut().find(|n| n.text == old))
+        // New wording (Local AI got ready), or signed out again later in the
+        // session: the one sign-in note moves to the top with the new text
+        // and counts as unread, instead of a second note piling up.
+        if let Some(i) = self
+            .notices
+            .items
+            .iter()
+            .position(|n| n.text == NATIVE_SIGNIN_NOTE || n.text == LOCAL_ONLY_NOTE)
         {
-            item.text = text.to_string();
-            return;
+            self.notices.items.remove(i);
         }
         self.notify(
             super::notices::NoticeKind::Info,
@@ -868,7 +857,7 @@ impl Cabin {
                         .fill(crate::theme::panel())
                         .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                        .inner_margin(egui::Margin::same(24))
+                        .inner_margin(egui::Margin::same(crate::theme::PAGE_MARGIN as i8))
                         .show(ui, |ui| {
                             ui.set_max_width(520.0);
                             if crate::cards::get_started_panel(
@@ -900,7 +889,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("History")
-                    .font(crate::theme::title_font(28.0))
+                    .font(crate::theme::title_font(crate::theme::TYPE_HEADLINE))
                     .color(crate::theme::fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -932,7 +921,7 @@ impl Cabin {
 
     pub(super) fn ui_history(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
+            .frame(crate::theme::page_frame())
             .show(ui, |ui| {
             self.history_header(ui);
 page_body(ui, "history", |ui| {
@@ -969,7 +958,7 @@ page_body(ui, "history", |ui| {
                 && self.history_rx.is_none()
                 && self.history_q_at.is_none()
             {
-                ui.label(RichText::new("No matches.").size(13.0).color(crate::theme::muted()));
+                ui.label(RichText::new("No matches.").size(crate::theme::TYPE_BODY).color(crate::theme::muted()));
             }
             let mut open: Option<String> = None;
             for (target, line) in &self.history_hits {
@@ -980,7 +969,7 @@ page_body(ui, "history", |ui| {
                     .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new(line).size(13.0).color(crate::theme::fg()));
+                        ui.label(RichText::new(line).size(crate::theme::TYPE_BODY).color(crate::theme::fg()));
                     })
                     .response
                     .interact(egui::Sense::click());
@@ -999,7 +988,7 @@ page_body(ui, "history", |ui| {
             crate::cards::section_label(ui, "Chats");
             ui.label(
                 RichText::new("Your chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::subtle()),
             );
             let live_empty = self.messages.is_empty();
@@ -1011,7 +1000,7 @@ page_body(ui, "history", |ui| {
             if shown.is_empty() {
                 ui.label(
                     RichText::new("No chats yet.")
-                        .size(13.0)
+                        .size(crate::theme::TYPE_BODY)
                         .color(crate::theme::muted()),
                 );
             } else {
@@ -1077,9 +1066,7 @@ page_body(ui, "history", |ui| {
             || self.palette_open
             || self.shortcuts_open
             || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
-        let frame = egui::Frame::NONE
-            .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(24));
+        let frame = crate::theme::page_frame();
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Workboards", "New card") {
                 self.board_edit = None;
@@ -1618,9 +1605,7 @@ page_body(ui, "history", |ui| {
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
         self.ensure_native_listing();
-        let frame = egui::Frame::NONE
-            .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(24));
+        let frame = crate::theme::page_frame();
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
                 self.native_listing_cwd.clear();
@@ -1655,7 +1640,7 @@ page_body(ui, "history", |ui| {
             crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
             ui.label(
                 RichText::new(grokhub_core::brand::filled("SKILL.md under ~/.config/GrokHub/skills. {product} follows these on a matching ask and writes new ones after a hard host run."))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );
             ui.add_space(8.0);

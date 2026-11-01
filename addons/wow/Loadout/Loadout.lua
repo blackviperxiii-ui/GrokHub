@@ -16,13 +16,19 @@
 -- WoW writes saved variables to disk only on logout, exit or /reload, so
 -- that is when Loadout sees new data.
 --
+-- The Loadout app follows Mythic+ keys and boss pulls through the combat
+-- log file WoW writes after /combatlog. When you enter a dungeon, a raid or
+-- a key with combat logging off, this addon says so once in your chat
+-- window. It only asks the game whether logging is on and never turns it
+-- on itself. /loadout logreminder turns the reminder off or on.
+--
 -- One copy loads on every live flavor: Retail first, then Mists of
 -- Pandaria Classic, Burning Crusade Anniversary, Classic Era and the test
 -- clients. Each read checks the API exists before calling it and falls
 -- back to the older API Classic clients have, so every flavor saves what
 -- it can and nothing errors where an API is missing.
 
-local ADDON_VERSION = "1.2.0"
+local ADDON_VERSION = "1.3.0"
 local MAX_EVENTS = 100
 local MAX_LIST = 60
 -- Seconds to wait after a change before reading, so a burst of events
@@ -33,6 +39,9 @@ local f = CreateFrame("Frame")
 local dirty = false
 local scheduled = false
 local greeted = false
+-- The instance the combat log reminder last checked, so it checks once per
+-- instance entry. LoggingCombat is rate limited across all addons.
+local remindedFor = nil
 
 -- Retail 12.0 can hand addons "secret" values; those can't be stored, so
 -- they are skipped.
@@ -63,6 +72,10 @@ local function db()
   d.addon = ADDON_VERSION
   d.characters = d.characters or {}
   d.events = d.events or {}
+  d.settings = d.settings or {}
+  if d.settings.logReminder == nil then
+    d.settings.logReminder = true
+  end
   return d
 end
 
@@ -493,6 +506,44 @@ local function summary()
   print("|cffffb000Loadout|r saves this for the Loadout app when you /reload or log out.")
 end
 
+-- In a dungeon, raid or key with combat logging off, says once in chat how
+-- to turn it on. LoggingCombat() with no argument only reads the state; it
+-- answers nil when rate limited, and then nothing is said.
+local function checkCombatLog(force)
+  if not db().settings.logReminder or type(LoggingCombat) ~= "function" then
+    return
+  end
+  if not IsInInstance then
+    return
+  end
+  local inInstance, kind = IsInInstance()
+  if not inInstance or (kind ~= "party" and kind ~= "raid") then
+    remindedFor = nil
+    return
+  end
+  local instanceID = GetInstanceInfo and plain((select(8, GetInstanceInfo())))
+  if remindedFor ~= nil and remindedFor == instanceID and not force then
+    return
+  end
+  remindedFor = instanceID or true
+  if InCombatLockdown and InCombatLockdown() then
+    return
+  end
+  if try(LoggingCombat) == false then
+    print("|cffffb000Loadout|r: combat logging is off, so the Loadout app can't follow this run. Type /combatlog to turn it on. (/loadout logreminder hides this.)")
+  end
+end
+
+local function laterCheckCombatLog(force)
+  if C_Timer and C_Timer.After then
+    C_Timer.After(3, function()
+      checkCombatLog(force)
+    end)
+  else
+    checkCombatLog(force)
+  end
+end
+
 -- Clicking Loadout in the minimap's addon menu prints the summary.
 function Loadout_OnAddonCompartmentClick()
   snapshot()
@@ -516,6 +567,7 @@ for _, event in ipairs({
   "PLAYER_SPECIALIZATION_CHANGED",
   "UPDATE_INSTANCE_INFO",
   "CHALLENGE_MODE_COMPLETED",
+  "CHALLENGE_MODE_START",
   "CHALLENGE_MODE_MAPS_UPDATE",
   "WEEKLY_REWARDS_UPDATE",
   "MAJOR_FACTION_RENOWN_LEVEL_CHANGED",
@@ -538,6 +590,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     queue()
   elseif event == "PLAYER_ENTERING_WORLD" then
     queue()
+    laterCheckCombatLog(false)
     if not greeted then
       greeted = true
       print("|cffffb000Loadout|r " .. ADDON_VERSION .. " is recording for the Loadout app. Type /loadout for a summary.")
@@ -566,6 +619,9 @@ f:SetScript("OnEvent", function(_, event, ...)
       size = size,
     })
     dirty = true
+  elseif event == "CHALLENGE_MODE_START" then
+    -- A key starts inside the dungeon you already entered: check again.
+    laterCheckCombatLog(true)
   elseif event == "PLAYER_DEAD" then
     local c = char()
     if c then
@@ -586,7 +642,13 @@ f:SetScript("OnEvent", function(_, event, ...)
 end)
 
 SLASH_LOADOUT1 = "/loadout"
-SlashCmdList.LOADOUT = function()
+SlashCmdList.LOADOUT = function(msg)
+  if type(msg) == "string" and msg:lower():match("^%s*logreminder") then
+    local s = db().settings
+    s.logReminder = not s.logReminder
+    print("|cffffb000Loadout|r: combat log reminder " .. (s.logReminder and "on." or "off."))
+    return
+  end
   snapshot()
   summary()
 end

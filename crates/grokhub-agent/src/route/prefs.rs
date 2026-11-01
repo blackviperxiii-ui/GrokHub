@@ -143,12 +143,26 @@ pub struct ModelPrefs {
 
 /// A model that answers something other than a chat (a safety classifier,
 /// an embedding or rerank model): "Auto: all models" leaves it out unless
-/// its own preference lets Auto use it.
+/// its own preference lets Auto use it. Matched on whole words of the id
+/// (`llama-guard-4`, `text-embedding-3`), so `vanguard-70b` stays a chat
+/// model; the router also leaves out a model whose listing says it answers
+/// in something other than text.
 pub fn utility_model(id: &str) -> bool {
-    let id = id.to_ascii_lowercase();
-    ["safety", "guard", "moderation", "embed", "rerank", "shield"]
-        .iter()
-        .any(|w| id.contains(w))
+    const WORDS: [&str; 10] = [
+        "safety",
+        "guard",
+        "moderation",
+        "embed",
+        "embedding",
+        "embeddings",
+        "rerank",
+        "reranker",
+        "shield",
+        "shieldgemma",
+    ];
+    id.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| WORDS.contains(&w))
 }
 
 impl ModelPrefs {
@@ -340,7 +354,12 @@ mod tests {
             true
         ));
         assert!(utility_model("openrouter/meta-llama/llama-guard-4-12b"));
+        assert!(utility_model("openrouter/google/shieldgemma-9b"));
         assert!(!utility_model("grok-4.7"));
+        // Whole words only: a chat model that merely contains one is kept.
+        assert!(!utility_model("openrouter/vendor/vanguard-70b"));
+        assert!(!utility_model("openrouter/vendor/guardian-chat"));
+        assert!(!utility_model("openrouter/vendor/embedded-coder"));
         // Its own preference still wins: Never, or chats only.
         p.set_use(or, ModelUse::Never);
         assert!(!p.auto_allows(or, "chat:default", true));

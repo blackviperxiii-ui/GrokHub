@@ -5447,6 +5447,16 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "Stardew Valley",
         ));
         rows.push((
+            "key_card",
+            crate::game_watch_wow::key_card(None, 12, true, 1_700_000, at),
+            "Mythic+ key",
+        ));
+        rows.push((
+            "boss_kill_card",
+            crate::game_watch_wow::boss_kill_card("Ulgrax the Devourer", 16, 4, 1, at),
+            "Ulgrax the Devourer",
+        ));
+        rows.push((
             "session_card",
             crate::eso_addon::session_card(
                 &crate::eso_addon::EsoSession {

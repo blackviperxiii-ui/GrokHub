@@ -841,6 +841,18 @@ pub fn touch_global() {
     }
 }
 
+/// The model the device answers with, by file name (its GGUF stem): the
+/// running sidecar's, else the one the next start would load.
+pub fn model_name(config_dir: &Path) -> Option<String> {
+    let running = global_slot()
+        .lock()
+        .ok()
+        .and_then(|s| s.as_ref().filter(|s| s.alive()).map(|s| s.model.clone()));
+    running
+        .or_else(|| resolve_paths(config_dir).map(|p| p.model))
+        .and_then(|m| m.file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
 /// Settings → Local AI → "Keep the model loaded": the running sidecar takes
 /// the new idle timeout at once; the next start reads it from `local_perf`.
 pub fn set_idle_unload_secs(secs: u64) {

@@ -563,6 +563,16 @@ pub fn mark_resident() {
     }
 }
 
+/// Tests: forget the probe and the baseline, so no later test plans against
+/// a fake reading.
+#[cfg(test)]
+pub(crate) fn reset_free_probe() {
+    if let Ok(mut l) = live().lock() {
+        l.free_probe = None;
+        l.launch_free_vram_mb = None;
+    }
+}
+
 /// A launch is starting (or the model left): no baseline until the new
 /// model is resident, so the last model's reading never judges this one.
 pub fn clear_resident() {

@@ -101,9 +101,7 @@ impl Cabin {
     pub(super) fn ui_journal(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
+                crate::theme::page_frame(),
             )
             .show(ui, |ui| {
                 crate::cards::page_header(ui, "Journal", "");
@@ -111,7 +109,7 @@ impl Cabin {
                     RichText::new(
                         "Open questions and experiments — not tasks. Start a mission to run the next experiment, or file it on Workboards.",
                     )
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::subtle()),
                 );
                 ui.add_space(10.0);
@@ -133,7 +131,7 @@ impl Cabin {
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(format!("Due to revisit: {question}"))
-                                            .size(13.0)
+                                            .size(crate::theme::TYPE_BODY)
                                             .color(crate::theme::fg()),
                                     );
                                     ui.with_layout(
@@ -208,7 +206,7 @@ impl Cabin {
                     if ids.is_empty() {
                         ui.label(
                             RichText::new("No matches.")
-                                .size(13.0)
+                                .size(crate::theme::TYPE_BODY)
                                 .color(crate::theme::muted()),
                         );
                         return;
@@ -238,7 +236,7 @@ impl Cabin {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let title = RichText::new(&entry.question)
-                        .size(14.0)
+                        .size(crate::theme::TYPE_LABEL)
                         .strong()
                         .color(crate::theme::fg());
                     if ui
@@ -254,7 +252,7 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(entry.status.label())
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                     });
@@ -262,7 +260,7 @@ impl Cabin {
                 if !entry.next_experiment.trim().is_empty() {
                     ui.label(
                         RichText::new(format!("Next: {}", entry.next_experiment.trim()))
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::subtle()),
                     );
                 }
@@ -272,7 +270,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new("Question")
-                        .size(11.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::subtle()),
                 );
                 ui.add(
@@ -281,7 +279,7 @@ impl Cabin {
                 );
                 ui.label(
                     RichText::new("Context")
-                        .size(11.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::subtle()),
                 );
                 ui.add(
@@ -291,7 +289,7 @@ impl Cabin {
                 );
                 ui.label(
                     RichText::new("Next experiment")
-                        .size(11.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::subtle()),
                 );
                 ui.add(
@@ -300,7 +298,7 @@ impl Cabin {
                 );
                 ui.label(
                     RichText::new("Unknowns (one per line)")
-                        .size(11.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::subtle()),
                 );
                 ui.add(
@@ -337,7 +335,7 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(&opt.label)
-                                .size(13.0)
+                                .size(crate::theme::TYPE_BODY)
                                 .color(crate::theme::fg()),
                         );
                         if entry.options.len() > 1 && crate::cards::ghost_pill(ui, "Remove") {
@@ -375,7 +373,11 @@ impl Cabin {
                         format!("{} · {} — {}", ev.kind.as_str(), ev.label, ev.reference)
                     };
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(line).size(12.0).color(crate::theme::fg()));
+                        ui.label(
+                            RichText::new(line)
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::fg()),
+                        );
                         if crate::cards::ghost_pill(ui, "Remove") {
                             drop_ev = Some(ev.id.clone());
                         }
@@ -472,7 +474,7 @@ impl Cabin {
                     if !outcome.learned.is_empty() {
                         ui.label(
                             RichText::new(format!("Learned: {}", outcome.learned))
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::subtle()),
                         );
                     }
@@ -480,7 +482,7 @@ impl Cabin {
                 if let Some(board_id) = &entry.board_id {
                     ui.label(
                         RichText::new(format!("Workboard: {board_id}"))
-                            .size(11.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                 }
@@ -491,7 +493,7 @@ impl Cabin {
                             "History · {} events (kept on remove)",
                             entry.history.len()
                         ))
-                        .size(11.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
                     );
                 }

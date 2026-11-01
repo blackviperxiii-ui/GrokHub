@@ -1,0 +1,1 @@
+- The older pages (Command, Queue, Devices, Memory, History, Journal and Night) now use the same text sizes, page margins and red-rimmed Loadout cards as the rest of the app. Page titles match the newer pages instead of the old oversized title.

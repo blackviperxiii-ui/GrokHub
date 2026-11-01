@@ -1253,6 +1253,15 @@ pub fn call_model(
             grokhub_core::adult_guard::dest_name(to)
         )));
     }
+    let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
+    // The prompt calls the assistant Grok: every call that reaches a provider
+    // is told which model really answers, so it says so when asked.
+    super::identity::stamp(
+        &mut req.to_mut().input,
+        model,
+        None,
+        openrouter && routing().fallback,
+    );
     let key = key(config_dir, &p.id)
         .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();
@@ -1274,7 +1283,6 @@ pub fn call_model(
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
     let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
-    let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
     if openrouter {
         apply_openrouter_routing(&mut body, wire_model, &routing());
     }

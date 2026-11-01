@@ -1965,6 +1965,12 @@ fn auto_all_models_ranks_every_provider_model_and_gives_way_in_a_tight_week() {
     // No xAI sign-in: before "all models" Auto had only the chat's own model.
     let mut reg = fleet();
     reg.entitlement.credential = Credential::None;
+    // "All models" takes a provider model only with a listed price under the ceiling.
+    reg.models.get_mut(AN_MODEL).unwrap().meta.prices = Prices {
+        prompt: Some(2_000),
+        completion: Some(10_000),
+        ..Prices::default()
+    };
     let all = |on: bool| {
         std::sync::Arc::new(super::prefs::ModelPrefs {
             all: on,
@@ -2048,6 +2054,16 @@ fn auto_all_models_ranks_every_provider_model_and_gives_way_in_a_tight_week() {
         10,
     );
     assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    // No listed price (Anthropic lists none) and OR over the ceiling: "all
+    // models" alone takes neither, so the call keeps its own model.
+    reg.models.get_mut(AN_MODEL).unwrap().meta.prices = Prices::default();
+    let r = Router::choose(&ask(all(true), false), &reg, &profiles, &table, 10);
+    assert_ne!(r.model, AN_MODEL, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"cost:not_included".into()),
+        "{:?}",
+        r.rule_ids
+    );
 }
 
 #[test]
@@ -2134,6 +2150,11 @@ fn all_models_reaches_key_users_keeps_the_episode_and_leaves_unpriced_routers_ou
     // No sign-in: the model an episode runs on keeps its next step.
     let mut none = fleet();
     none.entitlement.credential = Credential::None;
+    none.models.get_mut(AN_MODEL).unwrap().meta.prices = Prices {
+        prompt: Some(2_000),
+        completion: Some(10_000),
+        ..Prices::default()
+    };
     let mut mid = ask("chat:default", "grok-4.7", prefs(true, &[]), false);
     mid.episode_model = Some(AN_MODEL);
     let r = Router::choose(&mid, &none, &profiles, &table, 10);
@@ -2173,4 +2194,98 @@ fn all_models_reaches_key_users_keeps_the_episode_and_leaves_unpriced_routers_ou
         10,
     );
     assert_eq!(r.model, router, "{:?}", r.rule_ids);
+}
+
+#[test]
+fn prefs_label_only_the_pick_auto_made_and_non_text_models_stay_out() {
+    use super::prefs::{ModelPrefs, ModelUse};
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    let all = std::sync::Arc::new(ModelPrefs {
+        all: true,
+        ..ModelPrefs::default()
+    });
+    let ask = |prefs: std::sync::Arc<ModelPrefs>| RouteInput {
+        provider: "xai",
+        class: "chat:default",
+        current_model: "grok-4.7",
+        spend: Spend {
+            providers: vec!["openrouter".into(), "anthropic".into()],
+            ..Spend::default()
+        },
+        prefs,
+        ..RouteInput::default()
+    };
+    // Auto ranked it in: the preference rule names that.
+    let r = Router::choose(&ask(all.clone()), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"prefs:auto_provider".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // The next step of the same episode is kept, not chosen by a preference.
+    let mut mid = ask(all.clone());
+    mid.episode_model = Some(OR_MODEL);
+    let r = Router::choose(&mid, &reg, &profiles, &table, 10);
+    assert!(
+        r.rule_ids.contains(&"episode:keep".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "prefs:auto_provider"),
+        "{:?}",
+        r.rule_ids
+    );
+    // The pick is the pick.
+    let mut picked = ask(std::sync::Arc::new(ModelPrefs::default()));
+    picked.prefer = Some(OR_MODEL);
+    let r = Router::choose(&picked, &reg, &profiles, &table, 10);
+    assert!(
+        r.rule_ids.contains(&"provider:picked".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "prefs:auto_provider"),
+        "{:?}",
+        r.rule_ids
+    );
+    // A model that answers in something other than text stays out of "all
+    // models"; its own preference still lets it in.
+    reg.models.get_mut(OR_MODEL).unwrap().meta.output_modalities = Some(vec!["embeddings".into()]);
+    let r = Router::choose(&ask(all), &reg, &profiles, &table, 10);
+    assert_ne!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+    let mut own = ModelPrefs {
+        all: true,
+        ..ModelPrefs::default()
+    };
+    own.set_use(OR_MODEL, ModelUse::Any);
+    let r = Router::choose(&ask(std::sync::Arc::new(own)), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, OR_MODEL, "{:?}", r.rule_ids);
+}
+
+#[test]
+fn every_provider_call_is_told_which_model_answers() {
+    let (dir, wire) = setup("r3b-identity");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    // Straight through the transport (Settings' Try it, an episode step, a
+    // chat): the identity rides the request without the caller adding it.
+    assert_eq!(send(&dir).unwrap().text, "hello from the provider");
+    let body: serde_json::Value = serde_json::from_str(&wire.bodies()[0]).unwrap();
+    let system = body["messages"][0].clone();
+    assert_eq!(system["role"], "system", "{body}");
+    let text = system["content"].to_string();
+    assert!(
+        text.contains(
+            "[Model identity] This reply comes from `vendor/cheap`, served through OpenRouter"
+        ),
+        "{text}"
+    );
+    assert_eq!(body["messages"][1]["role"], "user", "{body}");
+    let _ = std::fs::remove_dir_all(dir);
 }

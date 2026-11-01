@@ -1908,6 +1908,25 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::game_watch_rl::match_card(&Default::default(), now),
         "Rocket League",
     ));
+    let mut wow = grokhub_core::game_watch_wow::WowSession::default();
+    let wipe = grokhub_core::game_watch::Pull {
+        encounter_id: 2902,
+        name: "Ulgrax the Devourer".into(),
+        difficulty: 16,
+        group_size: 20,
+    };
+    wow.take(&grokhub_core::game_watch::WatchEvent {
+        at_ms: now,
+        kind: grokhub_core::game_watch::EventKind::PullEnd {
+            pull: wipe,
+            kill: false,
+        },
+    });
+    rows.push((
+        "post_wow_cards",
+        wow.close(now).unwrap(),
+        "Ulgrax the Devourer",
+    ));
     rows.push((
         "end_factorio_session",
         grokhub_core::factorio_state::session_card(
