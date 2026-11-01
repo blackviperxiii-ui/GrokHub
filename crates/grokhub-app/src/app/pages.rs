@@ -8,11 +8,11 @@ const SEND_SIGNIN_HINT: &str =
     "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
 const NATIVE_SIGNIN_NOTE: &str =
-    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
+    "Sign in with Grok in Settings → AI models, or add an API key there.";
 
 /// No sign-in or key, but Local AI is ready: chats answer on this computer.
 pub(super) const LOCAL_ONLY_NOTE: &str =
-    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
+    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → AI models for the full models.";
 
 /// A page body that scrolls under a fixed header. Pages drawn straight into
 /// a CentralPanel run off the bottom of the window once their content is
@@ -581,7 +581,7 @@ impl Cabin {
                         ui.horizontal(|ui| {
                             crate::cards::settings_note(
                                 ui,
-                                "Sign in with Grok in Settings → Account, or add an API key.",
+                                "Sign in with Grok in Settings → AI models, or add an API key.",
                             );
                             if crate::cards::ghost_pill(ui, "Sign in") {
                                 self.set_nav_id("settings");

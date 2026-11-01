@@ -59,6 +59,7 @@ pub mod game_watch_league;
 pub mod game_watch_minecraft;
 pub mod game_watch_pick;
 pub mod game_watch_poe;
+pub mod game_watch_rl;
 pub mod game_watch_store;
 pub mod game_watch_wow;
 pub mod gguf;

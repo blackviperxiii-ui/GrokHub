@@ -1,0 +1,9 @@
+[
+  { "word": "night", "row": "Automations", "core": "Automations" },
+  { "word": "schedule", "row": "Automations", "core": "Automations" },
+  { "word": "ideas", "row": "Pulse", "core": "Pulse" },
+  { "word": "feed", "row": "Pulse", "core": "Pulse" },
+  { "word": "keys", "row": "Shortcuts", "core": "Keyboard shortcuts" },
+  { "word": "keyboard", "row": "Shortcuts", "core": "Keyboard shortcuts" },
+  { "word": "hotkeys", "row": "Shortcuts", "core": "Keyboard shortcuts" }
+]

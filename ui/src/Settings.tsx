@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
   getAutostart,
@@ -68,26 +68,39 @@ export function Settings({
   // On a phone the sections are one row that scrolls; the next one peeks in.
   usePeek(nav, "x", settings !== null && sections(caps).length);
 
-  useEffect(() => {
-    if (goTo) {
-      setSection(goTo.section);
-      clear();
-    }
-  }, [goTo]);
+  // A new palette pick opens its section. Settings stays mounted between visits,
+  // so showing it again keeps the section that was open.
+  const [goToN, setGoToN] = useState(goTo?.n);
+  if (goTo && goTo.n !== goToN) {
+    setGoToN(goTo.n);
+    setSection(goTo.section);
+    clear();
+  }
 
   function show(next: Shape) {
     setSettings(next);
     setDesktopControl(next.desktopControl);
   }
 
+  // Runs each time Settings shows. Desktop control changed here and not saved
+  // keeps the edit; untouched, it takes the fresh value.
+  const refresh = useEffectEvent((next: Shape) => {
+    const was = settings;
+    if (!was) return show(next);
+    setSettings(next);
+    if (desktopControl === was.desktopControl) setDesktopControl(next.desktopControl);
+  });
   useEffect(() => {
-    getSettings().then(show, fail);
-  }, []);
+    getSettings().then(
+      (next) => refresh(next),
+      fail,
+    );
+  }, [fail]);
 
   useEffect(() => {
     if (!caps.autostart || caps.remote) return;
     getAutostart().then(setAutostartShown, fail);
-  }, [caps.autostart, caps.remote]);
+  }, [caps.autostart, caps.remote, fail]);
 
   // Each section is its own page: it opens at the top, however far the last one was read.
   useEffect(() => {
