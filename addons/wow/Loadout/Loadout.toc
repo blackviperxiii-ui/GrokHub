@@ -1,8 +1,10 @@
-## Interface: 120000, 110207, 50501, 40402, 11508
+## Interface: 120105, 120100, 120007, 120000, 110207, 50501, 40402, 11508
 ## Title: Loadout
-## Notes: Records your own characters' level, zone, gold, played time and boss kills for the Loadout desktop app. Read-only: automates nothing.
+## Notes: Records your own characters' gear, gold, spec, professions, Mythic+, vault, lockouts, reputations and more for the Loadout desktop app. Read-only: automates nothing.
 ## Author: Loadout
-## Version: 1.0.0
+## Version: 1.1.0
+## IconTexture: Interface\Icons\INV_Misc_Note_01
+## AddonCompartmentFunc: Loadout_OnAddonCompartmentClick
 ## SavedVariables: LoadoutDB
 ## X-Loadout-App: 1
 

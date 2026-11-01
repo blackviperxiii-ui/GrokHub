@@ -95,28 +95,39 @@ export interface Prefill {
 }
 
 const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: "Message Grok",
+  chat: `Message ${PRODUCT_NAME}`,
   plan: "Describe what to plan",
   btw: "Ask on the side",
 };
 
-export const CHAT_EMPTY = "Ask Grok anything.";
+export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
   `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
+export const SIGNED_OUT_GROK =
+  `Sign in with your Grok account, or add an xAI API key. Either one is kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";
 export const SIGNED_OUT_REMOTE =
-  `${PRODUCT_NAME} on your computer has no API key yet. Add one there, then chat here.`;
+  `${PRODUCT_NAME} on your computer isn't signed in yet. Sign in there, then chat here.`;
 
 /** One primary sign-in button and one hint, on every platform. The web app
  * signs in on the computer, so it only says so. */
-function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void }) {
+function SignedOut({
+  remote,
+  grok,
+  onSignIn,
+}: {
+  remote: boolean;
+  /** This device offers Sign in with Grok. */
+  grok: boolean;
+  onSignIn: () => void;
+}) {
   if (remote) return <p className="empty">{SIGNED_OUT_REMOTE}</p>;
   return (
     <div className="signed-out" role="region" aria-label="Sign in">
       <h2>Sign in to start</h2>
-      <p>{SIGNED_OUT}</p>
+      <p>{grok ? SIGNED_OUT_GROK : SIGNED_OUT}</p>
       <button type="button" onClick={onSignIn}>
-        Add your API key
+        {grok ? "Sign in with Grok" : "Add your API key"}
       </button>
       <p className="note">{SIGNED_OUT_KEY_HINT}</p>
     </div>
@@ -276,6 +287,7 @@ export function Chat({
   notice,
   active = true,
   remote = false,
+  grokSignIn = false,
 }: {
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
@@ -287,6 +299,8 @@ export function Chat({
   notice?: RunNotice & { n: number };
   active?: boolean;
   remote?: boolean;
+  /** Settings → Account offers Sign in with Grok here. */
+  grokSignIn?: boolean;
 }) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
@@ -537,8 +551,8 @@ export function Chat({
     <section className="chat" aria-label="Chat">
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
-        {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
-          <SignedOut remote={remote} onSignIn={onSignIn} />
+        {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
+          <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
           items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
         )}

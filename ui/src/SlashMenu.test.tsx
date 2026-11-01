@@ -41,7 +41,7 @@ const SETTINGS: Settings = {
   theme: "system",
   version: "3.1.0",
   summonHotkey: false,
-  notifications: false,
+  notifications: true,
 };
 
 const ROWS: SlashHit[] = [

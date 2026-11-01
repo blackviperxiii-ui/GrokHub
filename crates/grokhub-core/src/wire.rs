@@ -1577,7 +1577,7 @@ pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
             "Done"
         }
         "cancelled" | "canceled" => "Cancelled",
-        "max_tokens" => "Truncated — Grok is continuing",
+        "max_tokens" => "Truncated — continuing",
         "max_turn_requests" | "max_turns_reached" => "Max turns",
         "refusal" => "Refused",
         other => other,
@@ -1656,7 +1656,7 @@ pub fn retry_status_line(msg: &str) -> String {
 pub fn rewrite_truncation_error(msg: &str) -> String {
     match classify_stream_error(msg) {
         StreamErrorKind::TruncationContinue => {
-            "Output hit the token limit. Grok is continuing automatically.".into()
+            "Output hit the token limit. Continuing automatically.".into()
         }
         StreamErrorKind::CreditLimit => {
             "Credit limit reached. Try Again retries the last prompt.".into()
@@ -1666,7 +1666,7 @@ pub fn rewrite_truncation_error(msg: &str) -> String {
             if l.contains("unreachable") || l.contains("coordinator") {
                 "Subagent coordinator busy — retrying.".into()
             } else {
-                "Grok hit a transient inference error and is retrying.".into()
+                "The model hit a transient inference error and is retrying.".into()
             }
         }
         StreamErrorKind::Fatal => msg.to_string(),
