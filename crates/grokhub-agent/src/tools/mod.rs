@@ -493,6 +493,8 @@ mod tests {
     /// tools share a name, so chat fails before the first token.
     #[test]
     fn schemas_for_has_no_duplicate_names() {
+        // Full tool list and per-turn system rewrite: the mode this test checks.
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         for readonly_session in [false, true] {
             for desktop in [false, true] {
                 let gate = Gate {

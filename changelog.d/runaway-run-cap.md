@@ -1,0 +1,1 @@
+- A run whose replies keep getting cut off at the output limit now stops after three in a row and says so, instead of looping. A run with no step limit now pauses once it has sent about 1M input tokens, and a "continue" picks it up. Normal runs are unchanged: the efficiency bench shows the same requests, tokens and recall before and after.

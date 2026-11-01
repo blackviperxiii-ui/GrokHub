@@ -1,1 +1,0 @@
-- Pulse picks its layout from the whole page beside the rail, as the deck's container rules do, so a 1024 px window now shows one column with the feed below instead of the Feed | Ideas switch. On that one-column layout the header's Suggest ideas reads "Suggest".

@@ -79,6 +79,10 @@ static LIVE: AtomicU8 = AtomicU8::new(ConnectivityState::Unknown as u8);
 
 /// Process-wide live state (debounced). Cabin reads this; writers use [`Connectivity`].
 pub fn state() -> ConnectivityState {
+    // Offline only reads as Offline, so the router goes local and nothing probes.
+    if crate::offline::enabled() {
+        return ConnectivityState::Offline;
+    }
     ConnectivityState::from_u8(LIVE.load(Ordering::SeqCst))
 }
 
@@ -281,7 +285,7 @@ impl Connectivity {
         client: &reqwest::blocking::Client,
         now_ms: u64,
     ) -> Option<Result<(), reqwest::Error>> {
-        if !self.probe_due(now_ms) {
+        if !self.probe_due(now_ms) || crate::offline::enabled() {
             return None;
         }
         let url = self.probe_url.clone().unwrap_or_default();

@@ -1,1 +1,0 @@
-- Chat tabs under the title bar replace the rail chat drawer, with soft-delete trash that restores within 30 days.

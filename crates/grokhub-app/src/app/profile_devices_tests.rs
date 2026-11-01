@@ -257,7 +257,7 @@ fn devices_hostname_must_not_block_the_ui() {
     let host = src
         .split("fn hostname_i()")
         .nth(1)
-        .and_then(|s| s.split("\nfn discover_hub_pair_url(").next())
+        .and_then(|s| s.split("fn discover_hub_pair_url(").next())
         .expect("hostname_i");
     assert!(
         host.contains("run_limited("),

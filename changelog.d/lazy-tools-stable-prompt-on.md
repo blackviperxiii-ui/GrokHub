@@ -1,0 +1,1 @@
+- Lazy tools and the stable prompt are now on by default, cutting tokens per chat by about a quarter to a third with recall unchanged. Tools a chat loads stay loaded for that chat, and reopened chats and exports show only what you typed. Set `enabled = false` in `deferred_tools.toml` or `prefix_cache.toml` to turn either off.

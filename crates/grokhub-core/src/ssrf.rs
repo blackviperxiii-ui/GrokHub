@@ -27,6 +27,7 @@ pub fn runtime_download_host_ok(host: &str) -> bool {
 
 /// Refuse non-HTTPS runtime downloads and hosts outside [`RUNTIME_DOWNLOAD_HOSTS`].
 pub fn runtime_download_url_ok(url: &str) -> Result<(), String> {
+    crate::offline::refuse()?;
     let url = url.trim();
     if !url.starts_with("https://") {
         return Err("engine download must use HTTPS".into());
@@ -86,6 +87,13 @@ fn ipv4_blocked(ip: Ipv4Addr) -> bool {
 
 /// Resolver shared by MCP registry refresh, Pulse, `web_fetch`, and media.
 pub fn public_only_resolve(netloc: &str) -> io::Result<Vec<std::net::SocketAddr>> {
+    // Offline only: this resolver only ever dials public hosts, so none go.
+    if crate::offline::enabled() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            *crate::offline::OFFLINE_MSG,
+        ));
+    }
     let host = netloc
         .rsplit_once(':')
         .map(|(host, _)| host)
@@ -115,6 +123,7 @@ pub fn public_only_resolve(netloc: &str) -> io::Result<Vec<std::net::SocketAddr>
 
 /// HTTPS URL on the official MCP registry only (hostname + public-address rail).
 pub fn guard_mcp_registry_url(url: &str) -> Result<(), String> {
+    crate::offline::refuse()?;
     let url = url.trim();
     if !url.to_ascii_lowercase().starts_with("https://") {
         return Err("MCP registry fetch requires https".into());

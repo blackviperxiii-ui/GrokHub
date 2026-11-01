@@ -177,6 +177,7 @@ pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
 /// Any fetch, timeout or ref error is `Err` — callers must not flip the
 /// channel then, and there is no fallback to stale cached refs.
 pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree".into());
     }
@@ -327,6 +328,7 @@ pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, Stri
 }
 
 fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
+    crate::offline::refuse()?;
     let want = channel.branch();
     let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
     let (ok, _) = git_stdout_within(
@@ -480,6 +482,8 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// Same plan as `update_cmds`, for the host the caller named, so a Windows
 /// test can still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
+    // Every plan pulls from GitHub (or downloads a release): none run offline.
+    crate::offline::refuse()?;
     if !is_grokhub_source(source) {
         return Err(format!(
             "{product} can't find its source folder (~/{id} or ~/.config/{id}/source).",
@@ -552,6 +556,7 @@ pub fn update_cmds_for_host_in(
     windows: bool,
     channel: Channel,
 ) -> Result<Vec<String>, String> {
+    crate::offline::refuse()?;
     match source {
         Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),

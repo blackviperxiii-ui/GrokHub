@@ -655,9 +655,8 @@ fn background_model_calls_run_at_low_effort() {
             "{name} runs on its own and must use low effort: {body}"
         );
     }
-    // Chips, the greeting, ideas and the feed digest go through `fast_once`.
+    // The greeting, ideas and the feed digest go through `fast_once`.
     for name in [
-        "spawn_native_chips",
         "spawn_native_greeting",
         "spawn_native_ideas",
         "spawn_native_digest",

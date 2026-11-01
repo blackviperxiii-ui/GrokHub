@@ -1,1 +1,0 @@
-- Security: in-app updates unpack into a new private folder with a random name, so another account on the same Linux computer can no longer swap the verified binary before it installs. Voice clips, pasted pictures and spoken replies also go to a private temp folder instead of fixed names in /tmp.

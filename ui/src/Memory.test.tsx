@@ -115,7 +115,7 @@ describe("Memory", () => {
     });
     render(<Memory />);
     await userEvent.type(await screen.findByLabelText("New note"), " deploys on fridays ");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Global" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Global" }));
     await userEvent.click(screen.getByRole("button", { name: "Remember" }));
 
     expect(api.addMemory).toHaveBeenCalledWith("deploys on fridays", true);
@@ -151,7 +151,7 @@ describe("Memory", () => {
     const project = await screen.findByLabelText("Project notes");
     await userEvent.type(project, "half typed");
     await userEvent.type(screen.getByLabelText("New note"), "new");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Global" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Global" }));
     await userEvent.click(screen.getByRole("button", { name: "Remember" }));
 
     await waitFor(() =>
@@ -243,7 +243,7 @@ describe("Memory", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete Lunch is at noon on Friday" }));
     expect(api.forgetMemoryRow).toHaveBeenCalledWith("mem-lunch");
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "Remember new lines" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Remember new lines" }));
     expect(api.setMemoryWrites).toHaveBeenCalledWith(false);
     expect(await screen.findByText("Memory is off. Nothing new is written.")).toBeInTheDocument();
   });
