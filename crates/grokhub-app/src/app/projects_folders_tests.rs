@@ -23,9 +23,9 @@ impl TempHome {
         std::fs::create_dir_all(&home).unwrap();
         let keys = ["HOME", "USERPROFILE", "GROKHUB_CONFIG"];
         let prev = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
-        std::env::set_var("HOME", &home);
-        std::env::set_var("USERPROFILE", &home);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("USERPROFILE", &home) };
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         Self {
             root,
             home,
@@ -49,8 +49,8 @@ impl Drop for TempHome {
     fn drop(&mut self) {
         for (k, v) in self.prev.drain(..) {
             match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
+                Some(v) => unsafe { std::env::set_var(k, v) },
+                None => unsafe { std::env::remove_var(k) },
             }
         }
         let _ = std::fs::remove_dir_all(&self.root);
@@ -241,7 +241,7 @@ fn make_folder_saves_harbor_notes() {
 fn remove_project_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("remove-project");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.remove_project_id("missing");
@@ -358,12 +358,12 @@ fn rename_folder_and_move_project_into_folder() {
 fn project_bind_show_and_clear() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("project-bind");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let home_s = home.display().to_string().trim_end_matches('/').to_string();
     let prev_home = std::env::var("HOME").ok();
-    std::env::set_var("HOME", &home_s);
+    unsafe { std::env::set_var("HOME", &home_s) };
     let dock = format!("{}/dock", root.display().to_string().trim_end_matches('/'));
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/project");
@@ -386,10 +386,10 @@ fn project_bind_show_and_clear() {
     assert!(cabin.project_sel.is_none());
     assert_eq!(cabin.status, "Unbound — full desktop");
     assert!(!cabin.running);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     match prev_home {
-        Some(h) => std::env::set_var("HOME", h),
-        None => std::env::remove_var("HOME"),
+        Some(h) => unsafe { std::env::set_var("HOME", h) },
+        None => unsafe { std::env::remove_var("HOME") },
     }
 }
 
@@ -399,7 +399,7 @@ fn project_menu_rename_move_and_delete() {
     let _guard = crate::config::hold_test_config();
     let root = crate::config::test_config_root("proj-menu");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -477,7 +477,7 @@ fn project_menu_rename_move_and_delete() {
     let _done = io.lock().unwrap_or_else(|e| e.into_inner());
     drop(_done);
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #187.
@@ -487,7 +487,7 @@ fn project_show_and_clear_stay_off_a_run() {
     let root = crate::config::test_config_root("project-show");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(cabin.cfg.project_dir.is_empty());
@@ -529,7 +529,7 @@ fn project_acts_need_a_selection() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("project-need-sel");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     assert!(cabin.project_sel.is_none());
@@ -555,7 +555,7 @@ fn project_acts_need_a_selection() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #192.
@@ -564,7 +564,7 @@ fn stage_new_folder_asks_for_a_name() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("stage-folder");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -591,7 +591,7 @@ fn cancel_staged_folder_drops_it() {
     let root = crate::config::test_config_root("cancel-folder");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -618,7 +618,7 @@ fn finish_staged_folder_renames_it() {
     let root = crate::config::test_config_root("finish-folder");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -675,7 +675,7 @@ fn make_folder_names_a_folder() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("make-folder");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = quiet_cabin();
     assert!(!cabin.running);
@@ -702,7 +702,7 @@ fn make_folder_names_a_folder() {
     assert!(!cabin.running);
 
     settle_project_flush(&cabin);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #198.
@@ -711,7 +711,7 @@ fn new_chat_under_folder_stays_off_a_run() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("folder-chat");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.projects.push(ProjectNode {
@@ -747,7 +747,7 @@ fn new_chat_under_folder_stays_off_a_run() {
     assert!(!thread.scratch);
     assert_eq!(thread.project_id.as_deref(), Some("f1"));
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -756,7 +756,7 @@ fn new_chat_under_folder_stays_off_a_run() {
 fn remove_from_folder_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("remove-folder");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.projects = vec![
@@ -820,7 +820,7 @@ fn remove_from_folder_stays_off_a_run() {
 fn add_to_folder_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("add-folder");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.projects.push(ProjectNode {
         id: "p1".into(),
@@ -882,7 +882,7 @@ fn add_to_folder_stays_off_a_run() {
 fn bind_empty_project_stays_off_a_run() {
     let _cfg = crate::config::hold_test_config();
     let root = crate::config::test_config_root("bind-empty");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.projects = vec![
@@ -958,7 +958,7 @@ fn remove_project_returns_chats() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("remove-chats");
     let prev = std::env::var("GROKHUB_CONFIG").ok();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(cabin.cfg.project_dir.is_empty());
@@ -1002,8 +1002,8 @@ fn remove_project_returns_chats() {
     assert!(cabin.cfg.project_dir.is_empty());
 
     match prev {
-        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-        None => std::env::remove_var("GROKHUB_CONFIG"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
     }
 }
 
@@ -1012,7 +1012,7 @@ fn remove_project_returns_chats() {
 fn remove_bound_project_unbinds() {
     let _guard = crate::config::hold_test_config();
     let root = crate::config::test_config_root("unbind-remove");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     let path = "/tmp/grokhub-unbound-harbor";
@@ -1047,7 +1047,7 @@ fn remove_bound_project_unbinds() {
 fn remove_folder_returns_its_project() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("drop-folder");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.projects = vec![
         ProjectNode {
@@ -1154,7 +1154,7 @@ fn projects_add_cancel_drops_the_staged_folder() {
     let root = crate::config::test_config_root("proj-add-cancel");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.stage_new_folder();

@@ -1109,8 +1109,8 @@ mod tests {
         std::fs::create_dir_all(home.join(".config")).unwrap();
         let old_home = std::env::var_os("HOME");
         let old_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("HOME", &home);
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(desktop_dir(), Some(home.join("Desktop")));
         std::fs::write(
             home.join(".config/user-dirs.dirs"),
@@ -1119,11 +1119,11 @@ mod tests {
         .unwrap();
         assert_eq!(desktop_dir(), Some(home.join("Schreibtisch")));
         match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
         if let Some(v) = old_xdg {
-            std::env::set_var("XDG_CONFIG_HOME", v);
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", v) };
         }
         let _ = std::fs::remove_dir_all(&home);
     }

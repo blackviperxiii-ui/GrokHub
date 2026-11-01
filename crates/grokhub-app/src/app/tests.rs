@@ -518,7 +518,7 @@ fn grok_login_powers_history_and_imagine() {
         .find("io.lock()")
         .expect("secrets arm takes persist_io");
     let svc_order = svc_secrets
-        .find("take_secrets(gen)")
+        .find("take_secrets(r#gen)")
         .expect("secrets arm checks order");
     let svc_save = svc_secrets
         .find("secrets::save")
@@ -1294,7 +1294,7 @@ fn open_memory_file_flushes_the_editor_you_left() {
 fn sign_out_oauth_clears_the_session() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("sign-out");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.imagine_pending = true;
     cabin.sign_out_oauth();
@@ -1302,7 +1302,7 @@ fn sign_out_oauth_clears_the_session() {
     assert!(cabin.secrets.oauth.is_none());
     assert!(!cabin.imagine_pending);
     assert!(cabin.oauth_pending.is_none());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #135.
@@ -1310,7 +1310,7 @@ fn sign_out_oauth_clears_the_session() {
 fn board_add_move_archive_restore_and_link() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("board-acts");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
     let thread_id = cabin.threads[cabin.thread_idx].id.clone();
@@ -1406,7 +1406,7 @@ fn workboard_delete_removes_the_card_and_keeps_its_chat() {
 fn memory_switch_flushes_the_file_you_left() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("memory-switch");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body = "harbor light".into();
@@ -1439,7 +1439,7 @@ fn memory_switch_flushes_the_file_you_left() {
 fn open_board_thread_opens_the_linked_chat() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("board-open");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.open_board_thread("missing");
     assert_eq!(cabin.status, "Linked chat is gone");
@@ -1459,7 +1459,7 @@ fn open_board_thread_opens_the_linked_chat() {
 fn store_session_plan_opens_once_and_keeps_the_first() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("session-plan");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.store_session_plan("   ", true);
     assert!(cabin.threads.is_empty());
@@ -1481,7 +1481,7 @@ fn store_session_plan_opens_once_and_keeps_the_first() {
 fn board_edit_fills_the_form_and_save_writes_it() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("board-edit");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.apply_board_act(Some(BoardAct::Edit("missing".into()))));
     assert!(!cabin.board_compose);
@@ -1520,7 +1520,7 @@ fn grok_tasks_and_commands_stay_off_a_run() {
     let root = crate::config::test_config_root("grok-tasks");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1566,7 +1566,7 @@ fn grok_tasks_and_commands_stay_off_a_run() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -1605,7 +1605,7 @@ fn hub_and_memory_show_stay_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("hub-memory");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1680,7 +1680,7 @@ fn plan_and_empty_video_stay_off_a_run() {
     let root = crate::config::test_config_root("plan-video");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -1718,7 +1718,7 @@ fn view_plan_opens_a_stored_plan() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("view-plan");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -1748,7 +1748,7 @@ fn rewind_files_asks_for_a_bind() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("rewind-bind");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     if !cabin.cfg.project_dir.is_empty() {
         cabin.cfg.project_dir = String::new();
@@ -1769,7 +1769,7 @@ fn goal_pin_sets_and_clears() {
     let _hold = config::hold_test_config();
     let root = config::test_config_root("goal-pin");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let _pin = config::TestConfigDir::set(root.clone());
 
     let mut cabin = Cabin::quiet_for_test();
@@ -1844,7 +1844,7 @@ fn btw_sets_a_side_ask() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("btw-side-ask");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1871,7 +1871,7 @@ fn missing_skill_stays_off_a_run() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("missing-skill");
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash(grokhub_core::Slash::Skill("harbor".into()));
     assert_eq!(cabin.status, "No skill harbor");
@@ -1886,7 +1886,7 @@ fn empty_undo_and_retry_stay_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("empty-undo-retry");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     assert!(cabin.messages.is_empty());
@@ -1903,7 +1903,7 @@ fn empty_undo_and_retry_stay_off_a_run() {
     assert!(!cabin.running);
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #191.
@@ -1913,7 +1913,7 @@ fn forget_clears_memory_off_a_run() {
     let root = crate::config::test_config_root("forget-off-run");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -1935,7 +1935,7 @@ fn forget_topic_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("forget-topic");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.new_thread(false);
@@ -1996,7 +1996,7 @@ fn quiet_cabin() -> Cabin {
         setup: super::setup_wizard::SetupWizard::default(),
         persist_gen: 0,
         persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
+        cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { r#gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),
         board_notes: String::new(),
@@ -2355,7 +2355,7 @@ fn empty_skill_tile_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("empty-skill-tile");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let tile = grokhub_core::LearnedSuggestion {
         kind: grokhub_core::SuggestionKind::Skill,
@@ -2389,7 +2389,7 @@ fn empty_update_plan_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("empty-update-plan");
     let prev = std::env::var("GROKHUB_CONFIG").ok();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut app = Cabin::quiet_for_test();
     app.start_overlay_update(Vec::new());
     assert_eq!(app.status, "Update plan empty");
@@ -2398,8 +2398,8 @@ fn empty_update_plan_stays_off_a_run() {
     assert!(!app.running);
     assert!(app.queued_overlay.is_none());
     match prev {
-        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-        None => std::env::remove_var("GROKHUB_CONFIG"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
     }
 }
 
@@ -2408,7 +2408,7 @@ fn empty_update_plan_stays_off_a_run() {
 fn busy_update_stays_queued() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("busy_update_stays_queued");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = true;
     cabin.start_overlay_update(vec!["echo hi".into()]);
@@ -2427,7 +2427,7 @@ fn busy_update_stays_queued() {
 fn plan_pill_stays_off_a_run() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("plan-pill");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     if cabin.threads.is_empty() {
         cabin.new_thread(false);

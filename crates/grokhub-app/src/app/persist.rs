@@ -92,18 +92,18 @@ pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) -> R
 /// generation it was taken at.
 #[derive(Default)]
 pub(super) struct PersistMark {
-    gen: u64,
+    r#gen: u64,
     projects: u64,
     secrets: u64,
 }
 
 impl PersistMark {
     /// Claim the secrets.json write for `gen`; false when a newer one already landed.
-    pub(super) fn take_secrets(&mut self, gen: u64) -> bool {
-        if gen <= self.secrets {
+    pub(super) fn take_secrets(&mut self, r#gen: u64) -> bool {
+        if r#gen <= self.secrets {
             return false;
         }
-        self.secrets = gen;
+        self.secrets = r#gen;
         true
     }
 }
@@ -116,36 +116,36 @@ impl PersistMark {
 pub(super) fn write_persist_disk_in_order(
     dir: &std::path::Path,
     snap: &PersistSnap,
-    gen: u64,
+    r#gen: u64,
     mark: &Mutex<PersistMark>,
 ) -> Result<(), String> {
     let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
-    if gen > mark.gen {
+    if r#gen > mark.r#gen {
         // A newer secrets-only write may have landed first; keep its tokens.
-        let r = if snap.secrets.is_some() && !mark.take_secrets(gen) {
+        let r = if snap.secrets.is_some() && !mark.take_secrets(r#gen) {
             let mut fresh = snap.clone();
             fresh.secrets = None;
             write_persist_disk(dir, &fresh)
         } else {
             write_persist_disk(dir, snap)
         };
-        mark.gen = gen;
+        mark.r#gen = r#gen;
         if snap.projects.is_some() {
-            mark.projects = gen;
+            mark.projects = r#gen;
         }
         return r;
     }
     let mut first = Ok(());
     if let Some(p) = &snap.projects {
-        if gen > mark.projects {
+        if r#gen > mark.projects {
             if let Err(e) = crate::store::save_projects(p) {
                 first = Err(e);
             }
-            mark.projects = gen;
+            mark.projects = r#gen;
         }
     }
     if let Some(s) = &snap.secrets {
-        if mark.take_secrets(gen) {
+        if mark.take_secrets(r#gen) {
             if first.is_ok() {
                 if let Err(e) = secrets::save(s) {
                     first = Err(e);
@@ -169,10 +169,10 @@ impl Cabin {
         self.last_persist = Instant::now();
         self.geom_dirty = false;
         let dir = config::config_dir();
-        let gen = self.next_persist_gen();
+        let r#gen = self.next_persist_gen();
         let err = self.persist_err.clone();
         // PersistService worker takes persist_io + write_persist_disk_in_order.
-        self.persist_svc.submit_full(dir, snap, gen, None, err);
+        self.persist_svc.submit_full(dir, snap, r#gen, None, err);
     }
 
     pub(super) fn next_persist_gen(&mut self) -> u64 {
@@ -261,10 +261,11 @@ impl Cabin {
         let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
-        let gen = self.next_persist_gen();
+        let r#gen = self.next_persist_gen();
         let err = self.persist_err.clone();
         // PersistService worker takes persist_io + write_persist_disk_in_order.
-        self.persist_svc.submit_full(dir, snap, gen, Some(tx), err);
+        self.persist_svc
+            .submit_full(dir, snap, r#gen, Some(tx), err);
     }
 
     pub(super) fn poll_persist(&mut self) {
@@ -300,13 +301,13 @@ impl Cabin {
         let dir = config::config_dir();
         let mut cfg = self.cfg.clone();
         cfg.api_key.clear();
-        let gen = match slot.lock() {
+        let r#gen = match slot.lock() {
             Ok(mut g) => publish_cfg(&mut g, cfg),
             Err(_) => return,
         };
         let err = self.persist_err.clone();
         // PersistService worker takes persist_io before save_in.
-        self.persist_svc.submit_settings(dir, slot, gen, err);
+        self.persist_svc.submit_settings(dir, slot, r#gen, err);
     }
 
     /// Show a failed background write instead of leaving "Saved" up.
@@ -343,11 +344,11 @@ impl Cabin {
     }
 
     fn submit_secrets(&mut self, err: Option<Arc<Mutex<Option<String>>>>) {
-        let gen = self.next_persist_gen();
+        let r#gen = self.next_persist_gen();
         let secrets = self.secrets.clone();
         // PersistService takes persist_io and drops a write older than the disk.
         self.persist_svc
-            .submit_secrets(config::config_dir(), secrets, gen, err);
+            .submit_secrets(config::config_dir(), secrets, r#gen, err);
     }
 
     pub(super) fn persist_usage(&self) {

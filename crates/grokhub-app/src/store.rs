@@ -125,7 +125,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("learn");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut s = LearningState::default();
         grokhub_core::upsert_insight(&mut s, "pref", "prefer nvim always");
         grokhub_core::upsert_insight(&mut s, "fact:hi-how-are-you", "hi how are you");
@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(loaded.insights.len(), 1);
         assert_eq!(loaded.insights[0].text, "prefer nvim always");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -142,13 +142,13 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("chips");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut s = empty_chip_memory();
         s.total_events = 3;
         save_chips(&s).expect("save");
         assert_eq!(load_chips().total_events, 3);
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("chips-scrub");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         // Synthetic fixture — no real chat. Legacy key embeds the ask text.
         let dirty = serde_json::json!({
             "version": 1,
@@ -218,7 +218,7 @@ mod tests {
             "load must rewrite chips.json without the legacy ask: {disk}"
         );
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("wall");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut w = ImagineWall {
             last_ms: 9,
             ..Default::default()
@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(loaded.last_ms, 9);
         assert_eq!(loaded.gifs[0].title, "Ember night");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("proj");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let nodes = grokhub_core::seed_from_bound("/tmp/GrokHub-Work");
         save_projects(&nodes).expect("save");
         let loaded = load_projects();
@@ -267,7 +267,7 @@ mod tests {
         assert!(projects_path().exists());
         assert!(load_projects().is_empty());
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -275,7 +275,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("suggest");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut s = SuggestionStore {
             last_review_day: Some("2026-08-16".into()),
             last_review_ms: 9,
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(loaded.last_review_day.as_deref(), Some("2026-08-16"));
         assert_eq!(loaded.autos[0].title, "Night wrap");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -320,12 +320,12 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("traj");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         append_trajectory(r#"{"ts":1,"cmds":["HOST_CMD: ls"],"ok":true,"excerpt":"ok"}"#)
             .expect("append");
         let raw = read_trajectory();
         assert!(raw.contains("HOST_CMD: ls"), "{raw}");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }

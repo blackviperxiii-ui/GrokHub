@@ -13,7 +13,7 @@ fn sync_writes_a_local_hub_snapshot() {
     let root = crate::config::test_config_root("sync-local");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     // Spike-4a: /sync publishes chats and memory, so it needs the hub grant
     // (the Settings → Permissions Allow click) or a hard-card click.
     let grant = grokhub_agent::harness::grant_destination(
@@ -61,7 +61,7 @@ fn sync_writes_a_local_hub_snapshot() {
     assert_eq!(sent.consent_ref, grant.id);
     assert_eq!(sent.path, "egress");
     assert_eq!(log[0].span_id, sent.span_ref());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 /// Every span line under `{root}/spans/`, any session.

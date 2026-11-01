@@ -18,7 +18,7 @@ fn pin(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
     let root = crate::config::test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     (crate::config::TestConfigDir::set(root.clone()), root)
 }
 

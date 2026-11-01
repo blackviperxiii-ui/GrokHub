@@ -124,7 +124,7 @@ fn remove_ignores_an_in_flight_picture_pick() {
 fn stale_after_newer_publish(older: super::AppConfig, newer: super::AppConfig) -> super::AppConfig {
     use std::sync::{Arc, Barrier, Mutex};
     let slot = Arc::new(Mutex::new(super::CfgSlot {
-        gen: 0,
+        r#gen: 0,
         cfg: super::AppConfig::default(),
     }));
     let io = Arc::new(Mutex::new(()));
@@ -304,7 +304,7 @@ fn clear_profile_picture_saves_without_a_dialog() {
     let root = crate::config::test_config_root("clear-profile");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);

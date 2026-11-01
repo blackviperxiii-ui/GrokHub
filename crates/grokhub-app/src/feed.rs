@@ -32,7 +32,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("updates");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let card = automation_done_card("loop-1", "Board", "done", 42);
         save(std::slice::from_ref(&card)).expect("save");
         let loaded = load();
@@ -46,6 +46,6 @@ mod tests {
             "boot must not slurp unbounded updates JSON: {code}"
         );
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }

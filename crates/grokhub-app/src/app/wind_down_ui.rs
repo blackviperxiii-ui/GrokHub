@@ -274,20 +274,20 @@ mod tests {
         let _lock = crate::config::hold_test_config();
         let before = std::env::var(DECK_ENV).ok();
         let before_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-        std::env::set_var(DECK_ENV, "confirm");
-        std::env::remove_var("GROKHUB_DECK_SHOT");
+        unsafe { std::env::set_var(DECK_ENV, "confirm") };
+        unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") };
         assert!(!deck_check(), "a stray switch never fakes an idle PC");
         assert!(!deck_confirm(), "nor opens the sleep confirm");
-        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
         assert!(deck_check());
         assert!(deck_confirm());
         match before {
-            Some(v) => std::env::set_var(DECK_ENV, v),
-            None => std::env::remove_var(DECK_ENV),
+            Some(v) => unsafe { std::env::set_var(DECK_ENV, v) },
+            None => unsafe { std::env::remove_var(DECK_ENV) },
         }
         match before_shot {
-            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+            Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+            None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
         }
     }
 

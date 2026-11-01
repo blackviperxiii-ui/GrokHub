@@ -163,7 +163,7 @@ fn persist_keeps_threads_in_the_dir_it_was_scheduled_with() {
     };
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &first);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &first) };
     let mut cabin = super::Cabin::quiet_for_test();
     let mut thread = crate::threads::ChatThread::new("PinnedLeak", false);
     thread.pinned = true;
@@ -173,7 +173,7 @@ fn persist_keeps_threads_in_the_dir_it_was_scheduled_with() {
     let io = cabin.persist_io.clone();
     let hold = io.lock().unwrap_or_else(|e| e.into_inner());
     cabin.persist();
-    std::env::set_var("GROKHUB_CONFIG", &second);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &second) };
     drop(hold);
     let scheduled = first.join("threads.json");
     let moved = second.join("threads.json");

@@ -88,7 +88,7 @@ fn pin_auto_config(label: &str) -> (crate::config::TestConfigDir, std::path::Pat
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
     PREV_CONFIG_ENV.with(|p| *p.borrow_mut() = Some(std::env::var_os("GROKHUB_CONFIG")));
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     (crate::config::TestConfigDir::set(root.clone()), root)
 }
 
@@ -96,8 +96,8 @@ fn pin_auto_config(label: &str) -> (crate::config::TestConfigDir, std::path::Pat
 /// every later test in this process (plain `cargo test`) to the real config.
 fn restore_config_env() {
     match PREV_CONFIG_ENV.with(|p| p.borrow_mut().take()) {
-        Some(Some(v)) => std::env::set_var("GROKHUB_CONFIG", v),
-        Some(None) => std::env::remove_var("GROKHUB_CONFIG"),
+        Some(Some(v)) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+        Some(None) => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
         None => {}
     }
 }

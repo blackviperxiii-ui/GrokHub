@@ -900,7 +900,7 @@ pub(crate) mod tests {
 
     #[test]
     fn media_request_bodies_match_imagine() {
-        let gen = body_of(
+        let r#gen = body_of(
             "image_generate",
             json!({
                 "prompt": "a cabin",
@@ -911,9 +911,9 @@ pub(crate) mod tests {
                 "model": "grok-imagine-image-2.0"
             }),
         );
-        assert_eq!(gen.path, "images/generations");
+        assert_eq!(r#gen.path, "images/generations");
         assert_eq!(
-            gen.body,
+            r#gen.body,
             grokhub_core::imagine_generation_body(
                 "a cabin",
                 "grok-imagine-image-2.0",
@@ -924,10 +924,10 @@ pub(crate) mod tests {
                 "url"
             )
         );
-        assert_eq!(gen.body["n"], 4);
-        assert_eq!(gen.body["resolution"], "2k");
-        assert_eq!(gen.body["quality"], "medium");
-        assert_eq!(gen.body["response_format"], "url");
+        assert_eq!(r#gen.body["n"], 4);
+        assert_eq!(r#gen.body["resolution"], "2k");
+        assert_eq!(r#gen.body["quality"], "medium");
+        assert_eq!(r#gen.body["response_format"], "url");
 
         let edit = body_of(
             "image_edit",

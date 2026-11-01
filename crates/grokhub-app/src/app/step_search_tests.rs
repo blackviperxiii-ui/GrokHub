@@ -38,7 +38,7 @@ fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
     let root = crate::config::test_config_root("spike3a-search");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(
         cabin.cfg.memory_backend.is_legacy(),
@@ -110,7 +110,7 @@ fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
     assert!(cabin.write_turn_trail(&pier_id, 2).is_none());
     cabin.harness_turn_end("Clicked OK.", 2);
     assert!(!root.join("amr").exists());
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
     let root = crate::config::test_config_root("spike3a-trail");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
@@ -170,7 +170,7 @@ fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
     assert!(cabin.write_turn_trail(&scratch_id, 1).is_none());
     cabin.harness_turn_end("Clicked OK.", 1);
     assert_eq!(trails(&root), 1);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn spike3a_adds_no_nav_page() {
     assert_eq!(named.len(), 16);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.threads.clear();
     cabin
@@ -230,5 +230,5 @@ fn spike3a_adds_no_nav_page() {
         matches!(cabin.nav, Nav::Chat),
         "a step hit opens the chat, not a page of its own"
     );
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }

@@ -236,7 +236,7 @@ fn failed_settings_write_replaces_saved_on_the_status_line() {
     std::fs::create_dir_all(&root).unwrap();
     let blocker = root.join("not-a-dir");
     std::fs::write(&blocker, b"x").unwrap();
-    std::env::set_var("GROKHUB_CONFIG", blocker.join("cfg"));
+    unsafe { std::env::set_var("GROKHUB_CONFIG", blocker.join("cfg")) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.status = "Saved".into();
     cabin.persist_cfg();
@@ -575,7 +575,7 @@ fn journal_create_promote_persists_and_slash_opens() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("journal-v1");
     let _ = std::fs::create_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/journal");
@@ -641,7 +641,7 @@ fn journal_create_promote_persists_and_slash_opens() {
         grokhub_core::JournalStatus::Decided
     );
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]

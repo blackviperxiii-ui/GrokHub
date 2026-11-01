@@ -1099,17 +1099,17 @@ mod tests {
         let root = crate::config::test_config_root(label);
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &root);
+        unsafe { std::env::set_var("HOME", &root) };
         (g, root, home)
     }
 
     fn unpin(home: Option<std::ffi::OsString>) {
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
         match home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
         }
     }
 

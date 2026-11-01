@@ -576,7 +576,7 @@ fn home_x_on_a_digest_keeps_it_in_pulse() {
 fn discuss_card_opens_a_local_chat() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("discuss-card");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.discuss_card("missing");
     assert!(cabin.threads.is_empty());
@@ -614,7 +614,7 @@ fn discuss_card_opens_a_local_chat() {
 fn feed_open_routes_an_idea_and_dismiss_removes_it() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("feed-open");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.open_feed_card("missing");
     assert!(matches!(cabin.nav, Nav::Chat));
@@ -659,7 +659,7 @@ fn feed_pulse_ticks_without_a_chat() {
     let root = crate::config::test_config_root("feed-pulse");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     // Whole-day quiet so Housekeep holds the digest clock and does not post a card.
@@ -709,8 +709,8 @@ fn feed_pulse_ticks_without_a_chat() {
     }
     let _disk = std::mem::ManuallyDrop::new(io.lock().unwrap_or_else(|e| e.into_inner()));
     match prev_config {
-        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-        None => std::env::remove_var("GROKHUB_CONFIG"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_CONFIG", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_CONFIG") },
     }
 }
 
@@ -720,7 +720,7 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("idea-expiry");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     // Heartbeat must not ask the real model from a test.
@@ -776,7 +776,7 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 // Landed from PR #166.
@@ -786,7 +786,7 @@ fn heartbeat_pulse_stays_off_a_run() {
     let root = crate::config::test_config_root("heartbeat_pulse_stays_off_a_run");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     // Heartbeat must not ask the real model from a test.
@@ -830,7 +830,7 @@ fn build_idea_files_one_todo() {
     let root = crate::config::test_config_root("build-idea");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     cabin.board.clear();
@@ -895,7 +895,7 @@ fn react_and_archive_stay_on_the_card() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("react-archive");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.updates = vec![
@@ -932,7 +932,7 @@ fn feed_actions_open_pages_without_a_run() {
     let root = crate::config::test_config_root("feed-actions");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = super::Cabin::quiet_for_test();
     assert!(!cabin.running);
@@ -1043,7 +1043,7 @@ fn automate_offer_files_a_daily_job() {
     let root = crate::config::test_config_root("automate-offer");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.automations.clear();
@@ -1101,7 +1101,7 @@ fn automate_offer_files_a_daily_job() {
     assert_eq!(cabin.automations[0].name, "check patch notes");
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -1110,7 +1110,7 @@ fn ask_offer_dismiss_persists_in_ledger() {
     let root = crate::config::test_config_root("ask-offer-dismiss");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     let mut card = offer_card(
@@ -1125,7 +1125,7 @@ fn ask_offer_dismiss_persists_in_ledger() {
     assert!(ledger.dismissed.contains("patch-note@h19"));
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 #[test]
@@ -1134,7 +1134,7 @@ fn feed_offer_click_opens_the_schedule_box_without_saving() {
     let root = crate::config::test_config_root("feed-offer-open");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.automations.clear();
@@ -1153,7 +1153,7 @@ fn feed_offer_click_opens_the_schedule_box_without_saving() {
     assert!(cabin.automations.is_empty());
 
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
 /// The first card on the feed that `pick` matches, or a failure naming `site`.
@@ -1991,7 +1991,7 @@ fn tray_restore_opens_home_but_a_raise_of_a_visible_window_keeps_the_page() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("tray-restore-home");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_cabin(vec![], 0);
     let ctx = egui::Context::default();
     // Minimized or behind other windows: still visible to the app.
@@ -2017,7 +2017,7 @@ fn a_fresh_launch_opens_on_home_with_a_clean_chat_draft_behind_it() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("launch-home");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut old = crate::threads::ChatThread::new("Yesterday", false);
     old.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
     let mut cabin = Cabin::quiet_cabin(vec![old], 0);
@@ -2026,11 +2026,11 @@ fn a_fresh_launch_opens_on_home_with_a_clean_chat_draft_behind_it() {
     assert!(cabin.messages.is_empty(), "Chat waits with an empty draft");
     assert_eq!(cabin.threads.len(), 2, "yesterday's chat is kept");
     let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
-    std::env::set_var("GROKHUB_DECK_SHOT", "1");
+    unsafe { std::env::set_var("GROKHUB_DECK_SHOT", "1") };
     cabin.open_launch_page();
     match prev_shot {
-        Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
-        None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_DECK_SHOT", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_DECK_SHOT") },
     }
     assert_eq!(
         cabin.nav,
@@ -2038,12 +2038,12 @@ fn a_fresh_launch_opens_on_home_with_a_clean_chat_draft_behind_it() {
         "deck shots still open on the Hangout chat"
     );
     let prev_web = std::env::var("GROKHUB_WEB_SEARCH_SHOT").ok();
-    std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1");
+    unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", "1") };
     cabin.nav = Nav::Home;
     cabin.open_launch_page();
     match prev_web {
-        Some(v) => std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v),
-        None => std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT"),
+        Some(v) => unsafe { std::env::set_var("GROKHUB_WEB_SEARCH_SHOT", v) },
+        None => unsafe { std::env::remove_var("GROKHUB_WEB_SEARCH_SHOT") },
     }
     assert_eq!(cabin.nav, Nav::Chat, "web-search shots open on their chat");
     release_isolated(&root, cabin);

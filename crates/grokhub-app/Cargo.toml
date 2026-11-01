@@ -7,6 +7,9 @@ license.workspace = true
 description = "GrokHub native cabin — no Electron, no Tauri"
 publish = false
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "grokhub"
 path = "src/main.rs"

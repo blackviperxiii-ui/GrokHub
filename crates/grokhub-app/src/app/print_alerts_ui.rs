@@ -708,7 +708,7 @@ mod tests {
         let root = crate::config::test_config_root("printer-snapshot");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut png = Vec::new();
         image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -723,7 +723,7 @@ mod tests {
         assert!(!cache_snapshot(&agent(), &junk));
         assert!(!super::super::pulse_ui::pulse_image_path(&junk).exists());
         served.join().unwrap();
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
         let _ = std::fs::remove_dir_all(&root);
     }
 

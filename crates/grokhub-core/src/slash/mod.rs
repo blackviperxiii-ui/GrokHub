@@ -195,11 +195,9 @@ pub fn mark_slash_result(body: &str) -> String {
 }
 
 pub fn strip_slash_result(text: &str) -> &str {
-    let t = text
-        .strip_prefix(SLASH_RESULT_PREFIX)
+    text.strip_prefix(SLASH_RESULT_PREFIX)
         .map(|s| s.strip_prefix('\n').unwrap_or(s))
-        .unwrap_or(text);
-    t
+        .unwrap_or(text)
 }
 
 /// Help / models / recall dumps stay on the pane and out of the next model kick.

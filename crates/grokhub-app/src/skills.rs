@@ -249,7 +249,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sk");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let s = SkillMd {
             name: "flash-pi".into(),
             description: "write an image".into(),
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert!(listed[0].instructions.contains("newer"));
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("sk-cwd");
         let _ = fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let s = SkillMd {
             name: "cwd-check".into(),
             description: "check the bound tree".into(),
@@ -321,7 +321,7 @@ mod tests {
         let hit = run_verify("cwd-check", project.to_str()).expect("ran bound");
         assert!(hit.ok, "verify must run in the bound project: {hit:?}");
         let _ = fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
     #[test]

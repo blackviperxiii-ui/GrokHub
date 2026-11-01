@@ -977,7 +977,7 @@ mod titlebar_pill_tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let root = crate::config::test_config_root("titlebar-pills");
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = super::Cabin::quiet_for_test();
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);

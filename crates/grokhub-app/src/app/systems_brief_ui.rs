@@ -240,7 +240,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("config root");
         let _pin = crate::config::TestConfigDir::set(root.clone());
-        std::env::set_var("GROKHUB_CONFIG", &root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.dream_hour = 21;
         let now = 1_700_000_000_000u64;
@@ -300,6 +300,6 @@ mod tests {
         drop(cabin);
         drop(_pin);
         let _ = std::fs::remove_dir_all(&root);
-        std::env::remove_var("GROKHUB_CONFIG");
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 }
