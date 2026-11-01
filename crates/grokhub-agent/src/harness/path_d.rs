@@ -141,7 +141,10 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::Credentials => "type into a credential field",
         HardClass::IrreversibleOs => "do an irreversible OS action",
     };
-    format!("Grok tried to {what} without asking")
+    format!(
+        "{} tried to {what} without asking",
+        grokhub_core::brand::product_name()
+    )
 }
 
 /// The card and span line for an unasked step: the tool and what the frame
@@ -299,11 +302,11 @@ mod tests {
     fn card_words_name_the_step_never_a_value() {
         assert_eq!(
             unasked_title(HardClass::Send),
-            "Grok tried to send something without asking"
+            "Loadout tried to send something without asking"
         );
         assert_eq!(
             unasked_title(HardClass::Credentials),
-            "Grok tried to type into a credential field without asking"
+            "Loadout tried to type into a credential field without asking"
         );
         assert_eq!(
             unasked_action(

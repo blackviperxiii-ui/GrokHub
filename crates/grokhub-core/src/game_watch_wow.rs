@@ -166,6 +166,8 @@ pub fn newest_combat_log(dir: &Path) -> Option<PathBuf> {
 #[derive(Debug)]
 pub struct CombatLogTail {
     dir: PathBuf,
+    /// Which file in `dir` to follow: the newest combat log for WoW.
+    pick: fn(&Path) -> Option<PathBuf>,
     file: Option<PathBuf>,
     offset: u64,
     partial: Vec<u8>,
@@ -174,8 +176,15 @@ pub struct CombatLogTail {
 
 impl CombatLogTail {
     pub fn new(dir: PathBuf) -> Self {
+        Self::with_picker(dir, newest_combat_log)
+    }
+
+    /// Follow the file `pick` chooses in `dir` instead, with the same rules
+    /// (another game's own log).
+    pub fn with_picker(dir: PathBuf, pick: fn(&Path) -> Option<PathBuf>) -> Self {
         Self {
             dir,
+            pick,
             file: None,
             offset: 0,
             partial: Vec::new(),
@@ -186,7 +195,7 @@ impl CombatLogTail {
     /// The complete lines added since the last read, at most [`READ_CAP`]
     /// bytes of them; call again for the rest.
     pub fn read_lines(&mut self) -> io::Result<Vec<String>> {
-        let newest = newest_combat_log(&self.dir);
+        let newest = (self.pick)(&self.dir);
         let first = !self.started;
         self.started = true;
         let Some(path) = newest else {

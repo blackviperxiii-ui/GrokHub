@@ -165,6 +165,7 @@ mod desktop_nyx;
 mod diagnostics_ui;
 mod dock_ui;
 mod downloads_tidy_ui;
+mod elite_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
@@ -198,6 +199,7 @@ mod local_probe;
 mod local_signals;
 mod marketplace_ui;
 mod memory_tidy;
+mod minecraft_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
@@ -216,6 +218,7 @@ mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod poe_ui;
 mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
@@ -458,6 +461,10 @@ pub struct Cabin {
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
     turn_retried: bool,
+    /// The bearer xAI last turned away (401/403). While it is still the one
+    /// on file, chats go to Local AI when it is ready; a new sign-in or key
+    /// is a different bearer and goes back to the cloud. Memory only.
+    rejected_bearer: Option<String>,
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
@@ -725,7 +732,6 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
-    sidebar_q: String,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -1120,6 +1126,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
@@ -1345,7 +1352,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1604,6 +1610,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
@@ -1820,7 +1827,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
