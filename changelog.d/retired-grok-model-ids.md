@@ -1,0 +1,1 @@
+- Models: Grok 3, Grok 4 and Grok 4.1 Fast leave the model list (xAI retired them on May 15, 2026), and a saved pin on any retired chat id now sends Grok 4.3, which is what xAI already serves for them. Imagine drops the retired "Quality" image model; a request for it goes out as Imagine 2.0 at low quality, xAI's own replacement.

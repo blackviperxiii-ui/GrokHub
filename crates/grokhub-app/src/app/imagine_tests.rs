@@ -537,7 +537,7 @@ fn imagine_more_finishes_agent_count_and_results_chrome() {
     match cabin.imagine_call() {
         super::imagine::ImagineCall::Generate { n, model, .. } => {
             assert_eq!(n, 7);
-            assert_eq!(model, "grok-imagine-image-quality");
+            assert_eq!(model, grokhub_core::FALLBACK_IMAGINE_MODEL);
         }
         _ => panic!("Agent must generate stills"),
     }
