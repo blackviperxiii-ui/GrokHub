@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod automations;
+pub mod background;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -17,6 +18,7 @@ pub mod local_ai;
 pub mod local_engine;
 pub mod memory;
 pub mod models;
+pub mod oauth;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
@@ -24,6 +26,7 @@ pub mod permissions;
 pub mod personality;
 pub mod playbooks;
 pub mod plugins;
+pub mod privacy;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod remote;
@@ -54,6 +57,7 @@ struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
     chats: Mutex<HashMap<String, Arc<agent::Session>>>,
+    sign_in: Arc<oauth::SignIn>,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
@@ -65,6 +69,8 @@ pub struct SettingsView {
     pub model: String,
     pub close_to_tray: bool,
     pub has_api_key: bool,
+    /// Signed in with Grok: who, when xAI said.
+    pub signed_in: Option<oauth::SignedIn>,
     /// The folder picked in Settings, empty for the default.
     pub workspace: String,
     /// The folder the agent actually works in.
@@ -92,6 +98,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         model: settings.model.clone(),
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
+        signed_in: oauth::signed_in(&oauth::Keychain),
         workspace: settings.workspace.clone(),
         workspace_path: agent::workspace_for(&settings.workspace)
             .display()
@@ -159,7 +166,7 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     Ok(view(&next))
 }
 
-/// Settings → General and the composer chip: the models to pick from.
+/// Settings → Defaults and the composer chip: the models to pick from.
 /// `refresh` reads the account's list again instead of the 10-minute cache.
 #[tauri::command]
 async fn list_models(
@@ -242,6 +249,28 @@ fn set_api_key(state: State<'_, ShellState>, key: String) -> Result<SettingsView
     Ok(view(&current(&state)))
 }
 
+/// Sign in with Grok, step one: the code and the page to type it at.
+#[tauri::command]
+async fn start_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Started, String> {
+    capabilities::needs(capabilities::current().grok_sign_in, "Sign in with Grok")?;
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.start()).await?
+}
+
+/// Step two, asked every few seconds by Settings → Account.
+#[tauri::command]
+async fn poll_grok_sign_in(state: State<'_, ShellState>) -> Result<oauth::Poll, String> {
+    let flow = Arc::clone(&state.sign_in);
+    off_main(move || flow.poll(&oauth::Keychain)).await?
+}
+
+#[tauri::command]
+fn grok_sign_out(state: State<'_, ShellState>) -> Result<SettingsView, String> {
+    state.sign_in.cancel();
+    oauth::sign_out(&oauth::Keychain)?;
+    Ok(view(&current(&state)))
+}
+
 #[tauri::command]
 fn clear_api_key(state: State<'_, ShellState>) -> Result<SettingsView, String> {
     credential::delete_key()?;
@@ -259,21 +288,39 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-/// The model client for the signed-in key, or the loopback mock in tests.
-fn model_client() -> Result<XaiClient, String> {
-    Ok(match credential::test_responses_url() {
-        Some(url) => XaiClient::new(
-            credential::LOOPBACK_TEST_BEARER,
+/// The model client: the loopback mock in tests, else Grok sign-in first,
+/// else the saved API key. The kind says which meter the turn uses.
+fn model_client() -> Result<(XaiClient, AuthKind), String> {
+    let idle = Duration::from_secs(120);
+    if let Some(url) = credential::test_responses_url() {
+        let client = XaiClient::new(credential::LOOPBACK_TEST_BEARER, AuthKind::ApiKey, idle)
+            .with_loopback_url(&url)?;
+        return Ok((client, AuthKind::ApiKey));
+    }
+    signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
+}
+
+/// Picks the bearer: a live Grok sign-in wins over a key. A sign-in that
+/// ended falls back to the key when there is one.
+fn signed_client(
+    oauth: Result<Option<String>, String>,
+    key: impl FnOnce() -> Result<String, String>,
+    idle: Duration,
+) -> Result<(XaiClient, AuthKind), String> {
+    match oauth {
+        Ok(Some(bearer)) => Ok((
+            XaiClient::new(bearer, AuthKind::OAuth, idle),
+            AuthKind::OAuth,
+        )),
+        Ok(None) => Ok((
+            XaiClient::new(key()?, AuthKind::ApiKey, idle),
             AuthKind::ApiKey,
-            Duration::from_secs(120),
-        )
-        .with_loopback_url(&url)?,
-        None => XaiClient::new(
-            credential::load_key()?,
-            AuthKind::ApiKey,
-            Duration::from_secs(120),
-        ),
-    })
+        )),
+        Err(ended) => match key() {
+            Ok(k) => Ok((XaiClient::new(k, AuthKind::ApiKey, idle), AuthKind::ApiKey)),
+            Err(_) => Err(ended),
+        },
+    }
 }
 
 fn route(
@@ -281,10 +328,10 @@ fn route(
     session: agent::SessionMode,
     config_dir: &Path,
 ) -> Result<agent::Route, String> {
-    let client = model_client()?;
+    let (client, auth_kind) = model_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
-        auth_kind: AuthKind::ApiKey,
+        auth_kind,
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
@@ -1087,6 +1134,83 @@ fn set_web_access(
     )
 }
 
+/// Settings → Behavior: the tray, the composer and the limits on scheduled work.
+#[tauri::command]
+fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
+    settings::behavior_view(&current(&state))
+}
+
+#[tauri::command]
+fn save_behavior(
+    state: State<'_, ShellState>,
+    close_to_tray: bool,
+    behavior: settings::Behavior,
+) -> Result<settings::BehaviorView, String> {
+    let next = ShellSettings {
+        close_to_tray: close_to_tray && capabilities::current().tray,
+        behavior: behavior.checked()?,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(settings::behavior_view(&next))
+}
+
+/// Settings → Defaults: the work folder and how chat handles changes.
+#[tauri::command]
+fn save_defaults(
+    state: State<'_, ShellState>,
+    workspace: String,
+    approvals: settings::Approvals,
+) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        workspace: workspace.trim().to_string(),
+        approvals,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// Settings → Privacy & data. Reads `offline.toml` again and may wait on the
+/// keyring, so it runs off the main thread.
+#[tauri::command]
+async fn get_privacy(state: State<'_, ShellState>) -> Result<privacy::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || privacy::page(&dir, privacy::keyring(&dir), grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn set_offline_only(state: State<'_, ShellState>, on: bool) -> Result<privacy::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        privacy::set_offline(&dir, on)?;
+        Ok(privacy::page(
+            &dir,
+            privacy::keyring(&dir),
+            grokhub_core::now_ms(),
+        ))
+    })
+    .await?
+}
+
+#[tauri::command]
+fn open_data_folder(state: State<'_, ShellState>) -> Result<(), String> {
+    privacy::open_data_folder(&state.config_dir)
+}
+
+/// Settings → Background: who fires automations, and when each runs.
+#[tauri::command]
+fn get_background(state: State<'_, ShellState>) -> Result<background::Page, String> {
+    let list = automations::load(&state.config_dir)?;
+    Ok(background::page(
+        &list,
+        &current(&state).behavior,
+        grokhub_core::now_ms(),
+    ))
+}
+
 fn arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
     serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null))
         .map_err(|err| format!("{name}: {err}"))
@@ -1221,6 +1345,9 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
+        "get_behavior" => out(get_behavior(state)),
+        "get_privacy" => out(block_on(get_privacy(state))?),
+        "get_background" => out(get_background(state)?),
         _ => Err(remote::refused()),
     }
 }
@@ -1397,6 +1524,39 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+
+    #[test]
+    fn a_grok_sign_in_wins_over_a_key_and_an_ended_one_falls_back() {
+        let idle = Duration::from_secs(1);
+        let key = || Ok("xai-key".to_string());
+        let none = || Err(grokhub_core::XAI_NEED_SIGNIN.to_string());
+        let kind = |r: Result<(XaiClient, AuthKind), String>| r.map(|(_, k)| k);
+        assert_eq!(
+            kind(signed_client(Ok(Some("at".into())), key, idle)),
+            Ok(AuthKind::OAuth)
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), key, idle)),
+            Ok(AuthKind::ApiKey)
+        );
+        assert_eq!(
+            kind(signed_client(Err(oauth::EXPIRED.into()), none, idle)),
+            Err(oauth::EXPIRED.to_string())
+        );
+        assert_eq!(
+            kind(signed_client(Ok(None), none, idle)),
+            Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
+        );
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -1485,7 +1645,7 @@ pub fn run() {
             pulse_feed::start(config_dir.clone(), {
                 let config_dir = config_dir.clone();
                 move || {
-                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?);
+                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                     Ok((client, settings::load(&config_dir).model))
                 }
             });
@@ -1495,6 +1655,7 @@ pub fn run() {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
+                sign_in: Arc::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
             });
@@ -1534,6 +1695,9 @@ pub fn run() {
             slash_hits,
             run_slash,
             clear_api_key,
+            start_grok_sign_in,
+            poll_grok_sign_in,
+            grok_sign_out,
             send_chat,
             answer_permission,
             answer_elicit,
@@ -1613,7 +1777,14 @@ pub fn run() {
             #[cfg(desktop)]
             os_extras::set_summon_hotkey,
             #[cfg(desktop)]
-            os_extras::set_notifications
+            os_extras::set_notifications,
+            get_behavior,
+            save_behavior,
+            save_defaults,
+            get_privacy,
+            set_offline_only,
+            open_data_folder,
+            get_background
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

@@ -632,7 +632,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         self.pull_account_oauth_from_disk();
-        let authed = self.has_key();
+        // The Grok sign-in, not "any key": Sign out here only signs out of Grok.
+        let authed = self.account_chrome_now().connected;
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
@@ -726,12 +727,13 @@ impl Cabin {
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
-        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
+        self.renew_account_oauth();
+        let account_auth = self.account_chrome_now();
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
-            "Saved in cabin config."
+            "Saved in your settings on this PC."
         } else {
-            "A local image, kept in cabin config."
+            "A local image, kept in your settings on this PC."
         };
         let pending = self
             .oauth_pending
@@ -995,14 +997,14 @@ impl Cabin {
                                                                 None,
                                                             );
                                                             let mut close_to_tray = self.cfg.close_to_tray;
-                                                            if settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
+                                                            if settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
                                                                 self.set_close_to_tray(close_to_tray);
                                                             }
                                                             let mut living_wall = self.cfg.imagine_wall;
                                                             if settings_toggle(
                                                                 ui,
                                                                 "Living wall",
-                                                                "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
+                                                                grokhub_core::brand::filled("Every few hours {product} paints a new cover. Twenty live. Oldest leaves first."),
                                                                 &mut living_wall,
                                                             ) {
                                                                 self.set_living_wall(living_wall);
@@ -1076,7 +1078,7 @@ impl Cabin {
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 "Quiet hours",
-                                                                "Inside quiet hours the cabin holds a destructive automation and stops anticipating. Off is start and end equal.",
+                                                                grokhub_core::brand::filled("Inside quiet hours {product} holds a destructive automation and stops anticipating. Off is start and end equal."),
                                                                 &quiet_selected,
                                                                 &quiet_labels,
                                                             ) {
@@ -1178,7 +1180,7 @@ impl Cabin {
                                                                 && crate::cards::settings_action(
                                                                     ui,
                                                                     &format!("Restart {}", grokhub_core::brand::product_name()),
-                                                                    "Reload hub, then start a new cabin and exit this one.",
+                                                                    "Reload hub, then open a new window and close this one.",
                                                                     "Restart",
                                                                 )
                                                             {
@@ -1444,7 +1446,7 @@ impl Cabin {
                                                                     && crate::cards::settings_action(
                                                                         ui,
                                                                         &format!("Restart {}", grokhub_core::brand::product_name()),
-                                                                        "Reload hub, then start a new cabin and exit this one.",
+                                                                        "Reload hub, then open a new window and close this one.",
                                                                         "Restart",
                                                                     )
                                                                 {
@@ -1463,7 +1465,7 @@ impl Cabin {
                                                             }
                                                             crate::cards::settings_note(
                                                                 ui,
-                                                                "This cabin's MCP servers are in Settings, Connectors.",
+                                                                grokhub_core::brand::filled("{product}'s MCP servers are in Settings, Connectors."),
                                                             );
                                                             let cwd = self.grok_cwd();
                                                             crate::native_plugins::paint(ui, &cwd);

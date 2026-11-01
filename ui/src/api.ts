@@ -6,16 +6,23 @@ import { call as invoke, GAP_EVENT, inShell, subscribe } from "./transport";
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
 
+export interface SignedIn {
+  name: string | null;
+  email: string | null;
+}
+
 export interface Settings {
   model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
+  /** Signed in with Grok: who, when xAI said. */
+  signedIn?: SignedIn | null;
   /** The folder picked in Settings, empty for the default. */
   workspace: string;
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
-  /** Settings → Let Grok control the desktop. */
+  /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
   theme: Theme;
@@ -37,6 +44,8 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** Settings → Account → Sign in with Grok (desktop and iOS). */
+  grokSignIn?: boolean;
   /** Settings → General → start at login. */
   autostart?: boolean;
   /** Settings → General → the summon hotkey; off on Wayland. */
@@ -82,7 +91,7 @@ export type ChatEvent =
   | {
       kind: "elicit";
       id: string;
-      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      /** "Plan" for a plan to approve, "Question" for the agent's question, or the connector. */
       server: string;
       message: string;
       mode: "form" | "url";
@@ -90,7 +99,7 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
-      /** Answers to tap for Grok's question, the recommended one first. */
+      /** Answers to tap for the agent's question, the recommended one first. */
       options?: ElicitChoice[];
     };
 
@@ -313,6 +322,32 @@ export function saveMemory(
   base: string,
 ): Promise<{ notes: MemoryNotes; redacted: boolean }> {
   return invoke("save_memory", { global, text, base });
+}
+
+/** Sign in with Grok, step one: the code to type at xAI's page. */
+export interface GrokSignInStart {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  interval: number;
+  expiresIn: number;
+}
+
+export type GrokSignInPoll =
+  | { status: "pending"; interval: number }
+  | { status: "ready"; signedIn: SignedIn }
+  | { status: "failed"; error: string };
+
+export function startGrokSignIn(): Promise<GrokSignInStart> {
+  return invoke<GrokSignInStart>("start_grok_sign_in");
+}
+
+export function pollGrokSignIn(): Promise<GrokSignInPoll> {
+  return invoke<GrokSignInPoll>("poll_grok_sign_in");
+}
+
+export function grokSignOut(): Promise<Settings> {
+  return invoke<Settings>("grok_sign_out");
 }
 
 /** A row of the composer's command list. `disabled` says why it can't run. */
@@ -1023,4 +1058,73 @@ export function installShellUpdate(): Promise<void> {
 
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** Settings → Behavior, saved in shell.json. Everything starts off. */
+export interface Behavior {
+  autocomplete: boolean;
+  /** Quiet hours for automations as HH:MM; both empty is none. */
+  quietStart: string;
+  quietEnd: string;
+  /** Tokens a day, one of `budgets`; 0 is off. */
+  dailyTokenBudget: number;
+  pauseOverBudget: boolean;
+}
+
+export interface BehaviorPage {
+  closeToTray: boolean;
+  behavior: Behavior;
+  budgets: { value: number; label: string }[];
+}
+
+export function getBehavior(): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("get_behavior");
+}
+
+export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
+}
+
+/** Settings → Defaults: the work folder and the approvals. */
+export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+  return invoke<Settings>("save_defaults", { workspace, approvals });
+}
+
+/** Settings → Privacy & data (src-tauri/src/privacy.rs). */
+export interface PrivacyPage {
+  offlineOnly: boolean;
+  /** An on-device model can take the chat while Offline only is on. */
+  localReady: boolean;
+  /** "3 calls sent off-device this week". */
+  sent: string;
+  hosts: { host: string; calls: number }[];
+  encrypted: boolean;
+  encryptedNote: string;
+  dataFolder: string;
+  canOpenFolder: boolean;
+}
+
+export function getPrivacy(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("get_privacy");
+}
+
+export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("set_offline_only", { on });
+}
+
+export function openDataFolder(): Promise<void> {
+  return invoke<void>("open_data_folder");
+}
+
+/** Settings → Background (src-tauri/src/background.rs). */
+export interface BackgroundPage {
+  runner: string;
+  nextDue: string | null;
+  quiet: string;
+  budget: string;
+  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+}
+
+export function getBackground(): Promise<BackgroundPage> {
+  return invoke<BackgroundPage>("get_background");
 }

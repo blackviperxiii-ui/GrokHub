@@ -290,7 +290,11 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
     if let Some(v) = &input.cabin_update {
         let src = "health:update";
         reliability.push(claim(
-            format!("Cabin update ready: {}.", v.trim_start_matches('v')),
+            format!(
+                "{} update ready: {}.",
+                crate::brand::product_name(),
+                v.trim_start_matches('v')
+            ),
             src,
         ));
         sources.push(claim(v.clone(), src));
@@ -467,7 +471,10 @@ fn summarize(
         ));
     }
     if update_ready {
-        parts.push("a cabin update is ready".into());
+        parts.push(format!(
+            "a {} update is ready",
+            crate::brand::product_name()
+        ));
     }
     let mut s = parts.join("; ");
     s.push('.');

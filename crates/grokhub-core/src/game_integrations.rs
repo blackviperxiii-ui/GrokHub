@@ -125,6 +125,26 @@ pub const ALL: &[Integration] = &[
         status: Status::Built,
     },
     Integration {
+        id: "stardew",
+        name: "Stardew Valley",
+        steam_app_id: Some(413150),
+        protection: Protection::None,
+        channels: &[Channel::GameFile(
+            "the farm saves the game writes: day, gold earned and skills, with a session recap in Pulse",
+        )],
+        status: Status::Built,
+    },
+    Integration {
+        id: "eso",
+        name: "The Elder Scrolls Online",
+        steam_app_id: Some(306130),
+        protection: Protection::None,
+        channels: &[Channel::OfficialAddon(
+            "a Loadout addon through ZeniMax's Lua addon API and saved variables, installed only when you click",
+        )],
+        status: Status::Built,
+    },
+    Integration {
         id: "dota2",
         name: "Dota 2",
         steam_app_id: Some(570),
@@ -173,16 +193,6 @@ pub const ALL: &[Integration] = &[
             "the game's own logs/latest.log, vanilla launcher and Prism or MultiMC instances: deaths and advancements, with a session recap in Pulse",
         )],
         status: Status::Built,
-    },
-    Integration {
-        id: "eso",
-        name: "The Elder Scrolls Online",
-        steam_app_id: Some(306130),
-        protection: Protection::None,
-        channels: &[Channel::OfficialAddon(
-            "a Loadout addon through ZeniMax's Lua addon API and saved variables",
-        )],
-        status: Status::Planned,
     },
 ];
 
@@ -233,9 +243,10 @@ mod tests {
             by_id("league").unwrap().how(),
             "Riot's Live Client Data API on this computer. Has Riot Vanguard, so Loadout adds nothing to the game"
         );
-        assert!(by_id("eso").unwrap().how().ends_with(". Planned"));
         assert_eq!(by_id("poe2").unwrap().steam_app_id, Some(2694490));
         assert_eq!(by_id("dota2").unwrap().steam_app_id, Some(570));
         assert_eq!(by_id("elite").unwrap().steam_app_id, Some(359320));
+        assert_eq!(by_id("stardew").unwrap().steam_app_id, Some(413150));
+        assert!(by_id("eso").unwrap().how().contains("only when you click"));
     }
 }
