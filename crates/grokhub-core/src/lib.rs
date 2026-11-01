@@ -42,6 +42,8 @@ pub mod doctor;
 pub mod downloads_tidy;
 pub mod eso_addon;
 pub mod export;
+pub mod factorio_mod;
+pub mod factorio_state;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;

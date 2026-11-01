@@ -67,6 +67,13 @@ vi.mock("./Automations", () => ({
 }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
+vi.mock("./Devices", () => ({
+  Devices: ({ onOpenWebAccess }: { onOpenWebAccess: () => void }) => (
+    <button type="button" onClick={onOpenWebAccess}>
+      Devices page
+    </button>
+  ),
+}));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
@@ -111,6 +118,7 @@ describe("App", () => {
       "Memory",
       "Connectors",
       "Workboard",
+      "Devices",
       "Library",
       "Settings",
     ]);
@@ -118,6 +126,14 @@ describe("App", () => {
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
+  });
+
+  it("opens Devices, whose Web access link goes to that Settings section", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Devices page" }));
+    expect(await screen.findByText("Settings for a desktop at webAccess")).toBeInTheDocument();
   });
 
   it("puts the saved theme on the page at startup", async () => {

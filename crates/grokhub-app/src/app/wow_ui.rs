@@ -382,6 +382,21 @@ impl Cabin {
             .filter(|f| f.install == install)
             .cloned()
             .collect();
+        let missing = flavors
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.addon,
+                    AddonState::NotInstalled | AddonState::Outdated { .. }
+                )
+            })
+            .count();
+        if missing > 1 {
+            ui.add_space(6.0);
+            if crate::cards::white_pill(ui, &format!("Install addon in all {missing} versions")) {
+                self.install_addon_everywhere(install);
+            }
+        }
         for info in flavors {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -463,13 +478,54 @@ impl Cabin {
         }
     }
 
+    /// Install or update the addon in every flavor of one install, on the
+    /// user's click, and show what happened.
+    fn install_addon_everywhere(&mut self, install: &std::path::Path) {
+        let results = wow_addon::install_all(install);
+        let done: Vec<&str> = results
+            .iter()
+            .filter(|(_, r)| r.is_ok())
+            .map(|(f, _)| f.label())
+            .collect();
+        let failed: Vec<String> = results
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().err().cloned())
+            .collect();
+        self.status = if failed.is_empty() {
+            format!(
+                "Installed the Loadout addon for WoW {}. Quit and restart WoW to load it: the game only finds new addons when it starts.",
+                done.join(", ")
+            )
+        } else {
+            failed.join(" ")
+        };
+        for f in self
+            .focus
+            .wow
+            .flavors
+            .iter_mut()
+            .filter(|f| f.install == install)
+        {
+            f.addon = wow_addon::state(&f.dir);
+        }
+    }
+
     /// Install, update or remove the addon in one flavor, on the user's
     /// click, and show the new state.
     fn run_addon_action(&mut self, info: &WowFlavorInfo, action: AddonAction) {
         let result = match action {
             AddonAction::Install => wow_addon::install(&info.install, &info.dir).map(|()| {
+                // Only Retail and its test clients have the minimap's addon menu.
+                let menu = if matches!(
+                    info.flavor,
+                    WowFlavor::Retail | WowFlavor::Ptr | WowFlavor::Xptr | WowFlavor::Beta
+                ) {
+                    " and sits in the minimap's addon menu"
+                } else {
+                    "; type /loadout for a summary"
+                };
                 format!(
-                    "Installed the Loadout addon for WoW {}. Quit and restart WoW to load it: the game only finds new addons when it starts. Then it says hello in chat and sits in the minimap's addon menu.",
+                    "Installed the Loadout addon for WoW {}. Quit and restart WoW to load it: the game only finds new addons when it starts. Then it says hello in chat{menu}.",
                     info.flavor.label()
                 )
             }),
@@ -626,6 +682,34 @@ mod tests {
         cabin.run_addon_action(&info, AddonAction::Remove);
         assert_eq!(cabin.focus.wow.flavors[0].addon, AddonState::NotInstalled);
         assert!(!root.join("_retail_/Interface/AddOns/Loadout").exists());
+    }
+
+    #[test]
+    fn one_click_installs_the_addon_in_retail_and_every_classic_flavor() {
+        let root = tmp("everywhere");
+        for flavor in ["_retail_", "_classic_", "_anniversary_", "_classic_era_"] {
+            std::fs::create_dir_all(root.join(flavor).join("Interface")).unwrap();
+        }
+        let (mut cabin, _dir) = cabin("wow-everywhere");
+        let games = vec![wow_at(&root)];
+        cabin.focus.wow.flavors = flavor_infos(&games);
+        cabin.focus.wow.games = games;
+        assert_eq!(cabin.focus.wow.flavors.len(), 4);
+        cabin.install_addon_everywhere(&root);
+        assert!(
+            cabin
+                .status
+                .starts_with("Installed the Loadout addon for WoW Retail, "),
+            "{}",
+            cabin.status
+        );
+        for info in &cabin.focus.wow.flavors {
+            assert!(info.addon.installed(), "{:?}", info.flavor);
+            assert!(info
+                .dir
+                .join("Interface/AddOns/Loadout/Loadout.toc")
+                .is_file());
+        }
     }
 
     #[test]
