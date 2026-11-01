@@ -1133,6 +1133,47 @@ async function appearance(s, config) {
   );
 }
 
+// DIAG (temporary): what the window looks like around the first Send.
+async function probe(s, label) {
+  const out = await wd("POST", `${s}/execute/sync`, {
+    script: `
+      const d = (el) => el ? (el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().replace(/\\s+/g, '.') : '') + (el.getAttribute && el.getAttribute('aria-label') ? '[' + el.getAttribute('aria-label') + ']' : '') + ':' + (el.textContent || '').trim().slice(0, 20)) : null;
+      if (!window.__diag) {
+        window.__diag = [];
+        const t0 = performance.now();
+        for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click', 'submit', 'focusin']) {
+          window.addEventListener(type, (e) => window.__diag.push([Math.round(performance.now() - t0), type, d(e.target), e.clientX, e.clientY, e.isTrusted]), true);
+        }
+        const de = document.documentElement;
+        new ResizeObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'resize', innerWidth, innerHeight, de.scrollWidth, de.scrollHeight])).observe(de);
+        const tabs = document.querySelector('nav.tabs');
+        if (tabs) new MutationObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'tabs', tabs.children.length])).observe(tabs, { childList: true });
+        const chat = document.querySelector('section.chat');
+        if (chat) new MutationObserver(() => window.__diag.push([Math.round(performance.now() - t0), 'chat-class', chat.className])).observe(chat, { attributes: true, attributeFilter: ['class'] });
+        const form = document.querySelector('form.composer');
+        if (form) new ResizeObserver(() => { const r = form.getBoundingClientRect(); window.__diag.push([Math.round(performance.now() - t0), 'form', Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]); }).observe(form);
+      }
+      const send = document.querySelector("form.composer button[type='submit']");
+      const r = send ? send.getBoundingClientRect() : null;
+      const cx = r ? r.x + r.width / 2 : 0, cy = r ? r.y + r.height / 2 : 0;
+      const de = document.documentElement;
+      return JSON.stringify({
+        win: [innerWidth, innerHeight, de.clientWidth, de.clientHeight, de.scrollWidth, de.scrollHeight, scrollX, scrollY, devicePixelRatio],
+        wide: matchMedia('(min-width: 900px)').matches,
+        narrow: matchMedia('(max-width: 900px)').matches,
+        tabs: document.querySelectorAll('nav.tabs > button').length,
+        chat: document.querySelector('section.chat')?.className,
+        send: send ? { text: send.textContent, disabled: send.disabled, rect: [r.x, r.y, r.width, r.height], hit: d(document.elementFromPoint(cx, cy)) } : null,
+        box: document.querySelector("textarea[aria-label='Message']")?.value,
+        active: d(document.activeElement),
+        vt: 'activeViewTransition' in document ? String(document.activeViewTransition) : 'n/a',
+        log: window.__diag.slice(-40),
+      });`,
+    args: [],
+  }).catch((e) => `(probe failed: ${e.message})`);
+  console.log(`DIAG ${label}: ${out}`);
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -1165,12 +1206,23 @@ async function main() {
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
     );
+    await probe(s, "loaded");
     await wd("POST", `${s}/element/${box[ELEMENT]}/value`, { text: PROMPT });
     const send = await wd("POST", `${s}/element`, {
       using: "css selector",
       value: "form.composer button[type='submit']",
     });
+    await probe(s, "before click");
     await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
+    await probe(s, "after click");
+    await sleep(1500);
+    await probe(s, "1.5s later");
+    await wd("GET", `${s}/screenshot`)
+      .then((png) => {
+        mkdirSync("smoke-shots", { recursive: true });
+        writeFileSync(join("smoke-shots", "diag-after-send.png"), Buffer.from(png, "base64"));
+      })
+      .catch(() => {});
 
     const card = await waitFor("the permission card", async () => {
       const el = await wd("POST", `${s}/element`, {
