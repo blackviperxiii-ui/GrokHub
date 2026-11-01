@@ -488,6 +488,41 @@ select:focus-visible {
   background: var(--user);
 }
 
+/* A row's key sits at its right edge. */
+.palette li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.palette kbd {
+  font: inherit;
+  font-size: 0.85em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.shortcuts h2 {
+  font-size: 1em;
+  margin: 0;
+}
+
+.shortcuts table {
+  border-collapse: collapse;
+}
+
+.shortcuts th,
+.shortcuts td {
+  padding: 4px 8px 4px 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.shortcuts th {
+  font-weight: normal;
+}
+
 .palette > button {
   align-self: flex-end;
 }
@@ -761,6 +796,17 @@ button.md-copy {
   align-items: flex-end;
 }
 
+/* Push to talk: held, it reads as on. */
+.composer .mic {
+  min-height: 52px;
+  touch-action: none;
+}
+
+.composer .mic.recording {
+  color: var(--danger-text);
+  border-color: currentColor;
+}
+
 .composer textarea {
   flex: 1;
   min-height: 52px;
@@ -769,6 +815,46 @@ button.md-copy {
   /* flex: 1 sizes it; its default width (cols) would hold the row wider than a phone. */
   width: 0;
   resize: none;
+}
+
+/* Files waiting on the composer; they wrap on a phone. */
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip.attach {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.chip.attach > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip.attach.warn {
+  border-color: var(--danger-text);
+}
+
+.attach-status {
+  color: var(--danger-text);
+}
+
+.attach-chips .note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.composer .attach-plus {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.2em;
 }
 
 /* The sections stay put on the left; each page scrolls inside its own pane. */
@@ -1286,6 +1372,30 @@ button.danger {
 .settings dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* Settings → Privacy & data and Background. */
+.privacy-hosts,
+.background-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.background-rows li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.privacy .confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .web-access {
@@ -2205,6 +2315,15 @@ label.toggle-row {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
 }
 
+/* Chat's cards sit in <ViewTransition>: one that arrives, changes or goes
+   eases over 150ms. A webview without view transitions just shows the change. */
+::view-transition-group(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 150ms;
+  animation-timing-function: var(--ease-out);
+}
+
 /* People who ask for less motion get none: state changes still happen, instantly. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2215,6 +2334,13 @@ label.toggle-row {
     transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+
+  /* `*` does not reach the view transition's pseudo-elements. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 
@@ -2430,6 +2556,37 @@ label.toggle-row {
   align-self: center;
 }
 
+.connector-add {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.connector-add .catalog {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.paste-config textarea {
+  width: 100%;
+  font-family: var(--mono, monospace);
+}
+
+.connector .card-title .switch {
+  float: right;
+}
+
+/* Settings → Account: Sign in with Grok. */
+.grok-sign-in {
+  margin-bottom: 1.5rem;
+}
+.device-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.6rem;
+  letter-spacing: 0.15em;
+  margin: 0.5rem 0;
+  user-select: all;
+}
 /* Composer slash commands: the list sits just above the composer. */
 .slash-wrap {
   position: relative;
@@ -2470,4 +2627,133 @@ label.toggle-row {
 }
 .card.slash-notice .card-detail-line {
   white-space: pre-wrap;
+}
+
+/* Library: a cover grid with the picked game's details beside it. */
+.library {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.library-head input {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.library-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+
+.library-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+  align-content: start;
+  overflow-y: auto;
+}
+
+.library-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-align: left;
+}
+
+.library-tile:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+}
+
+.library-tile[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.library-name {
+  padding: 0 6px 6px;
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-art {
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+.library-art.tall {
+  aspect-ratio: 2 / 3;
+}
+
+.library-art.wide {
+  aspect-ratio: 460 / 215;
+}
+
+/* No art from Steam: a painted cover, its hue picked from the app id. */
+.library-art.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(
+    160deg,
+    hsl(var(--art-hue) 45% 32%),
+    hsl(calc(var(--art-hue) + 40) 40% 16%)
+  );
+  color: #f2f2f4;
+  font-size: 1.6em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.library-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: start;
+}
+
+.library-detail h2 {
+  margin: 4px 0 0;
+  font-size: 1.15em;
+}
+
+.library-detail .card-status {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .library-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .library-detail {
+    order: -1;
+  }
 }

@@ -274,6 +274,7 @@ impl Cabin {
             return;
         }
         let elite = self.elite_line();
+        let stardew = self.stardew_line();
         let w = &self.focus.watch;
         let listening = match (&w.server, w.listening_for) {
             (Some(_), Some(game)) => format!("Listening while {} runs.", game.name()),
@@ -294,9 +295,13 @@ impl Cabin {
             .into_iter()
             .flatten()
             .collect();
+        let rl = self.rl_line();
         ui.indent("game-watch", |ui| {
             if let Some(elite) = &elite {
                 crate::cards::help_text(ui, elite);
+            }
+            if let Some(stardew) = &stardew {
+                crate::cards::help_text(ui, stardew);
             }
             if !note.is_empty() {
                 crate::cards::help_text(ui, &note);
@@ -308,7 +313,15 @@ impl Cabin {
             for line in &games {
                 crate::cards::help_text(ui, line);
             }
+            if let Some((line, how_to)) = &rl {
+                crate::cards::help_text(ui, line);
+                if *how_to && crate::cards::ghost_pill(ui, "Copy the setting") {
+                    ui.ctx()
+                        .copy_text(grokhub_core::game_watch_rl::INI_LINE.to_string());
+                }
+            }
         });
+        self.ui_eso(ui);
     }
 }
 

@@ -28,6 +28,12 @@ vi.mock("./api", () => ({
   loadChat: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
   onEventGap: () => Promise.resolve(() => {}),
+  // Composer attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 import { Chat } from "./Chat";

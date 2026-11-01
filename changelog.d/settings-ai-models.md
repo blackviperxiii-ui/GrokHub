@@ -1,0 +1,1 @@
+- Settings has one AI models page for everything model-related: Sign in with Grok, OpenRouter and API keys, the default model, Local AI and Offline only, and spend and effort. Account, Defaults, Privacy & data and Behavior no longer repeat those rows, and messages that pointed to them now point to AI models.

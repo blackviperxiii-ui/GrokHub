@@ -114,9 +114,20 @@ pub(super) fn account_connected_hint(tokens: &grokhub_core::XaiOAuthTokens) -> S
     }
 }
 
-/// Connect Grok chrome for Settings → Account. Connected when access token is live.
+/// Settings → Account title for a stored sign-in that has run out.
+pub(super) const ACCOUNT_EXPIRED_TITLE: &str = "Sign-in expired";
+const ACCOUNT_RENEWING_HINT: &str =
+    "Renewing your Grok sign-in. If it doesn't come back, sign in again.";
+const ACCOUNT_DEAD_HINT: &str = "Your Grok sign-in ran out and can't be renewed. Sign in again.";
+
+/// Connect Grok chrome for Settings → Account. Connected only while the
+/// access token is live at `now_ms`. A stored sign-in that has expired, or
+/// whose renewal failed (`renew_failed`), offers Sign in with Grok again
+/// instead of a Connected row that no chat can use.
 pub(super) fn account_connect_chrome(
     oauth: Option<&grokhub_core::XaiOAuthTokens>,
+    now_ms: u64,
+    renew_failed: bool,
 ) -> AccountConnectChrome {
     let Some(tokens) = oauth.filter(|t| !t.access_token.trim().is_empty()) else {
         return AccountConnectChrome {
@@ -129,19 +140,80 @@ pub(super) fn account_connect_chrome(
             connected: false,
         };
     };
+    if grokhub_core::oauth_access_live(tokens, now_ms) {
+        return AccountConnectChrome {
+            title: "Connected",
+            hint: account_connected_hint(tokens),
+            action: "Sign out",
+            connected: true,
+        };
+    }
+    let renewable = !renew_failed
+        && tokens
+            .refresh_token
+            .as_deref()
+            .is_some_and(|r| !r.trim().is_empty());
     AccountConnectChrome {
-        title: "Connected",
-        hint: account_connected_hint(tokens),
-        action: "Sign out",
-        connected: true,
+        title: ACCOUNT_EXPIRED_TITLE,
+        hint: if renewable {
+            ACCOUNT_RENEWING_HINT
+        } else {
+            ACCOUNT_DEAD_HINT
+        }
+        .into(),
+        action: "Sign in with Grok",
+        connected: false,
     }
 }
 
 impl Cabin {
+    /// Settings → Account chrome for the sign-in held now.
+    pub(super) fn account_chrome_now(&self) -> AccountConnectChrome {
+        account_connect_chrome(
+            self.secrets.oauth.as_ref(),
+            now_ms(),
+            crate::oauth::cabin_refresh_failed(),
+        )
+    }
+
+    /// An expired Account sign-in with a refresh token: renew it off the UI
+    /// thread, and take the renewed one once it is back.
+    pub(super) fn renew_account_oauth(&mut self) {
+        let Some(tok) = self.secrets.oauth.as_ref() else {
+            return;
+        };
+        if grokhub_core::oauth_access_live(tok, now_ms())
+            || !grokhub_core::token_needs_refresh(tok, now_ms())
+        {
+            return;
+        }
+        if let Some(next) = crate::oauth::refresh_cabin_oauth(tok) {
+            self.secrets.oauth = Some(next);
+            self.persist_oauth_secrets();
+        }
+    }
+
     /// Adopt secrets.json OAuth written by `grokhub --oauth` (or another process)
-    /// while this cabin was already open. Does not overwrite an in-memory session.
+    /// while this cabin was already open. Does not overwrite a live in-memory
+    /// session; an expired one gives way to a live sign-in on disk.
     pub(super) fn pull_account_oauth_from_disk(&mut self) {
+        let live_here = self
+            .secrets
+            .oauth
+            .as_ref()
+            .is_some_and(|t| grokhub_core::oauth_access_live(t, now_ms()));
+        if live_here {
+            return;
+        }
         if self.account_oauth_present() {
+            let disk = secrets::load();
+            if let Some(tok) = disk
+                .oauth
+                .filter(|t| grokhub_core::oauth_access_live(t, now_ms()))
+            {
+                self.secrets.oauth = Some(tok);
+                self.oauth_profile_tried = false;
+            }
             return;
         }
         let disk = secrets::load();
@@ -512,13 +584,13 @@ mod tests {
 
     #[test]
     fn account_connect_chrome_signed_out() {
-        let c = account_connect_chrome(None);
+        let c = account_connect_chrome(None, 2, false);
         assert!(!c.connected);
         assert_eq!(c.title, "Connect Grok");
         assert_eq!(c.action, "Sign in with Grok");
         assert!(c.hint.contains("Device-code OAuth"));
         let empty = tok("  ", None, None);
-        let c2 = account_connect_chrome(Some(&empty));
+        let c2 = account_connect_chrome(Some(&empty), 2, false);
         assert!(!c2.connected);
         assert_eq!(c2.action, "Sign in with Grok");
     }
@@ -530,7 +602,7 @@ mod tests {
             Some("GrokHub QA"),
             Some("grokhub-qa@agentmail.to"),
         );
-        let c = account_connect_chrome(Some(&t));
+        let c = account_connect_chrome(Some(&t), 2, false);
         assert!(c.connected);
         assert_eq!(c.title, "Connected");
         assert_eq!(c.action, "Sign out");
@@ -546,6 +618,139 @@ mod tests {
         assert_eq!(
             account_connected_hint(&tok("x", None, None)),
             "Signed in with Grok."
+        );
+    }
+
+    /// Every text Settings paints with Account in view, after it settles.
+    fn settings_texts(cabin: &mut Cabin) -> Vec<String> {
+        cabin.nav = Nav::Settings;
+        cabin.settings_sec = SettingsSec::Account;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_settings(ui.ctx()));
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+        }
+        texts
+    }
+
+    #[test]
+    fn settings_account_paints_sign_in_with_grok_when_signed_out_or_expired() {
+        let _paint = crate::theme::hold_paint_test();
+        let _lock = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("account-signin-paint");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        crate::oauth::set_token_url_for_test(None);
+        let hour = 60 * 60 * 1000;
+        let now = grokhub_core::now_ms();
+        let expired = XaiOAuthTokens {
+            access_token: "test-old-access".into(),
+            expires_at: Some(now - hour),
+            name: Some("Viper".into()),
+            ..Default::default()
+        };
+        let has = |texts: &[String], want: &str| texts.iter().any(|t| t == want);
+        for palette in [
+            crate::theme::PaintPalette::OpsDark,
+            crate::theme::PaintPalette::ClassicDark,
+        ] {
+            crate::theme::set_paint_palette(palette);
+            let mut cabin = Cabin::quiet_for_test();
+            let out = settings_texts(&mut cabin);
+            assert!(
+                has(&out, "Connect Grok") && has(&out, "Sign in with Grok"),
+                "signed out, Account offers Sign in with Grok: {out:?}"
+            );
+            cabin.secrets.oauth = Some(expired.clone());
+            let stale = settings_texts(&mut cabin);
+            assert!(
+                has(&stale, ACCOUNT_EXPIRED_TITLE)
+                    && has(&stale, ACCOUNT_DEAD_HINT)
+                    && has(&stale, "Sign in with Grok"),
+                "an expired sign-in offers Sign in with Grok again: {stale:?}"
+            );
+            assert!(
+                !has(&stale, "Viper") && !has(&stale, "Sign out"),
+                "an expired sign-in is not shown as connected: {stale:?}"
+            );
+            cabin.secrets.oauth = Some(XaiOAuthTokens {
+                expires_at: Some(now + hour),
+                ..expired.clone()
+            });
+            let live = settings_texts(&mut cabin);
+            assert!(
+                has(&live, "Connected") && has(&live, "Viper") && has(&live, "Sign out"),
+                "{live:?}"
+            );
+            assert!(!has(&live, "Sign in with Grok"), "{live:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_expired_or_unrenewable_sign_in_offers_sign_in_with_grok_again() {
+        let hour = 60 * 60 * 1000;
+        let now = 100 * hour;
+        let expired = XaiOAuthTokens {
+            access_token: "old-access".into(),
+            expires_at: Some(now - hour),
+            name: Some("Viper".into()),
+            ..Default::default()
+        };
+        // No refresh token: nothing can renew it.
+        let c = account_connect_chrome(Some(&expired), now, false);
+        assert_eq!(
+            (c.title, c.action, c.connected),
+            (ACCOUNT_EXPIRED_TITLE, "Sign in with Grok", false)
+        );
+        assert_eq!(c.hint, ACCOUNT_DEAD_HINT);
+        // A refresh token: renewing, and Sign in with Grok stays on offer.
+        let renewable = XaiOAuthTokens {
+            refresh_token: Some("rt".into()),
+            ..expired.clone()
+        };
+        let c = account_connect_chrome(Some(&renewable), now, false);
+        assert_eq!((c.action, c.connected), ("Sign in with Grok", false));
+        assert_eq!(c.hint, ACCOUNT_RENEWING_HINT);
+        // The renewal failed: the refresh token is no good either.
+        let c = account_connect_chrome(Some(&renewable), now, true);
+        assert_eq!(
+            (c.action, c.hint.as_str()),
+            ("Sign in with Grok", ACCOUNT_DEAD_HINT)
+        );
+        // An old token with no expiry, past the no-expiry age.
+        let aged = XaiOAuthTokens {
+            access_token: "aged".into(),
+            connected_at: 1,
+            ..Default::default()
+        };
+        assert!(!account_connect_chrome(Some(&aged), now, false).connected);
+        // Still live: Connected, whatever an old renewal did.
+        let live = XaiOAuthTokens {
+            expires_at: Some(now + hour),
+            ..renewable
+        };
+        let c = account_connect_chrome(Some(&live), now, true);
+        assert_eq!(
+            (c.title, c.action, c.connected),
+            ("Connected", "Sign out", true)
         );
     }
 }

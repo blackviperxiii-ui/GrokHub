@@ -64,7 +64,10 @@ fn carries_secret(args: &Value) -> bool {
 fn name_of(args: &Value) -> Result<String, String> {
     let name = hx::entry_id(&text(args, "name"))?;
     if crate::mcp::is_desktop_server(&name) {
-        return Err(format!("{name} is the cabin's own desktop server"));
+        return Err(format!(
+            "{name} is {}'s own desktop server",
+            grokhub_core::brand::product_name()
+        ));
     }
     Ok(name)
 }
@@ -615,7 +618,7 @@ mod tests {
         );
         assert_eq!(
             refused.text,
-            "grokhub-desktop is the cabin's own desktop server"
+            "grokhub-desktop is Loadout's own desktop server"
         );
     }
 
@@ -666,7 +669,7 @@ mod tests {
         );
         assert_eq!(
             crate::mcp::disconnect("linear").unwrap_err(),
-            "linear isn't one of this cabin's connections"
+            "linear isn't one of Loadout's connections"
         );
         crate::harness::undo_connection(&root, &mcp, "linear", UndoAsk::from_click()).unwrap();
         let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();

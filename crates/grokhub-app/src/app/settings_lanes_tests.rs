@@ -274,13 +274,13 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
         cabin.account_oauth_present(),
         "disk oauth must load into Account"
     );
-    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref());
+    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref(), 2, false);
     assert!(chrome.connected);
     assert_eq!(chrome.action, "Sign out");
     assert_eq!(chrome.title, "Connected");
     assert_eq!(chrome.hint, "GrokHub QA · grokhub-qa@agentmail.to");
     // Signed-out chrome stays for the empty case.
-    let signed_out = account_connect_chrome(None);
+    let signed_out = account_connect_chrome(None, 2, false);
     assert_eq!(signed_out.action, "Sign in with Grok");
     let settings = include_str!("settings.rs");
     let account = settings
@@ -534,7 +534,7 @@ fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
     let oauth = include_str!("oauth.rs");
     assert!(
-        settings.contains("account_connect_chrome")
+        settings.contains("account_chrome_now")
             && settings.contains("pull_account_oauth_from_disk")
             && oauth.contains("Sign in with Grok")
             && oauth.contains("Sign out"),

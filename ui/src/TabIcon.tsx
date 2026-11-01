@@ -11,6 +11,7 @@ const PATHS: Record<View, string> = {
   memory: "M12 4c-4 0-7 1.3-7 3v10c0 1.7 3 3 7 3s7-1.3 7-3V7c0-1.7-3-3-7-3zM5 7c0 1.7 3 3 7 3s7-1.3 7-3M5 12c0 1.7 3 3 7 3s7-1.3 7-3",
   connectors: "M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5",
   settings: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+  library: "M6 7h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.4 1.8L15 13H9l-1.6 1.8A3 3 0 0 1 2 13v-2a4 4 0 0 1 4-4zM7 10v3M5.5 11.5h3M15.5 11h0M18 12h0",
 };
 
 export function TabIcon({ view }: { view: View }) {

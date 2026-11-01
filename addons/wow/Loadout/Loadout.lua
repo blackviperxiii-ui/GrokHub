@@ -15,8 +15,14 @@
 --
 -- WoW writes saved variables to disk only on logout, exit or /reload, so
 -- that is when Loadout sees new data.
+--
+-- One copy loads on every live flavor: Retail first, then Mists of
+-- Pandaria Classic, Burning Crusade Anniversary, Classic Era and the test
+-- clients. Each read checks the API exists before calling it and falls
+-- back to the older API Classic clients have, so every flavor saves what
+-- it can and nothing errors where an API is missing.
 
-local ADDON_VERSION = "1.1.0"
+local ADDON_VERSION = "1.2.0"
 local MAX_EVENTS = 100
 local MAX_LIST = 60
 -- Seconds to wait after a change before reading, so a burst of events
@@ -128,9 +134,40 @@ local function gear()
   return out
 end
 
+local function stripColon(s)
+  return (s:gsub("%s*:%s*$", ""))
+end
+
+-- Classic Era and Burning Crusade list professions as skill lines under
+-- the Professions and Secondary Skills headers. A collapsed header hides
+-- its lines; Loadout leaves the skill window as the player set it.
+local function skillLineProfessions()
+  if not (GetNumSkillLines and GetSkillLineInfo) then
+    return nil
+  end
+  local wanted = {}
+  for _, h in ipairs({ TRADE_SKILLS, SECONDARY_SKILLS, "Professions", "Secondary Skills" }) do
+    if type(h) == "string" then
+      wanted[stripColon(h)] = true
+    end
+  end
+  local out = {}
+  local inSection = false
+  for i = 1, (try(GetNumSkillLines) or 0) do
+    local name, isHeader, _, rank, _, _, max = try(GetSkillLineInfo, i)
+    name = plain(name)
+    if isHeader then
+      inSection = name ~= nil and wanted[stripColon(name)] == true
+    elseif inSection and name then
+      table.insert(out, { name = name, skill = plain(rank), max = plain(max) })
+    end
+  end
+  return out
+end
+
 local function professions()
   if not GetProfessions then
-    return nil
+    return skillLineProfessions()
   end
   local out = {}
   -- Primary, primary, archaeology, fishing, cooking; any can be nil.
@@ -149,7 +186,21 @@ end
 local function currencies()
   local info = C_CurrencyInfo
   if not (info and info.GetCurrencyListSize and info.GetCurrencyListInfo) then
-    return nil
+    -- Older Classic clients: name, isHeader, _, _, _, count, _, max.
+    if not (GetCurrencyListSize and GetCurrencyListInfo) then
+      return nil
+    end
+    local out = {}
+    for i = 1, (try(GetCurrencyListSize) or 0) do
+      local name, isHeader, _, _, _, count, _, max = try(GetCurrencyListInfo, i)
+      if not isHeader and plain(name) and (plain(count) or 0) > 0 then
+        table.insert(out, { name = plain(name), quantity = plain(count), max = plain(max) })
+        if #out >= MAX_LIST then
+          break
+        end
+      end
+    end
+    return out
   end
   local out = {}
   for i = 1, (try(info.GetCurrencyListSize) or 0) do
@@ -176,6 +227,24 @@ local function reputations()
     end
   end
   local rep = C_Reputation
+  if not (rep and rep.GetNumFactions and rep.GetFactionDataByIndex) and GetNumFactions and GetFactionInfo then
+    -- Classic: name, _, standing, low, high, value, _, _, isHeader, _, hasRep.
+    for i = 1, (try(GetNumFactions) or 0) do
+      if #out >= MAX_LIST then
+        break
+      end
+      local name, _, standing, low, high, value, _, _, isHeader, _, hasRep = try(GetFactionInfo, i)
+      if plain(name) and (not isHeader or hasRep) then
+        table.insert(out, {
+          name = plain(name),
+          standing = plain(standing),
+          value = plain(value),
+          low = plain(low),
+          high = plain(high),
+        })
+      end
+    end
+  end
   if rep and rep.GetNumFactions and rep.GetFactionDataByIndex then
     for i = 1, (try(rep.GetNumFactions) or 0) do
       local r = try(rep.GetFactionDataByIndex, i)
@@ -270,16 +339,56 @@ end
 
 local function quests(c)
   local ql = C_QuestLog
-  if ql and ql.GetNumQuestLogEntries then
-    local _, count = try(ql.GetNumQuestLogEntries)
-    c.questsInLog = plain(count)
-  end
+  local _, count = try((ql and ql.GetNumQuestLogEntries) or GetNumQuestLogEntries)
+  c.questsInLog = plain(count) or c.questsInLog
   if ql and ql.GetAllCompletedQuestIDs then
     local done = try(ql.GetAllCompletedQuestIDs)
     if type(done) == "table" then
       c.questsCompleted = #done
     end
+  elseif GetQuestsCompleted then
+    -- Older Classic clients: a table keyed by quest id.
+    local done = try(GetQuestsCompleted)
+    if type(done) == "table" then
+      local n = 0
+      for _ in pairs(done) do
+        n = n + 1
+      end
+      if n > 0 then
+        c.questsCompleted = n
+      end
+    end
   end
+end
+
+-- Classic clients before Mists have talent trees, not specializations:
+-- the tree with the most points names the spec, and the points read like
+-- 31/20/0. Older clients start GetTalentTabInfo with the name, newer ones
+-- with an id, so the first text it returns is the name.
+local function talentSpec()
+  if not (GetNumTalentTabs and GetTalentTabInfo and GetNumTalents and GetTalentInfo) then
+    return nil
+  end
+  local best, bestPoints, points = nil, 0, {}
+  for tab = 1, (try(GetNumTalentTabs) or 0) do
+    local a, b = try(GetTalentTabInfo, tab)
+    local name = plain(type(a) == "string" and a or b)
+    local spent = 0
+    for i = 1, (try(GetNumTalents, tab) or 0) do
+      local rank = plain((select(5, try(GetTalentInfo, tab, i))))
+      if type(rank) == "number" then
+        spent = spent + rank
+      end
+    end
+    table.insert(points, spent)
+    if type(name) == "string" and spent > bestPoints then
+      best, bestPoints = name, spent
+    end
+  end
+  if not best then
+    return nil
+  end
+  return best, table.concat(points, "/")
 end
 
 -- Reads everything about the logged-in character. Never in combat, where
@@ -314,6 +423,12 @@ local function snapshot()
     local _, specName, _, _, role = try(GetSpecializationInfo, spec)
     c.spec = plain(specName) or c.spec
     c.role = plain(role) or c.role
+  else
+    local tree, talents = talentSpec()
+    if tree then
+      c.spec = tree
+      c.talents = talents
+    end
   end
   if IsInGuild and IsInGuild() then
     c.guild = plain((GetGuildInfo("player")))
@@ -358,6 +473,9 @@ local function summary()
     return
   end
   local who = (c.level or "?") .. " " .. (c.spec and (c.spec .. " ") or "") .. (c.className or "")
+  if c.talents then
+    who = who .. " (" .. c.talents .. ")"
+  end
   local parts = { c.name or "", who }
   if c.itemLevel then
     table.insert(parts, "ilvl " .. c.itemLevel)
@@ -389,10 +507,11 @@ f:RegisterEvent("PLAYER_MONEY")
 f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("TIME_PLAYED_MSG")
-f:RegisterEvent("ENCOUNTER_END")
 f:RegisterEvent("PLAYER_DEAD")
 -- Not every flavor has these.
 for _, event in ipairs({
+  "ENCOUNTER_END",
+  "CHARACTER_POINTS_CHANGED",
   "ACHIEVEMENT_EARNED",
   "PLAYER_SPECIALIZATION_CHANGED",
   "UPDATE_INSTANCE_INFO",
