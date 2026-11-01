@@ -161,7 +161,7 @@ pub(super) fn disconnect_question(name: &str) -> String {
 
 /// The confirm sheet's detail line: what goes.
 pub(super) const DISCONNECT_DETAIL: &str =
-    "Its entry leaves this cabin's connections and its sign-in and saved token are deleted. /connections can bring the entry back; you'd sign in again.";
+    "Its entry leaves the app's connections and its sign-in and saved token are deleted. /connections can bring the entry back; you'd sign in again.";
 
 /// One connector row: initial, name and chip, target, account or note, and
 /// the buttons on the right. Returns the button clicked.
@@ -314,7 +314,7 @@ impl Cabin {
         let mut picked: Option<(ConnectorRow, ConnectorAct)> = None;
         let snap = crate::native_mcp::snapshot();
         ui.horizontal(|ui| {
-            crate::cards::section_label(ui, "This cabin");
+            crate::cards::section_label(ui, grokhub_core::brand::product_name());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::cards::ghost_pill(ui, "Check status") {
                     crate::native_mcp::spawn(crate::native_mcp::Job::Doctor);
@@ -324,7 +324,7 @@ impl Cabin {
                 }
             });
         });
-        crate::cards::help_text(ui, "Servers native chats use, kept in this cabin's own home. Import copies definitions from the cabin's Grok home.");
+        crate::cards::help_text(ui, "Servers native chats use, kept in the app's own folder. Import copies definitions from the Grok CLI's home.");
         ui.add_space(8.0);
         if !snap.note.is_empty() {
             crate::cards::settings_note(ui, &snap.note);
@@ -336,7 +336,7 @@ impl Cabin {
         if snap.rows.is_empty() {
             crate::cards::settings_note(
                 ui,
-                "No connectors in this cabin yet. Import copies them from the cabin's Grok home.",
+                "No connectors here yet. Import copies them from the Grok CLI's home.",
             );
         } else if rows.is_empty() {
             crate::cards::settings_note(ui, "None matched.");
