@@ -64,6 +64,9 @@ pub struct ShellSettings {
     /// explicit presets, and a stored pick of one speaks in the default voice.
     pub explicit_personalities: bool,
     pub theme: Theme,
+    /// The chat the window had open, reopened at the next launch. Empty after
+    /// New chat.
+    pub last_chat: String,
     /// Settings → General → the summon hotkey (`os_extras::SUMMON_HOTKEY`).
     /// Off until the person turns it on.
     pub summon_hotkey: bool,
@@ -162,6 +165,7 @@ impl Default for ShellSettings {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            last_chat: String::new(),
             behavior: Behavior::default(),
             summon_hotkey: false,
             notifications: true,
@@ -273,6 +277,7 @@ mod tests {
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                last_chat: String::new(),
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
@@ -321,6 +326,7 @@ mod tests {
             personality: "pirate".into(),
             explicit_personalities: true,
             theme: Theme::Dark,
+            last_chat: "shell-abc-123".into(),
             behavior: Behavior {
                 autocomplete: true,
                 quiet_start: "22:00".into(),
@@ -341,6 +347,7 @@ mod tests {
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
+        assert!(raw.contains("\"lastChat\": \"shell-abc-123\""), "{raw}");
         assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
         assert!(raw.contains("\"dailyTokenBudget\": 1000000"), "{raw}");
         assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
@@ -368,6 +375,7 @@ mod tests {
                 personality: String::new(),
                 explicit_personalities: false,
                 theme: Theme::System,
+                last_chat: String::new(),
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
@@ -388,6 +396,7 @@ mod tests {
             personality: String::new(),
             explicit_personalities: false,
             theme: Theme::System,
+            last_chat: String::new(),
             behavior: Behavior::default(),
             summon_hotkey: false,
             notifications: true,

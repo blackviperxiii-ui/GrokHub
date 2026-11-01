@@ -11,6 +11,7 @@ import {
   type PulsePage,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
+import { FixWindow } from "./PulseFix";
 import { StatusLine, useNote } from "./ui";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
@@ -92,6 +93,8 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [paged, setPaged] = useState(PAGE_SIZE);
+  /** The PC health idea whose options window is open. */
+  const [fixing, setFixing] = useState<PulseIdea | null>(null);
   const end = useRef<HTMLLIElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -264,6 +267,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
                     idea={idea}
                     busy={busy}
                     onDo={() => void run(idea)}
+                    onFix={() => setFixing(idea)}
                     onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
                   />
@@ -272,6 +276,18 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
             </div>
           ))}
         </>
+      )}
+      {fixing && (
+        <FixWindow
+          id={fixing.id}
+          label={fixing.fix}
+          onClose={() => setFixing(null)}
+          onAsk={() => {
+            const idea = fixing;
+            setFixing(null);
+            void run(idea);
+          }}
+        />
       )}
     </section>
   );

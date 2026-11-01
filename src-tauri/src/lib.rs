@@ -13,6 +13,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
+pub mod history;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
@@ -372,6 +373,7 @@ async fn send_chat(
     attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
+    set_last_chat(&state, &conversation_id);
     let turn = Turn {
         text,
         mode,
@@ -386,6 +388,22 @@ struct Turn {
     text: String,
     mode: agent::SessionMode,
     attachments: Vec<String>,
+}
+
+/// The chat the window has open, reopened at the next launch; empty for none.
+/// A failed write only loses that, so chat goes on.
+fn set_last_chat(state: &ShellState, conversation_id: &str) {
+    let now = current(state);
+    if now.last_chat == conversation_id {
+        return;
+    }
+    let next = ShellSettings {
+        last_chat: conversation_id.to_string(),
+        ..now
+    };
+    if settings::save(&state.config_dir, &next).is_ok() {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
 }
 
 async fn chat_turn(
@@ -517,18 +535,26 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     }
 }
 
-/// New chat: the old conversation's worker ends.
+/// New chat: the old conversation's worker ends. Its saved turns stay, so
+/// History can open it again.
 #[tauri::command]
 fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
+    end_chat(&state, &conversation_id);
+}
+
+fn end_chat(state: &ShellState, conversation_id: &str) {
     let removed = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&conversation_id);
+        .remove(conversation_id);
     if let Some(session) = removed {
         session.cancel();
     }
-    state.trays.forget(&conversation_id);
+    if current(state).last_chat == conversation_id {
+        set_last_chat(state, "");
+    }
+    state.trays.forget(conversation_id);
 }
 
 /// The chat model's input kinds, for the chips' notes.
@@ -613,6 +639,69 @@ async fn pick_attachments(
 #[tauri::command]
 fn remove_attachment(state: State<'_, ShellState>, conversation_id: String, path: String) {
     state.trays.remove(&conversation_id, &path);
+}
+
+/// History: the shell's saved chats, newest first.
+#[tauri::command]
+async fn list_chats(state: State<'_, ShellState>) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::list(&dir)).await
+}
+
+#[tauri::command]
+async fn search_chats(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::ChatRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::search(&dir, &query)).await
+}
+
+/// Opens a saved chat: its newest `limit` lines, and it becomes the chat the
+/// next launch reopens. The next message resumes it (`agent::serve`).
+#[tauri::command]
+async fn load_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    limit: Option<usize>,
+) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    let shown =
+        off_main(move || history::load(&dir, &id, limit.unwrap_or(history::LOAD_CAP))).await??;
+    set_last_chat(&state, &shown.id);
+    Ok(shown)
+}
+
+/// The chat open when the window last closed, if it is still saved.
+#[tauri::command]
+async fn get_last_chat(
+    state: State<'_, ShellState>,
+) -> Result<Option<history::Transcript>, String> {
+    let (dir, id) = (state.config_dir.clone(), current(&state).last_chat);
+    if id.is_empty() {
+        return Ok(None);
+    }
+    off_main(move || history::load(&dir, &id, history::LOAD_CAP).ok()).await
+}
+
+#[tauri::command]
+async fn rename_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::rename(&dir, &id, &title)).await?
+}
+
+/// The page asks "Delete {title}?" first. A reply still running stops.
+#[tauri::command]
+async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    let doomed = id.clone();
+    off_main(move || history::delete(&dir, &doomed)).await??;
+    end_chat(&state, &id);
+    Ok(())
 }
 
 /// Agents: the open chat's to-dos and background tasks.
@@ -1354,6 +1443,14 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
     off_main(move || pulse::why(&dir, &id)).await?
 }
 
+/// A PC health card's options window. Read only.
+#[tauri::command]
+async fn pulse_fix(state: State<'_, ShellState>, id: String) -> Result<pulse::FixView, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::fix(&dir, &id)).await?
+}
+
 #[tauri::command]
 async fn get_feed_prompt(state: State<'_, ShellState>) -> Result<pulse::Prompt, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -1809,6 +1906,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
         "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "pulse_fix" => out(block_on(pulse_fix(state, arg(args, "id")?))?),
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
@@ -2274,6 +2372,12 @@ pub fn run() {
             answer_elicit,
             cancel_chat,
             close_chat,
+            list_chats,
+            search_chats,
+            load_chat,
+            get_last_chat,
+            rename_chat,
+            delete_chat,
             stage_attachment,
             stage_attachment_paths,
             pick_attachments,
@@ -2338,6 +2442,7 @@ pub fn run() {
             pulse_act,
             pulse_discuss,
             pulse_why,
+            pulse_fix,
             get_feed_prompt,
             save_feed_prompt,
             pulse_image,

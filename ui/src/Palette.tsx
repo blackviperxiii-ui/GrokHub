@@ -19,7 +19,21 @@ import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
 
-export type View = "chat" | "pulse" | "imagine" | "journal" | "automations" | "agents" | "memory" | "skills" | "connectors" | "settings" | "library" | "workboard" | "devices";
+export type View =
+  | "chat"
+  | "history"
+  | "pulse"
+  | "imagine"
+  | "journal"
+  | "automations"
+  | "agents"
+  | "memory"
+  | "skills"
+  | "connectors"
+  | "settings"
+  | "library"
+  | "workboard"
+  | "devices";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -59,6 +73,7 @@ const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], sla
 
 export const VIEW_LABELS: Record<View, string> = {
   chat: "Chat",
+  history: "History",
   pulse: "Pulse",
   imagine: "Imagine",
   journal: "Journal",
@@ -73,12 +88,14 @@ export const VIEW_LABELS: Record<View, string> = {
   library: "Library",
 };
 
-/** The pages this platform shows, in tab order. The journal is this
- * computer's file, so the web app leaves it on the desktop; Devices is
- * about this computer's Web access, so only a desktop that has it shows it. */
+/** The pages this platform shows, in tab order. History and the journal
+ * are this computer's files, so the web app leaves them on the desktop (a
+ * browser sees only the chats it started); Devices is about this computer's
+ * Web access, so only a desktop that has it shows it. */
 export function views(caps: Capabilities): View[] {
   return [
     "chat",
+    ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
     "imagine",
     ...(caps.remote ? [] : (["journal"] as const)),

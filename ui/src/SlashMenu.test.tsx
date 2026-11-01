@@ -23,6 +23,9 @@ vi.mock("./api", () => ({
   cancelChat: vi.fn(),
   setModel: vi.fn(),
   listModels: vi.fn(),
+  // No chat saved from an earlier launch.
+  getLastChat: () => Promise.resolve(null),
+  loadChat: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
   onEventGap: () => Promise.resolve(() => {}),
   // Composer attachments have their own tests (AttachChips.test.tsx).

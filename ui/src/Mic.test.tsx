@@ -9,6 +9,9 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  // No chat saved from an earlier launch.
+  getLastChat: () => Promise.resolve(null),
+  loadChat: vi.fn(),
   transcribe: api.transcribe,
   sendChat: api.sendChat,
   getSettings: () =>
