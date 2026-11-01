@@ -1904,6 +1904,11 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "The Elder Scrolls Online",
     ));
     rows.push((
+        "tick_rl",
+        grokhub_core::game_watch_rl::match_card(&Default::default(), now),
+        "Rocket League",
+    ));
+    rows.push((
         "end_factorio_session",
         grokhub_core::factorio_state::session_card(
             &grokhub_core::factorio_state::FactorioSession {

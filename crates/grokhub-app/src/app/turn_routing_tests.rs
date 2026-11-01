@@ -837,7 +837,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "Skills reads the native engine's listing, never grok inspect: {skills_ui}"
     );
     assert!(
-            skills_ui.contains("Cabin skills") && skills_ui.contains("self.skill_list"),
+            skills_ui.contains("\"{product} skills\"") && skills_ui.contains("self.skill_list"),
             "the skills the cabin follows and writes must be listed, not only the Grok catalog: {skills_ui}"
         );
     assert!(

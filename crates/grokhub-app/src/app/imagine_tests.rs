@@ -81,7 +81,7 @@ fn imagine_auth_source_never_names_cli_login() {
 
 #[test]
 fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
-    const NO_KEY: &str = "Sign in with Grok in Settings → Account, or add a console API key.";
+    const NO_KEY: &str = "Sign in with Grok in Settings → AI models, or add a console API key.";
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("imagine-nokey");
     // Imagine never uses the Grok CLI login; clear the cabin stores this path reads.
@@ -397,7 +397,7 @@ fn imagine_without_key_stays_off_a_run() {
 
     cabin.kick_imagine();
 
-    let expected = "Sign in with Grok in Settings → Account, or add a console API key.";
+    let expected = "Sign in with Grok in Settings → AI models, or add a console API key.";
     assert_eq!(cabin.status, expected);
     assert_eq!(cabin.imagine_error, expected);
     assert!(!cabin.running);

@@ -1098,7 +1098,7 @@ pub fn load() -> AppConfig {
     cfg
 }
 
-const SOUL_SEED: &str = "# Soul\n\nWho this cabin is. Edit this.\n";
+const SOUL_SEED: &str = "# Soul\n\nWho your assistant is. Edit this.\n";
 const USER_SEED: &str = "# User\n\nWho you are. Edit this.\n";
 pub(crate) const MEMORY_SEED: &str = "# Memory\n\nLong-term notes.\n";
 
@@ -1222,13 +1222,19 @@ pub fn workboard_path() -> PathBuf {
     config_dir().join("workboard.json")
 }
 
+/// Loads, fills fields older files lack, and remembers the cards so later saves
+/// can merge with the shell's and the self MCP's writes.
 pub fn load_board() -> Vec<BoardCard> {
-    load_json(&workboard_path(), JSON_STORE_CAP)
+    let path = workboard_path();
+    let mut cards: Vec<BoardCard> = load_json(&path, JSON_STORE_CAP);
+    crate::work_store::note_loaded(&path, &mut cards);
+    cards
 }
 
+/// Merged save: takes the board lock, re-reads, keeps the newer copy of each
+/// card, then writes through `atomic_write`.
 pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
-    atomic_write(&workboard_path(), s.as_bytes())
+    crate::work_store::save(&workboard_path(), cards)
 }
 
 /// Decision backlog / experiment journal (local-first open questions).
@@ -1877,7 +1883,7 @@ mod tests {
             "boot must still read a leftover app.json key so Cabin can migrate it"
         );
         ensure_memory_seeds();
-        assert!(read_memory("SOUL.md").contains("Who this cabin is"));
+        assert!(read_memory("SOUL.md").contains("Who your assistant is"));
         assert!(read_memory("USER.md").contains("Who you are"));
         assert!(read_memory("MEMORY.md").contains("Long-term notes"));
         write_memory("SOUL.md", "be useful").expect("mem");

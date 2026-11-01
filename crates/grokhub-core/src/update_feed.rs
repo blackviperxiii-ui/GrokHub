@@ -1706,7 +1706,7 @@ fn post_useful_idea(
     }
     let mut card = idea_card(source, title, body, now);
     card.why = Some(if why.trim().is_empty() {
-        "A way this cabin can work for you.".into()
+        format!("A way {} can work for you.", crate::brand::product_name())
     } else {
         why.trim().to_string()
     });
@@ -2040,6 +2040,7 @@ fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
 fn useful_profile_lines(raw: &str) -> Vec<String> {
     const SKIP: &[&str] = &[
         "Who this cabin is. Edit this.",
+        "Who your assistant is. Edit this.",
         "Who you are. Edit this.",
         "Long-term notes.",
     ];
@@ -5455,6 +5456,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 at,
             ),
             "The Elder Scrolls Online",
+        ));
+        rows.push((
+            "match_card",
+            crate::game_watch_rl::match_card(&Default::default(), at),
+            "Rocket League",
         ));
         rows.push((
             "session_card",

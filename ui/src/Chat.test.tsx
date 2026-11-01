@@ -45,6 +45,12 @@ vi.mock("./api", () => ({
     api.gap = handler;
     return Promise.resolve(() => {});
   },
+  // Attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 import { applyEvent, Chat, EVENTS_LOST, MISSION_BUSY, type Item } from "./Chat";
@@ -582,7 +588,7 @@ describe("applyEvent", () => {
       signedIn: { name: "Sam", email: null },
     });
     render(<Chat onOpenSettings={() => {}} grokSignIn />);
-    expect(await screen.findByText("Ask Grok anything.")).toBeVisible();
+    expect(await screen.findByText("Ask Loadout anything.")).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
   });
 
