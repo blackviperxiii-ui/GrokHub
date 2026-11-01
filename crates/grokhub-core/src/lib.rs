@@ -298,15 +298,16 @@ pub use chat_job::{
     ChatSendKind,
 };
 pub use chat_view::{
-    apply_session_thought_act, assistant_prose, chat_find_label, chat_find_rows, chat_find_step,
-    cluster_gap, effective_thought_fold, is_skill_saved_mark, is_workload_user, merge_thinking,
-    merge_thinking_capped, message_origin, quote_for_reply, refresh_last_stretch,
+    apply_session_thought_act, assistant_prose, bubble_delete, chat_find_label, chat_find_rows,
+    chat_find_step, cluster_gap, effective_thought_fold, is_skill_saved_mark, is_workload_user,
+    merge_thinking, merge_thinking_capped, message_origin, quote_for_reply, refresh_last_stretch,
     scrolled_off_tail, scrub_thought, session_thoughts_start_collapsed, stretch_saved_skill,
     strip_thinking, thought_body_key, thought_control_act, thought_fold_controls,
     thought_fold_draws, thought_fold_transition, thought_shows_acts, thought_shows_label,
-    visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind,
-    ChatView, MessageOrigin, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES,
-    CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
+    visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, BubbleDelete,
+    ChatKind, ChatView, MessageOrigin, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP,
+    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP,
+    THOUGHT_ROW_LABEL,
 };
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_intent, chip_key_embeds_chat_text,
