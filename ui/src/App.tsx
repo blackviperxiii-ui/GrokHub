@@ -32,8 +32,10 @@ const loaders = {
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   history: () => import("./History").then((m) => ({ default: m.History })),
+  home: () => import("./Home").then((m) => ({ default: m.Home })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
@@ -44,9 +46,11 @@ const Connectors = lazy(loaders.connectors);
 const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
 const History = lazy(loaders.history);
+const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
+const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
 const Settings = lazy(loaders.settings);
@@ -209,6 +213,14 @@ export function App() {
     shortcuts: () => setSheet(true),
   };
 
+  /** A saved chat, opened in Chat as History opens one. The web app has no
+   * History, so there it switches to the browser's own chat. */
+  function openSaved(id: string) {
+    if (caps.remote) setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: id }));
+    else setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+    setView("chat");
+  }
+
   function run(action: PaletteAction) {
     if (action.kind === "view") setView(action.view);
     else if (action.kind === "ask") ask(action.text);
@@ -306,6 +318,28 @@ export function App() {
       </div>
       {/* Chat and Automations are not in <Activity>: hidden there, their
           listeners would stop and a reply landing meanwhile would be lost. */}
+      {opened.has("home") && (
+        <Page shown={view === "home"}>
+          <Home
+            conversationId={openChat}
+            remote={Boolean(caps.remote)}
+            onOpen={setView}
+            onOpenChat={openSaved}
+            onAsk={ask}
+            onSettings={(section) => run({ kind: "settings", section })}
+          />
+        </Page>
+      )}
+      {opened.has("objectives") && (
+        <Page shown={view === "objectives"}>
+          <Objectives
+            conversationId={openChat}
+            remote={Boolean(caps.remote)}
+            onOpenChat={openSaved}
+            onHome={() => setView("home")}
+          />
+        </Page>
+      )}
       {opened.has("pulse") && caps.pulse && (
         <Page shown={view === "pulse"}>
           <Pulse onRun={ask} />
@@ -324,10 +358,7 @@ export function App() {
       {opened.has("history") && !caps.remote && (
         <Page shown={view === "history"}>
           <History
-            onOpen={(id) => {
-              setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
-              setView("chat");
-            }}
+            onOpen={openSaved}
             onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
           />
         </Page>
