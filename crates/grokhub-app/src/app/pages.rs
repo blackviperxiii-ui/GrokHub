@@ -8,11 +8,11 @@ const SEND_SIGNIN_HINT: &str =
     "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
 const NATIVE_SIGNIN_NOTE: &str =
-    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
+    "Sign in with Grok in Settings → AI models, or add an API key there.";
 
 /// No sign-in or key, but Local AI is ready: chats answer on this computer.
 pub(super) const LOCAL_ONLY_NOTE: &str =
-    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
+    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → AI models for the full models.";
 
 /// A page body that scrolls under a fixed header. Pages drawn straight into
 /// a CentralPanel run off the bottom of the window once their content is
@@ -104,6 +104,12 @@ pub(super) enum BoardAct {
     },
     /// Stop the turn running in a card's chat.
     Stop,
+    /// Carry on a paused or interrupted run (KB-03 fills in the resume).
+    Resume(String),
+    /// A paused run becomes yours: back to To do, and the sweep leaves it.
+    HandBack(String),
+    /// Open or close a card's log drawer.
+    ToggleLog(String),
 }
 
 /// Drag payload for a workboard card: its id.
@@ -511,7 +517,7 @@ impl Cabin {
                     crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Host,
-                        if name.is_empty() { "This cabin" } else { &name },
+                        if name.is_empty() { "This PC" } else { &name },
                         &body,
                         None,
                         sharing,
@@ -581,7 +587,7 @@ impl Cabin {
                         ui.horizontal(|ui| {
                             crate::cards::settings_note(
                                 ui,
-                                "Sign in with Grok in Settings → Account, or add an API key.",
+                                "Sign in with Grok in Settings → AI models, or add an API key.",
                             );
                             if crate::cards::ghost_pill(ui, "Sign in") {
                                 self.set_nav_id("settings");
@@ -651,7 +657,7 @@ impl Cabin {
                     ui.add_space(8.0);
                     crate::cards::settings_note(
                         ui,
-                        "Still the starter template. The cabin fills this in as you chat, or write it here.",
+                        grokhub_core::brand::filled("Still the starter template. {product} fills this in as you chat, or write it here."),
                     );
                 }
                 self.ui_memory_raw_tidy(ui);
@@ -923,7 +929,7 @@ page_body(ui, "history", |ui| {
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Chats");
             ui.label(
-                RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
+                RichText::new("Your chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
                     .size(12.0)
                     .color(crate::theme::subtle()),
             );
@@ -1293,6 +1299,19 @@ page_body(ui, "history", |ui| {
         let Some(act) = act else {
             return false;
         };
+        // Your edit hands the card to you: the sweep no longer tidies it.
+        if let BoardAct::Move { id, .. }
+        | BoardAct::Link(id)
+        | BoardAct::Unlink(id)
+        | BoardAct::Save(id)
+        | BoardAct::SaveNotes { id, .. }
+        | BoardAct::Work(id)
+        | BoardAct::Say { id, .. }
+        | BoardAct::Resume(id)
+        | BoardAct::HandBack(id) = &act
+        {
+            grokhub_core::mark_touched(&mut self.board, id, grokhub_core::now_ms());
+        }
         match act {
             BoardAct::Add => {
                 let mut card = BoardCard::new(
@@ -1333,16 +1352,10 @@ page_body(ui, "history", |ui| {
                 true
             }
             BoardAct::Archive(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Dismissed;
-                }
-                true
+                grokhub_core::archive_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Restore(id) => {
-                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-                    c.status = BoardStatus::Todo;
-                }
-                true
+                grokhub_core::restore_work_card(&mut self.board, &id, grokhub_core::now_ms())
             }
             BoardAct::Delete(id) => {
                 let Some(thread) = self
@@ -1357,7 +1370,7 @@ page_body(ui, "history", |ui| {
                     self.board_view.note = Some((id, "Stop the card's chat first".into()));
                     return false;
                 }
-                self.board.retain(|c| c.id != id);
+                crate::work_store::delete_card(&mut self.board, &id);
                 self.forget_board_card_view(&id);
                 // A Follow up chat was hidden because its card was the way in.
                 // With the card gone it goes back to History, as the status says.
@@ -1434,6 +1447,28 @@ page_body(ui, "history", |ui| {
                 self.halt_work("Stopped");
                 false
             }
+            BoardAct::Resume(id) => {
+                self.resume_work_card(&id);
+                // The card was touched above; Resume saves the board itself.
+                true
+            }
+            BoardAct::HandBack(id) => {
+                if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
+                    c.origin = Some(grokhub_core::WorkOrigin::User);
+                    c.status = BoardStatus::Todo;
+                }
+                self.status = "The card is yours now. It is in To do.".into();
+                true
+            }
+            BoardAct::ToggleLog(id) => {
+                let open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
+                self.board_view.log = if open {
+                    None
+                } else {
+                    Some((id.clone(), self.read_card_log(&id)))
+                };
+                false
+            }
             BoardAct::Open(id) => {
                 let thread = self
                     .board
@@ -1503,9 +1538,9 @@ page_body(ui, "history", |ui| {
                 })
                 .cloned()
                 .collect();
-            crate::cards::section_label(ui, "Cabin skills");
+            crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
             ui.label(
-                RichText::new("SKILL.md under ~/.config/GrokHub/skills. The cabin follows these on a matching ask and writes new ones after a hard host run.")
+                RichText::new(grokhub_core::brand::filled("SKILL.md under ~/.config/GrokHub/skills. {product} follows these on a matching ask and writes new ones after a hard host run."))
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -1513,7 +1548,7 @@ page_body(ui, "history", |ui| {
             if cabin_skills.is_empty() {
                 ui.label(
                     RichText::new(if self.skill_list.is_empty() {
-                        "None yet. The cabin saves one after it works something out, or /skill <name> runs one you wrote."
+                        grokhub_core::brand::filled("None yet. {product} saves one after it works something out, or /skill <name> runs one you wrote.")
                     } else {
                         "None matched."
                     })

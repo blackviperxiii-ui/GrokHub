@@ -180,6 +180,7 @@ fn cabin_oauth_refresh_state() -> &'static Mutex<CabinOauthRefresh> {
 }
 
 /// The last renewal of the Grok sign-in failed and none has worked since.
+/// Settings → Account then offers Sign in with Grok again.
 pub fn cabin_refresh_failed() -> bool {
     cabin_oauth_refresh_state()
         .lock()

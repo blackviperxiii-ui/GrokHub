@@ -100,7 +100,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert!(
         texts
             .iter()
-            .any(|t| t == "What I'd do next, from how you use the cabin."),
+            .any(|t| t == "What I'd do next, from how you use Loadout."),
         "{texts:?}"
     );
     // One stream: no Feed | For You switch, the two actions sit in the header.

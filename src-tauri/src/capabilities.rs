@@ -19,6 +19,8 @@ pub struct Capabilities {
     pub web_access: bool,
     /// Settings → Labs → Plugins: bundles install from git or a folder here.
     pub plugins: bool,
+    /// Settings → Account → Sign in with Grok. Android waits for a keychain.
+    pub grok_sign_in: bool,
     /// Settings → General → start at login (the OS's login items).
     pub autostart: bool,
     /// Settings → General → the summon hotkey. Wayland gives an app no global
@@ -26,11 +28,16 @@ pub struct Capabilities {
     pub summon_hotkey: bool,
     /// Settings → General → notifications while the window is in the background.
     pub notifications: bool,
+    /// The composer's push-to-talk mic (xAI speech to text). Desktops and
+    /// phones; the web app never gets it.
+    pub voice: bool,
+    /// The Library page: this computer's Steam games and Play.
+    pub library: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
-/// Windows and macOS get everything; any other OS gets chat, memory,
-/// automations and connectors only.
+/// Windows and macOS get everything; phones get chat, memory, automations,
+/// connectors and voice; any other OS gets no voice either.
 pub fn for_os(os: &str) -> Capabilities {
     for_env(os, false)
 }
@@ -39,6 +46,7 @@ pub fn for_os(os: &str) -> Capabilities {
 /// drops the summon hotkey.
 pub fn for_env(os: &str, wayland: bool) -> Capabilities {
     let desktop = matches!(os, "linux" | "windows" | "macos");
+    let phone = matches!(os, "android" | "ios");
     Capabilities {
         desktop_control: desktop,
         pulse: desktop,
@@ -46,9 +54,12 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         tray: desktop,
         web_access: desktop,
         plugins: desktop,
+        grok_sign_in: desktop || os == "ios",
         autostart: desktop,
         summon_hotkey: desktop && !(os == "linux" && wayland),
         notifications: desktop,
+        voice: desktop || phone,
+        library: desktop,
     }
 }
 
@@ -92,9 +103,12 @@ mod tests {
             tray: true,
             web_access: true,
             plugins: true,
+            grok_sign_in: true,
             autostart: true,
             summon_hotkey: true,
             notifications: true,
+            voice: true,
+            library: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -110,12 +124,21 @@ mod tests {
             tray: false,
             web_access: false,
             plugins: false,
+            grok_sign_in: false,
             autostart: false,
             summon_hotkey: false,
             notifications: false,
+            voice: true,
+            library: false,
         };
         assert_eq!(for_os("android"), none);
-        assert_eq!(for_os("ios"), none);
+        assert_eq!(
+            for_os("ios"),
+            Capabilities {
+                grok_sign_in: true,
+                ..none
+            }
+        );
         assert_eq!(for_env("android", true), none);
     }
 
@@ -144,6 +167,11 @@ mod tests {
     }
 
     #[test]
+    fn another_os_gets_no_voice() {
+        assert!(!for_os("freebsd").voice);
+    }
+
+    #[test]
     fn a_missing_feature_is_refused_in_words() {
         assert_eq!(needs(true, "Pulse"), Ok(()));
         assert_eq!(
@@ -164,9 +192,12 @@ mod tests {
                 "tray": false,
                 "webAccess": false,
                 "plugins": false,
+                "grokSignIn": false,
                 "autostart": false,
                 "summonHotkey": false,
                 "notifications": false,
+                "voice": true,
+                "library": false,
             })
         );
     }

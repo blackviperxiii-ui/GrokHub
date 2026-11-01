@@ -22,22 +22,23 @@ const ASSET_CAP: u64 = 512 * 1024 * 1024;
 fn fetch(url: &str, cap: u64, timeout: Duration) -> Result<Vec<u8>, String> {
     // EgressGuard: a public read, no user data.
     crate::xai::egress_ok(url, &[])?;
-    let resp = ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
-        .timeout_connect(Duration::from_secs(25))
-        .timeout(timeout)
-        .build()
-        .get(url)
-        .set("user-agent", "GrokHub")
-        .set(
-            "accept",
-            "application/vnd.github+json, application/octet-stream",
-        )
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(code, _) => format!("HTTP {code}"),
-            other => other.to_string(),
-        })?;
+    let resp = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(25),
+        overall: Some(timeout),
+        proxy_from_env: true,
+        ..Default::default()
+    })
+    .get(url)
+    .header("user-agent", "GrokHub")
+    .header(
+        "accept",
+        "application/vnd.github+json, application/octet-stream",
+    )
+    .call()
+    .map_err(|e| match e {
+        grokhub_core::http::Error::Status { code, .. } => format!("HTTP {code}"),
+        other => other.to_string(),
+    })?;
     let mut buf = Vec::new();
     resp.into_reader()
         .take(cap + 1)

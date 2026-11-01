@@ -7,9 +7,15 @@ import type { Capabilities } from "./api";
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 const api = vi.hoisted(() => ({
-  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false },
+  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
+  slashHits: vi.fn(async (draft: string) =>
+    [
+      { cmd: "/plan", hint: "Plan first", insert: "/plan ", runOnPick: false, disabled: null },
+      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
+    ].filter((hit) => hit.cmd.startsWith(draft)),
+  ),
   onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
     chatHandlers.push(handler);
     return Promise.resolve(() => {});
@@ -19,6 +25,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 // Each page has its own tests; here only the tabs matter.
 vi.mock("./Chat", () => ({
+  newConversationId: () => "shell-new",
   Chat: ({
     prefill,
     onSignIn,
@@ -45,6 +52,7 @@ vi.mock("./Automations", () => ({ Automations: () => null }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
     <p>
@@ -56,7 +64,15 @@ vi.mock("./Settings", () => ({
 
 import { App } from "./App";
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true };
+const DESKTOP: Capabilities = {
+  desktopControl: true,
+  pulse: true,
+  localAi: true,
+  tray: true,
+  webAccess: true,
+  plugins: true,
+  library: true,
+};
 
 function tabs() {
   const nav = screen.getByRole("navigation", { name: "Views" });
@@ -78,8 +94,11 @@ describe("App", () => {
       "Automations",
       "Memory",
       "Connectors",
+      "Library",
       "Settings",
     ]);
+    await userEvent.click(screen.getByRole("button", { name: "Library" }));
+    expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a desktop")).toBeInTheDocument();
   });
@@ -153,13 +172,13 @@ describe("App", () => {
     expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
   });
 
-  it("the Command button opens it too, and Ask Grok fills the chat box", async () => {
+  it("the Command button opens it too, and Ask Loadout fills the chat box", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     await userEvent.click(screen.getByRole("button", { name: "Command" }));
     await userEvent.keyboard("tidy the board");
-    await userEvent.click(screen.getByRole("option", { name: "Ask Grok: tidy the board" }));
+    await userEvent.click(screen.getByRole("option", { name: "Ask Loadout: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -170,6 +189,87 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("Ctrl+N starts a new chat from any page", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    await userEvent.keyboard("{Control>}n{/Control}");
+    expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Ctrl+, opens Settings and Ctrl+/ toggles the shortcut sheet", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.keyboard("{Control>},{/Control}");
+    expect(await screen.findByText("Settings for a desktop")).toBeVisible();
+    await userEvent.keyboard("{Control>}/{/Control}");
+    const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(sheet).getByRole("row", { name: "Ctrl+N New chat" })).toBeInTheDocument();
+    expect(within(sheet).queryByText("Halt")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the palette's commands start a chat, sign in and show the keys", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    // No halt command in this shell yet, so no Halt row even with desktop control.
+    expect(screen.queryByRole("option", { name: "Halt" })).toBeNull();
+    await userEvent.keyboard("sign");
+    await userEvent.click(await screen.findByRole("option", { name: "Sign in" }));
+    expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    await userEvent.keyboard("keys{Enter}");
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await userEvent.keyboard("{Control>}k{/Control}");
+    await userEvent.keyboard("new chat{Enter}");
+    expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
+  });
+
+  it("a slash query lists the composer's commands, and a pick fills the chat box", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await userEvent.keyboard("/pl");
+    expect(await screen.findByRole("option", { name: "/plan" })).toBeInTheDocument();
+    // A command that can't run in this shell has no row.
+    expect(screen.queryByRole("option", { name: "/play" })).toBeNull();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByText("Chat page: /plan in this chat")).toBeVisible();
+  });
+
+  it("the Sign in row goes once signed in with Grok", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, grokSignIn: true });
+    api.getSettings.mockResolvedValue({ theme: "light", hasApiKey: false, signedIn: { name: "user" } } as never);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    await userEvent.keyboard("sign");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ask Loadout: sign"]);
+    api.getSettings.mockReset();
+    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light" }));
+  });
+
+  it("the Sign in row goes once the key is in", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getSettings.mockResolvedValue({ theme: "light", hasApiKey: true } as never);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    await userEvent.keyboard("sign");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ask Loadout: sign"]);
+    api.getSettings.mockReset();
+    api.getSettings.mockImplementation(() => Promise.resolve({ theme: "light" }));
   });
 
   it("the Activity Dock shows an approval waiting from any page and opens the chat", async () => {

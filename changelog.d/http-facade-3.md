@@ -1,0 +1,1 @@
+- Internal: the shared HTTP client module (`grokhub_core::http`) now also builds the agents for the cabin Grok calls (chat, speech, Imagine), the release update download, Hugging Face model downloads and the printer alerts, and can honor an HTTPS proxy from the environment, which public-only fetches never use. No app behavior change.

@@ -15,10 +15,9 @@ export function useSlashHits(draft: string): SlashHit[] {
   const bare = /^\s*\/\S*$/.test(draft);
   useEffect(() => {
     const n = ++asked.current;
-    if (!bare) {
-      setHits([]);
-      return;
-    }
+    // Not a bare `/word`: the hook returns no rows, and the counter bump
+    // drops any answer still on its way.
+    if (!bare) return;
     slashHits(draft).then(
       (rows) => {
         if (n === asked.current) setHits(rows);

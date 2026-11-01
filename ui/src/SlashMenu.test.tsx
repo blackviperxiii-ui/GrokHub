@@ -25,6 +25,12 @@ vi.mock("./api", () => ({
   listModels: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
   onEventGap: () => Promise.resolve(() => {}),
+  // Composer attachments have their own tests (AttachChips.test.tsx).
+  onFileDrop: () => Promise.resolve(() => {}),
+  stageAttachment: vi.fn(),
+  stageAttachmentPaths: vi.fn(),
+  pickAttachments: vi.fn(),
+  removeAttachment: vi.fn(),
 }));
 
 import { Chat } from "./Chat";
@@ -40,6 +46,8 @@ const SETTINGS: Settings = {
   desktopControl: false,
   theme: "system",
   version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
 };
 
 const ROWS: SlashHit[] = [

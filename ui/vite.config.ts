@@ -7,7 +7,14 @@ import brand from "../brand/brand.json" with { type: "json" };
 // The dev server may also read ../brand, where brand.json and the logo art live.
 export default defineConfig({
   plugins: [
-    react(),
+    react({
+      // React Compiler (the native oxc port), only on components marked "use memo".
+      // logDiagnostics names the reason when one is skipped instead of compiled.
+      compiler: { compilationMode: "annotation", logDiagnostics: true },
+      // The compiler pass would also rewrite `?raw` source text (brand.test.tsx
+      // reads every file that way) and empties a `.d.ts` there.
+      exclude: [/\/node_modules\//, /[?&]raw(?:&|$)/],
+    }),
     {
       name: "brand-title",
       transformIndexHtml: (html) => html.replaceAll("%PRODUCT_NAME%", brand.productName),

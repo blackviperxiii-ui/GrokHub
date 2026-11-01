@@ -12,6 +12,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use grokhub_agent::HardClass;
+use grokhub_core::http;
 use grokhub_core::print_alerts::{
     self as pa, alert_card, control_action_json, control_request, identify_api,
     parse_control_action, parse_moonraker_status, parse_octoprint_job, ControlKind,
@@ -44,12 +45,13 @@ fn save_ledger(ledger: &PrintAlertsLedger) {
 
 /// No redirects: `egress_ok` checks only the printer URL, so a redirect
 /// could send the request (and its API key) off the LAN.
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(pa::DISCOVER_TIMEOUT_MS))
-        .timeout_read(Duration::from_millis(2_000))
-        .redirects(0)
-        .build()
+fn agent() -> http::Agent {
+    http::agent(http::Opts {
+        connect: Duration::from_millis(pa::DISCOVER_TIMEOUT_MS),
+        read: Some(Duration::from_millis(2_000)),
+        redirects: 0,
+        ..Default::default()
+    })
 }
 
 fn base_url(endpoint: &str) -> String {
@@ -72,7 +74,7 @@ fn printer_key(endpoint: &str) -> String {
 
 /// Save the printer's webcam snapshot where Pulse looks for card images.
 /// Only a 2xx body that decodes as an image is kept.
-fn cache_snapshot(agent: &ureq::Agent, url: &str) -> bool {
+fn cache_snapshot(agent: &http::Agent, url: &str) -> bool {
     let path = super::pulse_ui::pulse_image_path(url);
     if crate::xai::egress_ok(url, &[]).is_err() {
         return false;
@@ -99,11 +101,11 @@ fn cache_snapshot(agent: &ureq::Agent, url: &str) -> bool {
     config::atomic_write(&path, &buf).is_ok()
 }
 
-fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<String> {
+fn get_json(agent: &http::Agent, url: &str, api_key: Option<&str>) -> Option<String> {
     crate::xai::egress_ok(url, &[]).ok()?;
     let mut req = agent.get(url);
     if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
-        req = req.set("X-Api-Key", key);
+        req = req.header("X-Api-Key", key);
     }
     let resp = req.call().ok()?;
     if !(200..300).contains(&resp.status()) {
@@ -118,7 +120,7 @@ fn get_json(agent: &ureq::Agent, url: &str, api_key: Option<&str>) -> Option<Str
 }
 
 fn post_control(
-    agent: &ureq::Agent,
+    agent: &http::Agent,
     endpoint: &str,
     kind: PrinterKind,
     control: ControlKind,
@@ -132,22 +134,22 @@ fn post_control(
     crate::xai::egress_ok(&url, &[])?;
     let mut req = agent.post(&url);
     if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
-        req = req.set("X-Api-Key", key);
+        req = req.header("X-Api-Key", key);
     }
     let resp = if body.is_empty() {
         req.call()
     } else {
-        req.set("Content-Type", "application/json")
+        req.header("Content-Type", "application/json")
             .send_string(body)
     };
     match resp {
         Ok(_) => Ok(()),
-        Err(ureq::Error::Status(code, _)) => Err(format!("printer returned HTTP {code}")),
+        Err(http::Error::Status { code, .. }) => Err(format!("printer returned HTTP {code}")),
         Err(e) => Err(format!("printer control failed: {e}")),
     }
 }
 
-fn fetch_status(agent: &ureq::Agent, saved: &SavedPrinter) -> Option<PrinterStatus> {
+fn fetch_status(agent: &http::Agent, saved: &SavedPrinter) -> Option<PrinterStatus> {
     let base = base_url(&saved.endpoint);
     let key = saved.api_key.as_deref();
     match saved.kind {
@@ -169,7 +171,7 @@ fn fetch_status(agent: &ureq::Agent, saved: &SavedPrinter) -> Option<PrinterStat
     }
 }
 
-fn probe_endpoint(agent: &ureq::Agent, host: &str, port: u16) -> Option<SavedPrinter> {
+fn probe_endpoint(agent: &http::Agent, host: &str, port: u16) -> Option<SavedPrinter> {
     let endpoint = format!("{host}:{port}");
     let base = base_url(&endpoint);
     // Moonraker first on typical ports.

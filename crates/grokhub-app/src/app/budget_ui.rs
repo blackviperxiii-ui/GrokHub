@@ -296,7 +296,7 @@ impl Cabin {
             BudgetCard::Eighty => (
                 BUDGET_EYEBROW,
                 budget::EIGHTY_CARD.into(),
-                "Settings → Defaults has the cap.",
+                "Settings → AI models has the cap.",
                 "OK",
                 "Change cap",
             ),
@@ -328,7 +328,7 @@ impl Cabin {
             (BudgetCard::Eighty, true) => self.status = "OK. Chats stay at normal quality.".into(),
             (BudgetCard::Eighty, false) => {
                 self.nav = Nav::Settings;
-                self.settings_sec = SettingsSec::Defaults;
+                self.settings_sec = SettingsSec::AiModels;
             }
             (BudgetCard::Ask, true) => {
                 let mut notes = BudgetNotes::load(&dir);

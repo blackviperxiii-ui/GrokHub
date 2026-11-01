@@ -179,7 +179,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             crate::cards::settings_note(
                 ui,
-                "What chats teach goes to USER.md (you), SOUL.md (how the cabin behaves) and MEMORY.md (what you asked it to remember).",
+                "What chats teach goes to USER.md (you), SOUL.md (how your assistant behaves) and MEMORY.md (what you asked it to remember).",
             );
             if crate::cards::ghost_pill(ui, "See and edit") {
                 self.nav = Nav::Memory;
