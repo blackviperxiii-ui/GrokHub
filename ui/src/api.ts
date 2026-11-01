@@ -157,6 +157,28 @@ export function setNotifications(on: boolean): Promise<Settings> {
   return invoke<Settings>("set_notifications", { on });
 }
 
+/** Where a model in the picker came from. */
+export type ModelSource = "catalog" | "account" | "custom";
+
+export type ModelOption = { id: string; label: string; source: ModelSource };
+
+export type ModelList = {
+  current: string;
+  options: ModelOption[];
+  /** Why the account's models are missing, when they are. */
+  note: string | null;
+};
+
+/** The chat models to pick from; `refresh` skips the 10-minute cache. */
+export function listModels(refresh = false): Promise<ModelList> {
+  return invoke<ModelList>("list_models", { refresh });
+}
+
+/** Saves the chat model for the next message. */
+export function setModel(id: string): Promise<Settings> {
+  return invoke<Settings>("set_model", { id });
+}
+
 export function setApiKey(key: string): Promise<Settings> {
   return invoke<Settings>("set_api_key", { key });
 }

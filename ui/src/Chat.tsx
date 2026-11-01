@@ -5,6 +5,7 @@ import {
   cancelChat,
   closeChat,
   getSettings,
+  setModel,
   onChatEvent,
   onEventGap,
   saveSettings,
@@ -289,6 +290,14 @@ export function Chat({
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
 
+  async function pickModel(id: string) {
+    try {
+      setSettings(await setModel(id));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function setApprovals(approvals: Approvals) {
     if (!settings) return;
     try {
@@ -533,6 +542,8 @@ export function Chat({
         onApprovals={(a) => void setApprovals(a)}
         busy={busy}
         remote={remote}
+        model={settings?.model ?? null}
+        onModel={(id) => void pickModel(id)}
       />
       <form className="composer" onSubmit={send}>
         <textarea

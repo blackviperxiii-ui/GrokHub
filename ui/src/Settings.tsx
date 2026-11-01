@@ -16,6 +16,7 @@ import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
+import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
@@ -227,10 +228,10 @@ export function Settings({
     return (
       <>
       <form onSubmit={save}>
-        <label>
-          Model
-          <input value={model} onChange={(e) => setModel(e.target.value)} />
-        </label>
+        <div className="field">
+          <span id="model-label">Model</span>
+          <ModelPicker value={model} onPick={setModel} labelledBy="model-label" />
+        </div>
         <label>
           Work folder
           <input

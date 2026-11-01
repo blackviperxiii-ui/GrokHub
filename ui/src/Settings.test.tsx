@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   setAutostart: vi.fn<(on: boolean) => Promise<boolean>>(),
   setSummonHotkey: vi.fn<(on: boolean) => Promise<Shape>>(),
   setNotifications: vi.fn<(on: boolean) => Promise<Shape>>(),
+  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -76,10 +77,22 @@ describe("Settings", () => {
     );
     render(<Settings caps={DESKTOP} />);
 
+    api.listModels.mockResolvedValue({
+      current: "grok-4.7",
+      options: [{ id: "grok-4.7", label: "Grok 4.7", source: "catalog" }],
+      note: null,
+    });
     const model = await screen.findByLabelText("Model");
-    expect(model).toHaveValue("grok-4.7");
-    await userEvent.clear(model);
-    await userEvent.type(model, " grok-5 ");
+    expect(model).toHaveTextContent("grok-4.7");
+    await userEvent.click(model);
+    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
+    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
+    await userEvent.click(screen.getByRole("button", { name: "Use" }));
+    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
     await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
@@ -168,9 +181,9 @@ describe("Settings", () => {
     api.setNotifications.mockResolvedValue(shape({ summonHotkey: true, notifications: false }));
     render(<Settings caps={BASICS} />);
 
-    const model = await screen.findByLabelText("Model");
-    await userEvent.clear(model);
-    await userEvent.type(model, "grok-5");
+    const folder = await screen.findByLabelText("Work folder");
+    await userEvent.clear(folder);
+    await userEvent.type(folder, "/home/user/scratch");
     const hotkey = screen.getByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
     const notify = screen.getByLabelText(/Notify me when Grok needs an OK/);
     expect(hotkey).not.toBeChecked();
@@ -182,7 +195,7 @@ describe("Settings", () => {
     await userEvent.click(notify);
     expect(api.setNotifications).toHaveBeenCalledWith(false);
     await waitFor(() => expect(notify).not.toBeChecked());
-    expect(model).toHaveValue("grok-5");
+    expect(folder).toHaveValue("/home/user/scratch");
   });
 
   it("says why the hotkey couldn't be set and leaves it off", async () => {

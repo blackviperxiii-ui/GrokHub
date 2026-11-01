@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  setModel: vi.fn<(id: string) => Promise<Settings>>(),
+  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -29,6 +31,8 @@ vi.mock("./api", () => ({
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
   closeChat: api.closeChat,
+  setModel: api.setModel,
+  listModels: api.listModels,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});

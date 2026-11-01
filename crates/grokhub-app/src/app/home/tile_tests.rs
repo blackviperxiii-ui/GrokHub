@@ -309,3 +309,45 @@ fn frame_rate_tile_on_windows_names_the_app_it_counts() {
     let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)), true, None);
     assert_eq!(t.caption, "Windows didn't start the frame trace");
 }
+
+#[test]
+fn every_home_module_is_live_a_link_or_a_labelled_preview() {
+    use super::paint::{module_kind, LinkTarget, ModuleKind, LIVE_MODULES};
+    use grokhub_core::home::{lookup, DataStatus, REGISTRY};
+    // Every live painter is a real registry module, and none is flagged New:
+    // a painted module must never sit in the picker as "not built".
+    for id in LIVE_MODULES {
+        let m = lookup(id).unwrap_or_else(|| panic!("{id} painted but not in the registry"));
+        assert_ne!(m.data, DataStatus::New, "{id} is painted but flagged New");
+    }
+    let mut previews = Vec::new();
+    for m in REGISTRY {
+        match module_kind(m.id) {
+            ModuleKind::Live => {}
+            ModuleKind::Link { cta, to } => {
+                assert!(cta.starts_with("Open "), "{}: {cta}", m.id);
+                if let LinkTarget::Page(page) = to {
+                    assert!(
+                        ["library", "journal", "automations"].contains(&page),
+                        "{} links to {page}",
+                        m.id
+                    );
+                }
+            }
+            ModuleKind::Preview => previews.push(m.id),
+        }
+    }
+    // The modules the old READY stub covered that do have a home in the app
+    // now open it instead of showing an empty "ready" card.
+    for id in [
+        "local_ai",
+        "personality",
+        "playbooks",
+        "automations",
+        "journal",
+        "game_library",
+    ] {
+        assert!(matches!(module_kind(id), ModuleKind::Link { .. }), "{id}");
+    }
+    assert!(previews.contains(&"deals") && previews.contains(&"now_playing"));
+}
