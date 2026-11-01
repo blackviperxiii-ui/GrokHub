@@ -93,6 +93,20 @@ describe("App", () => {
     delete document.documentElement.dataset.theme;
   });
 
+  it("shows the brand mark and name in the top bar, and an icon on every tab", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    const { container } = render(<App />);
+    const bar = container.querySelector(".topbar");
+    expect(bar?.querySelector(".brand-mark")).toHaveTextContent("Loadout");
+    expect(bar?.querySelector(".brand-mark img")).toHaveAttribute("alt", "");
+    await screen.findByRole("button", { name: "Pulse" });
+    const nav = screen.getByRole("navigation", { name: "Views" });
+    for (const tab of within(nav).getAllByRole("button")) {
+      expect(tab.querySelector("svg.tab-icon")).not.toBeNull();
+      expect(tab).toHaveAttribute("title", tab.textContent);
+    }
+  });
+
   it("hides Pulse on a phone", async () => {
     api.getCapabilities.mockResolvedValue(api.CORE_ONLY);
     render(<App />);

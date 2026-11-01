@@ -1,0 +1,4 @@
+- Shell: the top bar shows the brand mark and name, and the browser tab shows the app icon.
+- Shell: view tabs carry icons and fold to icons alone on narrow windows, so they stay on one row.
+- Shell: the last theme paints at startup instead of flashing the default first.
+- Shell: card titles stand out, and automation results read as text instead of code.
