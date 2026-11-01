@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   setSummonHotkey: vi.fn<(on: boolean) => Promise<Shape>>(),
   setNotifications: vi.fn<(on: boolean) => Promise<Shape>>(),
   listModels: vi.fn(),
+  getHaltKeys: vi.fn(() => Promise.resolve({ global: true })),
   setModel: vi.fn<(id: string) => Promise<Shape>>(),
 }));
 
@@ -53,7 +54,7 @@ vi.mock("./Privacy", () => ({
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
-import { ABOUT_NOTE, DESKTOP_NOTE, GENERAL_EMPTY, REMOTE_NOTE, Settings } from "./Settings";
+import { ABOUT_NOTE, DESKTOP_NOTE, GENERAL_EMPTY, HALT_KEYS_LOCAL, HALT_KEYS_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
 async function openSection(name: string) {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -151,6 +152,26 @@ describe("Settings", () => {
     expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "ask", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText("Let Loadout control the desktop")).toBeChecked();
+  });
+
+  it("General names the Halt keys, and says when Super+Shift+Esc isn't system-wide", async () => {
+    const { unmount } = render(<Settings caps={DESKTOP} />);
+    expect(await screen.findByText(HALT_KEYS_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(HALT_KEYS_LOCAL)).toBeNull();
+    unmount();
+
+    api.getHaltKeys.mockResolvedValueOnce({ global: false });
+    render(<Settings caps={DESKTOP} />);
+    expect(await screen.findByText(HALT_KEYS_LOCAL)).toBeInTheDocument();
+    expect(screen.queryByText(HALT_KEYS_NOTE)).toBeNull();
+  });
+
+  it("a phone has no Halt keys note", async () => {
+    api.getHaltKeys.mockClear();
+    render(<Settings caps={PHONE} />);
+    await screen.findByText(GENERAL_EMPTY);
+    expect(screen.queryByText(HALT_KEYS_NOTE)).toBeNull();
+    expect(api.getHaltKeys).not.toHaveBeenCalled();
   });
 
   it("saves a key without echoing it, then removes it", async () => {

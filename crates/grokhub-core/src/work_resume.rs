@@ -659,6 +659,32 @@ mod tests {
         assert!(block.contains("\n7. [planned] 6"), "{block}");
     }
 
+    /// KB-04: the cap is bytes, so a card written in two- to four-byte
+    /// characters (every field at its cap, a quote in the title) still fits.
+    #[test]
+    fn a_maximal_wide_character_card_fits_the_cap() {
+        let mut c = maximal();
+        c.title = "\"é🎮\"".repeat(40);
+        for (i, s) in c.steps.iter_mut().enumerate() {
+            s.text = format!("{i}{}", "ü".repeat(STEP_TEXT_MAX));
+        }
+        let cp = c.checkpoint.as_mut().unwrap();
+        cp.goal = "目".repeat(CHECKPOINT_GOAL_MAX);
+        cp.next = "🎮".repeat(CHECKPOINT_NEXT_MAX);
+        cp.blocker = "ß".repeat(CHECKPOINT_BLOCKER_MAX);
+        cp.refs = vec!["ж".repeat(CHECKPOINT_REF_MAX); CHECKPOINT_REFS_MAX];
+        crate::work_item::clean_card(&mut c);
+        let block = resume_block(&c);
+        assert!(block.len() <= RESUME_BLOCK_MAX, "{} bytes", block.len());
+        assert!(block.contains("\nGoal: 目") && block.contains("\nNext: 🎮"));
+        assert!(block.contains("\nBlocked by: ß"), "{block}");
+        assert!(block.ends_with(RESUME_TAIL), "{block}");
+        // An uncleaned card (fields over their caps) is clipped the same way.
+        let mut raw = maximal();
+        raw.checkpoint.as_mut().unwrap().goal = "目".repeat(1000);
+        assert!(resume_block(&raw).len() <= RESUME_BLOCK_MAX);
+    }
+
     #[test]
     fn swap_or_lost_session_means_a_fresh_session() {
         let mut c = doing(HOST_CABIN);

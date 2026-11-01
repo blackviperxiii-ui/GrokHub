@@ -1,11 +1,13 @@
-import { Activity, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
   getSettings,
   getWorkboard,
+  haltDesktop,
   onAutomationRan,
   onChatEvent,
+  onHalt,
   shareSchedulerClock,
   type Capabilities,
 } from "./api";
@@ -13,6 +15,7 @@ import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStart
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
+import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
@@ -86,6 +89,11 @@ export function App() {
   // Which work card each chat works, from the Workboard's last load.
   const [cardChats, setCardChats] = useState<Record<string, string>>({});
   const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
+  const [desktopOn, setDesktopOn] = useState(false);
+  const [haltNote, setHaltNote] = useState<string>();
+  // Halt is the computer's own: phones and the web app have no desktop control.
+  const canHalt = caps.desktopControl && !caps.remote;
+  const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
   // The open chat for the Agents page: the conversation the window last heard from.
   const [openChat, setOpenChat] = useState<string>();
   // The pages opened so far. Each mounts the first time it opens, not before.
@@ -121,6 +129,29 @@ export function App() {
       () => {},
     );
   }, []);
+  // Settings may have turned desktop control on or off; read it again when
+  // the view changes (leaving Settings included).
+  useEffect(() => {
+    if (!canHalt) return;
+    getSettings().then(
+      (s) => setDesktopOn(s.desktopControl),
+      () => {},
+    );
+  }, [canHalt, view]);
+  // The tray's Halt and Super+Shift+Esc land here too.
+  useEffect(() => {
+    if (!canHalt) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onHalt(() => setHaltNote(HALT_DONE)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [canHalt]);
   // The palette's Sign in row follows the key and the Grok sign-in, which
   // Settings may have added.
   useEffect(() => {
@@ -149,6 +180,12 @@ export function App() {
       dropped = true;
       stop?.();
     };
+  }, []);
+  const halt = useCallback(() => {
+    haltDesktop().then(
+      () => setHaltNote(HALT_DONE),
+      (err) => setHaltNote(`${HALT_FAILED} ${String(err)}`),
+    );
   }, []);
   // The shell's scheduler fires jobs at local times, so it needs this
   // window's clock; again every few minutes for daylight saving.
@@ -183,6 +220,11 @@ export function App() {
   }, []);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (canHalt && isHaltKey(event)) {
+        event.preventDefault();
+        halt();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === "k") {
@@ -198,7 +240,7 @@ export function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [canHalt, halt]);
 
   function ask(text: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
@@ -214,6 +256,7 @@ export function App() {
   // The palette's commands this shell can run; the others have no row yet.
   const runners: CommandRunners = {
     "new-chat": newChat,
+    halt,
     "sign-in": () => run({ kind: "settings", section: "account" }),
     shortcuts: () => setSheet(true),
   };
@@ -251,6 +294,7 @@ export function App() {
             </button>
           ))}
         </nav>
+        {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
           items={Object.values(activity)}
           onOpenChat={() => setView("chat")}
@@ -270,6 +314,7 @@ export function App() {
           Command
         </button>
       </header>
+      {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
       {palette && (
         <Palette
           caps={caps}

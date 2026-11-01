@@ -82,7 +82,9 @@ export function chatActivity(
         at: now,
       };
     case "done":
-      return prev ? { ...base, status: "done", detail: "Reply finished", at: now } : undefined;
+      return prev
+        ? { ...base, status: "done", detail: event.stop === "halted" ? "Halted" : "Reply finished", at: now }
+        : undefined;
     case "error":
       return { ...restart, status: "failed", detail: clip(event.message), at: now };
     case "suggestions":

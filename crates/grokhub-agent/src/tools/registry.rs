@@ -800,5 +800,23 @@ mod tests {
         );
         let missing = run_load_tool_schema(&json!({"name": "work_delete"}));
         assert!(missing.failed, "there is no delete");
+        // Self-manage reads are eager, but the `work_*` reads are the
+        // exception: they too load by name, and stay out of the index.
+        assert!(crate::self_manage::is_read("work_get"));
+        assert!(!index_of(&stable).contains("work_"));
+        for name in ["work_get", "work_list"] {
+            let out = run_load_tool_schema(&json!({ "name": name }));
+            assert!(!out.failed, "{name}: {}", out.text);
+        }
+        assert_eq!(
+            names(&volatile_schemas(&gate, ON)),
+            vec!["work_update", "work_get", "work_list"]
+        );
+        // A read-only chat (Plan / Ask) and a desktop chat carry none either.
+        for gate in [chat(true, false), chat(false, true)] {
+            begin_turn("conv-work-tools-other");
+            let text = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
+            assert!(!text.contains("\"work_"), "{text}");
+        }
     }
 }
