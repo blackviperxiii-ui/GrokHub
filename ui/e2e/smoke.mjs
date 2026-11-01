@@ -265,34 +265,7 @@ async function tab(s, label) {
       value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
     }),
   );
-  try {
-    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
-  } catch (e) {
-    const probe = await wd("POST", `${s}/execute/sync`, {
-      script: `const b = arguments[0]; const nav = b.parentElement;
-        const hitAt = (n) => { const r = n.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
-          return [Math.round(x), Math.round(y), document.elementsFromPoint(x, y).slice(0, 3).map((e) => e.tagName + '.' + (e.getAttribute('class') || '') + (e.title ? '#' + e.title : ''))]; };
-        const cs = getComputedStyle(b); const ns = getComputedStyle(nav);
-        const out = { btn: { vis: cs.visibility, pe: cs.pointerEvents, disp: cs.display, pos: cs.position, z: cs.zIndex, op: cs.opacity, tf: cs.transform, cv: cs.contentVisibility, inert: b.inert || !!b.closest('[inert]') },
-          nav: { ov: ns.overflowX, pos: ns.position, z: ns.zIndex, tf: ns.transform, w: nav.clientWidth, sw: nav.scrollWidth, n: nav.children.length },
-          tabs: [...nav.querySelectorAll(':scope > button')].map((x) => (x.title || '?') + ':' + hitAt(x)[2][0]),
-          icon: b.querySelector('svg') ? hitAt(b.querySelector('svg')) : null, self: hitAt(b) };
-        nav.style.overflowX = 'visible'; out.visibleOverflow = hitAt(b); nav.style.overflowX = '';
-        const labels = [...nav.querySelectorAll('.tab-label')]; const btns = [...nav.querySelectorAll(':scope > button')];
-        const tryV = (name, on, off) => { on(); void nav.offsetWidth; out['v_' + name] = hitAt(b)[2][0]; off(); void nav.offsetWidth; };
-        tryV('navRelative', () => (nav.style.position = 'relative'), () => (nav.style.position = ''));
-        tryV('btnRelative', () => btns.forEach((x) => (x.style.position = 'relative')), () => btns.forEach((x) => (x.style.position = '')));
-        tryV('labelsNone', () => labels.forEach((x) => (x.style.display = 'none')), () => labels.forEach((x) => (x.style.display = '')));
-        tryV('labelsNoClip', () => labels.forEach((x) => (x.style.clipPath = 'none')), () => labels.forEach((x) => (x.style.clipPath = '')));
-        tryV('navNoMargin', () => (nav.style.margin = '0'), () => (nav.style.margin = ''));
-        tryV('again', () => {}, () => {});
-        return JSON.stringify(out);`,
-      args: [el],
-    });
-    console.log(`DIAG ${label} click failed (${e.message}): ${probe}`);
-    await new Promise((r) => setTimeout(r, 500));
-    console.log(`DIAG ${label} retry click ok`);
-  }
+  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
   await onView(s, label);
 }
 
@@ -1209,18 +1182,6 @@ async function main() {
     session = created.sessionId;
     const s = `/session/${session}`;
     if (windowsEngineProof()) await setWindowSize(s, 1280, 900);
-    // DIAG: log every view transition's start and end.
-    await wd("POST", `${s}/execute/sync`, {
-      script: `window.__vt = []; const d = document; const orig = d.startViewTransition;
-        console.log('vt support', typeof orig);
-        if (orig) d.startViewTransition = function (...a) {
-          const t0 = performance.now(); const vt = orig.apply(d, a); const rec = { t0 }; window.__vt.push(rec);
-          window.__vtActive = (window.__vtActive || 0) + 1;
-          vt.finished.finally(() => { rec.t1 = performance.now(); window.__vtActive--; });
-          return vt; };
-        return typeof orig;`,
-      args: [],
-    }).then((r) => console.log(`DIAG startViewTransition: ${r}`));
 
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
