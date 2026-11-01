@@ -409,25 +409,21 @@ pub fn run_update_cmds_with_progress(
 pub fn fetch_github_latest_tag() -> Result<String, String> {
     // EgressGuard (Spike-4c): a public read, no user data.
     crate::xai::egress_ok(GITHUB_LATEST_API, &[])?;
-    let resp = match ureq::get(GITHUB_LATEST_API)
-        .set("user-agent", "GrokHub")
-        .set("accept", "application/vnd.github+json")
-        .timeout(Duration::from_secs(8))
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        overall: Some(Duration::from_secs(8)),
+        ..Default::default()
+    });
+    let resp = match agent
+        .get(GITHUB_LATEST_API)
+        .header("user-agent", "GrokHub")
+        .header("accept", "application/vnd.github+json")
         .call()
     {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, r)) => {
-            let mut buf = Vec::new();
-            let _ = r
-                .into_reader()
-                .take(TEXT_FILE_CAP as u64)
-                .read_to_end(&mut buf);
+        Err(grokhub_core::http::Error::Status { code, body, .. }) => {
             return Err(format!(
                 "GitHub Latest {code}: {}",
-                String::from_utf8_lossy(&buf)
-                    .chars()
-                    .take(120)
-                    .collect::<String>()
+                body.chars().take(120).collect::<String>()
             ));
         }
         Err(e) => return Err(e.to_string()),

@@ -273,14 +273,15 @@ fn jobs() -> &'static Mutex<Jobs> {
     J.get_or_init(Mutex::default)
 }
 
-fn fetch_agent() -> ureq::Agent {
+fn fetch_agent() -> grokhub_core::http::Agent {
     // Same rules as Pulse images: no redirects, no env proxy, and the dial
     // refuses a name that resolves to a private address.
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout(std::time::Duration::from_secs(8))
-        .resolver(grokhub_agent::public_only_resolve)
-        .build()
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        redirects: 0,
+        overall: Some(std::time::Duration::from_secs(8)),
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 fn fetch_art(url: &str) -> Fetched {
@@ -292,7 +293,7 @@ fn fetch_art(url: &str) -> Fetched {
     }
     let resp = match fetch_agent().get(url).call() {
         Ok(resp) => resp,
-        Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
+        Err(grokhub_core::http::Error::Status { code, .. }) if (400..500).contains(&code) => {
             return Fetched::NotFound
         }
         Err(_) => return Fetched::Failed,
