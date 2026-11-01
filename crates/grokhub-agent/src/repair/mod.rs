@@ -35,8 +35,8 @@ pub use fix::{
     StepClass, FLOOR_GUIDANCE,
 };
 pub use interpret::{
-    interpret, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES,
-    MEM_WARN_PCT,
+    interpret, pending_update_count, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT,
+    LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
     on_path, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
