@@ -1,0 +1,3 @@
+- History shows its chats once: the second filtered chat list under Projects is gone, leaving one search over chats and memory.
+- Queue shows todo states in words (In progress, To do, Done) instead of raw keys and row ids.
+- Home: the PC Loadout buttons use the same casing as the other cards, and the edit pencil is labelled Edit Home.

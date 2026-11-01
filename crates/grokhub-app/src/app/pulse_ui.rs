@@ -2362,16 +2362,17 @@ pub(super) fn wait_pulse_decodes() {
     }
 }
 
-fn fetch_agent() -> ureq::Agent {
+fn fetch_agent() -> grokhub_core::http::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
-    // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
-    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
-    // on the target (same as web_fetch).
-    ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout(std::time::Duration::from_secs(8))
-        .resolver(grokhub_agent::public_only_resolve)
-        .build()
+    // `public_only` dials through public_only_resolve, which blocks DNS→private/CGNAT
+    // even when the hostname looked public. The facade reads no env proxy:
+    // HTTP(S)_PROXY would dial the proxy and skip that check on the target.
+    grokhub_core::http::agent(grokhub_core::http::Opts {
+        redirects: 0,
+        overall: Some(std::time::Duration::from_secs(8)),
+        public_only: true,
+        ..Default::default()
+    })
 }
 
 /// The source page's own preview image URL (`og:image`, else `twitter:image`).
@@ -2435,12 +2436,13 @@ mod fetch_agent_tests {
             .nth(1)
             .and_then(|rest| rest.split("fn source_preview(").next())
             .expect("fetch_agent");
+        // `public_only` dials through public_only_resolve (grokhub_core::http tests).
         assert!(
-            arm.contains(".resolver(grokhub_agent::public_only_resolve)"),
+            arm.contains("grokhub_core::http::agent(") && arm.contains("public_only: true"),
             "Pulse page/image fetches must refuse DNS→private: {arm}"
         );
         assert!(
-            arm.contains(".redirects(0)"),
+            arm.contains("redirects: 0,"),
             "Pulse image agent must not auto-follow redirects: {arm}"
         );
         assert!(

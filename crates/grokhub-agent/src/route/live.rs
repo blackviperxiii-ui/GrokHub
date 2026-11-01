@@ -601,6 +601,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 low_check: None,
                 budget_pct: b.pct,
                 routine,
+                steady: ladder::EffortSettings::load(config_dir).steady,
                 ..Obs::default()
             };
             let hold = ladder::hold_chat_drops(r.class, care_first);

@@ -1,7 +1,10 @@
 import { useState, type FormEvent } from "react";
 import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
+import { externalUrlOk } from "./external";
 import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
+import { ModelPicker } from "./ModelPicker";
+import { ExternalLink } from "./ui";
 
 /** The cabin's composer chips, each with its hover line. */
 export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] = [
@@ -31,9 +34,11 @@ export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
 export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard Grok thinks for each step.`;
 export const REMOTE_APPROVALS_TIP = `Set in ${PRODUCT_NAME} on your computer.`;
 
-/** Chat / Plan / btw, Ask / Auto / Always, and the read-only effort chip.
- * `approvals` is null until Settings loads. On the web app the approvals
- * stay the computer's, so those chips only show it. */
+export const REMOTE_MODEL_TIP = `The model is set in ${PRODUCT_NAME} on your computer.`;
+
+/** Chat / Plan / btw, Ask / Auto / Always, the model and the read-only effort
+ * chip. `approvals` and `model` are null until Settings loads. On the web app
+ * the approvals and the model stay the computer's, so those chips only show it. */
 export function ModeChips({
   mode,
   onMode,
@@ -41,6 +46,8 @@ export function ModeChips({
   onApprovals,
   busy,
   remote,
+  model = null,
+  onModel,
 }: {
   mode: SessionMode;
   onMode: (mode: SessionMode) => void;
@@ -48,6 +55,8 @@ export function ModeChips({
   onApprovals: (approvals: Approvals) => void;
   busy: boolean;
   remote: boolean;
+  model?: string | null;
+  onModel?: (id: string) => void;
 }) {
   return (
     <div className="chips">
@@ -81,8 +90,16 @@ export function ModeChips({
           </button>
         ))}
       </div>
-      <span className="chip quiet" title={EFFORT_TIP}>
-        Auto effort
+      {model !== null &&
+        (remote || !onModel ? (
+          <span className="chip quiet" title={REMOTE_MODEL_TIP}>
+            Model: {model}
+          </span>
+        ) : (
+          <ModelPicker value={model} onPick={onModel} disabled={busy} chip />
+        ))}
+      <span className="effort-label" title={EFFORT_TIP}>
+        Effort: auto
       </span>
     </div>
   );
@@ -153,7 +170,15 @@ export function ElicitCard({
     <div className="card elicit" role="group" aria-label={title}>
       <div className="card-title">{title}</div>
       <pre className="card-detail plain">{message}</pre>
-      {item.mode === "url" && item.url && <code className="card-detail-line">{item.url}</code>}
+      {item.mode === "url" && item.url && (
+        <p className="card-detail-line">
+          {externalUrlOk(item.url) ? (
+            <ExternalLink href={item.url}>Open {item.url}</ExternalLink>
+          ) : (
+            <code>{item.url}</code>
+          )}
+        </p>
+      )}
       {item.answer ? (
         <p className="card-answer">
           {item.answer === "accept" && picked

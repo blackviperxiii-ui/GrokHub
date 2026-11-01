@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
+  getAutostart,
   getSettings,
   saveSettings,
   setApiKey,
+  setAutostart,
+  setNotifications,
+  setSummonHotkey,
   type Approvals,
   type Capabilities,
   type Settings as Shape,
 } from "./api";
+import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
+import { ModelPicker } from "./ModelPicker";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
@@ -19,11 +25,19 @@ import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
+import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
 import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
+import { StatusLine, useNote } from "./ui";
 
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
+
+/** The summon hotkey (os_extras::SUMMON_HOTKEY), as this keyboard spells it. */
+export const SUMMON_KEYS =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+    ? "⌘+Shift+Space"
+    : "Ctrl+Shift+Space";
 
 /** `goTo`: a section the command palette picked. A new `n` opens it. */
 export function Settings({
@@ -42,8 +56,10 @@ export function Settings({
   const [workspace, setWorkspace] = useState("");
   const [approvals, setApprovals] = useState<Approvals>("ask");
   const [desktopControl, setDesktopControl] = useState(false);
+  /** As the OS has it; null until read. */
+  const [autostart, setAutostartShown] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
-  const [note, setNote] = useState<string | null>(null);
+  const { note, ok, fail, clear } = useNote();
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
   const nav = useRef<HTMLElement>(null);
   const page = useRef<HTMLDivElement>(null);
@@ -54,7 +70,7 @@ export function Settings({
   useEffect(() => {
     if (goTo) {
       setSection(goTo.section);
-      setNote(null);
+      clear();
     }
   }, [goTo]);
 
@@ -68,8 +84,13 @@ export function Settings({
   }
 
   useEffect(() => {
-    getSettings().then(show, (err) => setNote(String(err)));
+    getSettings().then(show, fail);
   }, []);
+
+  useEffect(() => {
+    if (!caps.autostart || caps.remote) return;
+    getAutostart().then(setAutostartShown, fail);
+  }, [caps.autostart, caps.remote]);
 
   // Each section is its own page: it opens at the top, however far the last one was read.
   useEffect(() => {
@@ -96,9 +117,29 @@ export function Settings({
       show(
         await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals, desktopControl),
       );
-      setNote("Settings saved.");
+      ok("Settings saved.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
+    }
+  }
+
+  // These switches apply at once. Only the switch changes, so an unsaved edit
+  // in the form above stays.
+  async function flipAutostart(on: boolean) {
+    try {
+      setAutostartShown(await setAutostart(on));
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function flip(change: () => Promise<Shape>) {
+    try {
+      setSettings(await change());
+      clear();
+    } catch (err) {
+      fail(err);
     }
   }
 
@@ -107,23 +148,23 @@ export function Settings({
     try {
       show(await setApiKey(key.trim()));
       setKey("");
-      setNote("API key saved in your system keychain.");
+      ok("API key saved in your system keychain.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
   async function removeKey() {
     try {
       show(await clearApiKey());
-      setNote("API key removed.");
+      ok("API key removed.");
     } catch (err) {
-      setNote(String(err));
+      fail(err);
     }
   }
 
   if (!settings) {
-    return <section className="settings">{note ?? "Loading settings…"}</section>;
+    return <section className="settings">{note?.text ?? "Loading settings…"}</section>;
   }
 
   if (caps.remote) return <RemoteSettings settings={settings} />;
@@ -132,7 +173,7 @@ export function Settings({
 
   function open(next: Section) {
     setSection(next);
-    setNote(null);
+    clear();
   }
 
   return (
@@ -166,7 +207,7 @@ export function Settings({
         <section className="settings" aria-label={SECTION_LABELS[section]}>
         {section === "general" && general()}
         {section === "account" && account()}
-        {note && <p className="note">{note}</p>}
+        <StatusLine note={note} className="note" />
         {section === "appearance" && (
           <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
         )}
@@ -185,11 +226,12 @@ export function Settings({
 
   function general() {
     return (
+      <>
       <form onSubmit={save}>
-        <label>
-          Model
-          <input value={model} onChange={(e) => setModel(e.target.value)} />
-        </label>
+        <div className="field">
+          <span id="model-label">Model</span>
+          <ModelPicker value={model} onPick={setModel} labelledBy="model-label" />
+        </div>
         <label>
           Work folder
           <input
@@ -227,6 +269,43 @@ export function Settings({
         )}
         <button type="submit">Save settings</button>
       </form>
+      {basics()}
+      </>
+    );
+  }
+
+  /** Start at login, the summon hotkey and notifications: desktop only. */
+  function basics() {
+    if (!caps.autostart && !caps.summonHotkey && !caps.notifications) return null;
+    return (
+      <div className="settings-group" role="group" aria-label="On this computer">
+        <h2>On this computer</h2>
+        {caps.autostart && (
+          <Toggle
+            checked={autostart === true}
+            disabled={autostart === null}
+            onChange={(on) => void flipAutostart(on)}
+          >
+            Start {PRODUCT_NAME} when you sign in
+          </Toggle>
+        )}
+        {caps.summonHotkey && (
+          <Toggle
+            checked={loaded.summonHotkey}
+            onChange={(on) => void flip(() => setSummonHotkey(on))}
+          >
+            Bring up {PRODUCT_NAME} from anywhere with {SUMMON_KEYS}
+          </Toggle>
+        )}
+        {caps.notifications && (
+          <Toggle
+            checked={loaded.notifications}
+            onChange={(on) => void flip(() => setNotifications(on))}
+          >
+            Notify me when Grok needs an OK or finishes while {PRODUCT_NAME} is in the background
+          </Toggle>
+        )}
+      </div>
     );
   }
 
@@ -269,6 +348,7 @@ function About({ version }: { version: string }) {
       <p className="note">{TAGLINE}</p>
       <p>Version {version}</p>
       <p className="note">{ABOUT_NOTE}</p>
+      {inShell() && <Updates />}
     </div>
   );
 }

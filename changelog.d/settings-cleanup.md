@@ -1,0 +1,3 @@
+- Settings: Behavior has a Reminder notifications switch, and About has a field for the support link, so neither needs editing app.json by hand.
+- Settings: three settings nothing read anymore are gone; older app.json files with them still load.
+- Settings: the Labs cursor-motion demo only shows with GROKHUB_DEV_DEMOS=1.
