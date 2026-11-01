@@ -72,7 +72,7 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 
 ## Channels: stable and beta
 
-There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. Every merge into `beta` publishes a pre-release named `v<version>-beta.<N>` with the same Linux and Windows files and `SHA256SUMS` as a release, so the beta updater can take it right away; a nightly build (about 3 AM Central, skipped when nothing new landed) backs it up.
+There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. A beta build is made on request, by running the Release workflow by hand on `beta`; it publishes a pre-release named `v<version>-beta.<N>` with the same Linux and Windows files and `SHA256SUMS` as a release, so the beta updater can take it. Merges into `beta` don't publish one on their own.
 
 **Without a source clone** (every Windows Setup install, and a Linux install from the release tarball), turn Settings → Labs → **Beta channel** on or off. Loadout downloads the newest beta pre-release (or the latest stable release), checks it against its `SHA256SUMS`, swaps `grokhub` and `grokhub-hub` in (keeping the old ones as `.old`), and only then saves the new channel. A download that doesn't check out leaves you on the channel you had. Update on a channel works the same way: Beta takes the newest pre-release by build time.
 
@@ -151,7 +151,7 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 | `%APPDATA%\GrokHub` | Windows user data |
 
 Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `vX.Y.Z` tag publishes both as a release; each push to `beta`, the nightly beta build and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
+Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `vX.Y.Z` tag publishes both as a release; a manual Release run on `beta` and a `vX.Y.Z-beta.N` tag publish them as a pre-release named `v<version>-beta.<N>`, as described under the two channels above. On tags, when SignPath secrets are configured, the Setup and portable zip are Authenticode-signed (certificate by SignPath Foundation); see [CODE_SIGNING.md](CODE_SIGNING.md).
 
 Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
 

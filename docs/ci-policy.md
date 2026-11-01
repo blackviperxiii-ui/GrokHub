@@ -44,19 +44,20 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 
 ## release.yml
 
-| Job | Beta | Tag | Nightly | Manual on `beta` |
-|---|---|---|---|---|
-| `plan` | yes | yes | yes | yes |
-| `linux-bundle` | yes, cached | yes | yes ⁷ | yes, cached |
-| `windows-installer` (pack-script tests after Package) | yes, cached | yes, signed ⁸ | yes ⁷ | yes, cached |
-| `shell bundles` | ubuntu, windows; cached | 3 OS | 3 OS ⁷ | 3 OS, cached |
-| `publish` | `vX.Y.Z-beta.N` pre-release | release (Latest only for `vX.Y.Z`) | pre-release ⁷ | pre-release |
+Beta builds are on request only. A push to `beta` and the nightly no longer start release.yml; run it by hand on `beta` (Actions → Release → Run workflow) when a beta build is wanted.
 
-7. The nightly skips everything after `plan` when `vX.Y.Z-beta.N` already exists, which means nothing new landed on `beta`.
-8. SignPath signs tag builds when its secrets are configured. Beta builds stay unsigned.
+| Job | Tag | Manual on `beta` |
+|---|---|---|
+| `plan` | yes | yes |
+| `linux-bundle` | yes | yes, cached |
+| `windows-installer` (pack-script tests after Package) | yes, signed ⁷ | yes, cached |
+| `shell bundles` | 3 OS | 3 OS, cached |
+| `publish` | release (Latest only for `vX.Y.Z`) | `vX.Y.Z-beta.N` pre-release |
 
-- Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
-- A newer beta build cancels one still running. Tag runs never cancel.
+7. SignPath signs tag builds when its secrets are configured. Beta builds stay unsigned.
+
+- Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags build cold.
+- A newer manual beta run cancels one still running. Tag runs never cancel.
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.
 
