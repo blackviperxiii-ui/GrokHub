@@ -198,7 +198,7 @@ export function App() {
           />
         )}
         {view === "memory" && <Memory />}
-        {view === "connectors" && <Connectors />}
+        {view === "connectors" && <Connectors remote={Boolean(caps.remote)} />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}
       </Suspense>
     </div>

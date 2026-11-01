@@ -2162,3 +2162,23 @@ label.toggle-row {
     justify-content: space-between;
   }
 }
+
+.connector-add {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.connector-add .catalog {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.paste-config textarea {
+  width: 100%;
+  font-family: var(--mono, monospace);
+}
+
+.connector .card-title .switch {
+  float: right;
+}

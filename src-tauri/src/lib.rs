@@ -624,6 +624,70 @@ async fn disconnect_connector(
     off_main(move || connectors::disconnect(&workspace, &name)).await?
 }
 
+/// The Add sheet's catalog; `refresh` only from the Refresh click.
+#[tauri::command]
+async fn connector_catalog(
+    state: State<'_, ShellState>,
+    refresh: bool,
+) -> Result<connectors::CatalogView, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::catalog(&workspace, refresh)).await
+}
+
+#[tauri::command]
+async fn add_catalog_connector(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_catalog(&workspace, &id)).await?
+}
+
+#[tauri::command]
+async fn add_connector_config(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::add_config(&workspace, &text)).await?
+}
+
+#[tauri::command]
+async fn set_connector_enabled(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::set_enabled(&workspace, &name, on)).await?
+}
+
+/// Opens the server's https sign-in page and waits for the browser to come back.
+#[tauri::command]
+async fn sign_in_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::sign_in(&workspace, &name, &opener::open)).await?
+}
+
+/// Posts the key's approval card; the page answers it with `answer_connector_key`.
+#[tauri::command]
+async fn save_connector_key(
+    state: State<'_, ShellState>,
+    name: String,
+    key: String,
+) -> Result<connectors::KeyCard, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::start_key(&workspace, &name, key)).await?
+}
+
+#[tauri::command]
+async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::Changed, String> {
+    off_main(move || connectors::answer_key(&id, approve)).await?
+}
+
 /// What this platform runs; the UI hides the rest.
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
@@ -1526,6 +1590,13 @@ pub fn run() {
             restart_connector,
             sign_out_connector,
             disconnect_connector,
+            connector_catalog,
+            add_catalog_connector,
+            add_connector_config,
+            set_connector_enabled,
+            sign_in_connector,
+            save_connector_key,
+            answer_connector_key,
             get_journal,
             journal_add,
             journal_act,

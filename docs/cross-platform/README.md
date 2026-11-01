@@ -218,8 +218,19 @@ approve, the cabin's three permission modes.
   entry out of `mcp.json`, through the same change ledger the cabin uses, and
   deletes its sign-in and saved token. Computer-use servers can't be
   disconnected here.
-- Not yet: signing in to an HTTP server and adding new connectors. The shell
-  has no browser opener, so the page points to the cabin for both.
+- Add… opens a sheet with the catalog the cabin ships (search, Add) and
+  Paste config for an `mcpServers` block. Refresh reads newer names and
+  descriptions from the official MCP registry, only when clicked. New entries
+  are written enabled through the change ledger and start on Check or first
+  use. Names already set up are kept as they are.
+- A key connector shows a password field once added. Save key posts a
+  credentials card through the harness park; only Save on that card seals the
+  key and names it in `mcp.json`, and Deny or a timeout saves nothing.
+- Sign in opens an HTTP server's https sign-in page in the browser and
+  reconnects it with the new token. The switch on each row writes `enabled`
+  through the change ledger; a server that is off is listed and never started.
+- The web remote lists, checks, reconnects, signs out and disconnects. Adding,
+  signing in, keys and the switch stay on the computer.
 - Rust tests run a real stdio server (`ui/e2e/fake-mcp.mjs` under node) and a
   missing command. The smoke test writes an entry for that server, checks it
   connects with one tool, and checks the entry leaves `mcp.json` only after
