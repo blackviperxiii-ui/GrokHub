@@ -3,7 +3,15 @@ import type { Capabilities } from "./api";
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 
-export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
+export type View =
+  | "chat"
+  | "pulse"
+  | "journal"
+  | "automations"
+  | "agents"
+  | "memory"
+  | "connectors"
+  | "settings";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -21,6 +29,7 @@ export const VIEW_LABELS: Record<View, string> = {
   pulse: "Pulse",
   journal: "Journal",
   automations: "Automations",
+  agents: "Agents",
   memory: "Memory",
   connectors: "Connectors",
   settings: "Settings",
@@ -34,6 +43,7 @@ export function views(caps: Capabilities): View[] {
     ...(caps.pulse ? (["pulse"] as const) : []),
     ...(caps.remote ? [] : (["journal"] as const)),
     "automations",
+    "agents",
     "memory",
     "connectors",
     "settings",

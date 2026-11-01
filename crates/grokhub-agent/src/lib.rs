@@ -134,7 +134,7 @@ pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{
     forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child,
-    session_is_live, watch_cancel,
+    session_is_live, watch_cancel, TaskRow, TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{

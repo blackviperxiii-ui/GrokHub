@@ -14,12 +14,14 @@ import { applyTheme } from "./theme";
 // load the first time they open, and again in the background once the app is
 // idle so that first click does not wait on the network or disk.
 const loaders = {
+  agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
 };
+const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
 const Journal = lazy(loaders.journal);
 const Memory = lazy(loaders.memory);
@@ -38,6 +40,8 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // The open chat for the Agents page: the conversation the window last heard from.
+  const [openChat, setOpenChat] = useState<string>();
   const barAway = useHidingBar(palette);
   // Closing Settings goes back to the screen that was open before it.
   const before = useRef<View>("chat");
@@ -68,6 +72,7 @@ export function App() {
     let stop: (() => void) | undefined;
     let dropped = false;
     void onChatEvent((envelope) => {
+      setOpenChat(envelope.conversationId);
       setActivity((now) => {
         const key = `chat:${envelope.conversationId}`;
         const next = chatActivity(now[key], envelope, Date.now());
@@ -189,6 +194,7 @@ export function App() {
             }}
           />
         )}
+        {view === "agents" && <Agents conversationId={openChat} onOpenChat={() => setView("chat")} />}
         {view === "memory" && <Memory />}
         {view === "connectors" && <Connectors />}
         {view === "settings" && <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />}

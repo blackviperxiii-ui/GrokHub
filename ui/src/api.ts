@@ -909,3 +909,36 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
 }
+
+/** A background task's status on the Agents page (src-tauri/src/queue.rs). */
+export type TaskStatus = "running" | "failed" | "done" | "stopped";
+
+/** A background command, subagent or monitor of the open chat. */
+export interface QueueTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Still going, so Stop has something to stop. */
+  live: boolean;
+}
+
+/** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
+export interface QueueTodo {
+  id: string;
+  content: string;
+  status: string;
+}
+
+export interface Queue {
+  todos: QueueTodo[];
+  tasks: QueueTask[];
+}
+
+export function getQueue(conversationId: string): Promise<Queue> {
+  return invoke<Queue>("get_queue", { conversationId });
+}
+
+/** Stops one task, or every task of the chat when `taskId` is left out. */
+export function stopTask(conversationId: string, taskId?: string): Promise<Queue> {
+  return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}

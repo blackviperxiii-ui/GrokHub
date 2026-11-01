@@ -226,7 +226,8 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             remove_worktree(&parent_ws, &path);
         }
     });
-    let id = match tasks.register_agent(call.agent_id.map(str::to_string), kill) {
+    let id = match tasks.register_agent(call.agent_id.map(str::to_string), &spec.description, kill)
+    {
         Ok(id) => id,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };

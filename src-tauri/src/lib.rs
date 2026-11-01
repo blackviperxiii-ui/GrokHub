@@ -22,6 +22,7 @@ pub mod playbooks;
 pub mod plugins;
 pub mod pulse;
 pub mod pulse_feed;
+pub mod queue;
 pub mod remote;
 pub mod remote_tls;
 pub mod settings;
@@ -320,6 +321,31 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
     if let Some(session) = removed {
         session.cancel();
     }
+}
+
+/// Agents: the open chat's to-dos and background tasks.
+#[tauri::command]
+async fn get_queue(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || queue::queue(&dir, &conversation_id)).await
+}
+
+/// Agents → Stop: one task by id, or every task of the chat without one.
+#[tauri::command]
+async fn stop_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: Option<String>,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::stop(&conversation_id, task_id.as_deref())?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
 }
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
@@ -1037,6 +1063,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             close_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "get_queue" => out(block_on(get_queue(state, own(args)?))?),
+        "stop_task" => out(block_on(stop_task(
+            state,
+            own(args)?,
+            arg(args, "taskId")?,
+        ))?),
         "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
         "add_automation" => out(add_automation(
             state,
@@ -1374,7 +1406,9 @@ pub fn run() {
             check_model_file,
             run_local_speed_test,
             get_web_access,
-            set_web_access
+            set_web_access,
+            get_queue,
+            stop_task
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
