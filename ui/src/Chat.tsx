@@ -148,6 +148,13 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     }
     case "permission":
       return [...items, { ...event, answer: null }];
+    // Deny on a notification: the card shows what ran, unless the turn already ended.
+    case "answered":
+      return items.map((item) =>
+        item.kind === "permission" && item.id === event.id && item.answer !== "ended"
+          ? { ...item, answer: event.answer }
+          : item,
+      );
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];

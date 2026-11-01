@@ -21,6 +21,10 @@ export interface Settings {
   theme: Theme;
   /** Settings → About. */
   version: string;
+  /** Settings → General → the summon hotkey. */
+  summonHotkey: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications: boolean;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -33,6 +37,12 @@ export interface Capabilities {
   webAccess: boolean;
   /** Settings → Labs → Plugins. */
   plugins: boolean;
+  /** Settings → General → start at login. */
+  autostart?: boolean;
+  /** Settings → General → the summon hotkey; off on Wayland. */
+  summonHotkey?: boolean;
+  /** Settings → General → notifications while the window is in the background. */
+  notifications?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -62,6 +72,8 @@ export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  /** A permission card answered away from the page, such as Deny on its notification. */
+  | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
@@ -125,6 +137,24 @@ export function saveSettings(
     approvals,
     desktopControl,
   });
+}
+
+/** Whether the OS starts the app at login. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Resolves with what the OS has after the change. */
+export function setAutostart(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { on });
+}
+
+export function setSummonHotkey(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_summon_hotkey", { on });
+}
+
+export function setNotifications(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_notifications", { on });
 }
 
 export function setApiKey(key: string): Promise<Settings> {
@@ -908,4 +938,42 @@ export function rememberGrant(command: string): Promise<PermissionPage> {
 
 export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
+}
+
+/** Settings → About → Updates (src-tauri/src/shell_update.rs). */
+export type UpdateChannel = "stable" | "beta";
+
+export interface UpdateView {
+  version: string;
+  channel: UpdateChannel;
+  /** The AppImage and the Windows installer update themselves. */
+  updatable: boolean;
+  /** Why this install doesn't update itself. */
+  note: string | null;
+  /** The version a check found, ready to install. */
+  available: string | null;
+}
+
+/** Emitted when the background check (every 2 hours) finds an update. */
+export const UPDATE_EVENT = "update://available";
+
+export function getUpdateStatus(): Promise<UpdateView> {
+  return invoke<UpdateView>("get_update_status");
+}
+
+export function setUpdateChannel(channel: UpdateChannel): Promise<UpdateView> {
+  return invoke<UpdateView>("set_update_channel", { channel });
+}
+
+export function checkShellUpdate(): Promise<UpdateView> {
+  return invoke<UpdateView>("check_shell_update");
+}
+
+/** Downloads, verifies and installs the update, then restarts into it. */
+export function installShellUpdate(): Promise<void> {
+  return invoke<void>("install_shell_update");
+}
+
+export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
+  return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
