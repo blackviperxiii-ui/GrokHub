@@ -88,6 +88,17 @@ impl BgRun {
     }
 }
 
+/// Which native session a background run writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum BgSession {
+    /// Fork the chat's session, so the run knows the conversation.
+    Fork,
+    /// Continue this session as it is (a resume on the same model).
+    Continue(String),
+    /// A new, empty session (a resume on another model, or a lost session).
+    Fresh,
+}
+
 /// Background runs and the blocks the next turn carries. Not saved.
 #[derive(Default)]
 pub(super) struct BgWork {
@@ -226,6 +237,26 @@ impl Cabin {
         thread_id: &str,
         origin: BgOrigin,
     ) -> Result<String, String> {
+        let gate = self.native_bg_gate();
+        let (run_id, title, card_session) =
+            self.start_native_bg_on(task, thread_id, origin, BgSession::Fork, gate)?;
+        // A scheduled run takes its automation's card in `start_scheduled_run`.
+        if matches!(origin, BgOrigin::User | BgOrigin::Agent) {
+            self.open_bg_card(run_id, &title, &card_session, origin == BgOrigin::User);
+        }
+        Ok(title)
+    }
+
+    /// Start one background run on `session` under `gate`. Returns its run id,
+    /// title and native session. Opens no card: the caller files or reuses one.
+    pub(super) fn start_native_bg_on(
+        &mut self,
+        task: &str,
+        thread_id: &str,
+        origin: BgOrigin,
+        session: BgSession,
+        gate: grokhub_agent::Gate,
+    ) -> Result<(u64, String, String), String> {
         let (cwd, parent) = {
             let thread = self.threads.iter().find(|t| t.id == thread_id);
             let cwd = thread
@@ -239,18 +270,26 @@ impl Cabin {
         let workspace = cwd
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| self.grok_cwd());
-        let child_id = if let Some(parent) = parent.as_deref() {
-            grokhub_agent::fork_session(parent)
-                .map(|info| info.id)
-                .unwrap_or_else(|_| format!("native-{}", grokhub_core::uid("n")))
-        } else {
-            format!("native-{}", grokhub_core::uid("n"))
+        // A resume never forks: it continues the card's own session, or starts
+        // fresh with only the resume block (KB-03), so no transcript is replayed.
+        let parent = match session {
+            BgSession::Fork => parent,
+            BgSession::Continue(_) | BgSession::Fresh => None,
+        };
+        let child_id = match session {
+            BgSession::Continue(id) => id,
+            BgSession::Fresh => format!("native-{}", grokhub_core::uid("n")),
+            BgSession::Fork => match parent.as_deref() {
+                Some(parent) => grokhub_agent::fork_session(parent)
+                    .map(|info| info.id)
+                    .unwrap_or_else(|_| format!("native-{}", grokhub_core::uid("n"))),
+                None => format!("native-{}", grokhub_core::uid("n")),
+            },
         };
         if let Some(parent) = parent.as_deref() {
             grokhub_agent::link_child(parent, &child_id);
         }
         let (client, auth_kind, bearer) = native_bg_model(self)?;
-        let gate = self.native_bg_gate();
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = self.bg_effort(origin);
@@ -301,11 +340,7 @@ impl Cabin {
             native_session: Some(child_id),
             automation: None,
         });
-        // A scheduled run takes its automation's card in `start_scheduled_run`.
-        if matches!(origin, BgOrigin::User | BgOrigin::Agent) {
-            self.open_bg_card(self.bg.next_id, &title, &card_session);
-        }
-        Ok(title)
+        Ok((self.bg.next_id, title, card_session))
     }
 
     /// `BACKGROUND_TASK:` lines in a finished chat reply. Ones that do not fit
@@ -638,10 +673,16 @@ impl Cabin {
             }
         }
         self.end_run_card(&run.thread_id, &end.into());
-        let mut changed = if *end == BgEnd::Done {
-            settle_inflight_card(&mut self.board, &run.thread_id)
-        } else {
-            abandon_inflight_card(&mut self.board, &run.thread_id)
+        let mut changed = match end {
+            BgEnd::Done => settle_inflight_card(&mut self.board, &run.thread_id),
+            // KB-03: a failure is an interruption, resumable from the checkpoint.
+            BgEnd::Failed(why) => grokhub_core::interrupt_inflight_card(
+                &mut self.board,
+                &run.thread_id,
+                grokhub_core::work_resume::InterruptCause::from_failure(why),
+                now_ms(),
+            ),
+            BgEnd::Stopped => abandon_inflight_card(&mut self.board, &run.thread_id),
         };
         if apply_assistant_work_marks(&mut self.board, reply, &run.thread_id) {
             changed = true;

@@ -374,6 +374,12 @@ pub fn load_session(id: &str) -> Result<SessionInfo, String> {
     read_session(&path, safe_id(id)?, true)
 }
 
+/// KB-03: the session file is there and still reads, with at least one turn,
+/// so a resume on the same model can continue it instead of starting fresh.
+pub fn session_intact(id: &str) -> bool {
+    load_session(id).is_ok_and(|info| !info.input().is_empty())
+}
+
 pub fn resume_input(id: &str) -> Result<Vec<InputItem>, String> {
     Ok(load_session(id)?.input())
 }
@@ -1148,6 +1154,26 @@ mod tests {
         assert!(raw.ends_with('\n'));
         assert_eq!(resume_input(id).unwrap(), items);
         assert_eq!(loaded.input(), items);
+    }
+
+    #[test]
+    fn session_intact_needs_a_readable_file_with_a_turn() {
+        let (_dir, _guard) = isolated("intact");
+        assert!(!session_intact("native-none"), "no file");
+        assert!(!session_intact("../escape"), "bad id");
+        record_turn(
+            "native-kept",
+            "/work",
+            "grok-4.7",
+            &sample_items(),
+            &Usage::default(),
+            "",
+            "fix the dock",
+        )
+        .unwrap();
+        assert!(session_intact("native-kept"));
+        fs::write(session_file("native-kept").unwrap(), "").unwrap();
+        assert!(!session_intact("native-kept"), "an emptied file is gone");
     }
 
     #[test]

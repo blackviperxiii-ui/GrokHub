@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FeedPrompt, PulseAct, PulsePage, PulsePost } from "./api";
+import type { FeedPrompt, FixView, PulseAct, PulseIdea, PulsePage, PulsePost } from "./api";
 
 const api = vi.hoisted(() => ({
   getPulse: vi.fn<() => Promise<PulsePage>>(),
@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   pulseDiscuss: vi.fn<(id: string) => Promise<string>>(),
   pulseWhy: vi.fn<(id: string) => Promise<string>>(),
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
+  pulseFix: vi.fn<(id: string) => Promise<FixView>>(),
   getFeedPrompt: vi.fn<() => Promise<FeedPrompt>>(),
   saveFeedPrompt: vi.fn<(text: string) => Promise<FeedPrompt>>(),
 }));
@@ -40,19 +41,22 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     ago: "2h ago",
     link: "https://blog.rust-lang.org/1.99.html",
     loved: false,
+    verdict: null,
     ...over,
   };
 }
 
 const TITLE = "Async closures are stable in Rust 1.99";
 
-const IDEA = {
+const IDEA: PulseIdea = {
   id: "idea-1",
   title: "I can tidy the workboard",
   icon: "",
   summary: "Close the done cards",
   kind: "Do",
   action: "close every done card on the workboard",
+  verdict: null,
+  fix: "",
 };
 
 const PAGE: PulsePage = {
@@ -211,6 +215,9 @@ describe("Pulse", () => {
     const card = await screen.findByRole("listitem", { name: TITLE });
     const love = within(card).getByRole("button", { name: "Love" });
     expect(love).toHaveAttribute("aria-pressed", "false");
+    // Discuss is the post's main button and Love its outlined second.
+    expect(within(card).getByRole("button", { name: "Discuss" })).not.toHaveClass("quiet");
+    expect(love).toHaveClass("quiet");
     await userEvent.click(love);
     expect(api.pulseAct).toHaveBeenCalledWith("post-1", "love");
     await vi.waitFor(() =>
@@ -297,7 +304,7 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
   });
 
-  it("the idea menu holds Let's do it, More like this and Not interested, and no Snooze", async () => {
+  it("an idea shows the same two buttons as every card, with More like this in its menu", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {
       feed: [],
@@ -315,26 +322,83 @@ describe("Pulse", () => {
     expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Productivity"]);
     const row = screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" });
     expect(row.querySelector("img.idea-icon")).toHaveAttribute("src", "/emoji3d/1f980.png");
-    await userEvent.click(within(row).getByRole("button", { name: "More" }));
-    expect(within(row).getAllByRole("menuitem").map((b) => b.textContent)).toEqual([
-      "Let's do it",
-      "More like this",
-      "Not interested",
-    ]);
+    // The main button is filled; the second is outlined.
+    const main = within(row).getByRole("button", { name: "Let's do it" });
+    const second = within(row).getByRole("button", { name: "Not interested" });
+    expect(main).not.toHaveClass("quiet");
+    expect(second).toHaveClass("quiet");
     expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
+
+    await userEvent.click(within(row).getByRole("button", { name: "More" }));
+    expect(within(row).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["More like this"]);
     await userEvent.click(within(row).getByRole("menuitem", { name: "More like this" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "moreLike");
     expect(await screen.findByRole("status")).toHaveTextContent(MORE_LIKE_NOTE);
 
-    await userEvent.click(within(row).getByRole("button", { name: "More" }));
-    await userEvent.click(within(row).getByRole("menuitem", { name: "Not interested" }));
+    await userEvent.click(second);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
     expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
 
-    await userEvent.click(within(row).getByRole("button", { name: "More" }));
-    await userEvent.click(within(row).getByRole("menuitem", { name: "Let's do it" }));
+    await userEvent.click(main);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
+  });
+
+  it("a PC health card reads its verdict and Fix it opens its options, which only advise", async () => {
+    const health: PulseIdea = {
+      ...IDEA,
+      id: "pc-1",
+      title: "PC health after Hades",
+      summary: "Max GPU 88°C.",
+      action: "I just finished a gaming session (Hades).",
+      verdict: { tone: "watch", line: "Warmer than usual: GPU peaked at 88°C." },
+      fix: "Fix it",
+    };
+    const page: PulsePage = { feed: [], ideas: [{ label: "", ideas: [health] }] };
+    api.getPulse.mockResolvedValue(page);
+    api.pulseAct.mockResolvedValue(page);
+    api.pulseFix.mockResolvedValue({
+      title: "PC health after Hades",
+      verdict: health.verdict,
+      options: [
+        { kind: "compare", title: "Compare with your last sessions", why: "See this run next to your recent ones.", steps: [] },
+        {
+          kind: "fpsCap",
+          title: "Cap the frame rate in Hades",
+          why: "Frames past your refresh rate are heat you never see.",
+          steps: ["Set a frame limit at your monitor's refresh rate."],
+        },
+        { kind: "ask", title: "Ask Loadout about it", why: "Open a chat with this session's numbers.", steps: [] },
+      ],
+      compare: [
+        { session: "This one", time: "40 min", gpuPeak: "88°C", cpuPeak: "70°C", gpuBusy: "90%" },
+        { session: "Hades", time: "35 min", gpuPeak: "78°C", cpuPeak: "68°C", gpuBusy: "85%" },
+      ],
+    });
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "PC health after Hades" });
+    expect(row).toHaveTextContent("Warmer than usual: GPU peaked at 88°C.");
+    expect(within(row).queryByRole("button", { name: "Let's do it" })).toBeNull();
+    await userEvent.click(within(row).getByRole("button", { name: "Fix it" }));
+    expect(api.pulseFix).toHaveBeenCalledWith("pc-1");
+    expect(api.pulseAct).not.toHaveBeenCalled();
+
+    const sheet = await screen.findByRole("dialog", { name: "Fix it" });
+    expect(sheet).toHaveTextContent("never changes fans, clocks or drivers");
+    const fps = await within(sheet).findByRole("listitem", { name: "Cap the frame rate in Hades" });
+    await userEvent.click(within(fps).getByRole("button", { name: "Show steps" }));
+    expect(fps).toHaveTextContent("Set a frame limit at your monitor's refresh rate.");
+    const compare = within(sheet).getByRole("listitem", { name: "Compare with your last sessions" });
+    await userEvent.click(within(compare).getByRole("button", { name: "Compare" }));
+    expect(within(compare).getAllByRole("row")).toHaveLength(3);
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "Ask" }));
+    expect(screen.queryByRole("dialog", { name: "Fix it" })).toBeNull();
+    expect(api.pulseAct).toHaveBeenLastCalledWith("pc-1", "accept");
+    await vi.waitFor(() => expect(onRun).toHaveBeenCalledWith("I just finished a gaming session (Hades)."));
   });
 
   it("a failed act says why, reloads, and does not run", async () => {

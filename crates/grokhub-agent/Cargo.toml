@@ -23,18 +23,11 @@ image = { workspace = true }
 # every table but `moz_places` / `urls`.
 rusqlite = { workspace = true, features = ["hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
-# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
+# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq 3, zeroize via
 # rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
 ring = "0.17"
 zeroize = "1"
 keyring = { workspace = true }
-
-[dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "http2",
-    "blocking",
-] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"

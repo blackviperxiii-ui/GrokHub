@@ -116,6 +116,7 @@ vi.mock("./Skills", () => ({
   ),
 }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
   Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
@@ -154,6 +155,7 @@ describe("App", () => {
     expect(tabs()).toEqual([
       "Chat",
       "Pulse",
+      "Imagine",
       "Journal",
       "Automations",
       "Agents",
@@ -206,14 +208,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Chat", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Chat", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });

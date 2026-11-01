@@ -690,6 +690,13 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        // KB-03: a resume turn runs on the card it resumes, already in Doing.
+        if self.work_resume.pending.take().is_some() {
+            self.inflight_open = true;
+            self.begin_run_card(&id);
+            self.flush_board();
+            return;
+        }
         // A reply in a Follow up card's chat is that card's work, not a new Doing card.
         if self
             .board
@@ -715,6 +722,7 @@ impl Cabin {
     /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
     /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
     pub(super) fn settle_turn_card(&mut self, assistant: &str) {
+        self.work_resume.follow = None;
         let Some(id) = self.chat_job_thread.clone() else {
             self.inflight_open = false;
             return;
@@ -746,6 +754,7 @@ impl Cabin {
 
     /// The turn never finished. Undoes the Doing card this attempt filed.
     pub(super) fn abandon_turn_card(&mut self) {
+        self.drop_pending_resume();
         if !self.inflight_open {
             return;
         }
