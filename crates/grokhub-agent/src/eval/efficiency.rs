@@ -64,6 +64,8 @@ struct Recorder {
     script: Vec<TurnOutput>,
     finish: String,
     n: AtomicUsize,
+    /// Next scripted turn. A load the model makes on its own does not use one.
+    pos: AtomicUsize,
     bodies: Mutex<Vec<Value>>,
 }
 
@@ -73,6 +75,7 @@ impl Recorder {
             script,
             finish: finish.to_string(),
             n: AtomicUsize::new(0),
+            pos: AtomicUsize::new(0),
             bodies: Mutex::new(Vec::new()),
         }
     }
@@ -101,12 +104,37 @@ impl ModelClient for Recorder {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .push(responses_body(req));
-        Ok(self
+        let pos = self.pos.load(Ordering::SeqCst);
+        let next = self
             .script
-            .get(n)
+            .get(pos)
             .cloned()
-            .unwrap_or_else(|| text_turn(&self.finish)))
+            .unwrap_or_else(|| text_turn(&self.finish));
+        // Like a real model, load a scripted tool the list only has in its
+        // lazy index before calling it; the scripted call comes next.
+        if let Some(name) = next.calls.first().map(|c| c.name.as_str()) {
+            if indexed_only(&req.tools, name) {
+                return Ok(tool_turn(
+                    &format!("load-{name}"),
+                    crate::tools::registry::LOAD_TOOL_SCHEMA,
+                    &json!({ "name": name }).to_string(),
+                ));
+            }
+        }
+        self.pos.fetch_add(1, Ordering::SeqCst);
+        Ok(next)
     }
+}
+
+/// `name` is not in `tools` but the `load_tool_schema` index lists it.
+fn indexed_only(tools: &[Value], name: &str) -> bool {
+    let indexed = tools.iter().any(|t| {
+        t["name"] == crate::tools::registry::LOAD_TOOL_SCHEMA
+            && t["description"]
+                .as_str()
+                .is_some_and(|d| d.lines().any(|l| l.starts_with(&format!("{name} — "))))
+    });
+    indexed && !tools.iter().any(|t| t["name"].as_str() == Some(name))
 }
 
 fn json_len(v: &Value) -> usize {
@@ -379,6 +407,21 @@ fn scenarios() -> Vec<Scenario> {
             context_tokens: None,
             trim_off: false,
         },
+        Scenario {
+            // LO-45: a chat that opens as small talk, then asks for a file.
+            name: "chat-then-code",
+            prompts: vec!["hi there", "Read my notes."],
+            script: vec![
+                text_turn("Hey! What's up?"),
+                read("cc1", "notes.txt"),
+                text_turn("Your notes name the save folder."),
+            ],
+            finish: "Anything else?",
+            history_turns: 0,
+            facts: vec![FACT_NOTE],
+            context_tokens: None,
+            trim_off: false,
+        },
         re_reads("re-reads", false),
         re_reads("re-reads (trim off)", true),
     ]
@@ -509,6 +552,7 @@ mod tests {
                 "diagnostics",
                 "long-chat",
                 "three-turns",
+                "chat-then-code",
                 "re-reads",
                 "re-reads (trim off)"
             ]
@@ -518,9 +562,20 @@ mod tests {
             assert!(r.first_tools_bytes > 0 && r.first_system_bytes > 0, "{r:?}");
             assert!(r.recall_ok, "a planted fact fell out: {r:?}");
         }
+        let row = |name: &str| rows.iter().find(|r| r.scenario == name).unwrap();
+        // LO-45: small talk opens on the lighter Talk list; work asks don't.
+        let talk = row("chat-then-code");
+        assert!(
+            talk.first_tools_bytes < row("tools").first_tools_bytes,
+            "{talk:?}"
+        );
+        assert_eq!(
+            talk.requests, 4,
+            "one load, then the scripted read: {talk:?}"
+        );
         // Dropping the two older log reads sends fewer bytes in the same requests.
-        let trimmed = &rows[5];
-        let control = &rows[6];
+        let trimmed = row("re-reads");
+        let control = row("re-reads (trim off)");
         assert_eq!(trimmed.requests, control.requests);
         assert!(
             trimmed.total_bytes < control.total_bytes,

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use crate::gate::Gate;
 
 use super::defs::{action_defs, all_defs, desktop_tail_defs, find_def, read_defs, ToolDef};
+use super::talk::{self, Profile, TALK_DEMOTED};
 use super::ToolOutput;
 
 const CONFIG_NAME: &str = "deferred_tools.toml";
@@ -164,6 +165,32 @@ struct Offer {
     volatile: Vec<Value>,
 }
 
+/// LO-45: the chat runs on the Talk profile (upgraded or not). Lazy tools off
+/// or a bound job [`ToolSet`] keep today's list.
+fn talk_shaped(session: &str, cfg: Settings) -> bool {
+    cfg.enabled
+        && !session.is_empty()
+        && talk::profile(session) != Profile::Full
+        && !crate::run::has_job_tool_set(session)
+}
+
+/// A Brief for `session`: the first sets its profile, a later work Brief
+/// upgrades a Talk chat.
+pub fn note_brief(session: &str, brief: &crate::brain::Brief) {
+    if talk::note_brief(session, brief) {
+        upgrade_talk(session);
+    }
+}
+
+/// Append every demoted tool to the chat's tail, once, in [`TALK_DEMOTED`] order.
+fn upgrade_talk(session: &str) {
+    if talk::mark_upgraded(session) {
+        for name in TALK_DEMOTED {
+            remember_loaded(session, name);
+        }
+    }
+}
+
 fn offer(gate: &Gate, cfg: Settings) -> Offer {
     if !cfg.enabled {
         return Offer {
@@ -171,10 +198,14 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
             volatile: Vec::new(),
         };
     }
+    let session = current_session().unwrap_or_default();
+    let talk = talk_shaped(&session, cfg);
+    // Indexed (not eager): deferred rows, plus the demoted ones on Talk.
+    let indexed = |def: &ToolDef| def.defer || (talk && talk::is_demoted(def.name));
     let rows = offered_defs(gate);
     let mut stable: Vec<Value> = rows
         .iter()
-        .filter(|def| !def.defer)
+        .filter(|def| !indexed(def))
         .map(|def| (def.schema)())
         .collect();
     stable.extend(crate::session_tools::schemas());
@@ -186,12 +217,13 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
     };
     // Self-manage reads (`*_list`) stay eager; its writes are deferred like the rest.
     stable.extend(selfs.iter().filter(|r| r.read).map(|r| r.schema.clone()));
-    stable.push(load_tool_schema_schema(index_lines(&rows, &selfs)));
-    let session = current_session().unwrap_or_default();
+    stable.push(load_tool_schema_schema(index_lines(
+        &rows, &selfs, &indexed,
+    )));
     let volatile = loaded_names(&session)
         .iter()
         .filter_map(|name| {
-            if let Some(def) = rows.iter().find(|d| d.defer && d.name == name) {
+            if let Some(def) = rows.iter().find(|d| indexed(d) && d.name == name) {
                 return Some((def.schema)());
             }
             selfs
@@ -275,10 +307,10 @@ fn self_rows() -> Vec<SelfRow> {
 
 /// One `name — blurb` line per deferred tool the gate shows, sorted by name so the
 /// index (and the stable prefix it sits in) is byte-identical from build to build.
-fn index_lines(rows: &[&ToolDef], selfs: &[SelfRow]) -> String {
+fn index_lines(rows: &[&ToolDef], selfs: &[SelfRow], indexed: &dyn Fn(&ToolDef) -> bool) -> String {
     let native = rows
         .iter()
-        .filter(|def| def.defer)
+        .filter(|def| indexed(def))
         .map(|def| format!("{} — {}", def.name, def.blurb));
     let own = selfs
         .iter()
@@ -336,6 +368,12 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
         return ToolOutput::err(format!("unknown tool `{name}`"));
     };
     if !def.defer {
+        // A Talk chat loads a demoted tool by upgrading: all of them land at once.
+        let session = current_session().unwrap_or_default();
+        if talk::is_demoted(name) && talk_shaped(&session, settings(&crate::perm::config_dir())) {
+            upgrade_talk(&session);
+            return finish_load(name, (def.schema)());
+        }
         return ToolOutput::err(format!(
             "`{name}` is always available with its full schema; load_tool_schema is only for deferred tools"
         ));
@@ -353,6 +391,10 @@ fn finish_load(name: &str, schema: Value) -> ToolOutput {
 }
 
 use super::desktop;
+
+#[cfg(test)]
+#[path = "talk_registry_tests.rs"]
+mod talk_tests;
 
 #[cfg(test)]
 mod tests {

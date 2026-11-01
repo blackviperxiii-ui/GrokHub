@@ -81,6 +81,9 @@ pub struct Shape {
     model: String,
     effort: Option<String>,
     segments: Vec<(Part, u64)>,
+    /// Hosted tools (`web_search`, `x_search`) at the end of the tools list.
+    /// A loaded schema lands just before them.
+    hosted: usize,
 }
 
 impl Shape {
@@ -92,6 +95,11 @@ impl Shape {
             .take_while(|item| item["role"] == "system")
             .count();
         let tools = body["tools"].as_array().cloned().unwrap_or_default();
+        let hosted = tools
+            .iter()
+            .rev()
+            .take_while(|t| t["type"] != "function")
+            .count();
         let mut segments = Vec::with_capacity(input.len() + tools.len());
         segments.extend(input[..lead].iter().map(|v| (Part::System, hash(v))));
         segments.extend(tools.iter().map(|v| (Part::Tools, hash(v))));
@@ -100,6 +108,7 @@ impl Shape {
             model: req.model.trim().to_string(),
             effort: req.effort.clone(),
             segments,
+            hosted,
         }
     }
 }
@@ -147,7 +156,8 @@ pub fn first_break(prev: &Shape, next: &Shape, noted: Option<Reason>) -> Option<
 }
 
 /// The new request is the old one with extra tool schemas at the end of the
-/// tools list (a deferred schema load) and the same items around them.
+/// tools list (a deferred schema load), just before any hosted tools, and the
+/// same items around them.
 fn tools_only_appended(prev: &Shape, next: &Shape) -> bool {
     let split = |s: &Shape| {
         let tools: Vec<u64> = s
@@ -166,8 +176,11 @@ fn tools_only_appended(prev: &Shape, next: &Shape) -> bool {
     };
     let (old_tools, old_rest) = split(prev);
     let (new_tools, new_rest) = split(next);
+    let (head, hosted) = old_tools.split_at(old_tools.len().saturating_sub(prev.hosted));
     new_tools.len() > old_tools.len()
-        && new_tools.starts_with(&old_tools)
+        && next.hosted == prev.hosted
+        && new_tools.starts_with(head)
+        && new_tools.ends_with(hosted)
         && new_rest.starts_with(&old_rest)
 }
 
@@ -397,6 +410,27 @@ mod tests {
                 part: Part::Tools,
                 reason: Reason::ToolsAppended,
             })
+        );
+    }
+
+    #[test]
+    fn a_load_before_the_hosted_search_tools_is_an_append() {
+        let mut a = req(
+            vec![msg("system", "S"), msg("user", "u")],
+            vec![tool("read")],
+        );
+        a.hosted_search = true;
+        let mut loaded = a.clone();
+        loaded.tools.push(tool("browser"));
+        let got = first_break(&Shape::of(&a), &Shape::of(&loaded), None).unwrap();
+        assert_eq!(got.part, Part::Tools);
+        assert_eq!(got.reason, Reason::ToolsAppended);
+        // A tool put in front of the old list is still a rewrite.
+        let mut front = a.clone();
+        front.tools.insert(0, tool("browser"));
+        assert_eq!(
+            first_break(&Shape::of(&a), &Shape::of(&front), None).map(|b| b.reason),
+            Some(Reason::Unexpected)
         );
     }
 
