@@ -1593,7 +1593,7 @@ mod tests {
         );
         assert_eq!(
             tuned.background.daily_tokens(grokhub_core::JobKind::Ideas),
-            100_000
+            50_000
         );
         let saved = serde_json::to_string(&tuned).unwrap();
         assert!(
