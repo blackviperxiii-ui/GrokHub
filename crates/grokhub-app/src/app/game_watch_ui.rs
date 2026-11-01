@@ -269,6 +269,7 @@ impl Cabin {
         ) {
             self.set_game_watch(on);
         }
+        ui_supported_games(ui);
         if !self.cfg.game_watch {
             return;
         }
@@ -300,9 +301,37 @@ impl Cabin {
     }
 }
 
+/// The games Loadout can read and how, folded away under the game watcher.
+fn ui_supported_games(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Games Loadout can read, and how")
+        .id_salt("game-integrations")
+        .default_open(false)
+        .show(ui, |ui| {
+            for game in grokhub_core::game_integrations::ALL {
+                crate::cards::help_text(ui, &supported_line(game));
+            }
+            crate::cards::help_text(
+                ui,
+                "All read-only: nothing reads game memory, hooks the game or sends it input.",
+            );
+        });
+}
+
+fn supported_line(game: &grokhub_core::game_integrations::Integration) -> String {
+    format!("{}: {}.", game.name, game.how())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_supported_games_list_names_each_game_and_its_way_in() {
+        let wow = grokhub_core::game_integrations::by_id("wow").unwrap();
+        let line = supported_line(wow);
+        assert!(line.starts_with("World of Warcraft: Loadout's WoW addon"));
+        assert!(line.ends_with("Read-only alongside Warden."));
+    }
     use std::io::{Read, Write};
 
     #[test]

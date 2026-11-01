@@ -547,6 +547,9 @@ pub fn run_loop(
     let mut turns = 0u32;
     let guard_key =
         crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
+    // At most one trim pass changes the history per turn, so it costs the prompt
+    // cache one miss and later requests extend the trimmed history again.
+    let mut trimmed = false;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
@@ -566,6 +569,18 @@ pub fn run_loop(
                 usage.add(&extra);
                 emit_usage(on_event, &usage, history, input.context_length);
             }
+        }
+        if !trimmed
+            && crate::compact::trim_pass(
+                history,
+                input.context_length,
+                &crate::perm::config_dir(),
+                input.workspace,
+                input.conversation_id,
+            ) > 0
+        {
+            trimmed = true;
+            crate::prefix_guard::note_trim(&guard_key);
         }
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
@@ -870,7 +885,7 @@ pub fn run_loop(
             if batch_failed {
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
                 emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -928,7 +943,7 @@ pub fn run_loop(
             *seen = seen.saturating_add(1);
             if *seen >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -968,7 +983,7 @@ pub fn run_loop(
             if reviewed.cancelled {
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
-                push_output(history, call, output);
+                push_output(history, input.conversation_id, call, output);
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if reviewed.halted {
@@ -1074,7 +1089,7 @@ pub fn run_loop(
                         Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
-                            push_output(history, call, output);
+                            push_output(history, input.conversation_id, call, output);
                             return finish(
                                 input,
                                 StopReason::Cancelled,
@@ -1124,7 +1139,7 @@ pub fn run_loop(
             if !output.failed && call.name == "report_findings" {
                 fresh.note_findings();
             }
-            push_output(history, call, output);
+            push_output(history, input.conversation_id, call, output);
             if cancelled {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
@@ -1279,11 +1294,18 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
     }
 }
 
-fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOutput) {
+fn push_output(
+    history: &mut Vec<InputItem>,
+    conversation_id: &str,
+    call: &FunctionCall,
+    output: ToolOutput,
+) {
     if output.failed {
         // E1: the next routed step thinks one rung harder.
         crate::route::ladder::note_tool_error();
     }
+    // Only a call that succeeded may stand in for an older identical one.
+    crate::compact::note_tool_result(conversation_id, &call.call_id, &call.name, output.failed);
     history.push(InputItem::FunctionCallOutput {
         call_id: call.call_id.clone(),
         output: output.text,
@@ -1320,11 +1342,13 @@ fn emit_tool(
     detail: &str,
     image: Option<String>,
 ) {
+    // The row shows what the tool said, not the untrusted fence around it.
+    let detail = crate::tools::fence::display_text(detail);
     on_event(LoopEvent::Tool {
         id: id.to_string(),
         name: call.name.clone(),
         status: status.into(),
-        detail: clip(detail, detail_limit(detail)),
+        detail: clip(&detail, detail_limit(&detail)),
         image,
     });
 }
@@ -1630,7 +1654,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
-        push_output(history, call, output);
+        push_output(history, input.conversation_id, call, output);
     }
 
     ReadonlyBatchOutcome::Ran(calls.len())
@@ -4459,6 +4483,86 @@ mod tests {
                 reason: crate::prefix_guard::Reason::Unexpected,
             }]
         );
+    }
+
+    #[test]
+    fn a_file_read_twice_is_trimmed_once_with_one_named_prefix_break() {
+        let dir = workspace("trim-loop");
+        let body: String = (0..200).map(|i| format!("log line {i:03} ok\n")).collect();
+        std::fs::write(dir.join("big.log"), &body).unwrap();
+        let conv = format!("trim-loop-{}", std::process::id());
+        let args = r#"{"target_file":"big.log"}"#;
+        let script = scripted(vec![
+            turn("", vec![call("r1", "read_file", args)]),
+            turn("", vec![call("r2", "read_file", args)]),
+            turn("The log is all ok.", Vec::new()),
+        ]);
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            // Two reads fill over 40% of this window and stay under 85%.
+            context_length: 4_000,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "check the log", None, &mut |ev| {
+            events.push(ev)
+        });
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Compact { .. })));
+        let output = |items: &[InputItem], id: &str| -> Option<String> {
+            items.iter().find_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+        };
+        let seen = script.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3);
+        let full = output(&seen[1], "r1").unwrap();
+        assert!(full.contains("log line 199 ok"), "{full}");
+        let note = "[Output dropped: read_file ran again later with the same arguments \
+                    (call r2). Use that result.]";
+        // Request 2 still carries r1 whole; request 3 carries the trim and r2 stays whole.
+        assert_eq!(output(&seen[1], "r2"), None);
+        assert_eq!(output(&seen[2], "r1").as_deref(), Some(note));
+        assert_eq!(output(&seen[2], "r2").as_deref(), Some(full.as_str()));
+        assert_eq!(output(&history, "r1").as_deref(), Some(note));
+        assert_eq!(output(&history, "r2").as_deref(), Some(full.as_str()));
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, .. }) if role == "assistant"
+        ));
+        let key = crate::prefix_guard::run_key(&conv, 0, None);
+        crate::prefix_guard::assert_no_unexpected_break(&key);
+        let breaks = crate::prefix_guard::breaks(&key);
+        assert_eq!(breaks.len(), 1, "{breaks:?}");
+        assert_eq!(breaks[0].reason, crate::prefix_guard::Reason::Trim);
+        assert_eq!(breaks[0].part, crate::prefix_guard::Part::Input);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

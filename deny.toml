@@ -4,10 +4,6 @@
 [advisories]
 version = 2
 ignore = [
-    # proc-macro-error is unmaintained. It is a build-time macro dependency of
-    # glib-macros (gtk-rs 0.18), pulled in by tray-icon's Linux tray; no
-    # runtime code. Drop this once tray-icon moves off gtk-rs 0.18.
-    { id = "RUSTSEC-2024-0370", reason = "build-time only, via tray-icon -> gtk 0.18" },
     # paste is unmaintained. Build-time proc-macro only, pulled in by egui_dock
     # 0.21.1 (U7f). No runtime code. Drop when egui_dock drops paste.
     { id = "RUSTSEC-2024-0436", reason = "build-time only, via egui_dock 0.21" },

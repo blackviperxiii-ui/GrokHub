@@ -1,0 +1,1 @@
+- Home's Speeds tile shows your ping and jitter from the internet log's once-a-minute check, says when you're offline, and shows the last download test with a "Test speed" button. With the internet log off it says so and sends nothing; the button opens the setting.
