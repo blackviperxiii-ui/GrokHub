@@ -137,7 +137,7 @@ impl Cabin {
             return;
         };
         if !card.id.is_empty() {
-            if self.run_tools_logged.iter().any(|id| *id == card.id) {
+            if self.run_tools_logged.contains(&card.id) {
                 return;
             }
             self.run_tools_logged.push(card.id.clone());

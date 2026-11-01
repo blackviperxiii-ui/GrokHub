@@ -577,5 +577,19 @@ mod tests {
         assert_eq!(row.run_count, 1);
         assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);
         assert!(row.last_run.is_some());
+        // KB-02: the run checkpointed one automation card, with start and end lines.
+        let board =
+            grokhub_core::work_run::read_board_file(&dir.join("workboard.json")).expect("board");
+        let card = board
+            .iter()
+            .find(|c| c.automation.as_deref() == Some(row.id.as_str()))
+            .expect("automation card");
+        assert_eq!(card.kind, grokhub_core::WorkKind::Automation);
+        assert_eq!(card.checkpoint.as_ref().map(|c| c.attempt), Some(1));
+        let log: Vec<String> = grokhub_core::work_item::read_work_log(&dir.join("work"), &card.id)
+            .into_iter()
+            .map(|e| e.text)
+            .collect();
+        assert_eq!(log, ["run now", "done"]);
     }
 }
