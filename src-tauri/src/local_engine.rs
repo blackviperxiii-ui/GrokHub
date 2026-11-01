@@ -317,7 +317,7 @@ pub fn draft_progress() -> Option<DraftProgress> {
     })
 }
 
-/// Opens the URL [`rd::download_engine`] asks for, checking every redirect hop.
+/// The engine archive download; `download_engine` names each asset's URL.
 struct HttpEngineFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {

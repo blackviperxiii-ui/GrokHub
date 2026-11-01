@@ -171,7 +171,7 @@ impl Cabin {
         }
         if run.no_model {
             self.sources.models.note =
-                "No local model yet. Set one up under Cabin defaults first.".into();
+                "No local model yet. Set one up under Settings → Defaults first.".into();
             self.save_news();
             return;
         }
@@ -213,7 +213,7 @@ impl Cabin {
         };
         self.setup.choice = Some(id.to_string());
         self.set_nav_id("settings");
-        self.settings_sec = SettingsSec::Defaults;
+        self.settings_sec = SettingsSec::AiModels;
         true
     }
 
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(cabin.updates.len(), before);
         assert_eq!(
             cabin.sources.models.note,
-            "No local model yet. Set one up under Cabin defaults first."
+            "No local model yet. Set one up under Settings → Defaults first."
         );
     }
 
@@ -353,7 +353,7 @@ mod tests {
             cabin.open_local_model_link("grokhub://local-model/gemma-4-31b-it-abliterated-q4_k")
         );
         assert_eq!(cabin.nav, Nav::Settings);
-        assert_eq!(cabin.settings_sec, SettingsSec::Defaults);
+        assert_eq!(cabin.settings_sec, SettingsSec::AiModels);
         assert_eq!(
             cabin.setup.choice.as_deref(),
             Some("gemma-4-31b-it-abliterated-q4_k")

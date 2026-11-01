@@ -52,6 +52,8 @@ export interface Capabilities {
   summonHotkey?: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications?: boolean;
+  /** The Library page: this computer's Steam games. */
+  library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -64,6 +66,7 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
   webAccess: false,
   plugins: false,
+  library: false,
 };
 
 /** The web app gets chat, memory, automations, connectors and Pulse. */
@@ -1086,4 +1089,109 @@ export function installShellUpdate(): Promise<void> {
 
 export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
+}
+
+/** Settings → Behavior, saved in shell.json. Everything starts off. */
+export interface Behavior {
+  autocomplete: boolean;
+  /** Quiet hours for automations as HH:MM; both empty is none. */
+  quietStart: string;
+  quietEnd: string;
+  /** Tokens a day, one of `budgets`; 0 is off. */
+  dailyTokenBudget: number;
+  pauseOverBudget: boolean;
+}
+
+export interface BehaviorPage {
+  closeToTray: boolean;
+  behavior: Behavior;
+  budgets: { value: number; label: string }[];
+}
+
+export function getBehavior(): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("get_behavior");
+}
+
+export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+  return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
+}
+
+/** Settings → Defaults: the work folder and the approvals. */
+export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+  return invoke<Settings>("save_defaults", { workspace, approvals });
+}
+
+/** Settings → Privacy & data (src-tauri/src/privacy.rs). */
+export interface PrivacyPage {
+  offlineOnly: boolean;
+  /** An on-device model can take the chat while Offline only is on. */
+  localReady: boolean;
+  /** "3 calls sent off-device this week". */
+  sent: string;
+  hosts: { host: string; calls: number }[];
+  encrypted: boolean;
+  encryptedNote: string;
+  dataFolder: string;
+  canOpenFolder: boolean;
+}
+
+export function getPrivacy(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("get_privacy");
+}
+
+export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("set_offline_only", { on });
+}
+
+export function openDataFolder(): Promise<void> {
+  return invoke<void>("open_data_folder");
+}
+
+/** Settings → Background (src-tauri/src/background.rs). */
+export interface BackgroundPage {
+  runner: string;
+  nextDue: string | null;
+  quiet: string;
+  budget: string;
+  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+}
+
+export function getBackground(): Promise<BackgroundPage> {
+  return invoke<BackgroundPage>("get_background");
+}
+
+/** One Steam game on this computer (src-tauri/src/library.rs). */
+export interface LibraryGame {
+  appId: number;
+  name: string;
+  /** False while Steam downloads or updates it. */
+  installed: boolean;
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  /** Minutes played, 0 when never played. */
+  playtimeMin: number;
+}
+
+export interface LibraryPage {
+  /** A Steam library folder was found on this computer. */
+  steamFound: boolean;
+  /** Most recently played first. */
+  games: LibraryGame[];
+}
+
+/** Tall box art for the grid, the wide store header for the detail column. */
+export type CoverShape = "tall" | "wide";
+
+export function getLibrary(): Promise<LibraryPage> {
+  return invoke<LibraryPage>("get_library");
+}
+
+/** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
+export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+  return invoke<string | null>("library_cover", { appId, shape });
+}
+
+/** Ask Steam to start the game. Resolves to a line to show. */
+export function libraryPlay(appId: number): Promise<string> {
+  return invoke<string>("library_play", { appId });
 }

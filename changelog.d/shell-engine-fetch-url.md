@@ -1,3 +1,1 @@
-### Fixed
-- The shell builds again: its Local AI engine download opens the URL the downloader asks for.
-- The shell's chat tests expect the new "Ask Loadout anything." line after a Grok sign-in.
+- The cross-platform app builds again after the CUDA engine change: its engine download takes the asset URL from the downloader.

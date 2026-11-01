@@ -8,11 +8,11 @@ const SEND_SIGNIN_HINT: &str =
     "Your message is still in the box. Sign in with Grok, then press Enter.";
 /// Native engine, no GrokHub sign-in and no key yet.
 const NATIVE_SIGNIN_NOTE: &str =
-    "Sign in with Grok in Settings → Account, or add an API key in Settings → Defaults.";
+    "Sign in with Grok in Settings → AI models, or add an API key there.";
 
 /// No sign-in or key, but Local AI is ready: chats answer on this computer.
 pub(super) const LOCAL_ONLY_NOTE: &str =
-    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → Account for the full models.";
+    "No sign-in yet, so chats run on Local AI on this computer. Sign in with Grok in Settings → AI models for the full models.";
 
 /// A page body that scrolls under a fixed header. Pages drawn straight into
 /// a CentralPanel run off the bottom of the window once their content is
@@ -511,7 +511,7 @@ impl Cabin {
                     crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Host,
-                        if name.is_empty() { "This cabin" } else { &name },
+                        if name.is_empty() { "This PC" } else { &name },
                         &body,
                         None,
                         sharing,
@@ -581,7 +581,7 @@ impl Cabin {
                         ui.horizontal(|ui| {
                             crate::cards::settings_note(
                                 ui,
-                                "Sign in with Grok in Settings → Account, or add an API key.",
+                                "Sign in with Grok in Settings → AI models, or add an API key.",
                             );
                             if crate::cards::ghost_pill(ui, "Sign in") {
                                 self.set_nav_id("settings");
@@ -651,7 +651,7 @@ impl Cabin {
                     ui.add_space(8.0);
                     crate::cards::settings_note(
                         ui,
-                        "Still the starter template. The cabin fills this in as you chat, or write it here.",
+                        grokhub_core::brand::filled("Still the starter template. {product} fills this in as you chat, or write it here."),
                     );
                 }
                 self.ui_memory_raw_tidy(ui);
@@ -923,7 +923,7 @@ page_body(ui, "history", |ui| {
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Chats");
             ui.label(
-                RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
+                RichText::new("Your chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
                     .size(12.0)
                     .color(crate::theme::subtle()),
             );
@@ -1503,9 +1503,9 @@ page_body(ui, "history", |ui| {
                 })
                 .cloned()
                 .collect();
-            crate::cards::section_label(ui, "Cabin skills");
+            crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
             ui.label(
-                RichText::new("SKILL.md under ~/.config/GrokHub/skills. The cabin follows these on a matching ask and writes new ones after a hard host run.")
+                RichText::new(grokhub_core::brand::filled("SKILL.md under ~/.config/GrokHub/skills. {product} follows these on a matching ask and writes new ones after a hard host run."))
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
@@ -1513,7 +1513,7 @@ page_body(ui, "history", |ui| {
             if cabin_skills.is_empty() {
                 ui.label(
                     RichText::new(if self.skill_list.is_empty() {
-                        "None yet. The cabin saves one after it works something out, or /skill <name> runs one you wrote."
+                        grokhub_core::brand::filled("None yet. {product} saves one after it works something out, or /skill <name> runs one you wrote.")
                     } else {
                         "None matched."
                     })

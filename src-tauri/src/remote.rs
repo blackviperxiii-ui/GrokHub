@@ -90,6 +90,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_feed_prompt",
     "save_feed_prompt",
     "pulse_image",
+    "get_behavior",
+    "get_privacy",
+    "get_background",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -865,6 +868,24 @@ mod tests {
             "set_autostart",
             "set_summon_hotkey",
             "set_notifications",
+            "get_library",
+            "library_cover",
+            "library_play",
+        ] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_web_reads_behavior_privacy_and_background_but_changes_none() {
+        for name in ["get_behavior", "get_privacy", "get_background"] {
+            assert!(web_command(name), "{name}");
+        }
+        for name in [
+            "save_behavior",
+            "save_defaults",
+            "set_offline_only",
+            "open_data_folder",
         ] {
             assert!(!web_command(name), "{name}");
         }
