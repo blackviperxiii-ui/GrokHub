@@ -1,0 +1,1 @@
+- The cross-platform app builds again after the CUDA engine change: its engine download takes the asset URL from the downloader.
