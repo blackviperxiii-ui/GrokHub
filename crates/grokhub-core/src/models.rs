@@ -14,11 +14,6 @@ pub const MODEL_CATALOG: &[ModelRow] = &[
         kind: "chat",
     },
     ModelRow {
-        id: "grok-3",
-        label: "Grok 3",
-        kind: "chat",
-    },
-    ModelRow {
         id: "grok-4.3",
         label: "Grok 4.3",
         kind: "chat",
@@ -31,16 +26,6 @@ pub const MODEL_CATALOG: &[ModelRow] = &[
     ModelRow {
         id: "grok-4.7",
         label: "Grok 4.7",
-        kind: "chat",
-    },
-    ModelRow {
-        id: "grok-4-latest",
-        label: "Grok 4",
-        kind: "chat",
-    },
-    ModelRow {
-        id: "grok-4-1-fast-non-reasoning",
-        label: "Grok 4.1 Fast",
         kind: "chat",
     },
     ModelRow {
@@ -65,8 +50,27 @@ pub const MODEL_CATALOG: &[ModelRow] = &[
     },
 ];
 
+/// Chat ids xAI retired on May 15, 2026. The slugs still answer, but xAI
+/// serves every one of them with grok-4.3, so a saved pin on one maps there.
+const RETIRED_CHAT: &[&str] = &[
+    "grok-3",
+    "grok-4",
+    "grok-4-latest",
+    "grok-4-0709",
+    "grok-4-fast-reasoning",
+    "grok-4-fast-non-reasoning",
+    "grok-4-1-fast-reasoning",
+    "grok-4-1-fast-non-reasoning",
+];
+
+/// What xAI serves a retired chat id with now.
+const RETIRED_CHAT_TARGET: &str = "grok-4.3";
+
 pub fn sanitize_chat_model(id: &str) -> &'static str {
     let t = id.trim();
+    if RETIRED_CHAT.iter().any(|r| r.eq_ignore_ascii_case(t)) {
+        return RETIRED_CHAT_TARGET;
+    }
     MODEL_CATALOG
         .iter()
         .find(|m| m.kind == "chat" && m.id == t)
@@ -88,7 +92,17 @@ mod tests {
 
     #[test]
     fn catalog() {
-        assert_eq!(sanitize_chat_model("grok-3"), "grok-3");
+        for retired in [
+            "grok-3",
+            "grok-4-latest",
+            " grok-4-1-fast-non-reasoning ",
+            "GROK-4-0709",
+        ] {
+            assert_eq!(sanitize_chat_model(retired), "grok-4.3", "{retired}");
+            let id = retired.trim().to_ascii_lowercase();
+            assert!(MODEL_CATALOG.iter().all(|m| m.id != id), "{retired}");
+        }
+        assert!(MODEL_CATALOG.iter().any(|m| m.id == RETIRED_CHAT_TARGET));
         assert_eq!(sanitize_chat_model("grok-4.6"), "grok-4.6");
         assert_eq!(sanitize_chat_model("grok-4.7"), "grok-4.7");
         assert_eq!(sanitize_chat_model("grok-4.3"), "grok-4.3");

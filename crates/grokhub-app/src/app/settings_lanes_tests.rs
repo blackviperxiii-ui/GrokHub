@@ -666,7 +666,7 @@ fn cabin_default_models_lists_known_ids() {
         ("grok-4.7", "Grok 4.7"),
         ("grok-4.6", "Grok 4.6"),
         ("grok-4.3", "Grok 4.3"),
-        ("grok-3", "Grok 3"),
+        ("grok-3-mini-fast", "Grok 3 Mini Fast"),
     ] {
         assert!(
             ids.contains(&want_id),
