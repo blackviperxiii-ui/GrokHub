@@ -198,6 +198,7 @@ mod local_probe;
 mod local_signals;
 mod marketplace_ui;
 mod memory_tidy;
+mod minecraft_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
@@ -216,6 +217,7 @@ mod pc_health_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
+mod poe_ui;
 mod print_alerts_ui;
 mod privacy_page;
 mod privacy_ui;
@@ -725,7 +727,6 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
-    sidebar_q: String,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -1345,7 +1346,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1820,7 +1820,6 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
-            sidebar_q: String::new(),
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
