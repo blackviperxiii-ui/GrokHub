@@ -519,7 +519,7 @@ impl ksni::Tray for GrokTray {
             icon_name: "grokhub".into(),
             icon_pixmap: vec![cabin_icon()],
             title: grokhub_core::brand::product_name().into(),
-            description: "Cabin — close stays in the tray".into(),
+            description: "Close stays in the tray".into(),
         }
     }
 
@@ -530,7 +530,7 @@ impl ksni::Tray for GrokTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
             StandardItem {
-                label: "Show cabin".into(),
+                label: format!("Show {}", grokhub_core::brand::product_name()),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(TrayCmd::Show);
                 }),
@@ -639,7 +639,11 @@ fn windows_tray_attach() -> Option<TrayHost> {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     let (tx, rx) = mpsc::channel();
-    let show = MenuItem::new("Show cabin", true, None);
+    let show = MenuItem::new(
+        format!("Show {}", grokhub_core::brand::product_name()),
+        true,
+        None,
+    );
     let nyx = MenuItem::new(desktop_nyx_label(), true, None);
     let halt = MenuItem::new("Halt", true, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -936,7 +940,7 @@ mod tests {
                 && hide.contains("if tip.show")
                 && hide.contains("if tip.mark_seen")
                 && hide.contains("Still running in the tray")
-                && hide.contains("In the tray — Show cabin to sit down"),
+                && hide.contains("In the tray — Show {} to sit down"),
             "first tip persists only when shown; cabin status stays: {hide}"
         );
     }

@@ -223,7 +223,7 @@ mod tests {
         );
         assert_eq!(
             config::read_memory("SOUL.md"),
-            "# Soul\n\nWho this cabin is. Edit this.\n"
+            "# Soul\n\nWho your assistant is. Edit this.\n"
         );
         let mut cabin = Cabin::quiet_for_test();
         cabin.new_thread(false);

@@ -1,0 +1,1 @@
+- Loadout's own text no longer calls the app "the cabin": tray menu, Settings notes, Skills, History, Devices, Connectors, Pulse, the update chip, slash help and --help now say Loadout, the app or this PC.

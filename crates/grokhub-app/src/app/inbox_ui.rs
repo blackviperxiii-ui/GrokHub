@@ -1018,10 +1018,10 @@ mod tests {
             hard_words(
                 HardClass::Delete,
                 "key",
-                "press Delete on the files selected in Files (the cabin can't see which)",
+                "press Delete on the files selected in Files (the app can't see which)",
                 &[]
             ),
-            "Press Delete on the files selected in Files (the cabin can't see which)"
+            "Press Delete on the files selected in Files (the app can't see which)"
         );
         let long = "x".repeat(300);
         assert_eq!(

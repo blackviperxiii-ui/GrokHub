@@ -710,7 +710,7 @@ pub fn parse_github_latest_tag(body: &str) -> Option<String> {
 
 pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     format!(
-        "{product} {latest} is on GitHub Latest (running {running}). Update overlays the cabin, then Restart.", product = crate::brand::product_name()
+        "{product} {latest} is on GitHub Latest (running {running}). Update installs over this copy, then Restart.", product = crate::brand::product_name()
     )
 }
 
@@ -745,7 +745,7 @@ pub fn pending_from_versions(running_cabin: &str, cabin_latest: Option<&str>) ->
 pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
     match pending {
         UpdatePending::None => None,
-        UpdatePending::Cabin => Some("Update cabin"),
+        UpdatePending::Cabin => Some(crate::brand::filled("Update {product}")),
     }
 }
 
@@ -784,7 +784,7 @@ pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
 /// Pending-state copy. `None` is the `grokhub --update` exit line (no overlay).
 pub fn update_hint(pending: UpdatePending) -> &'static str {
     match pending {
-        UpdatePending::Cabin => "Updates the cabin, then Restart.",
+        UpdatePending::Cabin => crate::brand::filled("Updates {product}, then Restart."),
         UpdatePending::None => crate::brand::filled("{product} is current."),
     }
 }
@@ -1473,10 +1473,10 @@ mod tests {
         assert_eq!(pending_from_versions("2.10.92", Option::None), None);
         assert_eq!(pending_for_manual_update(None), Cabin);
         assert_eq!(update_chip_label(None), Option::None);
-        assert_eq!(update_chip_label(Cabin), Some("Update cabin"));
+        assert_eq!(update_chip_label(Cabin), Some("Update Loadout"));
         assert_eq!(settings_update_label(None), "Update");
         assert_eq!(update_hint(None), "Loadout is current.");
-        assert_eq!(update_hint(Cabin), "Updates the cabin, then Restart.");
+        assert_eq!(update_hint(Cabin), "Updates Loadout, then Restart.");
         assert_eq!(
             settings_update_hint(None),
             "Loadout looks current. Update still overlays so a missed probe can land."
