@@ -2460,8 +2460,8 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
             ),
             chip(
                 "empty-brief",
-                "Cabin brief",
-                "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
+                "Quick brief",
+                "Give me a short brief: bound project, recent chats, and the next useful step.",
                 ChipKind::Chat,
                 68.0,
                 "New chat",
@@ -2559,7 +2559,7 @@ pub fn idea_talk_chips(title: &str, body: &str, chat: &[(String, String)]) -> Ve
         chip(
             "idea-sit",
             "When I sit down",
-            "Run this when I open the cabin.",
+            crate::brand::filled("Run this when I open {product}."),
             ChipKind::Chat,
             96.0,
             "This idea",
