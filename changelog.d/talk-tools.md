@@ -1,0 +1,1 @@
+- Chats that open as small talk send a lighter tool list: the file and shell tools wait in the lazy index and all come back at once on the first work ask.
