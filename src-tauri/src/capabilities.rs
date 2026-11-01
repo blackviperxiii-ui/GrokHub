@@ -28,13 +28,16 @@ pub struct Capabilities {
     pub summon_hotkey: bool,
     /// Settings → General → notifications while the window is in the background.
     pub notifications: bool,
+    /// The composer's push-to-talk mic (xAI speech to text). Desktops and
+    /// phones; the web app never gets it.
+    pub voice: bool,
     /// The Library page: this computer's Steam games and Play.
     pub library: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
-/// Windows and macOS get everything; any other OS gets chat, memory,
-/// automations and connectors only.
+/// Windows and macOS get everything; phones get chat, memory, automations,
+/// connectors and voice; any other OS gets no voice either.
 pub fn for_os(os: &str) -> Capabilities {
     for_env(os, false)
 }
@@ -43,6 +46,7 @@ pub fn for_os(os: &str) -> Capabilities {
 /// drops the summon hotkey.
 pub fn for_env(os: &str, wayland: bool) -> Capabilities {
     let desktop = matches!(os, "linux" | "windows" | "macos");
+    let phone = matches!(os, "android" | "ios");
     Capabilities {
         desktop_control: desktop,
         pulse: desktop,
@@ -54,6 +58,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         autostart: desktop,
         summon_hotkey: desktop && !(os == "linux" && wayland),
         notifications: desktop,
+        voice: desktop || phone,
         library: desktop,
     }
 }
@@ -102,6 +107,7 @@ mod tests {
             autostart: true,
             summon_hotkey: true,
             notifications: true,
+            voice: true,
             library: true,
         };
         assert_eq!(for_os("linux"), all);
@@ -122,6 +128,7 @@ mod tests {
             autostart: false,
             summon_hotkey: false,
             notifications: false,
+            voice: true,
             library: false,
         };
         assert_eq!(for_os("android"), none);
@@ -160,6 +167,11 @@ mod tests {
     }
 
     #[test]
+    fn another_os_gets_no_voice() {
+        assert!(!for_os("freebsd").voice);
+    }
+
+    #[test]
     fn a_missing_feature_is_refused_in_words() {
         assert_eq!(needs(true, "Pulse"), Ok(()));
         assert_eq!(
@@ -184,6 +196,7 @@ mod tests {
                 "autostart": false,
                 "summonHotkey": false,
                 "notifications": false,
+                "voice": true,
                 "library": false,
             })
         );
