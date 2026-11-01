@@ -865,7 +865,7 @@ mod tests {
     fn the_cheap_tier_is_the_fast_model_only_on_the_cost_goal() {
         let cost = RouteGoal::of("cost", "user active");
         let quality = RouteGoal::of("quality", "mistakes can break the system");
-        assert_eq!(tier_model("grok-4.3", cost.as_ref()), "grok-3-mini-fast");
+        assert_eq!(tier_model("grok-4.7", cost.as_ref()), "grok-4.3");
         assert_eq!(tier_model("grok-4.3", quality.as_ref()), "grok-4.3");
         assert_eq!(tier_model("grok-4.7", None), "grok-4.7");
     }
@@ -884,17 +884,14 @@ mod tests {
             !cabin.review_busy
         });
         let cheap = Some("goal cost (user active)".to_string());
-        assert_eq!(
-            take(),
-            vec![("grok-3-mini-fast".to_string(), cheap.clone())]
-        );
+        assert_eq!(take(), vec![("grok-4.3".to_string(), cheap.clone())]);
         cabin.digest_wants_lookup = true;
         cabin.follow_feed_lookup();
         wait_until(|| {
             cabin.poll_digest_lookup();
             cabin.digest_pending.is_some()
         });
-        assert_eq!(take(), vec![("grok-3-mini-fast".to_string(), cheap)]);
+        assert_eq!(take(), vec![("grok-4.3".to_string(), cheap)]);
         // Idle: the review is back on its own model, under the Brief's own background row.
         cabin.composer.clear();
         cabin.last_activity = Instant::now()

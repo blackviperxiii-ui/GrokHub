@@ -35,7 +35,7 @@ pub enum HeyGrokRoute {
     None,
 }
 
-pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
+pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-3.0";
 /// xAI realtime `session.voice` and TTS `voice_id`. Cabin voice mode is Ara.
 pub const DEFAULT_VOICE: &str = "ara";
 /// TTS voices a personality's `voice_hint` can pick.
@@ -560,7 +560,7 @@ mod tests {
             dedicated_voice_model("grok-3-mini-fast"),
             DEFAULT_VOICE_MODEL
         );
-        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
+        assert!(voice_session_url("").contains("grok-voice-3.0"));
         assert!(is_voice_error("VOICE_RECEIPT: arecord missing"));
         assert!(!is_voice_error("hey grok flash the pi"));
         assert_eq!(
@@ -701,10 +701,15 @@ mod tests {
 
     #[test]
     fn oauth_speech_and_api_key_realtime() {
-        assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-think-fast-2.0");
-        assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
+        assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-3.0");
+        assert!(voice_session_url("").contains("grok-voice-3.0"));
         assert!(voice_session_url("grok-voice-latest").contains("grok-voice-latest"));
-        assert_eq!(dedicated_voice_model(""), "grok-voice-think-fast-2.0");
+        assert_eq!(dedicated_voice_model(""), "grok-voice-3.0");
+        assert_eq!(
+            dedicated_voice_model("grok-voice-think-fast-2.0"),
+            "grok-voice-think-fast-2.0",
+            "an explicit older voice model is kept"
+        );
         assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(true, false, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, true, false), HeyGrokRoute::PushToTalk);
