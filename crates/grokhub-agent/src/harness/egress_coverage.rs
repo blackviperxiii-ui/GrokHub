@@ -79,6 +79,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-app/src/app/pulse_ui.rs", 1, "source_preview / cache_image: egress_ok (chat)"),
     ("grokhub-app/src/app/pulse_sources_ui.rs", 1, "fetch_source: egress_ok on every hop (chat for a topic search, else no user data)"),
     ("grokhub-app/src/desktop.rs", 2, "hub health and CDP HTTP (loopback_agent), CDP websocket: egress_ok (loopback)"),
+    ("grokhub-app/src/mods_fetch.rs", 1, "ModsNet::once: egress_ok (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-app/src/github.rs", 1, "run_github_tool: egress_ok (chat)"),
     ("grokhub-app/src/imagine_auth.rs", 1, "auth_agent callers post_form / imagine_discovery: egress_ok (no user data)"),
     ("grokhub-app/src/oauth.rs", 1, "auth_agent callers discovery / post_form / userinfo / photo: egress_ok (no user data)"),

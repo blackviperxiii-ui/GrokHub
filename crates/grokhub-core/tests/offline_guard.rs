@@ -85,6 +85,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/oauth.rs", 1, "Sign in with Grok to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
+    ("crates/grokhub-app/src/mods_fetch.rs", 1, "mod sources: offline::refuse + egress_ok on every hop"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),

@@ -372,6 +372,67 @@ pub fn installed_games(root: &Path) -> Vec<SteamGame> {
     games.into_values().collect()
 }
 
+/// One Workshop item Steam has downloaded for a game.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkshopItem {
+    pub id: u64,
+    /// Bytes on disk.
+    pub size: u64,
+    /// Unix seconds of the item's last update, 0 when unknown.
+    pub updated: u64,
+}
+
+/// The items one `appworkshop_<appid>.acf` lists as installed, newest first.
+pub fn parse_workshop_acf(text: &str) -> Vec<WorkshopItem> {
+    let vdf = parse_vdf(text);
+    let Some(items) = vdf
+        .get("AppWorkshop")
+        .and_then(|w| w.get("WorkshopItemsInstalled"))
+    else {
+        return Vec::new();
+    };
+    let num = |v: &Vdf, key: &str| {
+        v.get(key)
+            .and_then(Vdf::str)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
+    let mut out: Vec<WorkshopItem> = items
+        .entries()
+        .iter()
+        .filter_map(|(id, item)| {
+            Some(WorkshopItem {
+                id: id.parse().ok()?,
+                size: num(item, "size"),
+                updated: num(item, "timeupdated"),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    out
+}
+
+/// Workshop items installed for one game, from every library folder. Only
+/// reads Steam's own files.
+pub fn workshop_items(root: &Path, app_id: u32) -> Vec<WorkshopItem> {
+    let mut out: Vec<WorkshopItem> = Vec::new();
+    for folder in library_folders(root) {
+        let file = folder
+            .join("steamapps")
+            .join("workshop")
+            .join(format!("appworkshop_{app_id}.acf"));
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for item in parse_workshop_acf(&text) {
+            if !out.iter().any(|i| i.id == item.id) {
+                out.push(item);
+            }
+        }
+    }
+    out
+}
+
 /// A game from one parsed `appmanifest_*.acf`.
 pub fn manifest_game(vdf: &Vdf) -> Option<SteamGame> {
     let state = vdf.get("AppState")?;
@@ -667,6 +728,39 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workshop_acf_lists_installed_items_newest_first() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/mods/appworkshop_294100.acf"),
+        )
+        .unwrap();
+        let items = parse_workshop_acf(&text);
+        assert_eq!(
+            items,
+            vec![
+                WorkshopItem {
+                    id: 818773962,
+                    size: 87294118,
+                    updated: 1759000000
+                },
+                WorkshopItem {
+                    id: 2009463077,
+                    size: 4210112,
+                    updated: 1757000000
+                },
+            ]
+        );
+        assert!(parse_workshop_acf("\"AppWorkshop\" { }").is_empty());
+        let root = temp_root("workshop");
+        let dir = root.join("steamapps/workshop");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("appworkshop_294100.acf"), &text).unwrap();
+        assert_eq!(workshop_items(&root, 294100).len(), 2);
+        assert!(workshop_items(&root, 255710).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn other_cached_names_count_when_the_main_file_is_missing() {

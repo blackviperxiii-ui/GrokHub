@@ -2477,6 +2477,7 @@ mod tests {
         for (pinned, nav, id) in [
             (" Pulse ", Nav::Pulse, "pulse"),
             ("library", Nav::Library, "library"),
+            ("mods", Nav::Mods, "mods"),
             ("mission", Nav::Objectives, "objectives"),
             ("workboard", Nav::Workboard, "workboard"),
         ] {
