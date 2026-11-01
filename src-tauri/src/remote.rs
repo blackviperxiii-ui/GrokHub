@@ -722,6 +722,18 @@ mod tests {
     }
 
     #[test]
+    fn a_browser_never_checks_installs_or_switches_shell_updates() {
+        for name in [
+            "get_update_status",
+            "set_update_channel",
+            "check_shell_update",
+            "install_shell_update",
+        ] {
+            assert!(!web_command(name), "{name} must stay on the desktop");
+        }
+    }
+
+    #[test]
     fn only_the_exact_code_pairs() {
         let code = "0123456789abcdef";
         assert!(authorized(Some("Bearer 0123456789abcdef"), code));
