@@ -1582,12 +1582,15 @@ impl Cabin {
         c
     }
 
-    /// Fill the local clock and the desktop theme while the window is being
-    /// created, so the first frame reads them from cache instead of running
-    /// `date` and `gsettings` on the UI thread.
+    /// Fill the local clock, today's date and the desktop theme while the
+    /// window is being created, so `Cabin::new` and the first frame read them
+    /// from cache instead of running `date` and `gsettings` on the UI thread.
     pub fn warm_startup_caches() {
         std::thread::spawn(|| {
             let _ = Self::local_clock();
+        });
+        std::thread::spawn(|| {
+            let _ = Self::local_day();
         });
         std::thread::spawn(|| {
             let _ = crate::theme::desktop_prefers_dark();
@@ -1607,7 +1610,9 @@ impl Cabin {
         let halt = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Escape);
         let hey_id = hey.id();
         let halt_id = halt.id();
-        if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
+        // One message to the hotkey thread: on X11 each `register` waited
+        // out that thread's 50 ms poll, stalling the cabin's second frame.
+        if mgr.register_all(&[hey, halt]).is_ok() {
             self.hotkey_hey = hey_id;
             self.hotkey_halt = halt_id;
             self.hotkeys = Some(mgr);

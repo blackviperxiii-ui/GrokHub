@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ideas::same_topic;
+use crate::ideas::{same_topic_words, topic_words};
 use crate::update_feed::{
     post_update, public_http_url, CardReaction, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
 };
@@ -841,13 +841,45 @@ fn asks_explicitly(text: &str) -> bool {
     .any(|p| lower.contains(p))
 }
 
+/// The inputs' topic words, worked out once per ranking. Pulse ranks every
+/// frame, and comparing each card with each ledger line, skill and open card
+/// re-split both sides every time.
+struct InputTopics {
+    ledger: Vec<Vec<String>>,
+    skills: Vec<Vec<String>>,
+    open_work: Vec<Vec<String>>,
+}
+
+impl InputTopics {
+    fn of(inputs: &PulseInputs) -> Self {
+        let words = |lines: &mut dyn Iterator<Item = &str>| lines.map(topic_words).collect();
+        Self {
+            ledger: words(&mut inputs.ledger.iter().map(|e| e.title.as_str())),
+            skills: words(&mut inputs.skills.iter().map(String::as_str)),
+            open_work: words(&mut inputs.open_work.iter().map(String::as_str)),
+        }
+    }
+}
+
 /// The card's score: base by type, plus each rule that fires.
 pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
+    score_with(card, inputs, &InputTopics::of(inputs))
+}
+
+fn score_with(card: &UpdateCard, inputs: &PulseInputs, topics: &InputTopics) -> i64 {
     let text = card_text(card);
+    let title_words = topic_words(&card.title);
     let mut score = base_score(pulse_type(card));
     // 1. An explicit remind-me / need-to that a saved skill covers.
-    if asks_explicitly(&text) && inputs.skills.iter().any(|s| same_topic(s, &text)) {
-        score += SCORE_SKILL_ASK;
+    if asks_explicitly(&text) {
+        let text_words = topic_words(&text);
+        if topics
+            .skills
+            .iter()
+            .any(|s| same_topic_words(s, &text_words))
+        {
+            score += SCORE_SKILL_ASK;
+        }
     }
     // 2. Due inside a day, or overdue.
     if card
@@ -862,7 +894,10 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     if card.modified
         || card.feed_pin
         || card.draft.is_some()
-        || inputs.open_work.iter().any(|w| same_topic(w, &card.title))
+        || topics
+            .open_work
+            .iter()
+            .any(|w| same_topic_words(w, &title_words))
     {
         score += SCORE_UNFINISHED;
     }
@@ -875,9 +910,9 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     // buries ideas: a dismissed Feed post is gone, but tomorrow's run report or
     // quiet digest with that title still posts.
     let idea = is_idea_card(card);
-    for entry in inputs.ledger {
+    for (entry, words) in inputs.ledger.iter().zip(&topics.ledger) {
         let hit = entry.title.eq_ignore_ascii_case(card.title.trim())
-            || same_topic(&entry.title, &card.title);
+            || same_topic_words(words, &title_words);
         if !hit {
             continue;
         }
@@ -929,11 +964,12 @@ pub struct Ranked {
 /// Visible cards, best first: score, then newer, then id. Cards under the
 /// threshold are kept with kind Quiet so the page can say why it is silent.
 pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
+    let topics = InputTopics::of(inputs);
     let mut out: Vec<(Ranked, u64)> = cards
         .iter()
         .filter(|c| pulse_visible(c, inputs.now_ms))
         .map(|c| {
-            let score = pulse_score(c, inputs);
+            let score = score_with(c, inputs, &topics);
             let kind = if score < PULSE_THRESHOLD {
                 PulseType::Quiet
             } else {

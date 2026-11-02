@@ -2134,6 +2134,21 @@ mod tests {
         let mut custom = preset("pirate");
         custom.id = "pirate-copy".into();
         custom.custom = true;
+        // Thumbnails decode on a worker. Have every picture ready first, so a
+        // tile with no picture below is the gate's doing, not a pending decode.
+        let wardrobe = |id: &str| {
+            let pose = super::super::loadout_home::nyx_wardrobe::thumbnail(id, true).expect("art");
+            for _ in 0..500 {
+                if super::super::loadout_home::nyx_wardrobe::thumb_texture(&ctx, pose).is_some() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("{id} thumbnail never decoded");
+        };
+        for id in ["pirate", "nyx", "whore", "viper"] {
+            wardrobe(id);
+        }
         let count = |p: &Personality, adults: bool| {
             let mut n = 0;
             let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {

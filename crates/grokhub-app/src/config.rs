@@ -1043,14 +1043,33 @@ pub fn memory_dir() -> PathBuf {
     config_dir().join("memory")
 }
 
+/// The machine's name, worked out once per process: a first launch asks
+/// three times before the first frame.
 pub fn default_device_name() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(kernel_hostname)
+            .or_else(hostname_cmd)
+            .unwrap_or_else(|| "This computer".into())
+    })
+    .clone()
+}
+
+/// Linux keeps the name in a file, so there is no `hostname` process (and no
+/// 15 ms polls of it on the UI thread) to wait for.
+fn kernel_hostname() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(hostname_cmd)
-        .unwrap_or_else(|| "This computer".into())
 }
 
 fn hostname_cmd() -> Option<String> {

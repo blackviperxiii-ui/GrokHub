@@ -345,7 +345,7 @@ impl Cabin {
             }
         });
         if thinking {
-            ui.ctx().request_repaint();
+            crate::icons::request_live_frame(ui.ctx());
         }
         if composer.is_empty() {
             self.idea_board.composers.remove(&id);

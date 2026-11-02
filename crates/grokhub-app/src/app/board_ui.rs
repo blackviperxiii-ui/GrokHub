@@ -1000,7 +1000,7 @@ impl Cabin {
             }
         });
         if busy_here {
-            ui.ctx().request_repaint();
+            crate::icons::request_live_frame(ui.ctx());
         }
         resp.rect
     }

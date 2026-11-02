@@ -355,10 +355,30 @@ fn composer_wants_frame(live: bool, channels: &[f32]) -> bool {
     live || channels.iter().copied().any(channel_moving)
 }
 
-/// Another frame only while a channel is easing or the control is live.
+/// How often a live control (Stop while a reply runs, the listening mic, a
+/// busy card) asks for its next frame. Its breath is a 1.7 Hz sine, so 30
+/// frames a second is smooth; asking every frame ran the whole cabin at the
+/// monitor's refresh rate (up to 165 fps) for as long as a turn ran.
+pub(crate) const LIVE_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// Ask for the next frame [`LIVE_FRAME`] from now. egui takes its predicted
+/// frame time (1/60 s) off any delay and eframe counts from the call, mid
+/// frame, so a plain 33 ms request ran at about 50 fps. Adding it back gives
+/// about 30.
+pub(crate) fn request_live_frame(ctx: &egui::Context) {
+    let predicted = ctx.input(|i| i.predicted_dt);
+    let pad = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
+    ctx.request_repaint_after(LIVE_FRAME + pad);
+}
+
+/// Another frame now while a channel is easing; while the control is only
+/// live, one every [`LIVE_FRAME`]. Reduced motion keeps those frames: voice
+/// mode notices the end of a spoken reply on them.
 fn follow_composer_frame(ui: &egui::Ui, _resp: &egui::Response, live: bool, channels: &[f32]) {
-    if composer_wants_frame(live, channels) {
+    if channels.iter().copied().any(channel_moving) {
         ui.ctx().request_repaint();
+    } else if composer_wants_frame(live, channels) {
+        request_live_frame(ui.ctx());
     }
 }
 
@@ -1272,6 +1292,40 @@ mod tests {
             Some(std::time::Duration::MAX),
             "idle controls must not ask for another frame: {delays:?}"
         );
+    }
+
+    #[test]
+    fn a_running_stop_breathes_at_thirty_frames_a_second_not_the_monitor_rate() {
+        // egui takes its predicted frame time off a delay; the request adds it
+        // back, so the settled delay is exactly LIVE_FRAME. Before, a running
+        // Stop asked for the next frame at once, every frame. Reduced motion
+        // keeps the frames (voice mode polls on them).
+        for animation_time in [egui::Style::default().animation_time, 0.0] {
+            let ctx = egui::Context::default();
+            ctx.global_style_mut(|s| s.animation_time = animation_time);
+            let mut delays = Vec::new();
+            for step in 0..12 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    time: Some(step as f64 * 0.05),
+                    ..Default::default()
+                };
+                let out = crate::theme::test_pass(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let _ = paint_composer_stop(ui, 28.0, true);
+                    });
+                });
+                delays.push(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
+            }
+            assert_eq!(
+                delays.last().copied(),
+                Some(LIVE_FRAME),
+                "animation_time {animation_time}: {delays:?}"
+            );
+        }
     }
 
     /// Every animated icon site at once: idle frames ask for nothing, a hover

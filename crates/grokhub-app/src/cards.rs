@@ -704,8 +704,7 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
     if !hint.is_empty() {
         row.response.on_hover_text(hint);
     }
-    ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(33));
+    crate::icons::request_live_frame(ui.ctx());
 }
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
@@ -4270,7 +4269,7 @@ mod tests {
             .and_then(|s| s.split("pub fn titlebar_update_chip(").next())
             .expect("paint_run_pulse");
         assert!(
-            pulse.contains("request_repaint_after") && pulse.contains("33"),
+            pulse.contains("request_live_frame"),
             "the live dot must not repaint every frame: {pulse}"
         );
         assert!(
