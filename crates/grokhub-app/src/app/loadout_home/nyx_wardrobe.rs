@@ -357,7 +357,10 @@ fn decoded_thumb(ctx: &egui::Context, pose: Pose) -> Option<egui::ColorImage> {
                 if let Ok(mut jobs) = JOBS.lock() {
                     jobs.insert(pose.key, Some(image));
                 }
-                ctx.request_repaint();
+                // The tiles paint in the main window. A bare request_repaint
+                // from here goes to whichever viewport is mid-pass, which can
+                // be the desktop Nyx, and the tile would wait for input.
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             });
             None
         }

@@ -446,11 +446,37 @@ impl Cabin {
         let _ = origin;
     }
 
-    pub(super) fn poll_single(&mut self) {
+    /// Reads the `grok -p` events that have arrived, up to a cap. Its sender
+    /// doesn't wake the window, so one event a frame let a fast reply fall
+    /// behind at a turn's 30 fps.
+    pub(super) fn drain_single(&mut self) {
+        for _ in 0..super::jobs::STREAM_DRAIN_MAX {
+            if !self.poll_single() {
+                break;
+            }
+        }
+    }
+
+    /// One `grok -p` event. True for a mid-turn event whose stream is still
+    /// open; the turn's end, a failure or a stopped turn ends the drain.
+    pub(super) fn poll_single(&mut self) -> bool {
         let Some(rx) = self.grok_p_rx.take() else {
-            return;
+            return false;
         };
-        match rx.try_recv() {
+        let next = rx.try_recv();
+        let mid_turn = matches!(
+            next,
+            Ok(GrokPEvent::Thought(_)
+                | GrokPEvent::Text(_)
+                | GrokPEvent::Tool(_)
+                | GrokPEvent::Usage(_)
+                | GrokPEvent::Commands(_)
+                | GrokPEvent::Task { .. }
+                | GrokPEvent::Plan(_)
+                | GrokPEvent::Compact { .. }
+                | GrokPEvent::Recovering(_))
+        );
+        match next {
             Ok(GrokPEvent::Thought(d)) => {
                 // `append_thought` has no cap of its own, so it has to respect the buffer
                 // cap or the rendered blocks grow past IMAGE_FILE_CAP unbounded.
@@ -612,6 +638,7 @@ impl Cabin {
                 }
             }
         }
+        mid_turn && self.grok_p_rx.is_some()
     }
 
     pub(super) fn apply_single_turn(&mut self, turn: grokhub_core::wire::SingleTurn) {

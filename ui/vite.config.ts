@@ -33,8 +33,9 @@ export default defineConfig({
     // Vitest swaps CSS imports for empty strings; contrast.test.ts reads the real theme sheet.
     css: { include: [/styles\.css/] },
     setupFiles: ["./src/setupTests.ts"],
-    // One VM context per worker instead of a new jsdom per file: 59 files
-    // spent ~42% of the run building environments (40 s → 16 s locally).
+    // Workers stay up between files, so each loads vitest, jsdom and the
+    // test libraries once; every file still gets a fresh jsdom window in its
+    // own VM context. Per-file setup was ~42% of the run (40 s → 17 s locally).
     pool: "vmThreads",
   },
 });

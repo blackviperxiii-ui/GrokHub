@@ -5267,7 +5267,7 @@ impl eframe::App for Cabin {
         self.poll_learn();
         self.poll_session_show();
         self.poll_import_openclaw();
-        self.poll_single();
+        self.drain_single();
         self.poll_bg_runs();
         self.poll_native_automations();
         self.poll_self_changes();

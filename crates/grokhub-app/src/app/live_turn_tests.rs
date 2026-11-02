@@ -765,3 +765,53 @@ fn thinking_status_shows_context_when_usage_is_present() {
     assert_eq!(cabin.thinking_status(), format!("Thinking… {line}"));
     assert!(!cabin.running);
 }
+
+#[test]
+fn a_frame_reads_every_reply_delta_that_has_arrived() {
+    // `grok -p` deltas don't wake the window. Read one a frame, a fast reply
+    // fell behind once a running turn asked for 30 frames a second.
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("drain-single");
+    let (tx, rx) = std::sync::mpsc::channel();
+    for _ in 0..40 {
+        tx.send(grokhub_core::wire::GrokPEvent::Text("a".into()))
+            .expect("send");
+    }
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    cabin.drain_single();
+    assert_eq!(cabin.stream_buf, "a".repeat(40));
+    assert!(
+        cabin.grok_p_rx.is_some() && cabin.running,
+        "the reply is still streaming"
+    );
+    drop(tx);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_frame_skips_to_the_newest_host_line_and_the_end_behind_it() {
+    // Host lines don't wake the window either: one a frame held a long log's
+    // HostDone (and the rest of the turn) back by a frame per line.
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("drain-host-lines");
+    let (tx, rx) = std::sync::mpsc::channel();
+    for i in 0..400 {
+        tx.send(JobOut::HostLine(format!("line {i}")))
+            .expect("send");
+    }
+    cabin.rx = Some(rx);
+    cabin.running = true;
+    cabin.poll_job();
+    assert_eq!(cabin.host_live, "line 399");
+    assert!(cabin.rx.is_some(), "the command is still running");
+    tx.send(JobOut::HostLine("last line".into())).expect("send");
+    tx.send(JobOut::Err("exit 1".into())).expect("send");
+    cabin.poll_job();
+    assert!(
+        cabin.rx.is_none() && !cabin.running,
+        "the end is read in the same frame as the lines before it"
+    );
+    release_isolated(&root, cabin);
+}

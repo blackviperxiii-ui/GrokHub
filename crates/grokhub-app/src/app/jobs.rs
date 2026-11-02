@@ -34,10 +34,27 @@ pub(super) fn run_fix_desktop_step(line: &str) -> Result<String, String> {
     Err("not a desktop command".into())
 }
 
+/// Most stream events [`Cabin::poll_job`] and [`Cabin::drain_single`] take in
+/// one frame. Their senders don't wake the window, so one event a frame let a
+/// long host log or a fast reply fall behind at the 30 fps a turn now runs at.
+pub(super) const STREAM_DRAIN_MAX: usize = 512;
+
 impl Cabin {
     pub(super) fn poll_job(&mut self) {
         let Some(rx) = self.rx.take() else { return };
-        match rx.try_recv() {
+        // A host line only updates the live line, so skip to the newest one
+        // that has arrived, or to whatever follows it (HostDone, an error).
+        let mut next = rx.try_recv();
+        for _ in 0..STREAM_DRAIN_MAX {
+            if !matches!(next, Ok(JobOut::HostLine(_))) {
+                break;
+            }
+            match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => break,
+                later => next = later,
+            }
+        }
+        match next {
             Ok(JobOut::Consult(detail)) => {
                 self.running = false;
                 self.push_bound_msg("assistant", detail.clone());

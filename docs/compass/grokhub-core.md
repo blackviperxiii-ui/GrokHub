@@ -2,7 +2,7 @@
 
 ## Owns
 - The pure logic every surface shares, so Linux and Windows do not grow a second protocol: chat routing and models, slash parsing, chips, history, projects, automations, Pulse and the update feed, pairing and hub state, desktop MCP protocol, channels, AMR memory, motion constants.
-- No UI. Network goes through one HTTP client facade, `crates/grokhub-core/src/http.rs` (ureq 3); every network exit is listed in `crates/grokhub-core/tests/offline_guard.rs`. Serde stack plus minisign/toml/quick-xml/rusqlite; Windows adds `win_acl` (`crates/grokhub-core/Cargo.toml`).
+- No UI. HTTP goes through one client facade, `crates/grokhub-core/src/http.rs` (ureq 3). The other network exits (loopback sockets in `game_watch_rl.rs` and `game_watch_gsi.rs`, `git fetch` in `update.rs`) and every HTTP caller are listed in `crates/grokhub-core/tests/offline_guard.rs`. Serde stack plus minisign/toml/quick-xml/rusqlite; Windows adds `win_acl` (`crates/grokhub-core/Cargo.toml`).
 ## Quick commands
 - `cargo test -p grokhub-core --locked -- --test-threads=1`
 - `cargo test -p grokhub-core --test compass_paths` (these compass files)
@@ -17,7 +17,7 @@
 - `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`.
 ## Change recipe
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
-- New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; a network call goes through `http.rs` and is listed in `offline_guard.rs`. Processes are spawned only in `update.rs`, `channel.rs`, `code_resume.rs`, `model_drop.rs`, `watch_learn.rs` and `proc_util.rs`.
+- New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of egui; an HTTP call goes through `http.rs`, and any network exit is listed in `offline_guard.rs`. Outside tests only `update.rs` spawns a process (`git`).
 ## What breaks it
 - Renaming a re-exported item: it breaks grokhub-app, grokhub-hub, and grokhub-agent in one go. Grep the workspace first.
 - Editing scripts or packaging: `hands.rs`, `desktop_entry.rs`, `update.rs`, and `channel.rs` tests read `scripts/` and `packaging/` and assert on their text.
