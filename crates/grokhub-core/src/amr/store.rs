@@ -740,23 +740,10 @@ fn is_proposed(node: &Node) -> bool {
     node.tags.iter().any(|tag| tag == "proposed")
 }
 
-/// Replace `path` with `tmp`. Unix rename replaces. Windows cannot, so the
-/// destination is removed first.
+/// Replace `path` with `tmp`. std's rename replaces an existing file on
+/// Windows too, so there is never a moment with no file at `path`.
 fn replace_file(tmp: &Path, path: &Path) -> Result<(), AmrError> {
-    #[cfg(unix)]
-    {
-        fs::rename(tmp, path).map_err(io_err)
-    }
-    #[cfg(windows)]
-    {
-        fs::remove_file(path).map_err(io_err)?;
-        fs::rename(tmp, path).map_err(io_err)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (tmp, path);
-        Err(AmrError::Io("amr resave needs unix or windows".into()))
-    }
+    fs::rename(tmp, path).map_err(io_err)
 }
 
 /// Publish `tmp` as `path` only when `path` does not already exist.

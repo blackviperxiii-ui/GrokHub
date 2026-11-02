@@ -404,18 +404,22 @@ pub fn record_turn(
         return Ok(());
     }
     touch(&id, cwd, model)?;
-    for item in items {
-        if tombstoned(&id) {
-            let _ = fs::remove_file(session_file(&id)?);
-            return Ok(());
-        }
-        append_json(&id, &item_json(item))?;
+    // The turn's lines go out in one write and one sync: a sync per item cost
+    // a 10-tool turn about two dozen fsyncs before Done.
+    let mut lines = Vec::new();
+    for value in items
+        .iter()
+        .map(item_json)
+        .chain([usage_json(usage, meter)])
+    {
+        serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
+        lines.push(b'\n');
     }
     if tombstoned(&id) {
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
     }
-    append_json(&id, &usage_json(usage, meter))?;
+    append_lines(&id, &lines)?;
     if !tombstoned(&id) {
         let _ = note_title(&id, user_text);
     }
@@ -949,18 +953,23 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
 }
 
 fn append_json(id: &str, value: &Value) -> Result<(), String> {
+    let mut line = serde_json::to_vec(value).map_err(|err| err.to_string())?;
+    line.push(b'\n');
+    append_lines(id, &line)
+}
+
+/// Append whole `\n`-ended lines in one write, then sync once.
+fn append_lines(id: &str, lines: &[u8]) -> Result<(), String> {
     if tombstoned(id) {
         return Ok(());
     }
     let path = session_file(id)?;
-    let mut line = serde_json::to_vec(value).map_err(|err| err.to_string())?;
-    line.push(b'\n');
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|err| err.to_string())?;
-    file.write_all(&line).map_err(|err| err.to_string())?;
+    file.write_all(lines).map_err(|err| err.to_string())?;
     file.flush().map_err(|err| err.to_string())?;
     let _ = file.sync_all();
     Ok(())
@@ -1017,10 +1026,6 @@ fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         file.write_all(bytes).map_err(|err| err.to_string())?;
         file.flush().map_err(|err| err.to_string())?;
         let _ = file.sync_all();
-    }
-    #[cfg(windows)]
-    {
-        let _ = fs::remove_file(path);
     }
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
@@ -1408,6 +1413,42 @@ mod tests {
         assert!(raw.ends_with('\n'));
         assert_eq!(resume_input(id).unwrap(), items);
         assert_eq!(loaded.input(), items);
+    }
+
+    #[test]
+    fn a_turn_appends_its_items_then_its_usage_one_line_each_in_order() {
+        let (_dir, _guard) = isolated("lines");
+        let id = "native-lines";
+        let items = sample_items();
+        let usage = Usage {
+            input_tokens: 3,
+            ..Usage::default()
+        };
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &items,
+            &usage,
+            "pool",
+            "fix the dock",
+        )
+        .unwrap();
+        let first = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        record_turn(id, "/work", "grok-4.7", &items, &usage, "pool", "again").unwrap();
+        let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        let expected: Vec<String> = items
+            .iter()
+            .map(item_json)
+            .chain([usage_json(&usage, "pool")])
+            .map(|v| serde_json::to_string(&v).unwrap())
+            .collect();
+        let turn = |text: &str| -> Vec<String> {
+            text.lines().skip(1).map(str::to_string).collect::<Vec<_>>()
+        };
+        assert_eq!(turn(&first), expected, "one line per item, then usage");
+        let both: Vec<String> = expected.iter().chain(expected.iter()).cloned().collect();
+        assert_eq!(turn(&raw), both, "the second turn follows the first");
     }
 
     #[test]

@@ -863,6 +863,19 @@ fn classify_transport(msg: String) -> ClientError {
     }
 }
 
+/// The text in `pending` that is whole UTF-8, leaving the start of a
+/// character a read cut in half for the next read. A byte that can never be
+/// UTF-8 decodes as U+FFFD right away.
+fn take_utf8(pending: &mut Vec<u8>) -> String {
+    let keep = match std::str::from_utf8(pending) {
+        Err(err) if err.error_len().is_none() => pending.len() - err.valid_up_to(),
+        _ => 0,
+    };
+    let rest = pending.split_off(pending.len() - keep);
+    let whole = std::mem::replace(pending, rest);
+    String::from_utf8(whole).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
 fn read_sse<R: Read>(
     mut reader: R,
     cancel: &CancelToken,
@@ -876,6 +889,8 @@ fn read_sse<R: Read>(
     let mut usage = Usage::default();
     let mut truncated = false;
     let mut truncate_reason = None;
+    // Bytes of a character that a read cut in half, kept for the next read.
+    let mut pending: Vec<u8> = Vec::new();
     loop {
         if cancel.is_cancelled() {
             drop(reader);
@@ -893,9 +908,23 @@ fn read_sse<R: Read>(
                 return Err(ClientError::Transport(msg));
             }
         };
-        let chunk = String::from_utf8_lossy(&buf[..n]);
+        pending.extend_from_slice(&buf[..n]);
+        let chunk = take_utf8(&mut pending);
         fold_events(
             parser.push(&chunk),
+            sink,
+            &mut text,
+            &mut reasoning,
+            &mut calls,
+            &mut usage,
+            &mut truncated,
+            &mut truncate_reason,
+        )?;
+    }
+    if !pending.is_empty() {
+        let tail = String::from_utf8_lossy(&pending).into_owned();
+        fold_events(
+            parser.push(&tail),
             sink,
             &mut text,
             &mut reasoning,
@@ -968,6 +997,49 @@ fn fold_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body that hands out its bytes in the given cuts, one per read.
+    struct Cuts(std::collections::VecDeque<Vec<u8>>);
+
+    impl Read for Cuts {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let Some(next) = self.0.pop_front() else {
+                return Ok(0);
+            };
+            out[..next.len()].copy_from_slice(&next);
+            Ok(next.len())
+        }
+    }
+
+    #[test]
+    fn a_character_split_between_reads_stays_whole() {
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"café 🦀\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"output\":[]}}\n\n",
+        )
+        .as_bytes();
+        let e = body.windows(2).position(|w| w == [0xC3, 0xA9]).unwrap();
+        let crab = body
+            .windows(4)
+            .position(|w| w == [0xF0, 0x9F, 0xA6, 0x80])
+            .unwrap();
+        // Cut inside é (C3|A9) and inside the crab (F0 9F|A6 80).
+        let cuts = [&body[..e + 1], &body[e + 1..crab + 2], &body[crab + 2..]];
+        let reader = Cuts(cuts.iter().map(|c| c.to_vec()).collect());
+        let mut shown = String::new();
+        let out = read_sse(reader, &CancelToken::new(), &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        })
+        .unwrap();
+        assert_eq!(out.text, "café 🦀");
+        assert_eq!(shown, "café 🦀");
+
+        let mut pending = vec![b'o', b'k', 0xFF, b'!'];
+        assert_eq!(take_utf8(&mut pending), "ok\u{FFFD}!");
+        assert!(pending.is_empty());
+    }
 
     #[test]
     fn xai_client_loopback_url_accepts_only_local_http() {

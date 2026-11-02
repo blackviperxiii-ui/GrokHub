@@ -840,8 +840,8 @@ fn write_intentions(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let mut file = opts.open(&tmp).map_err(|err| err.to_string())?;
         file.write_all(bytes).map_err(|err| err.to_string())?;
     }
-    // Windows rename does not replace an existing file. One writer owns this path.
-    let _ = fs::remove_file(path);
+    // std's rename replaces the file on Windows too, so the old copy stays
+    // readable until the new one is in place.
     fs::rename(&tmp, path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         err.to_string()
@@ -853,6 +853,44 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_reader_never_finds_intentions_missing_while_they_are_rewritten() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-intentions-swap-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("intentions.json");
+        write_intentions(&path, b"[]").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let missing = Arc::new(AtomicUsize::new(0));
+        let reader = {
+            let (path, stop, missing) = (path.clone(), stop.clone(), missing.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if fs::read(&path).is_err() {
+                        missing.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+        };
+        for i in 0..500 {
+            write_intentions(&path, format!("[{i}]").as_bytes()).unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+        assert_eq!(
+            missing.load(Ordering::Relaxed),
+            0,
+            "the old copy stays until the new one is in place"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[499]");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn thread_goal_prompt_skips_host_results() {

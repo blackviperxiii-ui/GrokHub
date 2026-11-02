@@ -426,6 +426,8 @@ pub fn screen_reply(reply: &str) -> &str {
 pub struct ReplyGuard {
     text: String,
     shown: usize,
+    /// Where the words already checked end: just past a separator.
+    scanned: usize,
     holding: bool,
     /// Where the clean start ends, once the reply was replaced.
     replaced: Option<usize>,
@@ -436,8 +438,15 @@ impl ReplyGuard {
     pub fn push(&mut self, delta: &str) -> String {
         self.text.push_str(delta);
         if !self.holding {
-            let w = words(&self.text);
+            // Only what came since the last check: each whole word once, and
+            // the unfinished last word again, since it may still grow into a
+            // listed word. Rechecking the whole reply per delta was quadratic.
+            let fresh = &self.text[self.scanned..];
+            let w = words(fresh);
             self.holding = any_word(&w, EXPLICIT) || any_word(&w, STRONG);
+            if let Some((i, c)) = fresh.char_indices().rfind(|(_, c)| !c.is_alphanumeric()) {
+                self.scanned += i + c.len_utf8();
+            }
         }
         if self.holding {
             return String::new();
@@ -682,6 +691,58 @@ mod tests {
         assert_eq!(check(*HELD), Risk::Clean);
         assert_eq!(check(HELD_NOTICE), Risk::Clean);
         assert_eq!(check(REPLY_REPLACED), Risk::Clean);
+    }
+
+    #[test]
+    fn the_streamed_check_matches_a_check_of_the_whole_reply_at_any_delta_size() {
+        /// What `push` showed and when it began holding, by rechecking the
+        /// whole reply on every delta (the rule before the incremental scan).
+        fn whole(deltas: &[&str]) -> (String, Option<usize>) {
+            let mut text = String::new();
+            let mut shown = String::new();
+            for (n, d) in deltas.iter().enumerate() {
+                text.push_str(d);
+                let w = words(&text);
+                if any_word(&w, EXPLICIT) || any_word(&w, STRONG) {
+                    return (shown, Some(n));
+                }
+                shown = text.clone();
+            }
+            (shown, None)
+        }
+        let replies = [
+            "Sure, here is the fix: restart the child process, then retry. Café ☕ ok.",
+            "The scene turns: she starts to moan",
+            "A long, clean answer about Wi-Fi, DNS and the router's moana setting.",
+            "Hi. It gets nsfw now, and she's 15.",
+        ];
+        for reply in replies {
+            let chars: Vec<char> = reply.chars().collect();
+            for size in 1..=7 {
+                let deltas: Vec<String> = chars.chunks(size).map(|c| c.iter().collect()).collect();
+                let deltas: Vec<&str> = deltas.iter().map(String::as_str).collect();
+                let mut guard = ReplyGuard::default();
+                let mut shown = String::new();
+                let mut held_at = None;
+                for (n, d) in deltas.iter().enumerate() {
+                    shown.push_str(&guard.push(d));
+                    if guard.holding && held_at.is_none() {
+                        held_at = Some(n);
+                    }
+                }
+                assert_eq!(
+                    (shown, held_at),
+                    whole(&deltas),
+                    "{reply:?} in {size}-char deltas"
+                );
+            }
+        }
+        // A strong word split across deltas holds from the delta that completes
+        // it, as the whole-reply check did: the half before it showed.
+        let mut guard = ReplyGuard::default();
+        assert_eq!(guard.push("she starts to mo"), "she starts to mo");
+        assert_eq!(guard.push("an softly"), "");
+        assert!(guard.holding);
     }
 
     #[test]
