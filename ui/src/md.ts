@@ -332,13 +332,19 @@ function bareUrlLen(s: string): number | null {
       break;
     }
   }
-  // Trailing sentence punctuation is not part of the URL.
+  // Trailing sentence punctuation is not part of the URL. The parens are
+  // counted once and kept current as `)` is trimmed: recounting the head for
+  // each one made a line of `)` quadratic.
+  const url = s.slice(0, end);
+  const opens = count(url, "(");
+  let closes = count(url, ")");
   while (end > 0) {
     const last = charBefore(s, end) ?? " ";
-    const head = s.slice(0, end);
-    const unbalancedParen = last === ")" && count(head, "(") < count(head, ")");
-    if (".,;:!?']".includes(last) || unbalancedParen) end -= last.length;
-    else break;
+    const unbalancedParen = last === ")" && opens < closes;
+    if (".,;:!?']".includes(last) || unbalancedParen) {
+      end -= last.length;
+      if (last === ")") closes--;
+    } else break;
   }
   return mdLinkOk(s.slice(0, end)) ? end : null;
 }

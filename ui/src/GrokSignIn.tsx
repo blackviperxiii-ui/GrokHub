@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   getSettings,
   grokSignOut,
@@ -39,7 +39,6 @@ export function GrokSignIn({
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = null;
   }
-  useEffect(() => stop, []);
 
   function wait(seconds: number) {
     stop();
@@ -65,13 +64,19 @@ export function GrokSignIn({
     }
   }
 
+  // Settings sits in an <Activity>: hiding it runs this cleanup and showing it
+  // runs the effect again, so a code still on screen goes back to waiting.
+  const resume = useEffectEvent((seconds: number) => wait(seconds));
+  useEffect(() => {
+    if (code) resume(code.interval);
+    return stop;
+  }, [code]);
+
   async function start() {
     clear();
     setBusy(true);
     try {
-      const got = await startGrokSignIn();
-      setCode(got);
-      wait(got.interval);
+      setCode(await startGrokSignIn());
     } catch (err) {
       fail(err);
     } finally {

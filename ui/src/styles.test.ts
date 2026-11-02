@@ -113,4 +113,15 @@ describe("styles.css views bar in a narrow window", () => {
   it("keeps each tab at its own width so a row wraps rather than squashing icons", () => {
     expect(rule(narrow, ".tabs button {")).toContain("flex: none;");
   });
+
+  // A phone also matches the 900px query. The phone bar is one fixed 52px row,
+  // so the last phone rule for .tabs must come after the wrap and undo it, or
+  // the icons stack into rows over the composer.
+  it("keeps the phone bar on one row after the narrow-window wrap", () => {
+    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const phones = mediaBlocks(CSS, "(max-width: 600px)").filter((b) => rule(b, ".tabs {") !== "");
+    const last = phones[phones.length - 1] ?? "";
+    expect(bare.indexOf(last)).toBeGreaterThan(bare.indexOf(narrow));
+    expect(rule(last, ".tabs {")).toContain("flex-wrap: nowrap;");
+  });
 });

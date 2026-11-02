@@ -286,6 +286,27 @@ async function main() {
       screen: document.documentElement.clientWidth,
     }));
     check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
+    // The views bar sits over the bottom edge; Send must stay clickable. The
+    // page makes room for the bar with a short transition, so wait for it.
+    await page.waitForFunction(() => {
+      const room = parseFloat(getComputedStyle(document.querySelector(".app")).paddingBottom);
+      return room >= document.querySelector(".topbar").getBoundingClientRect().height;
+    });
+    const covered = await page.evaluate(() => {
+      const send = document.querySelector("form.composer button[type='submit']");
+      const r = send.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return send.contains(hit) ? "" : (hit?.outerHTML.slice(0, 80) ?? "nothing");
+    });
+    check(covered === "", `the views bar covers Send on a phone: ${covered}`);
+    // One row: no tab spills out of the bar over the page.
+    const spill = await page.evaluate(() => {
+      const bar = document.querySelector(".topbar").getBoundingClientRect();
+      return [...document.querySelectorAll("nav.tabs button")]
+        .map((b) => b.getBoundingClientRect())
+        .filter((r) => r.top < bar.top - 1 || r.bottom > bar.bottom + 1).length;
+    });
+    check(spill === 0, `${spill} tab(s) spill out of the phone's views bar`);
     await page.setViewportSize({ width: 1280, height: 720 });
 
     await page.locator("nav.tabs button", { hasText: "Pulse" }).click();

@@ -42,6 +42,31 @@ describe("md", () => {
     ]);
   });
 
+  it("trims a long run of ) after a bare link in linear time", () => {
+    const parens = ")".repeat(40_000);
+    const started = performance.now();
+    const spans = mdSpans(`see https://a.co/x${parens}`);
+    const took = performance.now() - started;
+    expect(spans).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "link", text: "https://a.co/x", url: "https://a.co/x" },
+      { kind: "text", text: parens },
+    ]);
+    // Recounting the parens for each trimmed one took about 13 s here.
+    expect(took).toBeLessThan(2000);
+  });
+
+  it("still keeps a balanced ) in a bare link", () => {
+    expect(mdSpans("https://en.wikipedia.org/wiki/Rust_(language)).")).toEqual([
+      {
+        kind: "link",
+        text: "https://en.wikipedia.org/wiki/Rust_(language)",
+        url: "https://en.wikipedia.org/wiki/Rust_(language)",
+      },
+      { kind: "text", text: ")." },
+    ]);
+  });
+
   it("links only http(s)", () => {
     expect(mdLinkOk("https://x.ai")).toBe(true);
     expect(mdLinkOk("http://example.com/a?b=c")).toBe(true);

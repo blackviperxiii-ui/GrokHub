@@ -360,13 +360,19 @@ fn bare_url_len(s: &str) -> Option<usize> {
         .find(|(_, c)| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`'))
         .map(|(i, _)| i)
         .unwrap_or(s.len());
-    // Trailing sentence punctuation is not part of the URL.
+    // Trailing sentence punctuation is not part of the URL. The parens are
+    // counted once and kept current as `)` is trimmed: recounting them for
+    // each one made a line of `)` quadratic.
+    let opens = s[..end].matches('(').count();
+    let mut closes = s[..end].matches(')').count();
     while end > 0 {
         let last = s[..end].chars().next_back().unwrap_or(' ');
-        let unbalanced_paren =
-            last == ')' && s[..end].matches('(').count() < s[..end].matches(')').count();
+        let unbalanced_paren = last == ')' && opens < closes;
         if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | ']') || unbalanced_paren {
             end -= last.len_utf8();
+            if last == ')' {
+                closes -= 1;
+            }
         } else {
             break;
         }
@@ -719,6 +725,26 @@ pub fn code_tokens(lang: &str, line: &str) -> Vec<(CodeTok, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_run_of_parens_after_a_bare_link_is_linear() {
+        let parens = ")".repeat(40_000);
+        let started = std::time::Instant::now();
+        let spans = md_spans(&format!("see https://a.co/x{parens}"));
+        let took = started.elapsed();
+        assert_eq!(
+            spans,
+            vec![
+                MdSpan::Text("see ".into()),
+                MdSpan::Link {
+                    text: "https://a.co/x".into(),
+                    url: "https://a.co/x".into(),
+                },
+                MdSpan::Text(parens),
+            ]
+        );
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    }
 
     #[test]
     fn numbered_bullets_tasks_and_depth() {
