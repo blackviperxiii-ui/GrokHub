@@ -8,7 +8,7 @@ This sweep followed the QA walkthrough in `qa-walkthrough-2026-11-02.md`. Six fi
 - build, CI, tests and repo size
 - code quality
 
-For each area, one adversarial verifier then re-derived every claim, and a planner ranked the results. Each change that shipped was reviewed again before merge, by one reviewer for correctness and one for whether the claimed gains hold.
+For each area, one adversarial verifier then re-derived every claim, and a planner ranked the results. Each change that shipped was reviewed again before merge, by one reviewer for correctness and one for whether the claimed gains hold. For #1374 that review raised 12 findings and confirmed 8, all fixed before merge.
 
 Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug builds unless noted) or from CI logs.
 
@@ -31,7 +31,8 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
 | PR | What | Measured gain |
 |---|---|---|
 | [#1373](https://github.com/blackviperxiii-ui/GrokHub/pull/1373) | `read_file` sends an image once; streamed UTF-8 stays whole; the reply guard scans linearly; one write and one sync per turn; no remove-before-rename | See below |
-| this PR | Cabin frame rate and startup; shell re-render storms; test and CI time | See below |
+| [#1374](https://github.com/blackviperxiii-ui/GrokHub/pull/1374) | Cabin frame rate and startup; shell re-render storms; test and CI time | See below |
+| this PR | Voice pictures decode on one worker; the measured Windows test time; a flaky test | See below |
 
 **#1373, agent hot paths:**
 - **Images:** each 300 KiB image read stops adding about 102k estimated tokens (409,622 bytes of base64 text) to every later request.
@@ -39,21 +40,22 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
 - **Session writes:** a 10-tool turn goes from 23 or more fsyncs to 1.
 - **Intentions file:** a reader no longer finds it missing mid-save. Before, it was missing 1,314 times in 500 rewrites.
 
-**This PR, the cabin:**
+**#1374 and this PR, the cabin:**
 - **Frame rate during a turn:** a running turn asks for frames about 30 times a second, not every frame. The fix adds egui's predicted frame time back to the delay. Without it, a 33 ms request ran at about 50 fps, and that applied to the existing run dot and glow too.
 - **Startup, fresh profile (3 runs each):** `Cabin::new` goes from 40.8–42.4 ms to 6.5–7.7 ms. Its config step goes from 20–23 ms to 3–4.5 ms. The first frame goes from 282–349 ms to 209–241 ms.
-- **Settings at launch:** 4.0 s → 2.5 s to the first window.
+- **Settings at launch:** 4.0–4.5 s → 1.5–2.0 s to the first window. The pictures decode on one worker. One thread per tile had cost 22–27 MB more heap (RssAnon) with Settings open; one worker costs 3 MB.
 - **Ranking and folding:** the outcome fold is linear, and Pulse ranking tokenizes each title once per frame.
+- **Turn streams:** host output and `grok -p` replies are read in full each frame. Before, they drained one message a frame, so at 30 fps a long host log held up the end of the job.
 
-**This PR, the shell:**
+**#1374, the shell:**
 - **Streamed text:** 100 chunks caused 100 `App` renders, now at most 2.
 - **Phone scrolling:** a 60-step swipe caused 59 renders, now at most 2.
-- **Settings:** `get_settings` runs off the main thread.
+- **Settings:** `get_settings` reads the keychain on the blocking pool, off the main thread. A first version ran it as an async command; on Linux the Secret Service client then panicked on the tokio worker. Both the review and the CI shell smoke caught it before merge.
 
-**This PR, tests and CI:**
+**#1374, tests and CI:**
 - **Deny-rule tests:** the three `gb_` tests take 48 s → 6 s.
 - **UI tests:** `npm test` takes about 40 s → 17 s, with 597/597 passing in each of 5 runs.
-- **Windows nextest:** the serial tests start first, an estimated 16–21 s off the job.
+- **Windows nextest:** the serial tests start first. On CI, nextest took 220 s on the Windows run before #1374 and 191 s on #1374's (one run each). Before, the 20 serial `channel_tip_tests` were its last ~41 s.
 
 ## Needs decision
 
@@ -85,6 +87,10 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
     - 59 byte-identical helper copies.
     - Raw transport errors shown to users.
     - Moving the `cards.rs` tests out, so its line budget (4,400 of 4,400) has room again.
+
+## Flaky test seen during this work
+
+- `app::tests::chat_threads_tests::main_tab_clear_chat_asks_first_then_wipes_only_main_for_good` failed once in five local runs of a 108-test subset (plain `cargo test`, one test at a time). `threads.json` or `threads.json.bak` still held the cleared Main chat. It passed in every other run, alone and in the full suite. That could be a persist write landing after the clear, which would leave a cleared chat on disk, so it is worth a look of its own.
 
 ## Refuted or overstated
 
