@@ -795,27 +795,41 @@ export function Chat({
   }
 
   async function answer(id: string, choice: Answer) {
-    setItems((now) =>
-      now.map((item) =>
-        item.kind === "permission" && item.id === id ? { ...item, answer: choice } : item,
-      ),
-    );
+    const mark = (from: Answer | null, to: Answer | null) =>
+      setItems((now) =>
+        now.map((item) =>
+          item.kind === "permission" && item.id === id && item.answer === from
+            ? { ...item, answer: to }
+            : item,
+        ),
+      );
+    mark(null, choice);
     try {
       await answerPermission(conversationId, id, choice);
     } catch (err) {
+      // It never reached the agent, which is still waiting: give the buttons back.
+      mark(choice, null);
       setError(String(err));
     }
   }
 
   async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
-    setItems((now) =>
-      now.map((it) => (it.kind === "elicit" && it.id === item.id ? { ...it, answer: action } : it)),
-    );
+    const mark = (from: ElicitAction | null, to: ElicitAction | null) =>
+      setItems((now) =>
+        now.map((it) =>
+          it.kind === "elicit" && it.id === item.id && it.answer === from ? { ...it, answer: to } : it,
+        ),
+      );
+    mark(null, action);
     // An approved plan leaves plan mode, as in the cabin.
-    if (item.server === "Plan" && action === "accept") setMode("chat");
+    const leavesPlan = item.server === "Plan" && action === "accept";
+    if (leavesPlan) setMode("chat");
     try {
       await answerElicit(conversationId, item.id, action, item.fieldName, value);
     } catch (err) {
+      // It never reached the agent, which is still asking: give the card back.
+      mark(action, null);
+      if (leavesPlan) setMode("plan");
       setError(String(err));
     }
   }

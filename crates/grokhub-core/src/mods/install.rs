@@ -771,6 +771,13 @@ pub fn recover(config: &Path) -> Vec<String> {
                     }
                 }
                 Some(_) => {}
+                // A manifest that is there but won't read (damaged, or from a
+                // newer Loadout) may sit beside the only copies of game files
+                // the mod replaced, in `backups/`, so it stays.
+                None if dir.join("manifest.json").exists() => lines.push(format!(
+                    "Couldn't read the install record in {}, so Loadout left it as it is.",
+                    dir.display()
+                )),
                 None => {
                     // A manifest that never got written: nothing touched the game.
                     let _ = std::fs::remove_dir_all(&dir);
@@ -942,6 +949,39 @@ mod tests {
         assert!(lines[0].contains("rolled back"));
         assert_eq!(walk(&r.game), before);
         assert!(recover(&r.config).is_empty(), "recovery is idempotent");
+    }
+
+    #[test]
+    fn an_unreadable_record_keeps_its_backups() {
+        let r = rig("mods-unreadable");
+        let p = sky_plan(&r, "nexus:1");
+        Installer::new(&r.config, &idle).apply(&p, 1).unwrap();
+        let dir = mod_dir(&r.config, "skyrimse", "nexus:1");
+        let backed_up = |dir: &Path| -> Vec<Vec<u8>> {
+            std::fs::read_dir(dir.join("backups"))
+                .map(|rd| rd.flatten().map(|e| std::fs::read(e.path()).unwrap()))
+                .into_iter()
+                .flatten()
+                .collect()
+        };
+        assert_eq!(backed_up(&dir), vec![b"vanilla sky".to_vec()]);
+        std::fs::write(dir.join("manifest.json"), b"{\"state\": \"FromTheFuture\"").unwrap();
+
+        let lines = recover(&r.config);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].starts_with("Couldn't read the install record in "),
+            "{lines:?}"
+        );
+        assert_eq!(
+            backed_up(&dir),
+            vec![b"vanilla sky".to_vec()],
+            "the backups stay"
+        );
+        assert_eq!(
+            std::fs::read(r.game.join("Data/textures/sky.dds")).unwrap(),
+            b"better sky"
+        );
     }
 
     #[test]

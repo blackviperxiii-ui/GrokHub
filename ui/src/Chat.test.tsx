@@ -359,6 +359,23 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
   });
 
+  it("an answer that doesn't reach the agent gives the buttons back", async () => {
+    holdTurn();
+    api.answerPermission.mockRejectedValueOnce("Can't reach Loadout on your computer. Is it open?");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write a note");
+
+    emit(id, { kind: "permission", id: "call-9", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach Loadout on your computer.");
+    const card = screen.getByRole("group", { name: "Approve write" });
+    expect(card).not.toHaveTextContent("Allowed once");
+    await userEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "call-9", "allow");
+    expect(card).toHaveTextContent("Allowed once");
+  });
+
   it("Deny and Always allow send their answers", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

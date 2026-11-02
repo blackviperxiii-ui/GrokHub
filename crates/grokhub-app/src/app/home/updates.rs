@@ -14,6 +14,9 @@ use grokhub_agent::repair::{
 
 const STEAM_EVERY: Duration = Duration::from_secs(10 * 60);
 const OS_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// A "not allowed" answer is asked again this soon, so a grant in Settings
+/// shows within a minute without a new read on every repaint.
+const NOT_ALLOWED_EVERY: Duration = Duration::from_secs(60);
 
 /// What the OS package check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,13 +63,38 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
     reading: false,
 });
 
+/// Which parts (Steam, OS) are due a read at `now`.
+fn due(slot: &Slot, now: Instant) -> (bool, bool) {
+    let past = |at: Option<Instant>, every: Duration| {
+        at.is_none_or(|t| now.saturating_duration_since(t) >= every)
+    };
+    let os_every = if slot.facts.os == OsUpdates::NotAllowed {
+        NOT_ALLOWED_EVERY
+    } else {
+        OS_EVERY
+    };
+    (past(slot.steam_at, STEAM_EVERY), past(slot.os_at, os_every))
+}
+
+/// Puts a finished background read in the slot.
+fn record(slot: &mut Slot, steam: Option<Vec<String>>, os: Option<OsUpdates>, now: Instant) {
+    if let Some(s) = steam {
+        slot.facts.steam = s;
+        slot.steam_at = Some(now);
+    }
+    if let Some(o) = os {
+        slot.facts.os = o;
+        slot.os_at = Some(now);
+    }
+    slot.reading = false;
+}
+
 /// The last facts; starts one background read when a part is due.
 pub(super) fn update_facts() -> UpdateFacts {
     let Ok(mut slot) = SLOT.lock() else {
         return UpdateFacts::default();
     };
-    let steam_due = slot.steam_at.is_none_or(|t| t.elapsed() >= STEAM_EVERY);
-    let os_due = slot.os_at.is_none_or(|t| t.elapsed() >= OS_EVERY);
+    let (steam_due, os_due) = due(&slot, Instant::now());
     if !slot.reading && (steam_due || os_due) {
         slot.reading = true;
         let dir = crate::config::config_dir();
@@ -89,17 +117,7 @@ pub(super) fn update_facts() -> UpdateFacts {
                     }
                 });
                 if let Ok(mut slot) = SLOT.lock() {
-                    let now = Instant::now();
-                    if let Some(s) = steam {
-                        slot.facts.steam = s;
-                        slot.steam_at = Some(now);
-                    }
-                    if let Some(o) = os {
-                        // A grant later should show soon, not in 6 hours.
-                        slot.os_at = (o != OsUpdates::NotAllowed).then_some(now);
-                        slot.facts.os = o;
-                    }
-                    slot.reading = false;
+                    record(&mut slot, steam, os, Instant::now());
                 }
             });
         if spawned.is_err() {
@@ -138,5 +156,55 @@ fn os_pending() -> OsUpdates {
         })
         .map_or(OsUpdates::Unknown, OsUpdates::Pending),
         ProbeRun::TimedOut | ProbeRun::Missing(_) => OsUpdates::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty() -> Slot {
+        Slot {
+            facts: UpdateFacts::default(),
+            steam_at: None,
+            os_at: None,
+            reading: true,
+        }
+    }
+
+    #[test]
+    fn a_not_allowed_answer_is_asked_again_in_a_minute_not_on_the_next_repaint() {
+        let t = Instant::now();
+        let mut slot = empty();
+        record(&mut slot, Some(Vec::new()), Some(OsUpdates::NotAllowed), t);
+        assert!(!slot.reading);
+        assert_eq!(due(&slot, t + Duration::from_millis(16)), (false, false));
+        assert_eq!(due(&slot, t + Duration::from_secs(59)), (false, false));
+        assert_eq!(due(&slot, t + Duration::from_secs(60)), (false, true));
+    }
+
+    #[test]
+    fn a_package_count_holds_six_hours_and_steam_ten_minutes() {
+        let t = Instant::now();
+        let mut slot = empty();
+        record(
+            &mut slot,
+            Some(vec!["Portal 2".into()]),
+            Some(OsUpdates::Pending(3)),
+            t,
+        );
+        assert_eq!(slot.facts.os, OsUpdates::Pending(3));
+        assert_eq!(slot.facts.steam, vec!["Portal 2".to_string()]);
+        assert_eq!(due(&slot, t + Duration::from_secs(60)), (false, false));
+        assert_eq!(due(&slot, t + Duration::from_secs(10 * 60)), (true, false));
+        assert_eq!(
+            due(&slot, t + Duration::from_secs(6 * 60 * 60)),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn nothing_read_yet_is_due() {
+        assert_eq!(due(&empty(), Instant::now()), (true, true));
     }
 }
