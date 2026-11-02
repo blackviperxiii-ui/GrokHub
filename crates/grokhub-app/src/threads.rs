@@ -1,6 +1,5 @@
 use grokhub_core::{clean_tab_title, empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::config;
@@ -284,12 +283,19 @@ enum SavedRow<'a> {
 }
 
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
-    save_capped(threads, config::HISTORY_STORE_CAP)
+    save_forgetting(threads, Forget::Nothing)
+}
+
+/// [`save`] for the snapshot taken right after Clear chat or Delete all. That
+/// save alone cleans the backups, so no other save can do it first and then
+/// leave a backup of the old chat behind.
+pub fn save_forgetting(threads: &[ChatThread], forget: Forget) -> Result<(), String> {
+    save_capped(threads, config::HISTORY_STORE_CAP, forget)
 }
 
 /// Never writes more than `load` accepts: over `cap`, the largest message bodies are
 /// dropped from the saved copy, and when that is not enough nothing is written.
-fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
+fn save_capped(threads: &[ChatThread], cap: usize, forget: Forget) -> Result<(), String> {
     let mut rows = Vec::with_capacity(threads.len());
     for t in threads {
         if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
@@ -314,12 +320,10 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
         eprintln!("threads.json: dropped the {dropped} largest messages to stay under the cap");
     }
     let path = threads_path();
-    // Delete all waits for the save that carries the emptied list. That save
-    // keeps no backup of the old history and removes the ones already made.
-    let all_cleared = ALL_CLEARED.load(Ordering::SeqCst)
-        && threads.iter().all(|t| t.main && t.messages.is_empty());
     // A bad in-memory list must not be the only remaining copy of a long history.
-    if !all_cleared && let Ok(prev) = std::fs::metadata(&path) {
+    // Delete all's save makes no backup of the history it deleted.
+    let back_up = forget != Forget::All;
+    if back_up && let Ok(prev) = std::fs::metadata(&path) {
         let prev_len = prev.len() as usize;
         if prev_len > 8 * 1024 && prev_len > s.len().saturating_mul(4) {
             let bak = path.with_file_name("threads.json.bak");
@@ -330,46 +334,33 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
         }
     }
     config::atomic_write(&path, s.as_bytes())?;
-    if all_cleared
-        && ALL_CLEARED
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    {
-        for copy in backup_copies(&path) {
-            let _ = std::fs::remove_file(copy);
+    match forget {
+        Forget::Nothing => {}
+        Forget::Main => scrub_main_from_backups(&path),
+        Forget::All => {
+            for copy in backup_copies(&path) {
+                let _ = std::fs::remove_file(copy);
+            }
         }
-    }
-    // Main's Clear chat waits for the save that carries the empty Main, then
-    // takes Main's old transcript out of every backup, the one just made too.
-    let main_now_empty = threads.iter().any(|t| t.main && t.messages.is_empty());
-    if main_now_empty
-        && MAIN_CLEARED
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    {
-        scrub_main_from_backups(&path);
     }
     Ok(())
 }
 
-/// Set by [`forget_main_history`] until the next save that holds an empty Main.
-static MAIN_CLEARED: AtomicBool = AtomicBool::new(false);
-
-/// Main's Clear chat. The next save of an empty Main also scrubs Main's
-/// transcript out of `threads.json.bak` and the quarantined copies, so no
-/// backup keeps it. Every other chat in those copies stays as it was.
-pub fn forget_main_history() {
-    MAIN_CLEARED.store(true, Ordering::SeqCst);
-}
-
-/// Set by [`forget_all_history`] until the next save of an emptied list.
-static ALL_CLEARED: AtomicBool = AtomicBool::new(false);
-
-/// History's Delete all. The next save of the emptied list removes
-/// `threads.json.bak` and the quarantined copies instead of backing up the
-/// history that was just deleted.
-pub fn forget_all_history() {
-    ALL_CLEARED.store(true, Ordering::SeqCst);
+/// What a save also takes out of the backups beside `threads.json`
+/// (`threads.json.bak` and the quarantined copies). Only the save of the
+/// snapshot taken right after the wipe carries it. No other save (one queued
+/// before the wipe, or another cabin's) may do the job, or the wipe's own
+/// save backs the old chat up again and keeps it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Forget {
+    #[default]
+    Nothing,
+    /// Main's Clear chat: Main's old transcript goes from every backup, the
+    /// one this save makes too. Every other chat in them stays.
+    Main,
+    /// History's Delete all: this save makes no backup of the deleted
+    /// history and removes the ones already made. Covers [`Forget::Main`].
+    All,
 }
 
 /// `threads.json.bak` and the quarantined `.corrupt-` / `.recovered-` copies.
@@ -1347,10 +1338,9 @@ mod tests {
         fs::write(&quarantined, "Night watch").unwrap();
         save(&[big]).expect("save big again");
 
-        forget_all_history();
         let mut main = ChatThread::new("Main", false);
         main.main = true;
-        save(&[main]).expect("save the emptied list");
+        save_forgetting(&[main], Forget::All).expect("save the emptied list");
         assert!(!bak.exists(), "no backup keeps the deleted history");
         assert!(!quarantined.exists());
         assert!(!fs::read_to_string(&path).unwrap().contains("Night watch"));
@@ -1623,7 +1613,7 @@ mod tests {
         ));
         let want = vec![shots, notes, small_shot];
 
-        save_capped(&want, cap).expect("save fits by dropping the biggest body");
+        save_capped(&want, cap, Forget::Nothing).expect("save fits by dropping the biggest body");
         let path = threads_path();
         let bytes = fs::metadata(&path).expect("meta").len();
         assert!(
@@ -1662,7 +1652,7 @@ mod tests {
         let before = fs::read(&path).expect("before");
         let mut planned = ChatThread::new("Plan", false);
         planned.plan_body = "p".repeat(cap);
-        assert!(save_capped(&[planned], cap).is_err());
+        assert!(save_capped(&[planned], cap, Forget::Nothing).is_err());
         assert_eq!(fs::read(&path).expect("after"), before, "nothing written");
 
         let _ = fs::remove_dir_all(&root);
@@ -1705,7 +1695,7 @@ mod tests {
         let value = serde_json::to_value(&saved).expect("value");
         let expected = serde_json::to_string_pretty(&value).expect("pretty");
         let wide = expected.len() + 64 * 1024;
-        save_capped(&threads, wide).expect("under the cap");
+        save_capped(&threads, wide, Forget::Nothing).expect("under the cap");
         let disk = fs::read_to_string(threads_path()).expect("threads.json");
         let on_disk: serde_json::Value = serde_json::from_str(&disk).expect("json");
         assert_eq!(
@@ -1739,7 +1729,7 @@ mod tests {
 
         let cap = 4 * 1024;
         assert!(expected.len() > cap, "fixture must exceed the small cap");
-        save_capped(&threads, cap).expect("fallback drops the biggest body");
+        save_capped(&threads, cap, Forget::Nothing).expect("fallback drops the biggest body");
         let raw = fs::read_to_string(threads_path()).expect("fitted");
         assert!(
             raw.len() <= cap,

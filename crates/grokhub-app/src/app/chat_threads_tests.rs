@@ -2017,6 +2017,146 @@ fn main_tab_clear_chat_asks_first_then_wipes_only_main_for_good() {
     drop(cfg);
 }
 
+/// A slow disk: Clear chat runs while older saves still wait for the disk. A
+/// save from before Main had anything in it must not take Clear chat's scrub,
+/// or the clear's own save backs Main's old chat up and keeps it there.
+#[test]
+fn clear_main_scrubs_the_backup_its_own_save_makes() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("clear-main-queued");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    let mut other = crate::threads::ChatThread::new("Pier light", false);
+    other
+        .messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    cabin.threads = vec![main, other];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+
+    let io = cabin.persist_io.clone();
+    let disk = io.lock().unwrap();
+    cabin.persist(); // Main is still empty.
+    let main = cabin.threads[0].messages_mut();
+    main.push(("user".into(), "the vault code is kumquat".into()));
+    // Long enough that clearing it shrinks threads.json into a backup.
+    main.push(("assistant".into(), "kumquat ".repeat(3_000)));
+    cabin.persist();
+    cabin.clear_main_chat();
+    drop(disk);
+    join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
+
+    assert!(
+        cfg.root.join("threads.json.bak").is_file(),
+        "clearing a long Main shrinks threads.json, so the save keeps a backup"
+    );
+    for file in ["threads.json", "threads.json.bak"] {
+        let text = std::fs::read_to_string(cfg.root.join(file)).expect(file);
+        assert!(!text.contains("kumquat"), "{file} still holds Main");
+        assert!(text.contains("bring the lamp"), "{file} lost another chat");
+    }
+}
+
+/// What made `main_tab_clear_chat_asks_first_then_wipes_only_main_for_good`
+/// flake: an earlier test's cabin, still saving its own empty Main, took this
+/// cabin's Clear chat scrub.
+#[test]
+fn clear_main_scrub_is_not_taken_by_another_cabins_save() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("clear-main-other-cabin");
+    let mut earlier = Cabin::quiet_for_test();
+    let mut empty_main = crate::threads::ChatThread::new("Main", false);
+    empty_main.main = true;
+    earlier.threads = vec![empty_main];
+    earlier.thread_idx = 0;
+    let earlier_io = earlier.persist_io.clone();
+    let earlier_disk = earlier_io.lock().unwrap();
+    {
+        let _pin = crate::config::TestConfigDir::set(cfg.root.join("earlier"));
+        earlier.persist();
+    }
+
+    let mut cabin = Cabin::quiet_for_test();
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    main.messages_mut()
+        .push(("user".into(), "the vault code is kumquat".into()));
+    let mut other = crate::threads::ChatThread::new("Pier light", false);
+    other
+        .messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    cabin.threads = vec![main, other];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    crate::threads::save(&cabin.threads).expect("seed save");
+    let saved = cfg.root.join("threads.json");
+    std::fs::copy(&saved, cfg.root.join("threads.json.bak")).expect("seed bak");
+
+    let io = cabin.persist_io.clone();
+    let disk = io.lock().unwrap();
+    cabin.clear_main_chat();
+    // The earlier cabin's save lands between the clear and the clear's own save.
+    drop(earlier_disk);
+    join_persist(&earlier.persist_svc);
+    drop(disk);
+    join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
+
+    for file in ["threads.json", "threads.json.bak"] {
+        let text = std::fs::read_to_string(cfg.root.join(file)).expect(file);
+        assert!(!text.contains("kumquat"), "{file} still holds Main: {text}");
+        assert!(text.contains("bring the lamp"), "{file} lost another chat");
+    }
+}
+
+/// Clear chat's save can fail. The scrub is still owed, and the next save
+/// that reaches the disk does it.
+#[test]
+fn clear_main_scrub_waits_for_a_save_that_lands() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("clear-main-retry");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut main = crate::threads::ChatThread::new("Main", false);
+    main.main = true;
+    main.messages_mut()
+        .push(("user".into(), "the vault code is kumquat".into()));
+    let mut other = crate::threads::ChatThread::new("Pier light", false);
+    other
+        .messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    cabin.threads = vec![main, other];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    crate::threads::save(&cabin.threads).expect("seed save");
+    let saved = cfg.root.join("threads.json");
+    let bak = cfg.root.join("threads.json.bak");
+    std::fs::copy(&saved, &bak).expect("seed bak");
+    // A folder where threads.json goes: the clear's save cannot land.
+    std::fs::remove_file(&saved).expect("drop threads.json");
+    std::fs::create_dir_all(saved.join("in-the-way")).expect("block threads.json");
+
+    cabin.clear_main_chat();
+    join_persist(&cabin.persist_svc);
+    assert!(
+        cabin.persist_err.lock().unwrap().take().is_some(),
+        "the clear's save failed"
+    );
+    let text = std::fs::read_to_string(&bak).expect("bak");
+    assert!(text.contains("kumquat"), "no save landed, so no scrub yet");
+
+    std::fs::remove_dir_all(&saved).expect("unblock threads.json");
+    cabin.persist();
+    join_persist(&cabin.persist_svc);
+    assert_eq!(*cabin.persist_err.lock().unwrap(), None, "persist failed");
+    for file in ["threads.json", "threads.json.bak"] {
+        let text = std::fs::read_to_string(cfg.root.join(file)).expect(file);
+        assert!(!text.contains("kumquat"), "{file} still holds Main: {text}");
+        assert!(text.contains("bring the lamp"), "{file} lost another chat");
+    }
+}
+
 fn seed_turns(id: &str, turns: &[(&str, &str)]) {
     for pair in turns.chunks(2) {
         let items: Vec<grokhub_agent::InputItem> = pair
