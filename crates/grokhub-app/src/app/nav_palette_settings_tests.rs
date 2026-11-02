@@ -343,7 +343,7 @@ fn settings_defaults_section() {
     );
 }
 
-/// Viper: one Settings page for every AI model change and setting, instead
+/// One Settings page for every AI model change and setting, instead
 /// of rows spread over Account, Defaults, Privacy and Behavior.
 #[test]
 fn ai_models_holds_every_model_setting_once() {

@@ -742,11 +742,22 @@ fn refuse(req: Request) {
 /// `media-src data:` plays Imagine's videos, which come as data: URLs.
 const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
+/// The UI file a page path names. A path with an empty, `.` or `..` part, a
+/// backslash or a drive is no file of the UI and gets the app's page: a dev
+/// build reads assets from disk and keeps `..`, which would reach any file.
+fn asset_name(path: &str) -> &str {
+    let file = path.trim_start_matches('/');
+    let odd =
+        file.contains(['\\', ':']) || file.split('/').any(|part| matches!(part, "" | "." | ".."));
+    if odd {
+        "index.html"
+    } else {
+        file
+    }
+}
+
 fn page(req: Request, path: &str, assets: &Assets) {
-    let file = match path.trim_start_matches('/') {
-        "" => "index.html",
-        file => file,
-    };
+    let file = asset_name(path);
     // An unknown path is the app's own route: the page handles it.
     let found = assets(file).or_else(|| assets("index.html"));
     match found {
@@ -1200,6 +1211,10 @@ mod tests {
         let assets: Assets = Arc::new(|path| match path {
             "index.html" => Some((b"<html>app</html>".to_vec(), "text/html".into())),
             "assets/app.js" => Some((b"js".to_vec(), "text/javascript".into())),
+            // A dev build reads assets from disk and keeps `..` in the path.
+            p if p.contains("..") => {
+                Some((b"a file outside the app".to_vec(), "text/plain".into()))
+            }
             _ => None,
         });
         let view = access
@@ -1243,6 +1258,19 @@ mod tests {
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");
+        for outside in [
+            "/../../home/user/.ssh/id_rsa",
+            "/assets/../../x",
+            "/a\\..\\x",
+            "/C:/x",
+        ] {
+            let (status, _, body) = http(port, "GET", outside, None, "");
+            assert_eq!(
+                (status, body.as_str()),
+                (200, "<html>app</html>"),
+                "{outside}"
+            );
+        }
         let (_, head, body) = http(port, "GET", "/assets/app.js", None, "");
         assert_eq!(body, "js");
         assert!(head.contains("Content-Type: text/javascript"), "{head}");

@@ -663,7 +663,7 @@ mod tests {
         let expired = XaiOAuthTokens {
             access_token: "test-old-access".into(),
             expires_at: Some(now - hour),
-            name: Some("Viper".into()),
+            name: Some("Avery".into()),
             ..Default::default()
         };
         let has = |texts: &[String], want: &str| texts.iter().any(|t| t == want);
@@ -687,7 +687,7 @@ mod tests {
                 "an expired sign-in offers Sign in with Grok again: {stale:?}"
             );
             assert!(
-                !has(&stale, "Viper") && !has(&stale, "Sign out"),
+                !has(&stale, "Avery") && !has(&stale, "Sign out"),
                 "an expired sign-in is not shown as connected: {stale:?}"
             );
             cabin.secrets.oauth = Some(XaiOAuthTokens {
@@ -696,7 +696,7 @@ mod tests {
             });
             let live = settings_texts(&mut cabin);
             assert!(
-                has(&live, "Connected") && has(&live, "Viper") && has(&live, "Sign out"),
+                has(&live, "Connected") && has(&live, "Avery") && has(&live, "Sign out"),
                 "{live:?}"
             );
             assert!(!has(&live, "Sign in with Grok"), "{live:?}");
@@ -711,7 +711,7 @@ mod tests {
         let expired = XaiOAuthTokens {
             access_token: "old-access".into(),
             expires_at: Some(now - hour),
-            name: Some("Viper".into()),
+            name: Some("Avery".into()),
             ..Default::default()
         };
         // No refresh token: nothing can renew it.
