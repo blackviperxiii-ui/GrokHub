@@ -1,0 +1,11 @@
+- Mods: an archive entry with a drive or stream name in any folder (`x/D:Games/a.dll`, `a.esp:s`) is refused, so on Windows a mod can't write outside its staging folder.
+- Network errors no longer show a link's query string, so the Steam Web API key never reaches the Mods page, the chat or the model.
+- Memory recalled into a chat counts as personal again when a tool call would send it out; the prefix cache moved it where the egress check did not look.
+- An MCP input card names the server that asked, never a name the request carries.
+- Web access: a paired browser can't queue a Workboard card for the background runner.
+- Imagine videos play in the shell and the web app (the page now allows data: media).
+- Phones and the web app: the views bar stays one row at the bottom instead of stacking its icons over the composer.
+- Sign in with Grok keeps waiting for your approval after you leave Settings and come back.
+- A reply line with a link followed by thousands of `)` no longer freezes the chat.
+- A huge Retry-After or token lifetime from a server no longer overflows.
+- CI: the shell's connector key test names the macOS Keychain on macOS runners.
