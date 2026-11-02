@@ -393,13 +393,14 @@ impl Request {
         // a fragment is never sent.
         let mut parsed = url::Url::parse(&url).map_err(|e| Error::Transport {
             kind: TransportKind::Other,
-            message: format!("Bad URL: failed to parse URL: {e}: {url}"),
+            message: format!("Bad URL: failed to parse URL: {e}: {}", shown_url(&url)),
         })?;
         parsed.set_fragment(None);
         let url = parsed.as_str();
+        let shown = shown_url(url);
         let other = |message: String| Error::Transport {
             kind: TransportKind::Other,
-            message: format!("{url}: {message}"),
+            message: format!("{shown}: {message}"),
         };
         let mut builder = ureq::http::Request::builder().method(method).uri(url);
         for (name, value) in &headers {
@@ -419,7 +420,7 @@ impl Request {
         let resp = agent
             .inner
             .run(req)
-            .map_err(|e| Error::from_ureq(url, agent.redirects, e))?;
+            .map_err(|e| Error::from_ureq(shown, agent.redirects, e))?;
         let code = resp.status().as_u16();
         // ureq 2 with a limit of 1 refused the first 3xx; ureq 3 at 0 hands it back.
         if agent.redirects == 1 && (300..399).contains(&code) {
@@ -430,6 +431,13 @@ impl Request {
         }
         Ok(Response(resp))
     }
+}
+
+/// A URL as error text shows it: no query or fragment. A caller may put a
+/// key in the query (the Steam Web API takes `?key=`), and error text reaches
+/// the screen, logs and the model.
+fn shown_url(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
 }
 
 fn too_many_redirects(limit: u32) -> String {
@@ -559,7 +567,10 @@ impl Error {
     fn from_status(resp: ureq::http::Response<ureq::Body>) -> Self {
         use ureq::ResponseExt;
         let code = resp.status().as_u16();
-        let message = format!("{}: status code {code}", resp.get_uri());
+        let message = format!(
+            "{}: status code {code}",
+            shown_url(&resp.get_uri().to_string())
+        );
         let retry_after = resp
             .headers()
             .get("retry-after")
@@ -739,6 +750,40 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn status_error_text_leaves_out_the_query() {
+        let (port, server) = serve(vec![reply("403 Forbidden", "", "bad key")]);
+        let base = format!("http://127.0.0.1:{port}/v1/");
+        let err = agent(Opts::default())
+            .get(&format!("{base}?key=sk-abcdefghijklmnopqrstuv&appid=7#top"))
+            .call()
+            .err()
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(err.status(), Some(403));
+        assert_eq!(err.to_string(), format!("{base}: status code 403"));
+    }
+
+    #[test]
+    fn transport_error_text_leaves_out_the_query() {
+        // A port nobody listens on: the connect is refused.
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let base = format!("http://127.0.0.1:{port}/v1/");
+        let err = agent(Opts::default())
+            .get(&format!("{base}?key=sk-abcdefghijklmnopqrstuv&appid=7"))
+            .call()
+            .err()
+            .unwrap();
+        let text = err.to_string();
+        assert!(text.starts_with(&format!("{base}: ")), "{text}");
+        assert!(!text.contains("abcdefghijklmnopqrstuv"), "{text}");
+        assert!(!text.contains("appid"), "{text}");
     }
 
     #[test]

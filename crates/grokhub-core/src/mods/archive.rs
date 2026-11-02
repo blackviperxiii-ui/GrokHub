@@ -88,7 +88,10 @@ fn runs(path: &Path) -> bool {
 }
 
 /// An archive entry's name as a path inside the staging folder, or `None`
-/// when it is absolute, has a drive, climbs with `..`, or is empty.
+/// when it is absolute, has a drive, climbs with `..`, or is empty. A `:` in
+/// any segment is refused too: on Windows `x/D:Games/a.dll` pushes `D:Games`,
+/// a drive-relative path that replaces the whole buffer (and the staging
+/// folder it is joined to), and `a.esp:s` names an NTFS stream.
 pub fn safe_rel(name: &str) -> Option<PathBuf> {
     if name.contains('\0') {
         return None;
@@ -100,6 +103,7 @@ pub fn safe_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for comp in Path::new(&name).components() {
         match comp {
+            Component::Normal(c) if c.to_string_lossy().contains(':') => return None,
             Component::Normal(c) => out.push(c),
             Component::CurDir => {}
             _ => return None,
@@ -283,6 +287,10 @@ pub(crate) mod tests {
             "/etc/passwd",
             "C:/Windows/x",
             "C:x",
+            "x/D:SteamLibrary/steamapps/common/Game/Data/evil.dll",
+            "x/C:version.dll",
+            "a\\C:x",
+            "Data/a.esp:hidden",
             "",
             "a\0b",
         ] {
