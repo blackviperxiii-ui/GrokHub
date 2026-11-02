@@ -552,7 +552,8 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None, None);
+            let effort = grokhub_core::reasoning_effort_for_mode("fast");
+            let r = grok_chat(&key, &model, &[("user".into(), q.clone())], None, effort);
             let _ = tx.send(match r {
                 Ok(t) => JobOut::Consult(format_consult_reply(&q, &t)),
                 Err(e) => JobOut::Err(e),

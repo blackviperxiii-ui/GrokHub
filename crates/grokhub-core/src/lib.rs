@@ -283,7 +283,7 @@ pub use chat::{
     extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode, needs_auth_banner,
     paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning,
     parse_model_text, parse_reasoning_effort, parse_responses_reasoning, parse_responses_text,
-    reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
+    quick_effort, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_request_body_images, responses_url, route_auto_mode, settings_pin_blocks_auto,
     should_failover_status, BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL,
     DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,

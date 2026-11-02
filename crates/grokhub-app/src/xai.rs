@@ -149,7 +149,9 @@ pub fn grok_chat_within(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, None, "chat:quick");
+    let effort = grokhub_core::quick_effort(model);
+    let call =
+        route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort, "chat:quick");
     let deadline = std::time::Instant::now() + limit;
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
         grok_chat_bounded(key, call, messages, &[], deadline, cancelled)
@@ -167,7 +169,9 @@ pub fn grok_chat_images(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, None, "chat:quick");
+    let effort = grokhub_core::quick_effort(model);
+    let call =
+        route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort, "chat:quick");
     let images: Vec<&str> = images.iter().map(String::as_str).collect();
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
         grok_chat_once(key, call, messages, &images)
