@@ -708,8 +708,9 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
 /// The recalled lines in a history's memory block (Spike-4c), so egress can
 /// tell when a call carries one. Text outside the fences is the preamble.
 /// Only what the cabin injected counts: system rows, and with the prefix cache
-/// on, the `<cabin-volatile>` block of a user row. What the person typed,
-/// even a pasted fence, is not recall.
+/// on, the `<cabin-volatile>` block of a user row. What the person typed after
+/// that block is not recall. A message typed to start with the wrapper itself
+/// reads as recall, which only marks more calls personal, never fewer.
 pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
     fenced_lines(history, true)
 }
@@ -730,14 +731,15 @@ fn fenced_lines(history: &[crate::InputItem], system_only: bool) -> Vec<String> 
             let crate::ContentPart::InputText(text) = part else {
                 continue;
             };
-            let text = match role.as_str() {
-                _ if !system_only => text.as_str(),
-                "system" => text.as_str(),
-                "user" => match crate::prefix_cache::split_user_turn(text) {
+            let text = if !system_only || role == "system" {
+                text.as_str()
+            } else if role == "user" {
+                match crate::prefix_cache::split_user_turn(text) {
                     Some((volatile, _)) => volatile,
                     None => continue,
-                },
-                _ => continue,
+                }
+            } else {
+                continue;
             };
             for block in text.split(OPEN_TAG).skip(1) {
                 let Some(block) = block.split(CLOSE_TAG).next() else {

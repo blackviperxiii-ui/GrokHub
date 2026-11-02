@@ -1236,6 +1236,10 @@ mod tests {
         );
         // Imagine's videos are data: URLs; without this the page refuses them.
         assert!(head.contains("media-src 'self' data:;"), "{head}");
+        // The desktop window's own CSP lives in tauri.conf.json: same rule.
+        let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
+        assert!(shell.contains("media-src 'self' data:;"), "{shell}");
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");

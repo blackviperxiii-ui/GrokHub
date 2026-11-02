@@ -105,6 +105,37 @@ describe("Sign in with Grok", () => {
     expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
   });
 
+  it("goes back to waiting at the interval xAI asked for last", async () => {
+    api.pollGrokSignIn
+      .mockResolvedValueOnce({ status: "pending", interval: 3 })
+      .mockResolvedValueOnce({ status: "ready", signedIn: { name: "Sam", email: null } });
+    api.getSettings.mockResolvedValue(SETTINGS);
+    const onChange = vi.fn();
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <GrokSignIn signedIn={null} onChange={onChange} />
+      </Activity>
+    );
+    const { rerender } = render(page("visible"));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    rerender(page("hidden"));
+    rerender(page("visible"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(SETTINGS));
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(2);
+  });
+
   it("a refused code shows why and offers sign-in again", async () => {
     api.pollGrokSignIn.mockResolvedValue({ status: "failed", error: "The sign-in was refused." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);

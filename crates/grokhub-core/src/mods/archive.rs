@@ -135,6 +135,21 @@ pub fn safe_rel(name: &str) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
+/// Why [`safe_rel`] refused `name`, in words for the install sheet.
+fn unsafe_why(name: &str) -> String {
+    // A drive at the very start (`C:x`) points outside; any other `:` or a
+    // name Windows rewrites is one it can't store.
+    let drive = name.as_bytes().get(1) == Some(&b':');
+    let windows = name.split(['/', '\\']).enumerate().any(|(i, s)| {
+        (s.contains(':') && !(i == 0 && drive)) || (s != "." && s != ".." && windows_renames(s))
+    });
+    if windows {
+        format!("\"{name}\" has a name Windows can't store")
+    } else {
+        format!("\"{name}\" points outside the mod")
+    }
+}
+
 fn hex_of(path: &Path, mut h: impl FnMut(&[u8])) -> std::io::Result<()> {
     let mut f = File::open(path)?;
     let mut buf = vec![0u8; 1 << 16];
@@ -194,8 +209,12 @@ pub fn unpack_zip(
     for i in 0..zip.len() {
         let f = zip.by_index_raw(i).map_err(|e| bad(&e))?;
         let name = f.name().map_err(|e| bad(&e))?.to_string();
-        let rel = safe_rel(&name)
-            .ok_or_else(|| ArchiveError::Unsafe(format!("\"{name}\" points outside the mod")))?;
+        // A Windows download copied through WSL leaves `a.esp:Zone.Identifier`
+        // beside each file: where it came from, not part of the mod.
+        if name.to_ascii_lowercase().ends_with(":zone.identifier") {
+            continue;
+        }
+        let rel = safe_rel(&name).ok_or_else(|| ArchiveError::Unsafe(unsafe_why(&name)))?;
         if f.is_symlink() {
             return Err(ArchiveError::Unsafe(format!("\"{name}\" is a link")));
         }
@@ -353,11 +372,33 @@ pub(crate) mod tests {
 
         let slip = dir.join("slip.zip");
         write_zip(&slip, &[("../evil.txt", b"x")]);
-        assert!(matches!(
+        assert_eq!(
             unpack_zip(&slip, &dir.join("o2"), &LIMITS),
-            Err(ArchiveError::Unsafe(_))
-        ));
+            Err(ArchiveError::Unsafe(
+                "\"../evil.txt\" points outside the mod".into()
+            ))
+        );
         assert!(!dir.join("evil.txt").exists());
+
+        // Zone.Identifier sidecars are skipped; a name Windows rewrites is refused.
+        let wsl = dir.join("wsl.zip");
+        write_zip(
+            &wsl,
+            &[
+                ("Mod/a.esp", b"one"),
+                ("Mod/a.esp:Zone.Identifier", b"[ZoneTransfer]"),
+            ],
+        );
+        let files = unpack_zip(&wsl, &dir.join("o-wsl"), &LIMITS).unwrap();
+        assert_eq!(files, [PathBuf::from("Mod/a.esp")]);
+        let dot = dir.join("dot.zip");
+        write_zip(&dot, &[("Mod/payload.exe.", b"MZ")]);
+        assert_eq!(
+            unpack_zip(&dot, &dir.join("o-dot"), &LIMITS),
+            Err(ArchiveError::Unsafe(
+                "\"Mod/payload.exe.\" has a name Windows can't store".into()
+            ))
+        );
 
         let link = dir.join("link.zip");
         let mut z = ZipWriter::new(File::create(&link).unwrap());

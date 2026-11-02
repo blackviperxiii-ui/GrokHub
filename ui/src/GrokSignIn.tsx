@@ -34,6 +34,11 @@ export function GrokSignIn({
   const [busy, setBusy] = useState(false);
   const { note, ok, fail, clear } = useNote();
   const timer = useRef<number | null>(null);
+  // The last interval xAI asked for (slow_down raises it), whether a poll is
+  // waiting on its answer, and whether the page is shown with a code to wait on.
+  const interval = useRef(0);
+  const polling = useRef(false);
+  const live = useRef(false);
 
   function stop() {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -42,11 +47,13 @@ export function GrokSignIn({
 
   function wait(seconds: number) {
     stop();
-    timer.current = window.setTimeout(() => void poll(), seconds * 1000);
+    interval.current = seconds;
+    if (live.current) timer.current = window.setTimeout(() => void poll(), seconds * 1000);
   }
 
   async function poll() {
     timer.current = null;
+    polling.current = true;
     try {
       const got = await pollGrokSignIn();
       if (got.status === "pending") wait(got.interval);
@@ -61,22 +68,33 @@ export function GrokSignIn({
     } catch (err) {
       setCode(null);
       fail(err);
+    } finally {
+      polling.current = false;
     }
   }
 
   // Settings sits in an <Activity>: hiding it runs this cleanup and showing it
-  // runs the effect again, so a code still on screen goes back to waiting.
-  const resume = useEffectEvent((seconds: number) => wait(seconds));
+  // runs the effect again, so a code still on screen goes back to waiting. A
+  // poll still out re-arms itself when it answers.
+  const resume = useEffectEvent((seconds: number) => {
+    if (!polling.current) wait(interval.current || seconds);
+  });
   useEffect(() => {
+    live.current = code !== null;
     if (code) resume(code.interval);
-    return stop;
+    return () => {
+      live.current = false;
+      stop();
+    };
   }, [code]);
 
   async function start() {
     clear();
     setBusy(true);
     try {
-      setCode(await startGrokSignIn());
+      const got = await startGrokSignIn();
+      interval.current = 0;
+      setCode(got);
     } catch (err) {
       fail(err);
     } finally {

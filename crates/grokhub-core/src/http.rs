@@ -208,7 +208,7 @@ impl Resolver for FnResolver {
         _timeout: NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
         let (Some(scheme), Some(authority)) = (uri.scheme_str(), uri.authority()) else {
-            return Err(ureq::Error::BadUri(uri.to_string()));
+            return Err(ureq::Error::BadUri(shown_url(&uri.to_string())));
         };
         let port = match (authority.port_u16(), scheme) {
             (Some(port), _) => port,
@@ -366,7 +366,7 @@ impl Request {
     pub fn send_json(self, body: impl serde::Serialize) -> Result<Response, Error> {
         let json = serde_json::to_vec(&body).map_err(|e| Error::Transport {
             kind: TransportKind::Other,
-            message: format!("{}: Failed to serialize JSON: {e}", self.url),
+            message: format!("{}: Failed to serialize JSON: {e}", shown_url(&self.url)),
         })?;
         let named = self
             .headers
@@ -420,7 +420,7 @@ impl Request {
         let resp = agent
             .inner
             .run(req)
-            .map_err(|e| Error::from_ureq(shown, agent.redirects, e))?;
+            .map_err(|e| Error::from_ureq(&shown, agent.redirects, e))?;
         let code = resp.status().as_u16();
         // ureq 2 with a limit of 1 refused the first 3xx; ureq 3 at 0 hands it back.
         if agent.redirects == 1 && (300..399).contains(&code) {
@@ -433,11 +433,34 @@ impl Request {
     }
 }
 
-/// A URL as error text shows it: no query or fragment. A caller may put a
-/// key in the query (the Steam Web API takes `?key=`), and error text reaches
-/// the screen, logs and the model.
-fn shown_url(url: &str) -> &str {
-    url.split(['?', '#']).next().unwrap_or(url)
+/// A URL as error text shows it: no user info, query or fragment. A caller
+/// may put a key in the query (the Steam Web API takes `?key=`) or a password
+/// in the address, and error text reaches the screen, logs and the model.
+fn shown_url(url: &str) -> String {
+    let bare = url.split(['?', '#']).next().unwrap_or(url);
+    let Some((scheme, rest)) = bare.split_once("://") else {
+        return bare.to_string();
+    };
+    let (authority, path) = rest.split_at(rest.find(['/', '\\']).unwrap_or(rest.len()));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
+}
+
+/// `text` with every URL in it as [`shown_url`] shows it (ureq's own messages
+/// can quote the address).
+fn shown_urls_in(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            if word.contains("://") {
+                shown_url(word)
+            } else {
+                word.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn too_many_redirects(limit: u32) -> String {
@@ -621,7 +644,7 @@ impl Error {
             ureq::Error::HostNotFound => (Dns, "Dns Failed".to_string()),
             ureq::Error::ConnectionFailed => (Connect, "Connection Failed".to_string()),
             ureq::Error::TooManyRedirects => (Other, too_many_redirects(redirects)),
-            ureq::Error::BadUri(m) => (Other, format!("Bad URL: {m}")),
+            ureq::Error::BadUri(m) => (Other, format!("Bad URL: {}", shown_urls_in(&m))),
             ureq::Error::Protocol(e) => (Other, format!("Bad Status: {e}")),
             ureq::Error::Http(e) => (Other, format!("Bad Header: {e}")),
             ureq::Error::ConnectProxyFailed(m) => (Other, format!("Proxy failed to connect: {m}")),
@@ -767,6 +790,20 @@ mod tests {
     }
 
     #[test]
+    fn shown_urls_drop_user_info_query_and_fragment() {
+        assert_eq!(
+            shown_url("https://user:secret@h.example:8443/a/b?key=1#top"),
+            "https://h.example:8443/a/b"
+        );
+        assert_eq!(shown_url("https://h.example?key=1"), "https://h.example");
+        assert_eq!(shown_url("not a url?key=1"), "not a url");
+        assert_eq!(
+            shown_urls_in("https://u:p@h.example/x?key=1 is missing host"),
+            "https://h.example/x is missing host"
+        );
+    }
+
+    #[test]
     fn transport_error_text_leaves_out_the_query() {
         // A port nobody listens on: the connect is refused.
         let port = TcpListener::bind("127.0.0.1:0")
@@ -784,6 +821,14 @@ mod tests {
         assert!(text.starts_with(&format!("{base}: ")), "{text}");
         assert!(!text.contains("abcdefghijklmnopqrstuv"), "{text}");
         assert!(!text.contains("appid"), "{text}");
+        let err = agent(Opts::default())
+            .get(&format!("http://user:secret@127.0.0.1:{port}/v1/?key=x"))
+            .call()
+            .err()
+            .unwrap();
+        let text = err.to_string();
+        assert!(text.starts_with(&format!("{base}: ")), "{text}");
+        assert!(!text.contains("secret"), "{text}");
     }
 
     #[test]
