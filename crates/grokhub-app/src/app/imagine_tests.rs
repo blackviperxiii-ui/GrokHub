@@ -174,6 +174,9 @@ fn kick_imagine_local_send_stores_harbor_url() {
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Windows gives an accepted socket the listener's
+                    // non-blocking mode; the reads below need blocking.
+                    stream.set_nonblocking(false).expect("blocking");
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
                         .expect("timeout");
