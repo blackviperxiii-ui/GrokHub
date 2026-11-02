@@ -117,11 +117,12 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The tool result's text for an image. The picture itself goes to the model
-/// once, as the input_image after this result; repeating its base64 here
-/// doubled its size in the context and in what each turn sends.
+/// The tool result's text for an image. The picture itself goes in
+/// `image_data_url` (the native loop sends it once, as an input_image after
+/// this result); repeating its base64 here doubled its size in the context
+/// and in what each turn sent.
 fn image_note(mime: &str, width: u32, height: u32, bytes: usize) -> String {
-    format!("[image {mime} {width}x{height}, {bytes} bytes, attached as input_image]")
+    format!("[image {mime} {width}x{height}, {bytes} bytes]")
 }
 
 fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
@@ -293,10 +294,7 @@ mod tests {
         assert!(!img.failed, "{}", img.text);
         assert_eq!(
             img.text,
-            format!(
-                "[image image/png 1x1, {} bytes, attached as input_image]",
-                png.len()
-            )
+            format!("[image image/png 1x1, {} bytes]", png.len())
         );
         let url = img.image_data_url.as_deref().unwrap();
         assert!(url.starts_with("data:image/png;base64,"), "{url}");

@@ -867,8 +867,13 @@ fn classify_transport(msg: String) -> ClientError {
 /// character a read cut in half for the next read. A byte that can never be
 /// UTF-8 decodes as U+FFFD right away.
 fn take_utf8(pending: &mut Vec<u8>) -> String {
-    let keep = match std::str::from_utf8(pending) {
-        Err(err) if err.error_len().is_none() => pending.len() - err.valid_up_to(),
+    // The last character's lead byte sits at most 3 bytes from the end; keep
+    // that character back when it is unfinished, whatever came before it.
+    let lead = (pending.len().saturating_sub(4)..pending.len())
+        .rev()
+        .find(|&i| pending[i] & 0xC0 != 0x80);
+    let keep = match lead.map(|i| (i, std::str::from_utf8(&pending[i..]))) {
+        Some((i, Err(err))) if err.error_len().is_none() => pending.len() - i,
         _ => 0,
     };
     let rest = pending.split_off(pending.len() - keep);
@@ -1039,6 +1044,12 @@ mod tests {
         let mut pending = vec![b'o', b'k', 0xFF, b'!'];
         assert_eq!(take_utf8(&mut pending), "ok\u{FFFD}!");
         assert!(pending.is_empty());
+        // A bad byte earlier in a read still lets a cut character at its end wait.
+        let mut pending = b"ok\xFF caf\xC3".to_vec();
+        let mut text = take_utf8(&mut pending);
+        pending.extend_from_slice(b"\xA9!");
+        text.push_str(&take_utf8(&mut pending));
+        assert_eq!(text, "ok\u{FFFD} café!");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! The first line is a header (`id`, `title`, `created`, `cwd`, `model`, `engine: "native"`).
 //! Later lines are user and assistant messages, function calls, their outputs, and per-turn usage.
-//! Each line is flushed on its own. A torn last line is dropped and the file rewritten. Resume
+//! A turn's lines are written and synced together. A torn last line is dropped and the file rewritten. Resume
 //! rebuilds the Responses `input` from the kept lines.
 
 use std::collections::HashSet;
@@ -388,7 +388,7 @@ pub fn resume_input(id: &str) -> Result<Vec<InputItem>, String> {
     Ok(load_session(id)?.input())
 }
 
-/// Create the file if needed and append this turn. Each line is flushed.
+/// Create the file if needed and append this turn in one write and one sync.
 /// A session that was just deleted is not written back.
 pub fn record_turn(
     id: &str,
@@ -450,12 +450,12 @@ pub fn record_compaction(
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
     }
-    append_json(&id, &compaction_json(items))?;
-    if tombstoned(&id) {
-        let _ = fs::remove_file(session_file(&id)?);
-        return Ok(());
+    let mut lines = Vec::new();
+    for value in [compaction_json(items), usage_json(usage, meter)] {
+        serde_json::to_writer(&mut lines, &value).map_err(|err| err.to_string())?;
+        lines.push(b'\n');
     }
-    append_json(&id, &usage_json(usage, meter))?;
+    append_lines(&id, &lines)?;
     if tombstoned(&id) {
         let _ = fs::remove_file(session_file(&id)?);
         return Ok(());
