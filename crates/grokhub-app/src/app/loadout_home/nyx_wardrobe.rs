@@ -335,54 +335,77 @@ pub(in crate::app) fn thumb_texture(
     Some(tex)
 }
 
+/// Decoded thumbnails by pose key: `None` while waiting or decoding; a
+/// picture that won't decode stays there.
+static THUMB_JOBS: std::sync::Mutex<std::collections::BTreeMap<&str, Option<egui::ColorImage>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// Poses for the one decode worker, which runs while this isn't empty and
+/// takes each pose off only once it is decoded.
+static THUMB_QUEUE: std::sync::Mutex<Vec<Pose>> = std::sync::Mutex::new(Vec::new());
+/// Decode workers started, so a test can tell one worker from a thread a tile.
+#[cfg(test)]
+static THUMB_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// A test holds this to keep the worker running between a decode and taking
+/// that pose off the queue.
+#[cfg(test)]
+static THUMB_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A thumbnail's pixels, decoded on a worker the first time they are asked
 /// for; `None` until then, and the tile shows its letter. Decoding every
 /// voice's JPEG on the UI thread froze the first open of Settings.
 fn decoded_thumb(ctx: &egui::Context, pose: Pose) -> Option<egui::ColorImage> {
-    use std::collections::BTreeMap;
-    use std::sync::Mutex;
-    /// `None` while waiting or decoding; a picture that won't decode stays there.
-    static JOBS: Mutex<BTreeMap<&str, Option<egui::ColorImage>>> = Mutex::new(BTreeMap::new());
-    /// Poses for the one decode worker, which runs while this isn't empty and
-    /// takes each pose off only once it is decoded.
-    static QUEUE: Mutex<Vec<Pose>> = Mutex::new(Vec::new());
-    let mut jobs = JOBS.lock().ok()?;
+    let mut jobs = THUMB_JOBS.lock().ok()?;
     match jobs.get(pose.key) {
         Some(Some(_)) => jobs.remove(pose.key).flatten(),
         Some(None) => None,
         None => {
             jobs.insert(pose.key, None);
             drop(jobs);
-            let mut queue = QUEUE.lock().ok()?;
+            let mut queue = THUMB_QUEUE.lock().ok()?;
             queue.push(pose);
             if queue.len() > 1 {
                 return None;
             }
             // One worker, not a thread per tile: decoding them all at once
-            // left ~12 MB in per-thread malloc arenas after Settings opened.
+            // left about 20 MB more heap after Settings opened (debug build).
+            #[cfg(test)]
+            THUMB_WORKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                loop {
-                    let Some(next) = QUEUE.lock().ok().and_then(|q| q.first().copied()) else {
-                        return;
-                    };
-                    if let Some(image) = square_thumb(next.jpg)
-                        && let Ok(mut jobs) = JOBS.lock()
-                    {
-                        jobs.insert(next.key, Some(image));
-                    }
-                    // The tiles paint in the main window. A bare
-                    // request_repaint from here goes to whichever viewport is
-                    // mid-pass, which can be the desktop Nyx.
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                    let Ok(mut queue) = QUEUE.lock() else { return };
-                    queue.remove(0);
-                    if queue.is_empty() {
-                        return;
-                    }
-                }
-            });
+            std::thread::spawn(move || decode_thumbs(&ctx));
             None
+        }
+    }
+}
+
+/// The decode worker: takes the queue's head, decodes it, and takes it off
+/// only then, so a pose pushed meanwhile is never left without a worker.
+fn decode_thumbs(ctx: &egui::Context) {
+    loop {
+        let Some(next) = THUMB_QUEUE.lock().ok().and_then(|q| q.first().copied()) else {
+            return;
+        };
+        // A panic counts as a picture that won't decode; left at the head,
+        // it would strand every tile behind it.
+        let image = std::panic::catch_unwind(|| square_thumb(next.jpg))
+            .ok()
+            .flatten();
+        if let Some(image) = image
+            && let Ok(mut jobs) = THUMB_JOBS.lock()
+        {
+            jobs.insert(next.key, Some(image));
+        }
+        // The tiles paint in the main window. A bare request_repaint from
+        // here goes to whichever viewport is mid-pass, which can be the
+        // desktop Nyx.
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+        #[cfg(test)]
+        drop(THUMB_HOLD.lock());
+        let Ok(mut queue) = THUMB_QUEUE.lock() else {
+            return;
+        };
+        queue.remove(0);
+        if queue.is_empty() {
+            return;
         }
     }
 }
@@ -672,31 +695,59 @@ mod tests {
     }
 
     #[test]
-    fn tiles_asked_for_together_all_decode_on_the_one_worker() {
+    fn a_tile_asked_for_while_the_worker_runs_joins_that_worker() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let wait = |what: &str, done: &dyn Fn() -> bool| {
+            for _ in 0..1000 {
+                if done() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("{what}");
+        };
         let ctx = egui::Context::default();
         let art = thumbnail("zen-mentor", false).expect("zen mentor art");
-        let keys = [
-            "test-only-queued-thumb-1",
-            "test-only-queued-thumb-2",
-            "test-only-queued-thumb-3",
-        ];
-        let poses = keys.map(|key| Pose { key, jpg: art.jpg });
-        for pose in poses {
-            assert!(thumb_texture(&ctx, pose).is_none(), "{} waits", pose.key);
+        let first = Pose {
+            key: "test-only-queued-thumb-1",
+            jpg: art.jpg,
+        };
+        let second = Pose {
+            key: "test-only-queued-thumb-2",
+            jpg: art.jpg,
+        };
+        // Tiles another test asked for finish first.
+        wait("the queue drains", &|| {
+            THUMB_QUEUE.lock().is_ok_and(|q| q.is_empty())
+        });
+        let started = THUMB_WORKERS.load(SeqCst);
+        let hold = THUMB_HOLD.lock().expect("hold");
+        assert!(thumb_texture(&ctx, first).is_none(), "the first waits");
+        // Decoded but not yet off the queue: the worker is still running.
+        wait("the first decodes", &|| {
+            THUMB_JOBS
+                .lock()
+                .is_ok_and(|j| matches!(j.get(first.key), Some(Some(_))))
+        });
+        assert!(thumb_texture(&ctx, second).is_none(), "the second waits");
+        drop(hold);
+        let mut sizes = [None, None];
+        wait("both decode", &|| {
+            THUMB_JOBS.lock().is_ok_and(|j| {
+                [first, second]
+                    .iter()
+                    .all(|p| !matches!(j.get(p.key), Some(None)))
+            })
+        });
+        for (i, pose) in [first, second].into_iter().enumerate() {
+            sizes[i] = thumb_texture(&ctx, pose).map(|t| t.size());
         }
-        let mut sizes = [None; 3];
-        for _ in 0..1000 {
-            for (i, pose) in poses.iter().enumerate() {
-                if sizes[i].is_none() {
-                    sizes[i] = thumb_texture(&ctx, *pose).map(|t| t.size());
-                }
-            }
-            if sizes.iter().all(Option::is_some) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(sizes, [Some([192, 192]); 3], "no tile is left waiting");
+        assert_eq!(sizes, [Some([192, 192]); 2]);
+        assert_eq!(
+            THUMB_WORKERS.load(SeqCst) - started,
+            1,
+            "the second joined the running worker instead of starting one"
+        );
     }
 
     #[test]

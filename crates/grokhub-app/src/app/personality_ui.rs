@@ -2134,21 +2134,24 @@ mod tests {
         let mut custom = preset("pirate");
         custom.id = "pirate-copy".into();
         custom.custom = true;
-        // Thumbnails decode on a worker. Have every picture ready first, so a
+        // Thumbnails decode on one worker. Have every picture ready first, so a
         // tile with no picture below is the gate's doing, not a pending decode.
-        let wardrobe = |id: &str| {
-            let pose = super::super::loadout_home::nyx_wardrobe::thumbnail(id, true).expect("art");
-            for _ in 0..500 {
-                if super::super::loadout_home::nyx_wardrobe::thumb_texture(&ctx, pose).is_some() {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+        // One budget for all four: they queue behind tiles an earlier test in
+        // this process asked for (plain `cargo test` runs them one by one).
+        let wardrobe = super::super::loadout_home::nyx_wardrobe::thumb_texture;
+        let poses = ["pirate", "nyx", "whore", "viper"]
+            .map(|id| super::super::loadout_home::nyx_wardrobe::thumbnail(id, true).expect("art"));
+        let mut ready = [false; 4];
+        for _ in 0..3000 {
+            for (done, pose) in ready.iter_mut().zip(poses) {
+                *done = *done || wardrobe(&ctx, pose).is_some();
             }
-            panic!("{id} thumbnail never decoded");
-        };
-        for id in ["pirate", "nyx", "whore", "viper"] {
-            wardrobe(id);
+            if ready.iter().all(|done| *done) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert_eq!(ready, [true; 4], "every thumbnail decodes");
         let count = |p: &Personality, adults: bool| {
             let mut n = 0;
             let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
