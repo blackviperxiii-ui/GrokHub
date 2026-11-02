@@ -110,17 +110,28 @@ pub fn chat_request_body_images(
 }
 
 fn sends_reasoning_effort(model: &str) -> bool {
-    matches!(model, "grok-4.6" | "grok-4.7")
+    matches!(model, "grok-4.3" | "grok-4.6" | "grok-4.7")
 }
 
+/// Fast's effort. Grok 4.3 takes `none` (xAI's model page lists none to xhigh, default low),
+/// which is what keeps Fast quicker than Balance on the same model.
+pub const FAST_EFFORT: &str = "none";
+
 /// Think is Grok 4.7 at high. Legacy Max mode is the same model at xhigh.
-/// Balance leaves effort unset. Saved effort `max` migrates to xhigh.
+/// Fast is Grok 4.3 with no reasoning. Balance is Grok 4.3 at its default (low).
+/// Saved effort `max` migrates to xhigh.
 pub fn reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     match mode.trim() {
         "max" | "deep" | "heavy" => Some("xhigh"),
         "think" | "build" | "expert" => Some("high"),
+        "fast" => Some(FAST_EFFORT),
         _ => None,
     }
+}
+
+/// The effort for a quick ask (`chat:quick`) on `model`: Fast's when it is Fast's model, else unset.
+pub fn quick_effort(model: &str) -> Option<&'static str> {
+    (model.trim() == model_for_mode("fast")).then_some(FAST_EFFORT)
 }
 
 /// Grok Build `grok agent --reasoning-effort` from the composer ladder / `/effort`.
@@ -751,6 +762,27 @@ mod tests {
     }
 
     #[test]
+    fn fast_is_grok_4_3_with_no_reasoning() {
+        assert_eq!(model_for_mode("fast"), "grok-4.3");
+        assert_eq!(reasoning_effort_for_mode("fast"), Some("none"));
+        assert_eq!(reasoning_effort_for_mode("auto"), None);
+        let body = chat_request_body_for_mode("fast", &[("user".into(), "hi".into())]);
+        assert_eq!(body["model"], "grok-4.3");
+        assert_eq!(body["reasoning_effort"], "none");
+        let resp = responses_request_body_images(
+            "grok-4.3",
+            &[("user".into(), "hi".into())],
+            &[],
+            Some("none"),
+        );
+        assert_eq!(resp["reasoning"]["effort"], "none");
+        assert_eq!(quick_effort("grok-4.3"), Some("none"));
+        assert_eq!(quick_effort(" grok-4.3 "), Some("none"));
+        assert_eq!(quick_effort("grok-4.7"), None);
+        assert_eq!(quick_effort(""), None);
+    }
+
+    #[test]
     fn failover_follows_new_mode_ladder() {
         assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
         assert_eq!(failover_model("grok-4.3"), None);
@@ -789,7 +821,10 @@ mod tests {
             "max"
         );
         assert_eq!(model_for_mode(route_auto_mode("hi")), "grok-4.3");
-        assert_eq!(reasoning_effort_for_mode(route_auto_mode("hi")), None);
+        assert_eq!(
+            reasoning_effort_for_mode(route_auto_mode("hi")),
+            Some("none")
+        );
         assert_eq!(
             model_for_mode(route_auto_mode(
                 "architect a host-tool plan and implement the first slice"
