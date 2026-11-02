@@ -210,11 +210,13 @@ describe("Nyx in the chat", () => {
     await waitFor(() => expect(container.querySelector(".nyx-face-96")).not.toBeNull());
     expect(screen.queryByRole("complementary", { name: "Nyx" })).toBeNull();
 
+    // The dock may not be listening yet when the window widens; it must
+    // still catch up rather than miss the change.
     act(() => {
       window.innerWidth = 1200;
       window.dispatchEvent(new Event("resize"));
     });
-    expect(screen.getByRole("complementary", { name: "Nyx" })).toBeVisible();
+    expect(await screen.findByRole("complementary", { name: "Nyx" })).toBeVisible();
   });
 
   it("shows no Nyx at all for a voice with no art", async () => {
