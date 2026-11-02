@@ -141,7 +141,9 @@ fn current(state: &ShellState) -> ShellSettings {
         .clone()
 }
 
-#[tauri::command]
+/// Off the main thread: `view` reads the keychain twice, and the window asks
+/// for settings three times as it first paints.
+#[tauri::command(async)]
 fn get_settings(state: State<'_, ShellState>) -> SettingsView {
     view(&current(&state))
 }
@@ -2852,6 +2854,20 @@ pub fn run() {
             grokhub_core::brand::product_name()
         );
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    #[test]
+    fn settings_load_off_the_main_thread() {
+        // `view` reads the keychain; a plain command runs on the main thread
+        // and holds up the window while it first paints.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("#[tauri::command(async)]\nfn get_settings("),
+            "get_settings must stay an async command"
+        );
     }
 }
 

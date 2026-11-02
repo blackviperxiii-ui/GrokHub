@@ -54,6 +54,10 @@ export function chatActivity(
   const restart = fresh ? { ...base, steps: 0 } : base;
   switch (event.kind) {
     case "text":
+      // More reply text changes nothing on a running item: returning it as it
+      // is lets the dock skip a render, where a fresh object per streamed
+      // chunk re-rendered the whole App on every token.
+      if (prev?.status === "running") return prev;
       return { ...restart, status: "running", detail: base.status === "running" ? base.detail : "Writing a reply…", at: now };
     case "tool": {
       const ended = event.status === "completed" || event.status === "failed";
