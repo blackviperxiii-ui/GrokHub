@@ -20,7 +20,7 @@ use grokhub_core::ssrf::runtime_download_url_ok;
 use super::*;
 
 const MIB: u64 = 1_024 * 1_024;
-const REDIRECTS_MAX: u32 = 8;
+const REDIRECTS_MAX: usize = 8;
 
 pub(super) enum RuntimeDlEvent {
     Progress(Progress),
@@ -103,59 +103,38 @@ fn runtime_agent() -> grokhub_core::http::Agent {
     })
 }
 
-fn redirect_target(from: &str, location: &str) -> String {
-    if location.starts_with("https://") || location.starts_with("http://") {
-        return location.to_string();
-    }
-    let (scheme, rest) = from.split_once("://").unwrap_or(("https", from));
-    let host = rest.split('/').next().unwrap_or("");
-    if location.starts_with('/') {
-        format!("{scheme}://{host}{location}")
-    } else {
-        format!("{scheme}://{host}/{location}")
-    }
-}
-
-fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
 impl RuntimeFetch for HttpRuntimeFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-        let mut url = url.to_string();
-        for hop in 0..=REDIRECTS_MAX {
-            runtime_download_url_ok(&url)?;
-            crate::xai::egress_ok(&url, &[])?;
-            let mut req = runtime_agent().get(&url).header("user-agent", "GrokHub");
-            if hop == 0 && offset > 0 {
-                req = req.header("range", &format!("bytes={offset}-"));
-            }
-            // With redirects: 0 a 3xx comes back as the answer, handled below.
-            let resp = req.call().map_err(|e| e.to_string())?;
-            let status = resp.status();
-            if is_redirect(status) {
-                let loc = resp.header("location").ok_or_else(|| {
-                    format!("engine download redirect missing Location (HTTP {status})")
-                })?;
-                url = redirect_target(&url, loc);
-                continue;
-            }
-            let (start, total) = if resp.status() == 206 {
-                (
-                    offset,
-                    resp.header("content-range")
-                        .and_then(md::content_range_total),
-                )
-            } else {
-                (
-                    0,
-                    resp.header("content-length")
-                        .and_then(|v| v.trim().parse().ok()),
-                )
-            };
-            return Ok((Box::new(resp.into_reader()), start, total));
+        let range = format!("bytes={offset}-");
+        let mut headers = vec![("user-agent", "GrokHub")];
+        if offset > 0 {
+            headers.push(("range", range.as_str()));
         }
-        Err("too many redirects while downloading the engine".into())
+        let resp = grokhub_core::http::get_following(
+            &runtime_agent(),
+            url,
+            &headers,
+            REDIRECTS_MAX,
+            "while downloading the engine",
+            &|hop| {
+                runtime_download_url_ok(hop)?;
+                crate::xai::egress_ok(hop, &[])
+            },
+        )?;
+        let (start, total) = if resp.status() == 206 {
+            (
+                offset,
+                resp.header("content-range")
+                    .and_then(md::content_range_total),
+            )
+        } else {
+            (
+                0,
+                resp.header("content-length")
+                    .and_then(|v| v.trim().parse().ok()),
+            )
+        };
+        Ok((Box::new(resp.into_reader()), start, total))
     }
 }
 

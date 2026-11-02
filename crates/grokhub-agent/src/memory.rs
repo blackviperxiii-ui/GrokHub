@@ -1213,9 +1213,9 @@ fn replace_with_backup(path: &Path, workspace: &Path, new_body: &str) -> Result<
     ensure_allowed(path, workspace)?;
     let backup = dream_backup_path(path);
     ensure_allowed(&backup, workspace)?;
-    let old = read_capped(path);
+    let old = read_for_rewrite(path)?;
     if path.is_file() {
-        fs::write(&backup, old.as_bytes()).map_err(|err| err.to_string())?;
+        fs::copy(path, &backup).map_err(|err| err.to_string())?;
     }
     let tmp = path.with_extension("md.dream.tmp");
     if let Err(err) = fs::write(&tmp, new_body.as_bytes()) {
@@ -1245,7 +1245,7 @@ fn replace_with_backup(path: &Path, workspace: &Path, new_body: &str) -> Result<
 }
 
 fn append_line(path: &Path, line: &str) -> Result<(), String> {
-    let mut body = read_capped(path);
+    let mut body = read_for_rewrite(path)?;
     if !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
@@ -1255,7 +1255,7 @@ fn append_line(path: &Path, line: &str) -> Result<(), String> {
 }
 
 fn append_block(path: &Path, block: &str) -> Result<(), String> {
-    let mut body = read_capped(path);
+    let mut body = read_for_rewrite(path)?;
     if !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
@@ -1286,18 +1286,36 @@ fn write_capped(path: &Path, body: &str) -> Result<(), String> {
     fs::write(path, body.as_bytes()).map_err(|err| err.to_string())
 }
 
-fn read_capped(path: &Path) -> String {
+const NOT_UTF8: &str =
+    "MEMORY.md has text that isn't UTF-8, so Loadout left it as it is. Save it as UTF-8 and try again.";
+
+/// Up to FILE_CAP bytes, less a character the cap cut in half.
+fn read_capped_bytes(path: &Path) -> Vec<u8> {
     let Ok(file) = fs::File::open(path) else {
-        return String::new();
+        return Vec::new();
     };
     let mut buf = Vec::new();
     if file.take(FILE_CAP as u64).read_to_end(&mut buf).is_err() {
-        return String::new();
+        return Vec::new();
     }
-    while !buf.is_empty() && std::str::from_utf8(&buf).is_err() {
-        buf.pop();
+    if let Err(err) = std::str::from_utf8(&buf) {
+        if err.error_len().is_none() {
+            buf.truncate(err.valid_up_to());
+        }
     }
-    String::from_utf8(buf).unwrap_or_default()
+    buf
+}
+
+/// The file to read from. A byte that isn't UTF-8 reads as U+FFFD, and every
+/// note after it still reads.
+fn read_capped(path: &Path) -> String {
+    String::from_utf8_lossy(&read_capped_bytes(path)).into_owned()
+}
+
+/// The file to rewrite. One that isn't UTF-8 (a Windows-1252 editor) is
+/// refused: writing back a lossy read would change bytes the user wrote.
+fn read_for_rewrite(path: &Path) -> Result<String, String> {
+    String::from_utf8(read_capped_bytes(path)).map_err(|_| NOT_UTF8.to_string())
 }
 
 fn ensure_allowed(path: &Path, workspace: &Path) -> Result<(), String> {
@@ -2017,6 +2035,29 @@ mod tests {
         assert!(hits
             .iter()
             .all(|hit| !hit.body.contains("sk-abcdefghijklmnopqrstuv")));
+    }
+
+    #[test]
+    fn remember_leaves_a_memory_file_that_is_not_utf8_byte_for_byte() {
+        let (_cfg, ws, _guard) = temp_pair("not-utf8");
+        let path = workspace_memory_path(&ws);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut before = b"# Notes\n\nfavourite cafe: caf\xe9\n".to_vec();
+        for i in 0..40 {
+            before.extend_from_slice(format!("note {i}\n").as_bytes());
+        }
+        fs::write(&path, &before).unwrap();
+        let err = remember(&ws, "new memory line").unwrap_err();
+        assert!(
+            err.starts_with("MEMORY.md has text that isn't UTF-8"),
+            "{err}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before, "not one note lost");
+        let read = read_capped(&path);
+        assert!(
+            read.contains("caf\u{FFFD}") && read.contains("note 39"),
+            "{read}"
+        );
     }
 
     #[test]

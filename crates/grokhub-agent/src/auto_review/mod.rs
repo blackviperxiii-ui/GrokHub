@@ -313,6 +313,9 @@ fn segment_is_fast(words: &[String]) -> bool {
     let Some(head) = words.first() else {
         return false;
     };
+    if !perm::trusted_head(head) {
+        return false;
+    }
     if head == "git" {
         return routine_git::git_words_are_routine(words);
     }
@@ -661,6 +664,10 @@ mod tests {
             "FOO=1 git status",
             "rm missing-auto-review.txt",
             "ls $(whoami)",
+            "./gh pr view 1",
+            "tools/gh pr list",
+            "/tmp/x/gh pr view 1",
+            "/usr/bin/../../tmp/x/gh pr view 1",
         ] {
             assert!(!words_allow(cmd), "{cmd} must not fast-allow");
         }

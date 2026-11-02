@@ -152,7 +152,7 @@ pub fn unqueue_card(cards: &mut [BoardCard], id: &str) -> bool {
     }
 }
 
-fn queueable(status: BoardStatus) -> bool {
+pub(crate) fn queueable(status: BoardStatus) -> bool {
     matches!(
         status.column(),
         Some(KanbanColumn::Todo | KanbanColumn::FollowUp)
@@ -683,6 +683,38 @@ mod tests {
         assert_eq!(cards[0].status, BoardStatus::Todo);
         assert_eq!(cards[0].checkpoint.as_ref().unwrap().blocker, "");
         assert!(!unblock_card(&mut cards, "a", 21));
+    }
+
+    #[test]
+    fn an_archived_card_leaves_the_queue_and_restore_does_not_requeue_it() {
+        let mut cards = vec![card("a", BoardStatus::Todo, 1)];
+        assert!(queue_card(&mut cards, "a", 10).unwrap());
+        assert_eq!(next_queued(&cards).map(|c| c.id.as_str()), Some("a"));
+        assert!(crate::work_item::archive(&mut cards, "a", 20));
+        assert!(crate::work_item::restore(&mut cards, "a", 30));
+        assert_eq!(cards[0].status, BoardStatus::Todo);
+        assert_eq!(cards[0].queued_ms, 0);
+        assert!(
+            next_queued(&cards).is_none(),
+            "Restore must not start a run"
+        );
+
+        // The model's WORK_UPDATE takes a queued card out of the queue the same way.
+        assert!(queue_card(&mut cards, "a", 40).unwrap());
+        assert!(crate::workboard::apply_work_update(
+            &mut cards,
+            "a",
+            BoardStatus::Done
+        ));
+        assert!(crate::workboard::apply_work_update(
+            &mut cards,
+            "a",
+            BoardStatus::Todo
+        ));
+        assert!(
+            next_queued(&cards).is_none(),
+            "done then back to Todo is not queued"
+        );
     }
 
     #[test]

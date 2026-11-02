@@ -305,6 +305,43 @@ impl Agent {
     }
 }
 
+/// GET `url` and follow up to `max_hops` redirects by hand, for an agent built
+/// with `redirects: 0`. `check` sees every URL before it is dialed; `headers`
+/// go on every hop, so a `range` reaches the CDN a release or model host
+/// redirects to (sent only to the first host, a resumed download starts
+/// over); a relative `Location` resolves against the URL that sent it.
+/// `what` finishes the error text: "while downloading the engine".
+pub fn get_following(
+    agent: &Agent,
+    url: &str,
+    headers: &[(&str, &str)],
+    max_hops: usize,
+    what: &str,
+    check: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<Response, String> {
+    let mut url = url.to_string();
+    for _ in 0..=max_hops {
+        check(&url)?;
+        let mut req = agent.get(&url);
+        for (name, value) in headers {
+            req = req.header(name, value);
+        }
+        let resp = req.call().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+            return Ok(resp);
+        }
+        let location = resp
+            .header("location")
+            .ok_or_else(|| format!("redirect missing Location {what} (HTTP {status})"))?;
+        url = url::Url::parse(&url)
+            .and_then(|base| base.join(location))
+            .map_err(|e| format!("bad redirect Location {what}: {e}"))?
+            .into();
+    }
+    Err(format!("too many redirects {what}"))
+}
+
 /// One request, not sent until [`Request::call`].
 #[must_use = "a request does nothing until it is called"]
 pub struct Request {
@@ -712,6 +749,103 @@ mod tests {
             "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
+    }
+
+    #[test]
+    fn get_following_sends_its_headers_on_every_hop_and_resolves_relative_locations() {
+        let (port, server) = serve(vec![
+            reply("302 Found", "Location: /files/v1/engine.zip\r\n", ""),
+            reply("302 Found", "Location: part.zip\r\n", ""),
+            reply(
+                "206 Partial Content",
+                "Content-Range: bytes 4-9/10\r\n",
+                "567890",
+            ),
+        ]);
+        let agent = agent(Opts {
+            redirects: 0,
+            ..Default::default()
+        });
+        let seen = std::sync::Mutex::new(Vec::new());
+        let check = |u: &str| {
+            seen.lock().unwrap().push(u.to_string());
+            Ok(())
+        };
+        let start = format!("http://127.0.0.1:{port}/releases/engine");
+        let resp = get_following(
+            &agent,
+            &start,
+            &[("range", "bytes=4-")],
+            5,
+            "while downloading the engine",
+            &check,
+        )
+        .unwrap();
+        assert_eq!(resp.status(), 206);
+        assert_eq!(resp.into_string().unwrap(), "567890");
+        let heads = server.join().unwrap();
+        assert_eq!(heads.len(), 3);
+        assert!(
+            heads.iter().all(|h| h.contains("range: bytes=4-")),
+            "{heads:?}"
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                start.clone(),
+                format!("http://127.0.0.1:{port}/files/v1/engine.zip"),
+                format!("http://127.0.0.1:{port}/files/v1/part.zip"),
+            ]
+        );
+    }
+
+    #[test]
+    fn get_following_stops_where_check_refuses_and_after_max_hops() {
+        let (port, server) = serve(vec![reply(
+            "302 Found",
+            "Location: https://elsewhere.example/x\r\n",
+            "",
+        )]);
+        let agent = agent(Opts {
+            redirects: 0,
+            ..Default::default()
+        });
+        let only_loopback = |u: &str| {
+            if u.starts_with("http://127.0.0.1:") {
+                Ok(())
+            } else {
+                Err(format!("refused {u}"))
+            }
+        };
+        let err = get_following(
+            &agent,
+            &format!("http://127.0.0.1:{port}/a"),
+            &[],
+            5,
+            "while downloading the model",
+            &only_loopback,
+        )
+        .err()
+        .expect("an error");
+        assert_eq!(err, "refused https://elsewhere.example/x");
+        server.join().unwrap();
+
+        let (port, server) = serve(vec![
+            reply("302 Found", "Location: /b\r\n", ""),
+            reply("302 Found", "Location: /c\r\n", ""),
+        ]);
+        let err = get_following(
+            &agent,
+            &format!("http://127.0.0.1:{port}/a"),
+            &[],
+            1,
+            "while downloading the model",
+            &|_| Ok(()),
+        )
+        .err()
+        .expect("an error");
+        assert_eq!(err, "too many redirects while downloading the model");
+        server.join().unwrap();
     }
 
     #[test]

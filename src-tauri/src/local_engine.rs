@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter};
 pub const ENGINE_EVENT: &str = "local-ai-engine";
 pub const DRAFTER_EVENT: &str = "local-ai-drafter";
 
-const REDIRECTS_MAX: u32 = 8;
+const REDIRECTS_MAX: usize = 8;
 const MIB: u64 = 1_024 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -331,60 +331,35 @@ fn runtime_agent() -> grokhub_core::http::Agent {
     })
 }
 
-fn redirect_target(from: &str, location: &str) -> String {
-    if location.starts_with("https://") || location.starts_with("http://") {
-        return location.to_string();
-    }
-    let (scheme, rest) = from.split_once("://").unwrap_or(("https", from));
-    let host = rest.split('/').next().unwrap_or("");
-    if location.starts_with('/') {
-        format!("{scheme}://{host}{location}")
-    } else {
-        format!("{scheme}://{host}/{location}")
-    }
-}
-
-fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
 impl rd::Fetch for HttpEngineFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-        let mut url = url.to_string();
-        for hop in 0..=REDIRECTS_MAX {
-            runtime_download_url_ok(&url)?;
-            let mut req = runtime_agent()
-                .get(&url)
-                .header("user-agent", grokhub_agent::USER_AGENT);
-            if hop == 0 && offset > 0 {
-                req = req.header("range", &format!("bytes={offset}-"));
-            }
-            // With redirects: 0 a 3xx comes back as the answer, handled below.
-            let resp = req.call().map_err(|e| e.to_string())?;
-            let status = resp.status();
-            if is_redirect(status) {
-                let loc = resp.header("location").ok_or_else(|| {
-                    format!("engine download redirect missing Location (HTTP {status})")
-                })?;
-                url = redirect_target(&url, loc);
-                continue;
-            }
-            let (start, total) = if resp.status() == 206 {
-                (
-                    offset,
-                    resp.header("content-range")
-                        .and_then(md::content_range_total),
-                )
-            } else {
-                (
-                    0,
-                    resp.header("content-length")
-                        .and_then(|v| v.trim().parse().ok()),
-                )
-            };
-            return Ok((Box::new(resp.into_reader()), start, total));
+        let range = format!("bytes={offset}-");
+        let mut headers = vec![("user-agent", grokhub_agent::USER_AGENT)];
+        if offset > 0 {
+            headers.push(("range", range.as_str()));
         }
-        Err("too many redirects while downloading the engine".into())
+        let resp = grokhub_core::http::get_following(
+            &runtime_agent(),
+            url,
+            &headers,
+            REDIRECTS_MAX,
+            "while downloading the engine",
+            &runtime_download_url_ok,
+        )?;
+        let (start, total) = if resp.status() == 206 {
+            (
+                offset,
+                resp.header("content-range")
+                    .and_then(md::content_range_total),
+            )
+        } else {
+            (
+                0,
+                resp.header("content-length")
+                    .and_then(|v| v.trim().parse().ok()),
+            )
+        };
+        Ok((Box::new(resp.into_reader()), start, total))
     }
 }
 
@@ -437,29 +412,20 @@ fn hf_agent() -> grokhub_core::http::Agent {
 }
 
 /// GET `url`, following redirects by hand so every hop passes
-/// [`model_download_url_ok`]. The Range header only goes to the first hop.
+/// [`model_download_url_ok`]. A `range` goes to every hop, the CDN too.
 fn hf_get(url: &str, range: Option<&str>) -> Result<grokhub_core::http::Response, String> {
-    let mut url = url.to_string();
-    for hop in 0..=REDIRECTS_MAX {
-        model_download_url_ok(&url)?;
-        let mut req = hf_agent()
-            .get(&url)
-            .header("user-agent", grokhub_agent::USER_AGENT);
-        if let (0, Some(range)) = (hop, range) {
-            req = req.header("range", range);
-        }
-        // With redirects: 0 a 3xx comes back as the answer, handled below.
-        let resp = req.call().map_err(|e| e.to_string())?;
-        let status = resp.status();
-        if !is_redirect(status) {
-            return Ok(resp);
-        }
-        let loc = resp
-            .header("location")
-            .ok_or_else(|| format!("model download redirect missing Location (HTTP {status})"))?;
-        url = redirect_target(&url, loc);
+    let mut headers = vec![("user-agent", grokhub_agent::USER_AGENT)];
+    if let Some(range) = range {
+        headers.push(("range", range));
     }
-    Err("too many redirects while downloading the model".into())
+    grokhub_core::http::get_following(
+        &hf_agent(),
+        url,
+        &headers,
+        REDIRECTS_MAX,
+        "while downloading the model",
+        &model_download_url_ok,
+    )
 }
 
 impl md::Fetch for HfFetch {
@@ -864,13 +830,6 @@ mod tests {
         assert_eq!(
             model_download_url_ok("https:///x.gguf"),
             Err("model download URL is missing a host".into())
-        );
-        assert_eq!(
-            redirect_target(
-                "https://huggingface.co/acme/x/resolve/main/x.gguf",
-                "/acme/x/resolve/abc/x.gguf"
-            ),
-            "https://huggingface.co/acme/x/resolve/abc/x.gguf"
         );
     }
 

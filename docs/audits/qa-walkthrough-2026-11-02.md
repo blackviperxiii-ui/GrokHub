@@ -9,7 +9,7 @@ Severity: **High** means a security hole, data loss, a broken flow, or a stall o
 Evidence tags:
 - **run**: reproduced by running the code (a test that fails on the base, or a browser).
 - **read**: the code path was traced by hand.
-- **reported**: a reviewer traced it by reading, and it was not re-checked here.
+- **reported**: a reviewer traced it by reading. A second, adversarial pass then re-checked every row tagged this way (see "Second pass" below); all held except the four listed there as refuted.
 
 ## What was run
 
@@ -54,8 +54,6 @@ Each fix has a test that fails on the base. The fail-before runs below swapped o
 | Sev | Where | What | Options |
 |---|---|---|---|
 | Medium | `crates/grokhub-agent/src/client.rs:551-555`, core `chat.rs` `accepts_reasoning_effort` vs `sends_reasoning_effort` | UP-11 (#1369) says "Fast sends grok-4.3 with reasoning effort none". That is true only for Chat Completions. Agent turns use `accepts_reasoning_effort`, which doesn't list grok-4.3, and the client drops `"none"` as well, so Fast and Balance send identical bodies. On routed quick asks the router's own effort also replaces the pinned `none`. The two core lists disagree: one comment says every other model answers 400 to an effort. (read, run of the code path not possible here) | (a) Check against the live xAI Responses API, then merge the two lists and send `none`. (b) If the API refuses it, reword the changelog: Fast is then the same as Balance. |
-| Medium | `src-tauri/src/lib.rs` `send_chat`, `stage_attachment` | A paired browser can send to any chat id that has no live worker: the chat reopened at launch, one opened from History, or a cabin thread whose id appears on web Workboard cards. That resumes the full history in the browser and writes into the desktop's session. This breaks "a chat in the window stays in the window". (reported) | Let the server create web chat ids, or refuse ids that already have a session file. Leave `chat` out of the web board view. |
-| Design | Web access | Web chats follow the desktop's approval setting. With Always on, anyone holding the pairing link can run commands with no prompt; only the hard classes still ask. (reported) | Force Ask for web chats, or say so where Always is turned on. |
 | Low | `ui/src/theme.ts` | In a browser, a pinned theme is written to `localStorage`. The documented rule is "no secret in browser storage", which this keeps. The web smoke's stricter "storage is empty" check passes only because its mock sends no theme. (read) | Allow it and loosen the smoke to "no pairing code", or skip the cache outside the shell. |
 
 ## Not fixed: ranked
@@ -94,7 +92,7 @@ Each fix has a test that fails on the base. The fail-before runs below swapped o
 
 **No-ship** for `beta` @ `e5f50cd`: the phone views bar and the Windows mod zip-slip were blockers. Both are closed by #1370.
 
-**Ship** once this PR is merged, if the maintainer settles the UP-11 effort question (fix it or reword the changelog). The Offline-only Mods stall and the web-chat adoption issue should go in the next batch. Neither one is a regression for anyone who doesn't use those new features.
+**Ship** once this PR is merged, if the maintainer settles the UP-11 effort question (fix it or reword the changelog). The second pass (below) refuted the web-chat adoption issue. The next batch should take tauri-N1 (web edits to queued cards), tauri-N2 (the shell scheduler ignores quiet hours and the budget pause), and the Offline-only Mods stall. None of these is a regression for anyone who doesn't use those new features.
 
 Not verified:
 - Signed-in cabin screens: no credentials here, and the Grok CLI's are off-limits.
@@ -102,3 +100,44 @@ Not verified:
 - Windows, macOS and phone builds.
 - Pages that the web smoke's mock doesn't serve (Home, Agents, Skills, Workboard) were walked only in their error state.
 - Findings tagged "reported" were not re-run.
+
+## Second pass: adversarial verify and sweep
+
+A second pass ran after [#1371](https://github.com/blackviperxiii-ui/GrokHub/pull/1371). Five reviewers each swept code the first pass never reached. Then one skeptic per area tried to refute every "reported" row and every new finding. Last, a critic looked for gaps. Nothing was built for this pass; claims about parsing were checked with small scripts.
+
+**Refuted** (taken out of the tables above):
+- **T1, the paired browser adopting desktop chats.** The code path is real: a web send to an id with no live worker resumes that id's session. But no web command hands the browser a desktop chat id. Workboard `chat` is a cabin `thr-` id, while cabin sessions are saved as `native-…`. Last-chat and History ids never reach the web. The critic notes the adoption check is still loose; see D3 below.
+- **T2, web chats under Always.** In Ask mode the paired browser gets every permission card and can answer it, Allow always included. So Always only skips clicks the browser could make itself, and the hard classes still ask. The Web access panel says so.
+- **A7, prompt tidy effort.** Mapping `none` to the lowest level a template lists is that template's lowest effort. A test pins this on purpose.
+- **C10, release caches.** Caches are scoped by ref and saved only from trusted pushes. Tag builds, the only signed ones, restore no cache.
+
+**Fixed in the follow-up PR:** core-N1, agent-N1, agent-N2, P4, tauri-N3, app-N3 and the critic's D1 (one shared redirect-following GET), and tauri-N4. Each has a test that fails without its fix.
+
+**New findings, confirmed, not fixed yet** (medium first):
+
+| Sev | Id | Where | What |
+|---|---|---|---|
+| Medium | tauri-N1 | `src-tauri/src/remote.rs` `web_may_act` | Only Queue is refused from the web. A paired browser can still edit the title, notes and steps of a card that is already queued, and the cabin's unattended runner then works from that text. |
+| Medium | tauri-N2 | `src-tauri/src/scheduler.rs` | The shell scheduler ignores Behavior's quiet hours and the over-budget pause. The Background and Behavior pages still say jobs run only on Run now. |
+| Medium | app-N2 | `crates/grokhub-app/src/app/native_engine.rs` | One 401/403 marks the key or sign-in rejected for the whole session, and saving the same key again never recovers it. |
+| Medium | ui-N3 | `ui/src/LocalAi.tsx` | Local AI engine and drafter events overwrite unsaved Manual edits. |
+| Medium | C1 | `crates/grokhub-core/src/mods/install.rs` `update` | Updating a mod overwrites a file the user edited, with no backup (first pass, now confirmed). |
+| Medium | A1 | `route/providers.rs`, `local_http.rs` | `ServerCompaction` is dropped on non-xAI routes (first pass, now confirmed). |
+| Low | agent-N4 | `auto_review/mod.rs` | The git/gh fast path approves any tool whose arguments carry a routine `command`, MCP tools included. |
+| Low | agent-N5 | `route/mod.rs` `over_ceiling` | The OpenRouter router fallback bypasses Auto's $/M ceiling. |
+| Low | agent-N6 | `memory.rs` recall | Query words are deduplicated with `Vec::contains`, which is quadratic in pasted text and runs up to 4 times per turn. |
+| Low | agent-N3, N7 | `local_sidecar.rs`, `home/fps.rs` | An early engine exit saves `cpu_only` for good. A Windows FPS session's Drop can reset the new session's counts. |
+| Low | app-N1, N4, N5, N7, N9 | `net_log_ui.rs`, `pages.rs`, `elite_ui.rs`, `rl_ui.rs`, `connectivity_ui.rs` | UI-thread work: per-frame stat and parse of `local_ai.json` when signed out; Elite journal search per tick; a 200 ms Rocket League probe every 5 s; a blocking connectivity HEAD. Offline only also logs fake outages. |
+| Low | app-N6, N8 | `privacy_page.rs`, `loadout_home.rs` | Wipe Know me arms and confirms in the same spot (double-click). Home XP drops when logs rotate. |
+| Low | core-N2 | `.github/scripts/cards_sync.py` | An issue from anyone that carries a card marker can mark that card Done. |
+| Low | core-N3, N4 | `game_watch_minecraft.rs`, `pc_health_advice.rs` | Multiplayer chat lines are dropped. PC health Pause keeps sampling. |
+| Low | tauri-N5, N6 | `pulse.rs`, `workboard.rs` | A paired browser's `get_pulse` rewrites the writer's UTC offset. A sweep's Undo can be lost. |
+| Low | ui-N1, N2, N4–N8 | `nyx.ts`, `md.ts`, `LocalAi.tsx`, `styles.css`, `Workboard.tsx` | Adults-only art is in the web bundle. `md.ts` trims are quadratic on long runs. No safety notice on catalog picks. Light-theme amber text is 1.7:1. The chat log's focus ring is removed. The Move menu ignores outside presses. Three undefined CSS tokens. |
+| Low | D2, D3 (critic) | `src-tauri/src/automations.rs`, `lib.rs`, `attach.rs` | Shell automations always meter as API-key use. A paired browser can grow attachment storage by sending to new ids. |
+
+**Not covered by either pass:**
+- `src-tauri/src/connectors.rs` (its check and restart web commands start stdio MCP servers) and `automations.rs`.
+- CI gate changes: PRs now build the shell on Ubuntu only.
+- Game-folder writers and parsers: `eso_addon`, `factorio_mod`, `wow_saved`, `stardew_saves`, `game_watch_poe`.
+- `mods/allowlist.rs` and `mods/source.rs`, `mcp/headers.rs` and `mcp/rpc.rs`, `native_unattended.rs`.
+
