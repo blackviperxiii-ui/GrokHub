@@ -1103,10 +1103,14 @@ impl Cabin {
     }
 
     /// History's "Delete all" button. The first click only arms it; a second
-    /// click within [`DELETE_ALL_ARM`] wipes every chat. Returns true when it
-    /// deleted.
+    /// click within [`DELETE_ALL_ARM`] wipes every chat, but not one sooner
+    /// than [`DELETE_ALL_MIN`] (a double-click). Returns true when it deleted.
     pub(super) fn click_delete_all_history(&mut self, now: Instant) -> bool {
         match self.history_delete_armed_at.take() {
+            Some(at) if now.saturating_duration_since(at) < DELETE_ALL_MIN => {
+                self.history_delete_armed_at = Some(at);
+                false
+            }
             Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => {
                 self.delete_all_history();
                 true

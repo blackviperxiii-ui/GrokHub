@@ -627,9 +627,12 @@ mod tests {
             );
             assert!(saved.contains("tokenRef"), "{saved}");
         } else {
-            // A machine with no system password store seals nothing.
+            // A machine whose OS store is locked or missing seals nothing,
+            // and the status names that OS's store (macOS CI: the Keychain).
             assert!(
-                approved.status.contains("system password store"),
+                approved
+                    .status
+                    .contains(hx::keyring_name_for(hx::KeyringOs::current())),
                 "{}",
                 approved.status
             );

@@ -241,7 +241,8 @@ pub fn parse_token(body: &str, region: Region, now_ms: u64) -> Result<Token, Str
         .unwrap_or(86_399);
     Ok(Token {
         access_token,
-        expires_at_ms: now_ms + secs * 1000,
+        // expires_in is the server's number: saturate, never wrap.
+        expires_at_ms: now_ms.saturating_add(secs.saturating_mul(1000)),
         region,
     })
 }

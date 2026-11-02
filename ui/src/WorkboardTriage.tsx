@@ -103,7 +103,9 @@ export function CardTriage({
               Take off the queue
             </button>
           ) : (
-            lane !== "doing" && (
+            // Queue hands the card to the cabin's runner: desktop only, like Resume.
+            lane !== "doing" &&
+            desktop && (
               <button
                 type="button"
                 className="quiet"

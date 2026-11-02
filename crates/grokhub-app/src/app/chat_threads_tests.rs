@@ -982,6 +982,30 @@ fn history_hit_opens_memory_or_chat() {
     assert!(!cabin.running);
 }
 
+#[test]
+fn a_double_click_on_delete_all_only_arms_it() {
+    let _lock = crate::config::hold_test_config();
+    let _cfg = IsolatedConfig::arm("delete-all-double");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier light", false)];
+    cabin.thread_idx = 0;
+    let t0 = std::time::Instant::now();
+    assert!(!cabin.click_delete_all_history(t0), "first click only arms");
+    let second = t0 + std::time::Duration::from_millis(120);
+    assert!(
+        !cabin.click_delete_all_history(second),
+        "a double-click's second half never deletes"
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == "Pier light"));
+    assert!(cabin.history_delete_armed(second), "it stays armed");
+    let decided = t0 + std::time::Duration::from_secs(1);
+    assert!(
+        cabin.click_delete_all_history(decided),
+        "a later click deletes"
+    );
+    assert!(!cabin.threads.iter().any(|t| t.title == "Pier light"));
+}
+
 // Landed from PR #172.
 #[test]
 fn delete_all_history_needs_a_second_click() {

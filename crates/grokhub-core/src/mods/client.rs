@@ -89,7 +89,12 @@ impl ModClient {
     fn note_limit(&self, source: Source, err: &SourceError, now_ms: u64) {
         if let SourceError::RateLimited(secs) = err {
             if let Ok(mut b) = self.buckets.lock() {
-                b.pause(source, now_ms + secs * 1000, now_ms);
+                // Retry-After is the server's number: saturate, never wrap.
+                b.pause(
+                    source,
+                    now_ms.saturating_add(secs.saturating_mul(1000)),
+                    now_ms,
+                );
             }
         }
     }
@@ -379,6 +384,30 @@ mod tests {
         q2.page = 1;
         assert!(matches!(
             c.search("minecraft", Source::Modrinth, &q2, 10_000),
+            Err(SourceError::RateLimited(_))
+        ));
+        assert_eq!(sent.lock().unwrap().len(), 1, "no request while paused");
+    }
+
+    #[test]
+    fn a_huge_retry_after_pauses_instead_of_overflowing() {
+        let mut limited = Reply::ok("");
+        limited.status = 429;
+        limited
+            .headers
+            .push(("retry-after".into(), u64::MAX.to_string()));
+        let fake = Fake::new().reply("/v2/search", limited);
+        let sent = fake.log();
+        let c = ModClient::new(Box::new(fake), &temp_config("429-max"), Keys::default());
+        let q = Query::browse(Browse::Popular);
+        assert_eq!(
+            c.search("minecraft", Source::Modrinth, &q, 0),
+            Err(SourceError::RateLimited(u64::MAX))
+        );
+        let mut q2 = q.clone();
+        q2.page = 1;
+        assert!(matches!(
+            c.search("minecraft", Source::Modrinth, &q2, 86_400_000),
             Err(SourceError::RateLimited(_))
         ));
         assert_eq!(sent.lock().unwrap().len(), 1, "no request while paused");

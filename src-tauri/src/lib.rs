@@ -2228,11 +2228,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "title")?,
             arg(args, "detail")?,
         ))?),
-        "workboard_act" => out(block_on(workboard_act(
-            state,
-            arg(args, "id")?,
-            arg(args, "act")?,
-        ))?),
+        "workboard_act" => {
+            let act: workboard::Act = arg(args, "act")?;
+            if !remote::web_may_act(&act) {
+                return Err(remote::refused());
+            }
+            out(block_on(workboard_act(state, arg(args, "id")?, act))?)
+        }
         "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
         "workboard_recur" => out(block_on(workboard_recur(
             state,

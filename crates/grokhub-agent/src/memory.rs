@@ -707,7 +707,10 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
 
 /// The recalled lines in a history's memory block (Spike-4c), so egress can
 /// tell when a call carries one. Text outside the fences is the preamble.
-/// Only system rows count: a user message that quotes the fence is not egress.
+/// Only what the cabin injected counts: system rows, and with the prefix cache
+/// on, the `<cabin-volatile>` block of a user row. What the person typed after
+/// that block is not recall. A message typed to start with the wrapper itself
+/// reads as recall, which only marks more calls personal, never fewer.
 pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
     fenced_lines(history, true)
 }
@@ -724,11 +727,18 @@ fn fenced_lines(history: &[crate::InputItem], system_only: bool) -> Vec<String> 
         let crate::InputItem::Message { role, content } = item else {
             continue;
         };
-        if system_only && role != "system" {
-            continue;
-        }
         for part in content {
             let crate::ContentPart::InputText(text) = part else {
+                continue;
+            };
+            let text = if !system_only || role == "system" {
+                text.as_str()
+            } else if role == "user" {
+                match crate::prefix_cache::split_user_turn(text) {
+                    Some((volatile, _)) => volatile,
+                    None => continue,
+                }
+            } else {
                 continue;
             };
             for block in text.split(OPEN_TAG).skip(1) {
@@ -2302,6 +2312,32 @@ mod tests {
                 "ranked mode off".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn recall_lines_read_the_cached_user_turn_but_not_typed_text() {
+        // format_injection reads the recall cap from the config folder.
+        let (_cfg, _ws, _guard) = temp_pair("recall-volatile");
+        let fence = format_injection(&["my home address is 12 Harbor Lane".to_string()]).unwrap();
+        let row = |role: &str, text: String| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text)],
+        };
+        // Prefix cache on (the default): recall rides in the user row.
+        let cached = crate::prefix_cache::user_message_text(&fence, "where do I live?");
+        assert_eq!(
+            recall_lines(&[row("user", cached)]),
+            vec!["my home address is 12 Harbor Lane".to_string()]
+        );
+        // Prefix cache off: recall is a system row.
+        assert_eq!(
+            recall_lines(&[row("system", fence.clone())]),
+            vec!["my home address is 12 Harbor Lane".to_string()]
+        );
+        // A fence the person pasted is their own text, not recall.
+        assert!(recall_lines(&[row("user", format!("look:\n{fence}"))]).is_empty());
+        let typed_after = crate::prefix_cache::user_message_text("style: brief", &fence);
+        assert!(recall_lines(&[row("user", typed_after)]).is_empty());
     }
 
     #[test]

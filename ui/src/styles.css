@@ -2855,6 +2855,9 @@ label.toggle-row {
   }
 }
 
+/* Phones keep the one-row bar from the phone block above (a fixed 52px bar
+   that scrolls sideways). The 900px rule's wrap comes later in this file, so
+   without this the icons stack into rows that spill over the composer. */
 @media (max-width: 600px) {
   .brand-mark {
     display: none;
@@ -2862,6 +2865,7 @@ label.toggle-row {
 
   .tabs {
     justify-content: space-between;
+    flex-wrap: nowrap;
   }
 }
 

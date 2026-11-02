@@ -87,8 +87,29 @@ fn runs(path: &Path) -> bool {
         .is_some_and(|e| RUNS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// A segment Windows would not write as named: it drops a trailing dot or
+/// space (`tool.exe.` lands as `tool.exe`, past the [`RUNS`] check), and
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9` and `LPT0`-`LPT9` name devices
+/// whatever extension follows.
+fn windows_renames(seg: &str) -> bool {
+    if seg.ends_with('.') || seg.ends_with(' ') {
+        return true;
+    }
+    let stem = seg.split('.').next().unwrap_or(seg).trim_end();
+    let stem = stem.to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => d.is_ascii_digit(),
+        _ => false,
+    }
+}
+
 /// An archive entry's name as a path inside the staging folder, or `None`
-/// when it is absolute, has a drive, climbs with `..`, or is empty.
+/// when it is absolute, has a drive, climbs with `..`, or is empty. A `:` in
+/// any segment is refused too: on Windows `x/D:Games/a.dll` pushes `D:Games`,
+/// a drive-relative path that replaces the whole buffer (and the staging
+/// folder it is joined to), and `a.esp:s` names an NTFS stream. So is a
+/// segment Windows would rename or open as a device ([`windows_renames`]).
 pub fn safe_rel(name: &str) -> Option<PathBuf> {
     if name.contains('\0') {
         return None;
@@ -100,12 +121,33 @@ pub fn safe_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for comp in Path::new(&name).components() {
         match comp {
-            Component::Normal(c) => out.push(c),
+            Component::Normal(c) => {
+                let seg = c.to_string_lossy();
+                if seg.contains(':') || windows_renames(&seg) {
+                    return None;
+                }
+                out.push(c);
+            }
             Component::CurDir => {}
             _ => return None,
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// Why [`safe_rel`] refused `name`, in words for the install sheet.
+fn unsafe_why(name: &str) -> String {
+    // A drive at the very start (`C:x`) points outside; any other `:` or a
+    // name Windows rewrites is one it can't store.
+    let drive = name.as_bytes().get(1) == Some(&b':');
+    let windows = name.split(['/', '\\']).enumerate().any(|(i, s)| {
+        (s.contains(':') && !(i == 0 && drive)) || (s != "." && s != ".." && windows_renames(s))
+    });
+    if windows {
+        format!("\"{name}\" has a name Windows can't store")
+    } else {
+        format!("\"{name}\" points outside the mod")
+    }
 }
 
 fn hex_of(path: &Path, mut h: impl FnMut(&[u8])) -> std::io::Result<()> {
@@ -167,8 +209,12 @@ pub fn unpack_zip(
     for i in 0..zip.len() {
         let f = zip.by_index_raw(i).map_err(|e| bad(&e))?;
         let name = f.name().map_err(|e| bad(&e))?.to_string();
-        let rel = safe_rel(&name)
-            .ok_or_else(|| ArchiveError::Unsafe(format!("\"{name}\" points outside the mod")))?;
+        // A Windows download copied through WSL leaves `a.esp:Zone.Identifier`
+        // beside each file: where it came from, not part of the mod.
+        if name.to_ascii_lowercase().ends_with(":zone.identifier") {
+            continue;
+        }
+        let rel = safe_rel(&name).ok_or_else(|| ArchiveError::Unsafe(unsafe_why(&name)))?;
         if f.is_symlink() {
             return Err(ArchiveError::Unsafe(format!("\"{name}\" is a link")));
         }
@@ -277,12 +323,32 @@ pub(crate) mod tests {
         assert_eq!(safe_rel("a/b.esp"), Some(PathBuf::from("a/b.esp")));
         assert_eq!(safe_rel("a\\b.esp"), Some(PathBuf::from("a/b.esp")));
         assert_eq!(safe_rel("./a"), Some(PathBuf::from("a")));
+        for good in [
+            "Console/a.esp",
+            "a.b.c/d.esp",
+            "COM10.esp",
+            "nullify.esp",
+            "LPTX/x",
+        ] {
+            assert_eq!(safe_rel(good), Some(PathBuf::from(good)), "{good:?}");
+        }
         for bad in [
             "../x",
             "a/../../x",
             "/etc/passwd",
             "C:/Windows/x",
             "C:x",
+            "x/D:SteamLibrary/steamapps/common/Game/Data/evil.dll",
+            "x/C:version.dll",
+            "a\\C:x",
+            "Data/a.esp:hidden",
+            "Data/payload.exe.",
+            "Data/payload.bat ",
+            "x/CON",
+            "x/nul.txt",
+            "COM1.esp",
+            "lpt9",
+            "AUX .ini",
             "",
             "a\0b",
         ] {
@@ -306,11 +372,33 @@ pub(crate) mod tests {
 
         let slip = dir.join("slip.zip");
         write_zip(&slip, &[("../evil.txt", b"x")]);
-        assert!(matches!(
+        assert_eq!(
             unpack_zip(&slip, &dir.join("o2"), &LIMITS),
-            Err(ArchiveError::Unsafe(_))
-        ));
+            Err(ArchiveError::Unsafe(
+                "\"../evil.txt\" points outside the mod".into()
+            ))
+        );
         assert!(!dir.join("evil.txt").exists());
+
+        // Zone.Identifier sidecars are skipped; a name Windows rewrites is refused.
+        let wsl = dir.join("wsl.zip");
+        write_zip(
+            &wsl,
+            &[
+                ("Mod/a.esp", b"one"),
+                ("Mod/a.esp:Zone.Identifier", b"[ZoneTransfer]"),
+            ],
+        );
+        let files = unpack_zip(&wsl, &dir.join("o-wsl"), &LIMITS).unwrap();
+        assert_eq!(files, [PathBuf::from("Mod/a.esp")]);
+        let dot = dir.join("dot.zip");
+        write_zip(&dot, &[("Mod/payload.exe.", b"MZ")]);
+        assert_eq!(
+            unpack_zip(&dot, &dir.join("o-dot"), &LIMITS),
+            Err(ArchiveError::Unsafe(
+                "\"Mod/payload.exe.\" has a name Windows can't store".into()
+            ))
+        );
 
         let link = dir.join("link.zip");
         let mut z = ZipWriter::new(File::create(&link).unwrap());

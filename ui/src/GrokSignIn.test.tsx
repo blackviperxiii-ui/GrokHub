@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Activity } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GrokSignInPoll, GrokSignInStart, Settings } from "./api";
 
@@ -77,6 +78,62 @@ describe("Sign in with Grok", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(after));
     expect(api.pollGrokSignIn).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("status")).toHaveTextContent("Signed in as Sam (sam@example.com).");
+  });
+
+  it("keeps waiting after Settings is hidden and shown again", async () => {
+    api.pollGrokSignIn.mockResolvedValue({ status: "ready", signedIn: { name: "Sam", email: null } });
+    api.getSettings.mockResolvedValue(SETTINGS);
+    const onChange = vi.fn();
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <GrokSignIn signedIn={null} onChange={onChange} />
+      </Activity>
+    );
+    const { rerender } = render(page("visible"));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    rerender(page("hidden"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(api.pollGrokSignIn).not.toHaveBeenCalled();
+    rerender(page("visible"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(SETTINGS));
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes back to waiting at the interval xAI asked for last", async () => {
+    api.pollGrokSignIn
+      .mockResolvedValueOnce({ status: "pending", interval: 3 })
+      .mockResolvedValueOnce({ status: "ready", signedIn: { name: "Sam", email: null } });
+    api.getSettings.mockResolvedValue(SETTINGS);
+    const onChange = vi.fn();
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <GrokSignIn signedIn={null} onChange={onChange} />
+      </Activity>
+    );
+    const { rerender } = render(page("visible"));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    rerender(page("hidden"));
+    rerender(page("visible"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(SETTINGS));
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(2);
   });
 
   it("a refused code shows why and offers sign-in again", async () => {

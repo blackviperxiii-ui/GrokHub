@@ -725,7 +725,8 @@ describe("Workboard", () => {
       ...queued,
       queueNote: "Queued cards start in the cabin.",
     });
-    render(<Workboard onWork={() => {}} />);
+    // The desktop window, as App renders it there: Resume and Queue are on.
+    render(<Workboard onWork={() => {}} onResume={() => {}} />);
     await userEvent.click(
       await screen.findByRole("button", { name: /Write release notes/ }),
     );
@@ -746,6 +747,19 @@ describe("Workboard", () => {
     expect(api.workboardAct).toHaveBeenLastCalledWith("w-1", {
       kind: "unqueue",
     });
+  });
+
+  it("the web app offers Now but not Queue, which the desktop refuses from a browser", async () => {
+    api.getWorkboard.mockResolvedValue(TODO);
+    render(<Workboard onWork={() => {}} onResume={() => {}} resumable={false} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Write release notes/ }),
+    );
+    const handOver = within(
+      screen.getByRole("group", { name: "Agent: do this" }),
+    );
+    expect(handOver.getByRole("button", { name: "Now" })).toBeVisible();
+    expect(handOver.queryByRole("button", { name: "Queue" })).toBeNull();
   });
 
   it("Now is Work: the card's prompt goes to the chat box", async () => {

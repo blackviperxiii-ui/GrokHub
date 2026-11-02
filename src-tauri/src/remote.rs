@@ -53,6 +53,13 @@ pub fn refused() -> String {
 }
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
+/// A Workboard change a browser may make. Queue hands the card to the
+/// cabin's background runner, which runs unattended and can hold the desktop
+/// tools, so like Resume it stays on this computer.
+pub fn web_may_act(act: &crate::workboard::Act) -> bool {
+    !matches!(act, crate::workboard::Act::Queue)
+}
+
 /// The web app's commands: chat with approvals, automations, memory,
 /// connectors, Pulse, Imagine, the Agents page and the workboard, reading the settings and the skills list, and which Nyx picture shows.
 /// Home and Objectives are read only, with only the browser's own chats.
@@ -732,7 +739,8 @@ fn refuse(req: Request) {
 }
 
 /// The page may load only its own files and talk only to this desktop.
-const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+/// `media-src data:` plays Imagine's videos, which come as data: URLs.
+const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 fn page(req: Request, path: &str, assets: &Assets) {
     let file = match path.trim_start_matches('/') {
@@ -1042,6 +1050,11 @@ mod tests {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("workboard_resume"));
+        let act = |v: Value| serde_json::from_value::<crate::workboard::Act>(v).unwrap();
+        assert!(!web_may_act(&act(json!({"kind": "queue"}))));
+        assert!(web_may_act(&act(json!({"kind": "unqueue"}))));
+        assert!(web_may_act(&act(json!({"kind": "archive"}))));
+        assert!(web_may_act(&act(json!({"kind": "move", "to": "doing"}))));
         // Playbooks live on the computer, so starting one stays there too.
         assert!(!web_command("workboard_playbook"));
         // The tidy setting stays on the computer, like the rest of Settings.
@@ -1221,6 +1234,12 @@ mod tests {
             head.contains("Content-Security-Policy: default-src 'self'"),
             "{head}"
         );
+        // Imagine's videos are data: URLs; without this the page refuses them.
+        assert!(head.contains("media-src 'self' data:;"), "{head}");
+        // The desktop window's own CSP lives in tauri.conf.json: same rule.
+        let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
+        assert!(shell.contains("media-src 'self' data:;"), "{shell}");
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");

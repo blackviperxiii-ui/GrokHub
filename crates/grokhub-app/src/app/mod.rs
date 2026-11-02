@@ -353,6 +353,8 @@ const HIDDEN_HEARTBEAT_MS: u64 = 400;
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 /// How long History's armed "Delete all" waits for the confirming click.
 const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
+/// A confirm sooner than this is a double-click's second half, not a decision.
+const DELETE_ALL_MIN: Duration = Duration::from_millis(500);
 /// Closing line on a reply cut off by Stop, so it reads as stopped, not finished.
 const STOPPED_TURN_SEAM: &str = "\n\n*Stopped*";
 const PALETTE_LIST_H: f32 = 280.0;

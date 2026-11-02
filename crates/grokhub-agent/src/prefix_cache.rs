@@ -168,7 +168,7 @@ pub fn visible_user_text(text: &str) -> &str {
 }
 
 /// Split a stored user turn into volatile block and visible user text.
-fn split_user_turn(text: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_user_turn(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.strip_prefix(WRAPPER_START)?;
     let (volatile, rest) = trimmed.split_once(WRAPPER_END)?;
     let user = rest.strip_prefix("\n\n").unwrap_or(rest);
