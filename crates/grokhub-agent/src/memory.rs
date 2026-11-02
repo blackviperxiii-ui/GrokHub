@@ -2314,6 +2314,8 @@ mod tests {
 
     #[test]
     fn recall_lines_read_the_cached_user_turn_but_not_typed_text() {
+        // format_injection reads the recall cap from the config folder.
+        let (_cfg, _ws, _guard) = temp_pair("recall-volatile");
         let fence = format_injection(&["my home address is 12 Harbor Lane".to_string()]).unwrap();
         let row = |role: &str, text: String| InputItem::Message {
             role: role.into(),

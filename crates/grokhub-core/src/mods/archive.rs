@@ -87,11 +87,29 @@ fn runs(path: &Path) -> bool {
         .is_some_and(|e| RUNS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// A segment Windows would not write as named: it drops a trailing dot or
+/// space (`tool.exe.` lands as `tool.exe`, past the [`RUNS`] check), and
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9` and `LPT0`-`LPT9` name devices
+/// whatever extension follows.
+fn windows_renames(seg: &str) -> bool {
+    if seg.ends_with('.') || seg.ends_with(' ') {
+        return true;
+    }
+    let stem = seg.split('.').next().unwrap_or(seg).trim_end();
+    let stem = stem.to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => d.is_ascii_digit(),
+        _ => false,
+    }
+}
+
 /// An archive entry's name as a path inside the staging folder, or `None`
 /// when it is absolute, has a drive, climbs with `..`, or is empty. A `:` in
 /// any segment is refused too: on Windows `x/D:Games/a.dll` pushes `D:Games`,
 /// a drive-relative path that replaces the whole buffer (and the staging
-/// folder it is joined to), and `a.esp:s` names an NTFS stream.
+/// folder it is joined to), and `a.esp:s` names an NTFS stream. So is a
+/// segment Windows would rename or open as a device ([`windows_renames`]).
 pub fn safe_rel(name: &str) -> Option<PathBuf> {
     if name.contains('\0') {
         return None;
@@ -103,8 +121,13 @@ pub fn safe_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for comp in Path::new(&name).components() {
         match comp {
-            Component::Normal(c) if c.to_string_lossy().contains(':') => return None,
-            Component::Normal(c) => out.push(c),
+            Component::Normal(c) => {
+                let seg = c.to_string_lossy();
+                if seg.contains(':') || windows_renames(&seg) {
+                    return None;
+                }
+                out.push(c);
+            }
             Component::CurDir => {}
             _ => return None,
         }
@@ -281,6 +304,15 @@ pub(crate) mod tests {
         assert_eq!(safe_rel("a/b.esp"), Some(PathBuf::from("a/b.esp")));
         assert_eq!(safe_rel("a\\b.esp"), Some(PathBuf::from("a/b.esp")));
         assert_eq!(safe_rel("./a"), Some(PathBuf::from("a")));
+        for good in [
+            "Console/a.esp",
+            "a.b.c/d.esp",
+            "COM10.esp",
+            "nullify.esp",
+            "LPTX/x",
+        ] {
+            assert_eq!(safe_rel(good), Some(PathBuf::from(good)), "{good:?}");
+        }
         for bad in [
             "../x",
             "a/../../x",
@@ -291,6 +323,13 @@ pub(crate) mod tests {
             "x/C:version.dll",
             "a\\C:x",
             "Data/a.esp:hidden",
+            "Data/payload.exe.",
+            "Data/payload.bat ",
+            "x/CON",
+            "x/nul.txt",
+            "COM1.esp",
+            "lpt9",
+            "AUX .ini",
             "",
             "a\0b",
         ] {
