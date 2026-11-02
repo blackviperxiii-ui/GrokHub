@@ -42,7 +42,7 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
 **This PR, the cabin:**
 - **Frame rate during a turn:** a running turn asks for frames about 30 times a second, not every frame. The fix adds egui's predicted frame time back to the delay. Without it, a 33 ms request ran at about 50 fps, and that applied to the existing run dot and glow too.
 - **Startup, fresh profile (3 runs each):** `Cabin::new` goes from 40.8–42.4 ms to 6.5–7.7 ms. Its config step goes from 20–23 ms to 3–4.5 ms. The first frame goes from 282–349 ms to 209–241 ms.
-- **Settings at launch:** 4.0 s → 2.5 s to the first window.
+- **Settings at launch:** 4.0–4.5 s → 1.5–2.0 s to the first window. The pictures decode on one worker. One thread per tile had cost 22–27 MB more heap (RssAnon) with Settings open; one worker costs 3 MB.
 - **Ranking and folding:** the outcome fold is linear, and Pulse ranking tokenizes each title once per frame.
 
 **This PR, the shell:**

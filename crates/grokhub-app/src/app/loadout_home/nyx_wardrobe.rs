@@ -341,26 +341,46 @@ pub(in crate::app) fn thumb_texture(
 fn decoded_thumb(ctx: &egui::Context, pose: Pose) -> Option<egui::ColorImage> {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
-    /// `None` while a worker decodes; a picture that won't decode stays there.
+    /// `None` while waiting or decoding; a picture that won't decode stays there.
     static JOBS: Mutex<BTreeMap<&str, Option<egui::ColorImage>>> = Mutex::new(BTreeMap::new());
+    /// Poses for the one decode worker, which runs while this isn't empty and
+    /// takes each pose off only once it is decoded.
+    static QUEUE: Mutex<Vec<Pose>> = Mutex::new(Vec::new());
     let mut jobs = JOBS.lock().ok()?;
     match jobs.get(pose.key) {
         Some(Some(_)) => jobs.remove(pose.key).flatten(),
         Some(None) => None,
         None => {
             jobs.insert(pose.key, None);
+            drop(jobs);
+            let mut queue = QUEUE.lock().ok()?;
+            queue.push(pose);
+            if queue.len() > 1 {
+                return None;
+            }
+            // One worker, not a thread per tile: decoding them all at once
+            // left ~12 MB in per-thread malloc arenas after Settings opened.
             let ctx = ctx.clone();
             std::thread::spawn(move || {
-                let Some(image) = square_thumb(pose.jpg) else {
-                    return;
-                };
-                if let Ok(mut jobs) = JOBS.lock() {
-                    jobs.insert(pose.key, Some(image));
+                loop {
+                    let Some(next) = QUEUE.lock().ok().and_then(|q| q.first().copied()) else {
+                        return;
+                    };
+                    if let Some(image) = square_thumb(next.jpg)
+                        && let Ok(mut jobs) = JOBS.lock()
+                    {
+                        jobs.insert(next.key, Some(image));
+                    }
+                    // The tiles paint in the main window. A bare
+                    // request_repaint from here goes to whichever viewport is
+                    // mid-pass, which can be the desktop Nyx.
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                    let Ok(mut queue) = QUEUE.lock() else { return };
+                    queue.remove(0);
+                    if queue.is_empty() {
+                        return;
+                    }
                 }
-                // The tiles paint in the main window. A bare request_repaint
-                // from here goes to whichever viewport is mid-pass, which can
-                // be the desktop Nyx, and the tile would wait for input.
-                ctx.request_repaint_of(egui::ViewportId::ROOT);
             });
             None
         }
@@ -649,6 +669,34 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(tex.expect("thumbnail decodes").size(), [192, 192]);
+    }
+
+    #[test]
+    fn tiles_asked_for_together_all_decode_on_the_one_worker() {
+        let ctx = egui::Context::default();
+        let art = thumbnail("zen-mentor", false).expect("zen mentor art");
+        let keys = [
+            "test-only-queued-thumb-1",
+            "test-only-queued-thumb-2",
+            "test-only-queued-thumb-3",
+        ];
+        let poses = keys.map(|key| Pose { key, jpg: art.jpg });
+        for pose in poses {
+            assert!(thumb_texture(&ctx, pose).is_none(), "{} waits", pose.key);
+        }
+        let mut sizes = [None; 3];
+        for _ in 0..1000 {
+            for (i, pose) in poses.iter().enumerate() {
+                if sizes[i].is_none() {
+                    sizes[i] = thumb_texture(&ctx, *pose).map(|t| t.size());
+                }
+            }
+            if sizes.iter().all(Option::is_some) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(sizes, [Some([192, 192]); 3], "no tile is left waiting");
     }
 
     #[test]
