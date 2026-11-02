@@ -117,6 +117,14 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// The tool result's text for an image. The picture itself goes in
+/// `image_data_url` (the native loop sends it once, as an input_image after
+/// this result); repeating its base64 here doubled its size in the context
+/// and in what each turn sent.
+fn image_note(mime: &str, width: u32, height: u32, bytes: usize) -> String {
+    format!("[image {mime} {width}x{height}, {bytes} bytes]")
+}
+
 fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
     let decoded = match image::load_from_memory(bytes) {
         Ok(img) => img,
@@ -126,10 +134,9 @@ fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
     let within_pixels = nw == decoded.width() && nh == decoded.height();
     if within_pixels && bytes.len() <= IMAGE_MAX_BYTES {
         let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let url = format!("data:{mime};base64,{b64}");
         return ToolOutput {
-            text: url.clone(),
-            image_data_url: Some(url),
+            text: image_note(mime, decoded.width(), decoded.height(), bytes.len()),
+            image_data_url: Some(format!("data:{mime};base64,{b64}")),
             failed: false,
         };
     }
@@ -141,10 +148,9 @@ fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
     match jpeg_under_budget(&scaled) {
         Ok(jpg) => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
-            let url = format!("data:image/jpeg;base64,{b64}");
             ToolOutput {
-                text: url.clone(),
-                image_data_url: Some(url),
+                text: image_note("image/jpeg", scaled.width(), scaled.height(), jpg.len()),
+                image_data_url: Some(format!("data:image/jpeg;base64,{b64}")),
                 failed: false,
             }
         }
@@ -286,12 +292,13 @@ mod tests {
         std::fs::write(dir.join("dot.png"), &png).unwrap();
         let img = execute(&dir, "read_file", r#"{"target_file":"dot.png"}"#);
         assert!(!img.failed, "{}", img.text);
-        assert!(
-            img.text.starts_with("data:image/png;base64,"),
-            "{}",
-            img.text
+        assert_eq!(
+            img.text,
+            format!("[image image/png 1x1, {} bytes]", png.len())
         );
-        assert_eq!(img.image_data_url.as_deref(), Some(img.text.as_str()));
+        let url = img.image_data_url.as_deref().unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert!(!img.text.contains("base64,"), "the picture goes once");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

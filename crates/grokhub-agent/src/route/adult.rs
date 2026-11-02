@@ -108,6 +108,11 @@ pub fn explicit(input: &[InputItem]) -> bool {
 /// The provider bans adult chat (or, like OpenRouter, may hand the turn to a
 /// model that does) and this call is explicit: xAI takes it.
 pub fn to_xai(input: &[InputItem], dest: Dest) -> bool {
+    // Where even an explicit call is sent as it is (xAI, the local model, the
+    // default route) there is nothing to decide, so skip reading every turn.
+    if adult_guard::route(adult_guard::Risk::Explicit, dest) == Route::Send {
+        return false;
+    }
     let risk = if explicit(input) {
         adult_guard::Risk::Explicit
     } else {
@@ -246,6 +251,7 @@ mod tests {
         );
         // OpenRouter can land on a model whose maker bans adult chat: xAI takes it.
         assert!(to_xai(&horny, Dest::OpenRouter));
+        assert!(!to_xai(&horny, Dest::Xai) && !to_xai(&horny, Dest::Local));
         assert!(!to_xai(&[user("fix my wifi")], Dest::OpenRouter));
         assert_eq!(
             xai_model("anthropic/model-x"),
