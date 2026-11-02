@@ -977,6 +977,10 @@ pub fn apply_work_update(cards: &mut [BoardCard], key: &str, status: BoardStatus
             return false;
         }
         c.status = status;
+        // Leaving Todo or Follow up leaves the queue, as a drag does.
+        if !crate::work_triage::queueable(status) {
+            c.queued_ms = 0;
+        }
         return true;
     }
     false

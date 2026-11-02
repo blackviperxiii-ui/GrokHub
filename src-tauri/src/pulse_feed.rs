@@ -229,6 +229,17 @@ fn taste_summary(
     note
 }
 
+/// Settings → Pulse → Sources as the desktop app saved them in `app.json`
+/// (`pulseSources`), or every source on when it has none.
+fn source_settings(config_dir: &Path) -> ps::SourceSettings {
+    std::fs::read_to_string(config_dir.join("app.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("pulseSources").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
 fn write_post(
     config_dir: &Path,
     model: &str,
@@ -243,7 +254,7 @@ fn write_post(
     let topics = profile.search_topics();
     let cache_path = config_dir.join(ps::CACHE_FILE);
     let mut cache = ps::load_cache(&cache_path);
-    let reqs = ps::requests_for(&ps::SourceSettings::default(), &topics, cache.runs, now_ms);
+    let reqs = ps::requests_for(&source_settings(config_dir), &topics, cache.runs, now_ms);
     if reqs.is_empty() {
         return Ok(Outcome::Nothing(NOTHING_TO_READ.into()));
     }
@@ -806,6 +817,53 @@ mod tests {
             ))
         );
         assert!(again.seen.lock().unwrap().is_empty(), "no model call");
+    }
+
+    /// FakeNet that writes down every source URL it was asked for.
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<String>>);
+
+    impl Net for Recording {
+        fn source(&self, req: &SourceReq, have: Option<&CacheEntry>) -> Fetched {
+            self.0.lock().unwrap().push(req.url.clone());
+            FakeNet.source(req, have)
+        }
+
+        fn page(&self, url: &str) -> Result<String, String> {
+            FakeNet.page(url)
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+            FakeNet.image(url)
+        }
+    }
+
+    #[test]
+    fn a_run_asks_only_the_sources_left_on_in_settings() {
+        let d = dirs("sources");
+        std::fs::write(
+            d.config.join("app.json"),
+            r#"{"pulseSources":{"webSearch":false,"reddit":false,"youtube":false}}"#,
+        )
+        .expect("app.json");
+        with_state(&d.config, |s| {
+            s.note_taste(TasteKind::Love, "Rust 1.98 notes", NOW - 1);
+        })
+        .expect("state");
+        let client = Script::new(&["They love Rust release notes.", POST]);
+        let net = Recording::default();
+        run_once(&d.config, "grok-test", &client, &net, NOW).expect("run");
+        let urls = net.0.lock().unwrap().clone();
+        assert!(
+            urls.iter().any(|u| u.contains("hn.algolia.com")),
+            "{urls:?}"
+        );
+        assert!(
+            !urls.iter().any(|u| u.contains("duckduckgo")
+                || u.contains("reddit.com")
+                || u.contains("youtube")),
+            "a source turned off was asked: {urls:?}"
+        );
     }
 
     #[test]

@@ -99,6 +99,34 @@ pub fn program_name(token: &str) -> String {
     lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
 }
 
+/// A head that runs a system tool, not a file someone left in the workspace:
+/// a bare name found on PATH, or a path straight inside a system bin folder
+/// (anywhere under Program Files on Windows). `./gh`, `tools/cat` or
+/// `/tmp/x/ls` could be anything, so their name earns no read-only pass.
+pub fn trusted_head(token: &str) -> bool {
+    if !token.contains(['/', '\\']) {
+        return true;
+    }
+    let path = token.replace('\\', "/").to_ascii_lowercase();
+    if path.split('/').any(|part| matches!(part, "." | "..")) {
+        return false;
+    }
+    const BIN: &[&str] = &[
+        "/bin/",
+        "/sbin/",
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/usr/local/bin/",
+        "/opt/homebrew/bin/",
+        "c:/windows/system32/",
+    ];
+    const TREES: &[&str] = &["c:/program files/", "c:/program files (x86)/"];
+    BIN.iter().any(|dir| {
+        path.strip_prefix(dir)
+            .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+    }) || TREES.iter().any(|dir| path.starts_with(dir))
+}
+
 pub fn is_dangerous(words: &[String]) -> bool {
     let Some(head_tok) = words.first() else {
         return false;
@@ -143,7 +171,7 @@ pub fn is_readonly(words: &[String]) -> bool {
     let Some(head_tok) = words.first() else {
         return false;
     };
-    if is_dangerous(words) {
+    if is_dangerous(words) || !trusted_head(head_tok) {
         return false;
     }
     let head = program_name(head_tok);

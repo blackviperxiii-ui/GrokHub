@@ -243,6 +243,8 @@ pub(crate) fn archive_card(c: &mut BoardCard, now: u64) -> bool {
     }
     c.status = BoardStatus::Dismissed;
     c.archived_ms = now;
+    // Off the queue too, or Restore would put it back in line and start a run.
+    c.queued_ms = 0;
     bump(c, now);
     true
 }

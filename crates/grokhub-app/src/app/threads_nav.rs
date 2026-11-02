@@ -1099,6 +1099,7 @@ impl Cabin {
         self.rename_idx = None;
         self.status = "Deleted all chats".into();
         self.stamp_current_access();
+        threads::forget_all_history();
         self.persist();
     }
 

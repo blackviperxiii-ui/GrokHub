@@ -314,8 +314,12 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
         eprintln!("threads.json: dropped the {dropped} largest messages to stay under the cap");
     }
     let path = threads_path();
+    // Delete all waits for the save that carries the emptied list. That save
+    // keeps no backup of the old history and removes the ones already made.
+    let all_cleared = ALL_CLEARED.load(Ordering::SeqCst)
+        && threads.iter().all(|t| t.main && t.messages.is_empty());
     // A bad in-memory list must not be the only remaining copy of a long history.
-    if let Ok(prev) = std::fs::metadata(&path) {
+    if !all_cleared && let Ok(prev) = std::fs::metadata(&path) {
         let prev_len = prev.len() as usize;
         if prev_len > 8 * 1024 && prev_len > s.len().saturating_mul(4) {
             let bak = path.with_file_name("threads.json.bak");
@@ -326,6 +330,15 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
         }
     }
     config::atomic_write(&path, s.as_bytes())?;
+    if all_cleared
+        && ALL_CLEARED
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        for copy in backup_copies(&path) {
+            let _ = std::fs::remove_file(copy);
+        }
+    }
     // Main's Clear chat waits for the save that carries the empty Main, then
     // takes Main's old transcript out of every backup, the one just made too.
     let main_now_empty = threads.iter().any(|t| t.main && t.messages.is_empty());
@@ -349,7 +362,18 @@ pub fn forget_main_history() {
     MAIN_CLEARED.store(true, Ordering::SeqCst);
 }
 
-fn scrub_main_from_backups(path: &std::path::Path) {
+/// Set by [`forget_all_history`] until the next save of an emptied list.
+static ALL_CLEARED: AtomicBool = AtomicBool::new(false);
+
+/// History's Delete all. The next save of the emptied list removes
+/// `threads.json.bak` and the quarantined copies instead of backing up the
+/// history that was just deleted.
+pub fn forget_all_history() {
+    ALL_CLEARED.store(true, Ordering::SeqCst);
+}
+
+/// `threads.json.bak` and the quarantined `.corrupt-` / `.recovered-` copies.
+fn backup_copies(path: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut copies = vec![path.with_file_name("threads.json.bak")];
     if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|s| s.to_str())) {
         let corrupt = format!("{name}.corrupt-");
@@ -364,7 +388,11 @@ fn scrub_main_from_backups(path: &std::path::Path) {
             }
         }
     }
-    for copy in copies {
+    copies
+}
+
+fn scrub_main_from_backups(path: &std::path::Path) {
+    for copy in backup_copies(path) {
         scrub_main_in(&copy);
     }
 }
@@ -1298,6 +1326,34 @@ mod tests {
         assert!(String::from_utf8_lossy(&kept).contains("Night watch"));
         save(&[ChatThread::new("Chat", false)]).expect("save small again");
         assert_eq!(fs::metadata(&bak).expect("bak2").len(), kept.len() as u64);
+        let _ = fs::remove_dir_all(&root);
+        unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    }
+
+    #[test]
+    fn delete_all_leaves_no_copy_of_the_old_history() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("delete-all-bak");
+        let _ = fs::remove_dir_all(&root);
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+        let mut big = ChatThread::new("Night watch", false);
+        big.messages_mut().push(("user".into(), "x".repeat(12_000)));
+        save(&[big.clone()]).expect("save big");
+        save(&[ChatThread::new("Chat", false)]).expect("shrink makes a backup");
+        let path = threads_path();
+        let bak = path.with_file_name("threads.json.bak");
+        assert!(fs::read_to_string(&bak).unwrap().contains("Night watch"));
+        let quarantined = path.with_file_name("threads.json.corrupt-1");
+        fs::write(&quarantined, "Night watch").unwrap();
+        save(&[big]).expect("save big again");
+
+        forget_all_history();
+        let mut main = ChatThread::new("Main", false);
+        main.main = true;
+        save(&[main]).expect("save the emptied list");
+        assert!(!bak.exists(), "no backup keeps the deleted history");
+        assert!(!quarantined.exists());
+        assert!(!fs::read_to_string(&path).unwrap().contains("Night watch"));
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
