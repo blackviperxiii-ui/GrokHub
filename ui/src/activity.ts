@@ -15,7 +15,8 @@ export interface ActivityItem {
   detail: string;
   /** Tool steps finished in this turn, for the progress line. */
   steps: number;
-  /** When the item last changed (ms), newest first in the dock. */
+  /** When the item last changed state (ms), newest first in the dock. Streamed
+   * reply text doesn't count: it would re-render the app on every chunk. */
   at: number;
 }
 
@@ -54,6 +55,11 @@ export function chatActivity(
   const restart = fresh ? { ...base, steps: 0 } : base;
   switch (event.kind) {
     case "text":
+      // More reply text leaves a running item as it is, `at` included (so a
+      // streaming chat doesn't move up the dock): returning it unchanged lets
+      // the dock skip a render, where a fresh object per streamed chunk
+      // re-rendered the whole App on every token.
+      if (prev?.status === "running") return prev;
       return { ...restart, status: "running", detail: base.status === "running" ? base.detail : "Writing a reply…", at: now };
     case "tool": {
       const ended = event.status === "completed" || event.status === "failed";

@@ -141,9 +141,14 @@ fn current(state: &ShellState) -> ShellSettings {
         .clone()
 }
 
+/// On the blocking pool, like the other keychain reads: `view` reads the
+/// keychain twice, and the window asks for settings three times as it first
+/// paints. Not a plain async command: Linux's Secret Service client blocks on
+/// its own tokio runtime, which panics on an async worker thread.
 #[tauri::command]
-fn get_settings(state: State<'_, ShellState>) -> SettingsView {
-    view(&current(&state))
+async fn get_settings(state: State<'_, ShellState>) -> Result<SettingsView, String> {
+    let settings = current(&state);
+    off_main(move || view(&settings)).await
 }
 
 #[tauri::command]
@@ -2041,7 +2046,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         }
     };
     match command {
-        "get_settings" => out(get_settings(state)),
+        "get_settings" => out(view(&current(&state))),
         "send_chat" => {
             let conversation_id: String = arg(args, "conversationId")?;
             let taken = state
@@ -2852,6 +2857,30 @@ pub fn run() {
             grokhub_core::brand::product_name()
         );
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    #[test]
+    fn settings_load_on_the_blocking_pool() {
+        // `view` reads the keychain. A plain command runs on the main thread
+        // and holds up the window while it first paints; an async worker
+        // panics in the Secret Service client. Only the blocking pool fits.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = src
+            .split("async fn get_settings(")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("get_settings is an async fn");
+        assert!(
+            body.contains("off_main(move || view(&settings)).await"),
+            "get_settings must read the keychain through off_main: {body}"
+        );
+        assert!(
+            !src.contains("#[tauri::command(async)]\nfn get_settings("),
+            "a sync body on an async worker panics in zbus"
+        );
     }
 }
 

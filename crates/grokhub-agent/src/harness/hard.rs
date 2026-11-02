@@ -2182,11 +2182,25 @@ mod tests {
             else {
                 return false;
             };
-            let pattern: Vec<String> = glob.split('*').map(regex::escape).collect();
-            regex::Regex::new(&format!("^{}$", pattern.join(".*")))
-                .map(|re| re.is_match(subject))
-                .unwrap_or(false)
+            glob_regex(glob).is_some_and(|re| re.is_match(subject))
         })
+    }
+
+    /// Each glob compiled once. Compiling per rule per command made the two
+    /// big tables ~83,000 compiles a run, the slowest tests in the suite.
+    fn glob_regex(glob: &str) -> Option<regex::Regex> {
+        use std::collections::HashMap;
+        use std::sync::{LazyLock, Mutex};
+        static COMPILED: LazyLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
+            LazyLock::new(Mutex::default);
+        let mut compiled = COMPILED.lock().unwrap_or_else(|e| e.into_inner());
+        compiled
+            .entry(glob.to_string())
+            .or_insert_with(|| {
+                let pattern: Vec<String> = glob.split('*').map(regex::escape).collect();
+                regex::Regex::new(&format!("^{}$", pattern.join(".*"))).ok()
+            })
+            .clone()
     }
 
     fn hard_shell(cmd: &str) -> bool {

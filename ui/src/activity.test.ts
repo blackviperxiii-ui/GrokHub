@@ -47,6 +47,21 @@ describe("chatActivity", () => {
     expect(done?.steps).toBe(1);
   });
 
+  it("more reply text leaves a running item as it is, so the dock skips a render", () => {
+    const running = fold([{ kind: "text", text: "Looking" }, tool("in_progress")]);
+    const more = chatActivity(running, { conversationId: "shell-1", event: { kind: "text", text: " more" } }, 9000);
+    expect(more).toBe(running);
+    // Text after a finished turn still starts it again.
+    const done = fold([{ kind: "done", stop: "end_turn" }], running);
+    expect(fold([{ kind: "text", text: "Again" }], done)).toMatchObject({
+      status: "running",
+      detail: "Writing a reply…",
+      steps: 0,
+    });
+    // The first text of a turn still makes the item.
+    expect(fold([{ kind: "text", text: "Hi" }])).toMatchObject({ status: "running", detail: "Thinking…" });
+  });
+
   it("a turn Halt stopped says so", () => {
     const running = fold([{ kind: "text", text: "Typing" }]);
     expect(fold([{ kind: "done", stop: "halted" }], running)).toMatchObject({ status: "done", detail: "Halted" });

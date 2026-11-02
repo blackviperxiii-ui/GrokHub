@@ -325,20 +325,61 @@ pub(in crate::app) fn thumb_texture(
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
-    let img = image::load_from_memory(pose.jpg).ok()?;
+    let image = decoded_thumb(ctx, pose)?;
+    let tex = ctx.load_texture(
+        format!("thumb-{}", pose.key),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// A thumbnail's pixels, decoded on a worker the first time they are asked
+/// for; `None` until then, and the tile shows its letter. Decoding every
+/// voice's JPEG on the UI thread froze the first open of Settings.
+fn decoded_thumb(ctx: &egui::Context, pose: Pose) -> Option<egui::ColorImage> {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    /// `None` while a worker decodes; a picture that won't decode stays there.
+    static JOBS: Mutex<BTreeMap<&str, Option<egui::ColorImage>>> = Mutex::new(BTreeMap::new());
+    let mut jobs = JOBS.lock().ok()?;
+    match jobs.get(pose.key) {
+        Some(Some(_)) => jobs.remove(pose.key).flatten(),
+        Some(None) => None,
+        None => {
+            jobs.insert(pose.key, None);
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let Some(image) = square_thumb(pose.jpg) else {
+                    return;
+                };
+                if let Ok(mut jobs) = JOBS.lock() {
+                    jobs.insert(pose.key, Some(image));
+                }
+                // The tiles paint in the main window. A bare request_repaint
+                // from here goes to whichever viewport is mid-pass, which can
+                // be the desktop Nyx, and the tile would wait for input.
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            });
+            None
+        }
+    }
+}
+
+/// A [`THUMB_PX`] square from the middle of a JPEG.
+fn square_thumb(jpg: &[u8]) -> Option<egui::ColorImage> {
+    let img = image::load_from_memory(jpg).ok()?;
     let side = img.width().min(img.height());
     let square = img.crop_imm((img.width() - side) / 2, 0, side, side);
     let rgba = square
         .resize_exact(THUMB_PX, THUMB_PX, image::imageops::FilterType::Triangle)
         .to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    let tex = ctx.load_texture(
-        format!("thumb-{}", pose.key),
-        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-    Some(tex)
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        size,
+        rgba.as_raw(),
+    ))
 }
 
 /// Hands this frame's explicit-art gate to painters that have no cabin.
@@ -588,9 +629,26 @@ mod tests {
         );
         assert_eq!(thumbnail("pirate-copy", true), None);
         let ctx = egui::Context::default();
-        let pose = thumbnail("zen-mentor", false).expect("zen mentor art");
-        let tex = thumb_texture(&ctx, pose).expect("thumbnail decodes");
-        assert_eq!(tex.size(), [192, 192]);
+        let art = thumbnail("zen-mentor", false).expect("zen mentor art");
+        // A key no other test paints, so this ask is sure to be the first: it
+        // starts a worker, and the tile shows its letter meanwhile.
+        let pose = Pose {
+            key: "test-only-zen-mentor-thumb",
+            jpg: art.jpg,
+        };
+        assert!(
+            thumb_texture(&ctx, pose).is_none(),
+            "decoded off the UI thread"
+        );
+        let mut tex = None;
+        for _ in 0..500 {
+            tex = thumb_texture(&ctx, pose);
+            if tex.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(tex.expect("thumbnail decodes").size(), [192, 192]);
     }
 
     #[test]

@@ -289,8 +289,12 @@ pub fn topic_words(text: &str) -> Vec<String> {
 /// Two lines are about the same thing when they share two topic words, or one
 /// when either line has only one or two to begin with.
 pub fn same_topic(a: &str, b: &str) -> bool {
-    let wa = topic_words(a);
-    let wb = topic_words(b);
+    same_topic_words(&topic_words(a), &topic_words(b))
+}
+
+/// [`same_topic`] on [`topic_words`] already worked out, for callers that
+/// compare one line against many.
+pub fn same_topic_words(wa: &[String], wb: &[String]) -> bool {
     if wa.is_empty() || wb.is_empty() {
         return false;
     }

@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { Profiler } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -534,6 +535,29 @@ describe("App", () => {
     await userEvent.click(within(dock).getByRole("button", { name: "Open card" }));
     expect(await screen.findByText("Workboard page at w1")).toBeVisible();
     expect(screen.getByRole("button", { name: "Workboard" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("streamed reply text doesn't re-render the app per chunk", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    let commits = 0;
+    render(
+      <Profiler id="app" onRender={() => (commits += 1)}>
+        <App />
+      </Profiler>,
+    );
+    await waitFor(() => expect(chatHandlers.length).toBe(1));
+    act(() => {
+      chatHandlers[0]({ conversationId: "shell-c9", event: { kind: "text", text: "Hi" } });
+    });
+    const before = commits;
+    // Chunks arrive in separate tasks, as a stream does: one act each.
+    for (let i = 0; i < 100; i++) {
+      act(() => {
+        chatHandlers[0]({ conversationId: "shell-c9", event: { kind: "text", text: ` word${i}` } });
+      });
+    }
+    expect(commits - before).toBeLessThanOrEqual(2);
   });
 
   describe("Halt", () => {

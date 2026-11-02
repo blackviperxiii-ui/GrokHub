@@ -353,8 +353,7 @@ pub(crate) fn pack_glow_uniforms(
 pub(crate) fn paint_composer_glow_at(ui: &egui::Ui, pill: egui::Rect, streaming: bool) {
     let motion = crate::theme::motion_ok(ui);
     if motion {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(33));
+        crate::icons::request_live_frame(ui.ctx());
     }
     let breath = if motion && streaming {
         crate::icons::composer_breath(ui.input(|input| input.time) as f32)

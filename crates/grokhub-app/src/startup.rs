@@ -189,6 +189,17 @@ mod tests {
             ensure.contains("self.idea_inputs()") && !ensure.contains("idea_request"),
             "{ensure}"
         );
+        // What `Cabin::new` still reads from a cache (today's date, for the
+        // launch auto-archive) is filled while the window is created.
+        let warm = src
+            .split("pub fn warm_startup_caches()")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .expect("warm_startup_caches");
+        assert!(new.contains("Self::local_day()"), "{new}");
+        for cached in ["local_clock(", "local_day(", "desktop_prefers_dark("] {
+            assert!(warm.contains(cached), "{cached} is not warmed: {warm}");
+        }
         let main = include_str!("main.rs").replace("\r\n", "\n");
         let run = main.split("fn run_cabin(").nth(1).expect("run_cabin");
         assert!(
