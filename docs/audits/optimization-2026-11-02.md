@@ -53,7 +53,7 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
 **This PR, tests and CI:**
 - **Deny-rule tests:** the three `gb_` tests take 48 s → 6 s.
 - **UI tests:** `npm test` takes about 40 s → 17 s, with 597/597 passing in each of 5 runs.
-- **Windows nextest:** the serial tests start first, an estimated 16–21 s off the job.
+- **Windows nextest:** the serial tests start first. On CI, nextest took 220 s on the Windows run before this PR and 191 s on this PR's (one run each). Before, the 20 serial `channel_tip_tests` were its last ~41 s.
 
 ## Needs decision
 
@@ -85,6 +85,10 @@ Base: `beta` @ `901ccdd0`. Numbers come from this machine (4 CPUs, Linux, debug 
     - 59 byte-identical helper copies.
     - Raw transport errors shown to users.
     - Moving the `cards.rs` tests out, so its line budget (4,400 of 4,400) has room again.
+
+## Flaky test seen during this work
+
+- `app::tests::chat_threads_tests::main_tab_clear_chat_asks_first_then_wipes_only_main_for_good` failed once in five local runs of a 108-test subset (plain `cargo test`, one test at a time). `threads.json` or `threads.json.bak` still held the cleared Main chat. It passed in every other run, alone and in the full suite. That could be a persist write landing after the clear, which would leave a cleared chat on disk, so it is worth a look of its own.
 
 ## Refuted or overstated
 
