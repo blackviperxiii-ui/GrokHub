@@ -1159,6 +1159,7 @@ fn empty_grok_usage() -> GrokUsage {
         cost_in_usd_ticks: 0,
         meter: String::new(),
         turn_cache_pct: None,
+        turn_cache_drop_from: None,
     }
 }
 
