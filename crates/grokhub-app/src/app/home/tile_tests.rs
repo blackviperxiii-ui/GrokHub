@@ -21,17 +21,18 @@ fn usage_tile_shows_tokens_against_the_cap_and_week_spend() {
             pct: Some(35),
         }),
         10,
+        None,
     );
     assert_eq!(t.big, "812k");
     assert_eq!(t.caption, "Tokens today · 81% of 1.0M");
     assert_eq!(t.detail.as_deref(), Some("$3.50 of $10 this week"));
     assert_eq!(t.tone, Tone::Warn);
 
-    let over = usage_text(1_200_000, 1_000_000, None, 0);
+    let over = usage_text(1_200_000, 1_000_000, None, 0, None);
     assert_eq!(over.tone, Tone::Alert);
     assert_eq!(over.detail, None);
 
-    let none = usage_text(0, 0, None, 0);
+    let none = usage_text(0, 0, None, 0, None);
     assert_eq!(none.big, "0");
     assert_eq!(none.caption, "Tokens today · no daily cap");
     assert_eq!(none.tone, Tone::Quiet);
@@ -44,9 +45,27 @@ fn usage_tile_shows_tokens_against_the_cap_and_week_spend() {
             pct: None,
         }),
         0,
+        None,
     );
     assert_eq!(uncapped.detail.as_deref(), Some("$0.42 this week"));
     assert_eq!(uncapped.tone, Tone::Normal);
+}
+
+#[test]
+fn usage_tile_adds_the_cache_share_and_flags_a_low_one() {
+    let week = Some(WeekSpend {
+        usd: 3.5,
+        pct: None,
+    });
+    let good = usage_text(1_000, 0, week, 0, Some(91));
+    assert_eq!(good.detail.as_deref(), Some("$3.50 this week · cache 91%"));
+    let low = usage_text(1_000, 0, week, 0, Some(42));
+    assert_eq!(
+        low.detail.as_deref(),
+        Some("$3.50 this week · cache 42% (low)")
+    );
+    let alone = usage_text(1_000, 0, None, 0, Some(88));
+    assert_eq!(alone.detail.as_deref(), Some("cache 88%"));
 }
 
 #[test]
