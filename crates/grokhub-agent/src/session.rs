@@ -34,6 +34,9 @@ struct Header {
 /// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
 const SERVER_COMPACTION_RECORD: &str = "server_compaction";
 
+/// Session line type of an xAI sealed reasoning item ([`InputItem::Reasoning`]).
+const REASONING_RECORD: &str = "reasoning_item";
+
 /// What a transcript shows where xAI folded the earlier turns.
 pub const COMPACTED_NOTE: &str = "Earlier conversation compacted";
 
@@ -786,7 +789,9 @@ fn user_text(item: &InputItem) -> Option<String> {
 fn is_reply_item(item: &InputItem) -> bool {
     match item {
         InputItem::Message { role, .. } => role == "assistant",
-        InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. } => true,
+        InputItem::FunctionCall { .. }
+        | InputItem::FunctionCallOutput { .. }
+        | InputItem::Reasoning { .. } => true,
         InputItem::ServerCompaction { .. } => false,
     }
 }
@@ -832,6 +837,7 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
             Record::Item(InputItem::ServerCompaction { .. }) => {
                 out.push_str(&format!("\n_{COMPACTED_NOTE}_\n"));
             }
+            Record::Item(InputItem::Reasoning { .. }) => {}
             Record::Usage { usage, meter } => {
                 let line = usage_label(
                     usage.input_tokens,
@@ -1188,6 +1194,11 @@ fn parse_record(value: &Value) -> Option<Record> {
             call_id: string_field(value, "call_id"),
             output: string_field(value, "output"),
         })),
+        REASONING_RECORD => value
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(|raw| InputItem::reasoning(raw, &string_field(value, "model")))
+            .map(Record::Item),
         SERVER_COMPACTION_RECORD => value
             .get("raw")
             .and_then(Value::as_str)
@@ -1297,6 +1308,12 @@ fn item_json(item: &InputItem) -> Value {
         InputItem::ServerCompaction { raw } => json!({
             "type": SERVER_COMPACTION_RECORD,
             "raw": raw,
+        }),
+        // Same idea: the sealed item as the exact text xAI sent, and its model.
+        InputItem::Reasoning { raw, model } => json!({
+            "type": REASONING_RECORD,
+            "raw": raw,
+            "model": model,
         }),
     }
 }
@@ -2178,5 +2195,36 @@ mod tests {
             transcript_pairs(&loaded),
             vec![("assistant".to_string(), "keep me".to_string())]
         );
+    }
+
+    /// A sealed reasoning item is saved as the exact text xAI sent, with the
+    /// model that wrote it, and resumes as the same item.
+    #[test]
+    fn a_reasoning_item_round_trips_with_its_model() {
+        let (_dir, _guard) = isolated("reasoning-item");
+        let id = "native-reasoning-item";
+        let raw =
+            r#"{"id":"rs_1","summary":[],"type":"reasoning","encrypted_content":"gAAAAB+x/y=="}"#;
+        let item = InputItem::reasoning(raw, "grok-4.7").unwrap();
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("Q"), item.clone(), assistant("A")],
+            &Usage::default(),
+            "API credits",
+            "Q",
+        )
+        .unwrap();
+        assert_eq!(
+            resume_input(id).unwrap(),
+            vec![user("Q"), item, assistant("A")]
+        );
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(
+            file.contains(r#"{"model":"grok-4.7","raw":"{\"id\":\"rs_1\",\"summary\":[],\"type\":\"reasoning\",\"encrypted_content\":\"gAAAAB+x/y==\"}","type":"reasoning_item"}"#),
+            "{file}"
+        );
+        assert!(!export_markdown(id).unwrap().contains("gAAAA"));
     }
 }

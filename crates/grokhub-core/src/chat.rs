@@ -171,6 +171,15 @@ pub fn accepts_reasoning_effort(model: &str) -> bool {
         })
 }
 
+/// Models whose reasoning can be switched off with `reasoning.effort: "none"`:
+/// Grok 4.3 and its dated or `-latest` ids (docs.x.ai model page: none to xhigh,
+/// default low). This is what makes Fast ([`FAST_EFFORT`]) quicker than Balance.
+pub fn accepts_effort_none(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.strip_prefix("grok-4.3")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+}
+
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
 pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
     match s.trim().to_ascii_lowercase().as_str() {
