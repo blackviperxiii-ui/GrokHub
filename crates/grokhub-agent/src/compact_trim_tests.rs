@@ -167,26 +167,31 @@ fn a_later_call_with_no_output_yet_keeps_the_older_result() {
 }
 
 #[test]
-fn history_trim_settings_default_on_with_age_out_off_and_parse_the_file() {
+fn history_trim_settings_default_on_with_age_out_on_and_parse_the_file() {
     assert_eq!(
         HistoryTrimSettings::default(),
         HistoryTrimSettings {
             enabled: true,
-            age_out: false,
+            age_out: true,
             age_out_min_bytes: 12_000,
             age_out_user_turns: 3,
+            keep_recent_outputs: 10,
+            mask_min_bytes: 2_000,
         }
     );
     assert_eq!(
         parse_history_trim_file(
-            "# trim\nenabled = false\nage_out = true # trades quality\n\
-             age_out_min_bytes = 500\nage_out_user_turns = 2\nbogus = 1\n"
+            "# trim\nenabled = false\nage_out = false\n\
+             age_out_min_bytes = 500\nage_out_user_turns = 2\nbogus = 1\n\
+             keep_recent_outputs = 4\nmask_min_bytes = 900\n"
         ),
         HistoryTrimSettings {
             enabled: false,
-            age_out: true,
+            age_out: false,
             age_out_min_bytes: 500,
             age_out_user_turns: 2,
+            keep_recent_outputs: 4,
+            mask_min_bytes: 900,
         }
     );
     assert_eq!(
@@ -216,7 +221,7 @@ fn old_big_output(users_after: usize) -> Vec<InputItem> {
 }
 
 #[test]
-fn age_out_is_off_by_default_and_spools_old_big_outputs_when_on() {
+fn age_out_can_be_turned_off_and_spools_old_big_outputs_when_on() {
     let ws = std::env::temp_dir().join(format!("gh-trim-age-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ws);
     let big = format!("error: link failed\n{}", "x".repeat(12_981));
@@ -225,7 +230,10 @@ fn age_out_is_off_by_default_and_spools_old_big_outputs_when_on() {
     let mut history = old_big_output(3);
     let ctx = half_full(&history);
     let before = history.clone();
-    let off = HistoryTrimSettings::default();
+    let off = HistoryTrimSettings {
+        age_out: false,
+        ..HistoryTrimSettings::default()
+    };
     assert_eq!(age_out_history(&mut history, ctx, &off, &ws, "sess"), 0);
     assert_eq!(history, before);
 
@@ -367,4 +375,65 @@ fn a_refused_repeat_is_not_a_result_to_point_at() {
         output_of(&history, "c3"),
         "not run: the same call already ran twice."
     );
+}
+
+/// `n` read_file calls of `bytes` bytes each, in one user turn.
+fn many_reads(n: usize, bytes: usize) -> Vec<InputItem> {
+    let mut items = vec![msg("system", "RULES"), msg("user", "check every log")];
+    for i in 0..n {
+        let id = format!("r{i}");
+        items.push(call(
+            &id,
+            "read_file",
+            &format!(r#"{{"target_file":"log{i}.txt"}}"#),
+        ));
+        items.push(out(&id, &format!("log {i} line\n{}", "y".repeat(bytes))));
+    }
+    items
+}
+
+#[test]
+fn outputs_older_than_the_newest_ten_are_masked_in_one_batch() {
+    let ws = std::env::temp_dir().join(format!("gh-trim-mask-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    let on = HistoryTrimSettings::default();
+    let mut history = many_reads(14, 3_000);
+    let ctx = half_full(&history);
+    let before = history.clone();
+    // Same user turn, so only the keep-recent rule applies: 4 of 14 masked.
+    assert_eq!(age_out_history(&mut history, ctx, &on, &ws, "mask"), 4);
+    for i in 0..14 {
+        let body = output_of(&history, &format!("r{i}"));
+        if i < 4 {
+            assert!(
+                body.starts_with(&format!(
+                    "<tool_output_compact tool=\"read_file\" handle=\"to-r{i}\" bytes=\"3011\">\nArguments: {{\"target_file\":\"log{i}.txt\"}}\n"
+                )),
+                "{body}"
+            );
+            assert!(
+                body.ends_with(&format!(
+                    "`.grokhub/tool-output-compact/mask/to-r{i}.txt`. Re-read it with read_file (or grep that path) when you need exact text."
+                )),
+                "{body}"
+            );
+        } else {
+            assert_eq!(
+                body,
+                output_of(&before, &format!("r{i}")),
+                "r{i} stays whole"
+            );
+        }
+    }
+    assert_eq!(messages(&history), messages(&before));
+    // Nothing new until more outputs arrive.
+    assert_eq!(age_out_history(&mut history, ctx, &on, &ws, "mask"), 0);
+    // Small outputs are never masked, however old.
+    let mut small = many_reads(14, 500);
+    let small_ctx = half_full(&small);
+    assert_eq!(age_out_history(&mut small, small_ctx, &on, &ws, "mask"), 0);
+    // Below the trim threshold nothing is masked.
+    let mut roomy = many_reads(14, 3_000);
+    assert_eq!(age_out_history(&mut roomy, 10_000_000, &on, &ws, "mask"), 0);
+    let _ = std::fs::remove_dir_all(&ws);
 }
