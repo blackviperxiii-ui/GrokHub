@@ -102,8 +102,14 @@ pub enum InputItem {
     /// JSON text it arrived as. Opaque: it is never parsed for meaning, edited,
     /// merged or reordered, and goes back to xAI as received. Build it with
     /// [`InputItem::server_compaction`].
+    ///
+    /// `digest` is a plain-text copy of what the item folded, built locally when
+    /// it was made. xAI never sees it; OpenRouter and the local model, which
+    /// can't read `raw`, get the digest instead so the earlier chat isn't lost
+    /// when a turn routes away from xAI. Empty for items saved before it existed.
     ServerCompaction {
         raw: String,
+        digest: String,
     },
     /// One xAI `reasoning` output item with its `encrypted_content`, kept as the
     /// JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
@@ -149,8 +155,20 @@ impl InputItem {
         (value.get("type").and_then(Value::as_str) == Some("compaction")).then(|| {
             InputItem::ServerCompaction {
                 raw: raw.to_string(),
+                digest: String::new(),
             }
         })
+    }
+
+    /// The same item with `digest` as its text copy. Other items are unchanged.
+    pub fn with_digest(self, text: &str) -> InputItem {
+        match self {
+            InputItem::ServerCompaction { raw, .. } => InputItem::ServerCompaction {
+                raw,
+                digest: text.to_string(),
+            },
+            other => other,
+        }
     }
 }
 
@@ -493,7 +511,7 @@ fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
                 }));
             }
             // Built only from valid JSON ([`InputItem::server_compaction`]).
-            InputItem::ServerCompaction { raw } => {
+            InputItem::ServerCompaction { raw, .. } => {
                 if let Ok(item) = serde_json::from_str::<Value>(raw) {
                     input.push(item);
                 }
@@ -1401,6 +1419,7 @@ mod tests {
             CompactOutput {
                 items: vec![InputItem::ServerCompaction {
                     raw: r#"{"id":"cmp_1", "type":"compaction","encrypted_content":"Zm9v"}"#.into(),
+                    digest: String::new(),
                 }],
                 usage: Usage {
                     input_tokens: 50,

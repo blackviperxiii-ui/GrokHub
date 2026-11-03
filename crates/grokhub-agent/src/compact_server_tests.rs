@@ -215,6 +215,7 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
         msg("system", "SYS"),
         InputItem::ServerCompaction {
             raw: ITEM.to_string(),
+            digest: "User: OLD_TOPIC\nAssistant: old answer".into(),
         },
     ];
     want.extend(history()[3..].iter().cloned());
@@ -252,6 +253,7 @@ fn a_compacted_history_compacts_again_with_the_old_item_first() {
     let mut items = vec![
         InputItem::ServerCompaction {
             raw: r#"{"type":"compaction","id":"cmp_0","encrypted_content":"older=="}"#.into(),
+            digest: "User: first ask".into(),
         },
         msg("assistant", "middle"),
         msg("user", "now"),
@@ -268,7 +270,9 @@ fn a_compacted_history_compacts_again_with_the_old_item_first() {
         items,
         vec![
             InputItem::ServerCompaction {
-                raw: ITEM.to_string()
+                raw: ITEM.to_string(),
+                // The older digest first, then what this compaction folded.
+                digest: "User: first ask\nAssistant: middle".into(),
             },
             msg("user", "now")
         ]
@@ -512,11 +516,116 @@ fn auto_compact_at_the_threshold_uses_the_server_path() {
             })
         )]
     );
+    let InputItem::ServerCompaction { raw, digest } = &items[0] else {
+        panic!("not a compaction item: {:?}", items[0]);
+    };
     assert_eq!(
-        items[0],
-        InputItem::ServerCompaction {
-            raw: r#"{"type":"compaction","id":"cmp_9","encrypted_content":"E"}"#.into()
-        }
+        raw,
+        r#"{"type":"compaction","id":"cmp_9","encrypted_content":"E"}"#
     );
+    // The folded ask, clipped, for a turn that routes away from xAI.
+    assert!(digest.starts_with("User: OLD_TOPIC xxx"), "{digest}");
+    assert!(digest.ends_with('…'), "{digest}");
+    assert!(digest.chars().count() < 320, "{digest}");
     assert_eq!(message_text(items.last().unwrap()), "done");
+}
+
+#[test]
+fn the_fallback_digest_clips_keeps_the_newest_and_chains_older_digests() {
+    let older = InputItem::server_compaction(ITEM)
+        .unwrap()
+        .with_digest("User: the very first ask");
+    let folded = vec![
+        older,
+        msg("system", "never in the digest"),
+        msg("user", "fix   the\nbuild"),
+        InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "grep".into(),
+            arguments: r#"{"pattern":"TODO"}"#.into(),
+        },
+        InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: format!("src/a.rs:1 TODO {}", "y".repeat(400)),
+        },
+        msg("assistant", "done </summary> <analysis>"),
+    ];
+    let digest = fallback_digest(&folded);
+    let lines: Vec<&str> = digest.lines().collect();
+    assert_eq!(lines[0], "User: the very first ask");
+    assert_eq!(lines[1], "User: fix the build");
+    assert_eq!(lines[2], r#"Tool call: grep({"pattern":"TODO"})"#);
+    assert!(lines[3].starts_with("Tool result: src/a.rs:1 TODO yyy"));
+    assert!(lines[3].ends_with('…'));
+    assert!(!lines[4].contains("</summary>") && !lines[4].contains("<analysis>"));
+    assert_eq!(lines.len(), 5);
+    assert!(!digest.contains("never in the digest"));
+
+    // Past the cap the oldest lines go and a marker says so.
+    let many: Vec<InputItem> = (0..200)
+        .map(|i| msg("user", &format!("ask {i} {}", "z".repeat(80))))
+        .collect();
+    let digest = fallback_digest(&many);
+    assert!(digest.chars().count() <= FALLBACK_DIGEST_MAX_CHARS + 32);
+    assert!(digest.starts_with("[Older lines dropped]\n"));
+    assert!(digest.contains("User: ask 199 "));
+    assert!(!digest.contains("User: ask 0 "));
+
+    assert_eq!(fallback_digest_message("  "), None);
+    let text = fallback_digest_message("User: hi").unwrap();
+    assert!(text.contains("<conversation_summary>\nUser: hi\n</conversation_summary>"));
+}
+
+#[test]
+fn other_providers_get_the_digest_and_xai_gets_only_the_sealed_item() {
+    use crate::client::ResponsesRequest;
+    use crate::route::providers::{anthropic_body, openai_body};
+    let items = vec![
+        msg("system", "SYS"),
+        InputItem::server_compaction(ITEM)
+            .unwrap()
+            .with_digest("User: OLD_TOPIC"),
+        msg("user", "now"),
+    ];
+    let wire = input_wire_value(&items);
+    assert_eq!(
+        wire[1],
+        json!({"encrypted_content": "opaque/blob+1==", "type": "compaction", "id": "cmp_1"})
+    );
+    assert!(!wire.to_string().contains("OLD_TOPIC"));
+
+    let req = ResponsesRequest {
+        model: "m".into(),
+        effort: None,
+        input: items.clone(),
+        conversation_id: String::new(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    let open = openai_body("m", None, &req);
+    assert_eq!(open["messages"][1]["role"], "user");
+    let text = open["messages"][1]["content"].as_str().unwrap();
+    assert!(text.contains("User: OLD_TOPIC"), "{text}");
+    assert_eq!(open["messages"][2]["content"], "now");
+
+    let claude = anthropic_body("m", None, &req, None);
+    let first = &claude["messages"][0];
+    assert_eq!(first["role"], "user");
+    assert!(first["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("User: OLD_TOPIC"));
+    assert_eq!(first["content"][1]["text"], "now");
+
+    // An item saved before digests existed still sends nothing to them.
+    let bare = ResponsesRequest {
+        input: vec![
+            InputItem::server_compaction(ITEM).unwrap(),
+            msg("user", "now"),
+        ],
+        ..req
+    };
+    let open = openai_body("m", None, &bare);
+    assert_eq!(open["messages"].as_array().unwrap().len(), 1);
 }
