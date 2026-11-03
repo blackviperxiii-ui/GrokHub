@@ -745,12 +745,13 @@ fn paint_usage(
     let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
         paint_tile_text(ui, &t, size);
+        // The daily token budget lives on AI & chat → AI models.
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Budget") {
-            actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+            actions.push(ModuleAction::Settings(SettingsSec::AiModels));
         }
     });
     if card_clicked(ui, &resp, "home-usage", "Daily token budget") {
-        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+        actions.push(ModuleAction::Settings(SettingsSec::AiModels));
     }
 }
 
@@ -1044,8 +1045,9 @@ fn paint_speeds(
         paint_tile_text(ui, &t, size);
         if size != ModuleSize::Small {
             if !f.on {
+                // The internet log row is on Your PC → App & extras.
                 if crate::cards::ghost_pill(ui, "Turn on in Settings") {
-                    actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+                    actions.push(ModuleAction::Settings(SettingsSec::Extras));
                 }
             } else if !f.testing && !f.down && crate::cards::ghost_pill(ui, "Test speed") {
                 test = true;
@@ -1056,7 +1058,7 @@ fn paint_speeds(
         cabin.start_speed_test();
     }
     if card_clicked(ui, &resp, "home-speeds", "Internet log settings") {
-        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+        actions.push(ModuleAction::Settings(SettingsSec::Extras));
     }
 }
 
