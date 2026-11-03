@@ -117,6 +117,7 @@ impl Cabin {
         self.housekeep_rhythm_and_recap();
         self.tick_pc_health();
         self.tick_print_alerts();
+        self.tick_mod_discovery();
         if self.last_persist.elapsed() > Duration::from_secs(2) {
             self.persist_bg();
         }

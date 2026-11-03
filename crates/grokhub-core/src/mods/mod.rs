@@ -18,6 +18,7 @@ pub mod archive;
 pub mod cache;
 pub mod client;
 pub mod curseforge;
+pub mod discover;
 pub mod ids;
 pub mod install;
 pub mod managers;
