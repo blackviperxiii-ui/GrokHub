@@ -28,7 +28,8 @@ pub fn schema() -> Value {
             "properties": {
                 "command": {"type": "string"},
                 "timeout": {"type": "integer", "description": "Milliseconds. Default 120000. Maximum 300000. Ignored when is_background is true."},
-                "is_background": {"type": "boolean", "description": "Start the command and return a task id immediately. Read it with get_command_or_subagent_output."}
+                "is_background": {"type": "boolean", "description": "Start the command and return a task id immediately. Read it with get_command_or_subagent_output."},
+                "outside_sandbox": {"type": "boolean", "description": "Commands are sandboxed (writes: workspace, temp, caches). true: whole machine, asks the user."}
             },
             "required": ["command"],
             "additionalProperties": false
@@ -54,7 +55,8 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
         Ok(path) => path,
         Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
     };
-    match spawn_and_wait(&cwd, &command, timeout_ms, stop) {
+    let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
+    match spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref()) {
         Ok(output) => output,
         Err(err) => ToolOutput::err(err),
     }
@@ -201,7 +203,11 @@ impl Drop for BgProc {
 /// `sudo` asks GrokHub's helper ([`crate::sudo_pass`]) through the OS
 /// password dialog, never a terminal nobody is looking at.
 #[cfg(unix)]
-fn bash(cwd: &Path, command: &str) -> std::process::Command {
+fn bash(
+    cwd: &Path,
+    command: &str,
+    plan: Option<&crate::sandbox::Plan>,
+) -> Result<std::process::Command, String> {
     use std::process::{Command, Stdio};
 
     let mut cmd = Command::new("bash");
@@ -230,18 +236,25 @@ fn bash(cwd: &Path, command: &str) -> std::process::Command {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    cmd
+    if let Some(plan) = plan {
+        crate::sandbox::apply(&mut cmd, plan)?;
+    }
+    Ok(cmd)
 }
 
 #[cfg(unix)]
-pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
+pub(crate) fn spawn_background(
+    cwd: &Path,
+    command: &str,
+    plan: Option<&crate::sandbox::Plan>,
+) -> Result<BgProc, String> {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     if crate::sudo_pass::names_helper(command) {
         return Err((*crate::sudo_pass::HELPER_REFUSAL).to_string());
     }
 
-    let mut child = bash(cwd, command)
+    let mut child = bash(cwd, command, plan)?
         .spawn()
         .map_err(|err| format!("could not start bash: {err}"))?;
     let pgid = child.id() as i32;
@@ -276,12 +289,20 @@ pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, Stri
 }
 
 #[cfg(windows)]
-pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
+pub(crate) fn spawn_background(
+    cwd: &Path,
+    command: &str,
+    _plan: Option<&crate::sandbox::Plan>,
+) -> Result<BgProc, String> {
     win::spawn_background(cwd, command)
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn spawn_background(_cwd: &Path, _command: &str) -> Result<BgProc, String> {
+pub(crate) fn spawn_background(
+    _cwd: &Path,
+    _command: &str,
+    _plan: Option<&crate::sandbox::Plan>,
+) -> Result<BgProc, String> {
     Err("shell is not available on this system".into())
 }
 
@@ -306,10 +327,11 @@ fn spawn_and_wait(
     command: &str,
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
+    plan: Option<&crate::sandbox::Plan>,
 ) -> Result<ToolOutput, String> {
     use std::thread;
 
-    let mut child = bash(cwd, command)
+    let mut child = bash(cwd, command, plan)?
         .spawn()
         .map_err(|err| format!("could not start bash: {err}"))?;
     let pgid = child.id() as i32;
@@ -630,6 +652,7 @@ fn spawn_and_wait(
     command: &str,
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
+    _plan: Option<&crate::sandbox::Plan>,
 ) -> Result<ToolOutput, String> {
     win::run(cwd, command, timeout_ms, stop)
 }
@@ -640,6 +663,7 @@ fn spawn_and_wait(
     _command: &str,
     _timeout_ms: u64,
     _stop: &dyn Fn() -> bool,
+    _plan: Option<&crate::sandbox::Plan>,
 ) -> Result<ToolOutput, String> {
     Err("shell is not available on this system".into())
 }
@@ -679,7 +703,7 @@ mod tests {
         assert!(out.failed);
         assert_eq!(out.text, *crate::sudo_pass::HELPER_REFUSAL);
         assert_eq!(
-            super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"")
+            super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"", None)
                 .err()
                 .as_deref(),
             Some(*crate::sudo_pass::HELPER_REFUSAL)
