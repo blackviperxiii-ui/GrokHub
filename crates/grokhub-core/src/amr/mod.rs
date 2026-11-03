@@ -793,6 +793,53 @@ Glow stays white.
         assert!(store.recall_ranked(&[]).is_empty());
     }
 
+    /// Toy meanings for [`AmrStore::recall_semantic`]: "gpu" and "graphics"
+    /// share one direction, "ram" and "memory" another.
+    fn toy_encode(text: &str) -> Option<Vec<f32>> {
+        let t = text.to_ascii_lowercase();
+        let gpu = (t.contains("gpu") || t.contains("graphics")) as u8 as f32;
+        let ram = (t.contains("ram") || t.contains("memory")) as u8 as f32;
+        let n = (gpu * gpu + ram * ram).sqrt();
+        (n > 0.0).then(|| vec![gpu / n, ram / n])
+    }
+
+    #[test]
+    fn semantic_recall_finds_lines_by_meaning_and_skips_superseded_facts() {
+        let tmp = Tmp::new("semantic");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store
+            .remember(&draft(
+                "rig-card",
+                "Rig notes\ngraphics card is an RTX 4080\n",
+            ))
+            .unwrap();
+        store
+            .remember(&draft("rig-ram", "the PC has 64 GB of RAM\n"))
+            .unwrap();
+        store
+            .remember(&draft("old-card", "graphics card is a GTX 1080\n"))
+            .unwrap();
+        store
+            .link("rig-card", "old-card", EdgeRel::Supersedes)
+            .unwrap();
+        let q = toy_encode("which GPU do I have").unwrap();
+        let hits = store.recall_semantic(&q, &toy_encode, 0.5, 5);
+        assert_eq!(
+            hits.iter().map(|h| h.line.as_str()).collect::<Vec<_>>(),
+            vec!["graphics card is an RTX 4080"],
+            "the replaced card stays on disk but is never recalled"
+        );
+        assert!(tmp.path.join("nodes").join("old-card.md").is_file());
+        assert!(store.recall_semantic(&q, &toy_encode, 0.5, 0).is_empty());
+        assert!(store.recall_semantic(&[], &toy_encode, 0.5, 5).is_empty());
+        let q = toy_encode("how much memory").unwrap();
+        assert_eq!(
+            store.recall_semantic(&q, &toy_encode, 0.5, 5)[0].id,
+            "rig-ram"
+        );
+    }
+
     /// A node file that sat untouched and still won't parse is moved aside and noted for
     /// a Home card. One written seconds ago may be mid-write, so it stays put.
     #[test]

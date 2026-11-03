@@ -22,6 +22,7 @@ pub mod indexers;
 mod loopback;
 pub mod mcp;
 mod memory;
+mod memory_embed;
 mod models;
 pub mod perm;
 mod plan_skills;
