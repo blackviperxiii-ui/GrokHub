@@ -1551,6 +1551,18 @@ mod tests {
         assert!(!grokhub_core::accepts_effort_none("grok-4"));
     }
 
+    /// Grok 4.3 takes every level, so the router's pick reaches it.
+    #[test]
+    fn grok_4_3_gets_low_to_xhigh_too() {
+        for effort in ["low", "medium", "high", "xhigh"] {
+            let body = responses_body(&grok_req("grok-4.3", Some(effort)));
+            assert_eq!(body["reasoning"], json!({"effort": effort}), "{effort}");
+        }
+        // A saved legacy name still goes out as its level.
+        let body = responses_body(&grok_req("grok-4.3-latest", Some("think")));
+        assert_eq!(body["reasoning"], json!({"effort": "high"}));
+    }
+
     #[test]
     fn sealed_reasoning_goes_back_only_to_the_model_that_wrote_it() {
         let sealed = InputItem::reasoning(SEALED, "grok-4.7").unwrap();
