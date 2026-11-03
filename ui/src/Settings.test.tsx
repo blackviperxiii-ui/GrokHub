@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, Settings as Shape } from "./api";
@@ -55,9 +55,35 @@ vi.mock("./Privacy", () => ({
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
 import { ABOUT_NOTE, DESKTOP_NOTE, GENERAL_EMPTY, HALT_KEYS_LOCAL, HALT_KEYS_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+import { CATEGORY_LABELS, SECTION_LABELS, categoryOf, type Section } from "./sections";
 
+/** Opens a page the way a person does: its category up top, then the page in
+ * the side menu. */
 async function openSection(name: string) {
-  await userEvent.click(await screen.findByRole("button", { name }));
+  const section = (Object.keys(SECTION_LABELS) as Section[]).find((s) => SECTION_LABELS[s] === name)!;
+  const tabs = await screen.findByRole("navigation", { name: "Settings categories" });
+  await userEvent.click(within(tabs).getByRole("button", { name: CATEGORY_LABELS[categoryOf(section)] }));
+  await userEvent.click(within(sideMenu()).getByRole("button", { name }));
+}
+
+function sideMenu() {
+  return screen.getByRole("navigation", { name: "Settings sections" });
+}
+
+function labels(nav: HTMLElement) {
+  return Array.from(nav.querySelectorAll("button"), (b) => b.textContent);
+}
+
+/** Every category's pages, read by clicking through the top row. */
+async function everyPage() {
+  const tabs = screen.getByRole("navigation", { name: "Settings categories" });
+  const pages: Record<string, (string | null)[]> = {};
+  for (const tab of Array.from(tabs.querySelectorAll("button"))) {
+    await userEvent.click(tab);
+    expect(tab).toHaveAttribute("aria-pressed", "true");
+    pages[tab.textContent ?? ""] = labels(sideMenu());
+  }
+  return pages;
 }
 
 const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true };
@@ -282,43 +308,31 @@ describe("Settings", () => {
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
     expect(screen.queryByRole("group", { name: "On this computer" })).toBeNull();
     expect(api.getAutostart).not.toHaveBeenCalled();
-    const nav = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
-      "General",
-      "Account",
-      "Defaults",
-      "Behavior",
-      "Appearance",
-      "Personality",
-      "Playbooks",
-      "Permissions",
-      "Privacy & data",
-      "Background",
-      "About",
-    ]);
+    expect(await everyPage()).toEqual({
+      Account: ["Account"],
+      "Look & feel": ["Appearance"],
+      "AI & chat": ["Defaults", "Personality", "Playbooks"],
+      "Your PC": ["General", "Behavior", "Background"],
+      "Privacy & safety": ["Privacy & data", "Permissions"],
+      "Help & updates": ["About"],
+    });
   });
 
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
-      "General",
-      "Account",
-      "Defaults",
-      "Behavior",
-      "Appearance",
-      "Personality",
-      "Playbooks",
-      "Permissions",
-      "Privacy & data",
-      "Background",
-      "Pulse",
-      "Local AI",
-      "Web access",
-      "Labs",
-      "About",
-    ]);
+    // General opens first, so Your PC is the lit category.
+    expect(screen.getByRole("button", { name: "Your PC" })).toHaveAttribute("aria-pressed", "true");
+    expect(await everyPage()).toEqual({
+      Account: ["Account"],
+      "Look & feel": ["Appearance"],
+      "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI"],
+      "Your PC": ["General", "Behavior", "Background"],
+      "Privacy & safety": ["Privacy & data", "Permissions", "Web access"],
+      "Help & updates": ["About", "Labs"],
+    });
+    // A category opens on its first page.
+    expect(screen.getByRole("heading", { level: 1, name: "About" })).toBeTruthy();
   });
 
   it("opens every section from the nav, one at a time", async () => {
@@ -329,8 +343,8 @@ describe("Settings", () => {
     await openSection("Account");
     expect(screen.getByLabelText("API key")).toBeInTheDocument();
     expect(screen.queryByLabelText("Let Loadout control the desktop")).toBeNull();
-    expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
+    expect(within(sideMenu()).getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(sideMenu()).queryByRole("button", { name: "General" })).toBeNull();
 
     await openSection("Defaults");
     expect(screen.getByLabelText("Model")).toHaveTextContent("grok-4.7");
@@ -390,7 +404,7 @@ describe("Settings", () => {
   it("opens each section at the top and closes from the button or Esc", async () => {
     api.getSettings.mockResolvedValue(shape({}));
     const onClose = vi.fn();
-    const { container } = render(<Settings caps={DESKTOP} onClose={onClose} />);
+    const { container } = render(<Settings caps={DESKTOP} onClose={onClose} backTo="Chat" />);
     await openSection("Playbooks");
     const pane = container.querySelector<HTMLElement>(".settings-pane")!;
     expect(screen.getByRole("heading", { level: 1, name: "Playbooks" })).toBeTruthy();
@@ -399,7 +413,7 @@ describe("Settings", () => {
     expect(pane.scrollTop).toBe(0);
     expect(screen.getByRole("heading", { level: 1, name: "Permissions" })).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Back to Chat" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(2);
