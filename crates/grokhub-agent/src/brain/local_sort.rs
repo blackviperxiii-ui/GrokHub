@@ -149,6 +149,19 @@ pub(super) const EXEMPLARS: &[(Intent, &str, &[&str])] = &[
     ),
     (
         Intent::Repair,
+        "pc-health",
+        &[
+            "give my rig a once-over",
+            "is everything ok with my setup",
+            "make my computer run faster",
+            "my drive is almost full",
+            "what's eating all my space",
+            "boot takes forever lately",
+            "too many things start when I log in",
+        ],
+    ),
+    (
+        Intent::Repair,
         "desktop",
         &[
             "the screen goes black randomly",

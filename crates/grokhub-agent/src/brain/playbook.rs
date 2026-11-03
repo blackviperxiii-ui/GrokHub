@@ -333,7 +333,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (15, Source::Shipped, 0)
+            (16, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -375,6 +375,7 @@ mod tests {
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
+                ("pc-tuneup", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -404,6 +405,7 @@ mod tests {
                 ("quick-answer", Source::Shipped),
                 ("plan-day", Source::Shipped),
                 ("creative", Source::Shipped),
+                ("pc-tuneup", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -467,7 +469,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 16);
+        assert_eq!(all.len(), 17);
         assert_eq!(
             problems,
             vec![
@@ -501,6 +503,14 @@ mod tests {
         );
         // One PC-fix family covers macOS too; the any-task playbook no longer does.
         assert_eq!(id("repair", "system", "macos").as_deref(), Some("pc-fix"));
+        // A check-up of a PC that isn't broken gets the tune-up, never small talk.
+        for os in ["linux", "windows", "macos"] {
+            assert_eq!(id("repair", "pc-health", os).as_deref(), Some("pc-tuneup"));
+            assert_eq!(
+                id("question", "pc-health", os).as_deref(),
+                Some("pc-tuneup")
+            );
+        }
         assert_eq!(id("task", "code", "linux").as_deref(), Some("code-dev"));
         assert_eq!(id("repair", "code", "windows").as_deref(), Some("code-dev"));
         assert_eq!(id("task", "files", "linux").as_deref(), Some("files"));

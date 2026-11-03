@@ -1024,7 +1024,11 @@ pub fn compact_transcript(
     if history.is_empty() {
         return Err(CompactError::Failed("nothing to compact".into()));
     }
-    let snapshot = history.clone();
+    // Earlier turns' cabin notes (style, playbook, memory) go now: the prompt
+    // is rebuilt anyway, so dropping them costs no cache, and the summary
+    // never reads a stale playbook as something the person said.
+    let mut snapshot = history.clone();
+    crate::prefix_cache::drop_older_notes(&mut snapshot);
     if let Some((rebuilt, done)) =
         server_compact(client, cancel, model, conversation_id, &snapshot)?
     {

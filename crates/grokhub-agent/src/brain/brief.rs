@@ -16,7 +16,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
+\"mood\":\"calm|urgent|frustrated|low\",\"domain\":\"system|pc-health|code|files|desktop|web|media|gaming|game-help|loadout|library|planning|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -196,7 +196,6 @@ const REPAIR_PHRASES: &[&str] = &[
     "doesn't work",
     "stopped working",
     "can't start",
-    "health check",
 ];
 /// Diagnostics is repair work: the design's "repair/diagnostics" intent.
 const DIAGNOSE_WORDS: &[&str] = &["scan", "diagnose", "diagnostics", "troubleshoot", "checkup"];
@@ -209,10 +208,74 @@ const FEATURE_PHRASES: &[&str] = &[
     "i want it to",
     "add support",
     "feature",
+    "to the app",
+    "in the app",
 ];
 /// The machine as a whole: the system domain, without being a change to it.
 const MACHINE_WORDS: &[&str] = &[
     "computer", "pc", "laptop", "machine", "os", "windows", "linux",
+];
+/// A check-up of the machine as a whole: named on their own, these are
+/// always about this PC ("run a health check", "give it a tune-up").
+const PC_HEALTH_PHRASES: &[&str] = &[
+    "health check",
+    "checkup",
+    "check-up",
+    "check up",
+    "tune-up",
+    "tune up",
+    "tuneup",
+];
+/// With a machine word these make a check-up too ("why is my pc slow",
+/// "speed up my laptop", "optimize windows"); alone they're too vague.
+const PC_HEALTH_WORDS: &[&str] = &[
+    "tune",
+    "optimize",
+    "optimise",
+    "slow",
+    "slower",
+    "slowly",
+    "sluggish",
+    "laggy",
+    "lagging",
+    "bloat",
+    "bloated",
+    "bloatware",
+    "declutter",
+    "maintenance",
+    "healthy",
+    "health",
+    "cleanup",
+    "temps",
+    "temperatures",
+    "overheating",
+];
+const PC_HEALTH_MACHINE_PHRASES: &[&str] = &["speed up", "clean up", "running hot"];
+/// Freeing space is a check-up with or without a machine word.
+const STORAGE_PHRASES: &[&str] = &[
+    "free up storage",
+    "free up space",
+    "free up disk",
+    "free up some space",
+    "free up some storage",
+    "free up some disk",
+    "low on space",
+    "low on storage",
+    "out of space",
+    "out of storage",
+    "running out of space",
+    "running out of storage",
+    "clear up space",
+    "make some space",
+    "drive is full",
+    "disk is full",
+    "drive is almost full",
+    "disk is almost full",
+    "drive is nearly full",
+    "disk is nearly full",
+    "storage is full",
+    "storage is almost full",
+    "filling up my drive",
 ];
 const CREATIVE_WORDS: &[&str] = &[
     "poem",
@@ -336,6 +399,14 @@ const DESKTOP_WORDS: &[&str] = &[
 /// `steam` alone stay out so a Pulse/library feature ask is not gaming.
 const GAMING_WORDS: &[&str] = &[
     "fps",
+    "stutter",
+    "stuttering",
+    // Finding people to play with.
+    "duo",
+    "squad",
+    "teammate",
+    "teammates",
+    "lfg",
     "game",
     "games",
     "gaming",
@@ -406,6 +477,9 @@ const GAME_HELP_PHRASES: &[&str] = &[
 /// Phrases only: bare "loadout" is the cabin app name, not this playbook.
 const LOADOUT_PHRASES: &[&str] = &[
     "pc build",
+    "roast my build",
+    "rate my build",
+    "my build",
     "pc parts",
     "parts list",
     "build a pc",
@@ -451,6 +525,14 @@ const PLAN_DAY_PHRASES: &[&str] = &[
     "day plan",
     "today's plan",
     "todays plan",
+    "plan my week",
+    "plan the week",
+    "plan this week",
+    "plan my weekend",
+    "plan the weekend",
+    "plan this weekend",
+    "week plan",
+    "weekly plan",
 ];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
@@ -502,6 +584,25 @@ fn is_plan_day(t: &str) -> bool {
     any_phrase(t, PLAN_DAY_PHRASES)
 }
 
+/// A check-up of this PC: a tune-up, a health check, "it's slow", freeing
+/// space. "check" counts only with a machine word right after it ("check this
+/// pc", not "check my email on this computer").
+fn is_pc_health(t: &str, ws: &[&str]) -> bool {
+    let machine = any_word(ws, MACHINE_WORDS);
+    let check_machine = ws.iter().enumerate().any(|(i, w)| {
+        *w == "check"
+            && ws
+                .iter()
+                .skip(i + 1)
+                .take(3)
+                .any(|n| MACHINE_WORDS.contains(n))
+    });
+    any_phrase(t, PC_HEALTH_PHRASES)
+        || any_phrase(t, STORAGE_PHRASES)
+        || check_machine
+        || (machine && (any_word(ws, PC_HEALTH_WORDS) || any_phrase(t, PC_HEALTH_MACHINE_PHRASES)))
+}
+
 pub(super) fn words(t: &str) -> Vec<&str> {
     t.split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
@@ -524,6 +625,12 @@ fn system_change(t: &str, ws: &[&str]) -> bool {
 fn done_for(intent: Intent, domain: &str) -> Vec<String> {
     let list: &[&str] = match (intent, domain) {
         (Intent::Repair, "system") => &["services", "packages", "boot errors", "ports"],
+        (Intent::Repair, "pc-health") => &[
+            "read-only check run first",
+            "findings explained",
+            "fixes ranked by impact",
+            "nothing changed without a yes",
+        ],
         (Intent::Repair, "code") => &["it builds", "tests pass", "the error is gone"],
         (Intent::Repair, "gaming") | (Intent::Task, "gaming") => &[
             "hardware read from this PC",
@@ -641,6 +748,14 @@ fn domain_of(
         "gaming"
     } else if is_plan_day(t) {
         "planning"
+    } else if !system
+        && !feature_ask
+        && !any_word(ws, REPAIR_WORDS)
+        && !any_phrase(t, REPAIR_PHRASES)
+        && is_pc_health(t, ws)
+    {
+        // A check-up, not a breakage or a change: the tune-up playbook.
+        "pc-health"
     } else if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
@@ -749,7 +864,8 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let gaming_lag = gaming
         && (any_phrase(&t, &["low fps", "dropping frames", "stutter", "stuttering"])
             || any_word(&ws, &["lag", "laggy", "stutter", "choppy"]));
-    let repair = broken || gaming_lag || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
+    let pc_health = !feature && !gaming && is_pc_health(&t, &ws);
+    let repair = broken || gaming_lag || pc_health || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
     } else if repair {
@@ -870,10 +986,13 @@ pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
             confidence,
         };
     }
+    // A guess still keeps the ask's subject ("my pc ..." stays system), so
+    // nothing downstream reads an unclear ask about the machine as small talk.
+    let guessed_domain = domain_of(&t, &ws, input, Intent::Chat, false);
     let fallback = || Brief {
         care: care_for(Intent::Chat, false, destructive, true),
         mood: "calm".into(),
-        domain: "general".into(),
+        domain: guessed_domain.into(),
         by: "default".into(),
         confidence,
         ..Default::default()
@@ -1454,7 +1573,7 @@ mod tests {
                 done: vec!["files in place".into(), "nothing lost".into()],
                 domain: "files".into(),
                 by: "model".into(),
-                confidence: 18,
+                confidence: 3,
             }
         );
         // Fallback off: the same ask gets the default Brief, with no call to make.
@@ -1464,7 +1583,7 @@ mod tests {
                 mood: "calm".into(),
                 domain: "general".into(),
                 by: "default".into(),
-                confidence: 18,
+                confidence: 3,
                 ..Default::default()
             }
         );
@@ -1544,7 +1663,7 @@ mod tests {
             .iter()
             .flat_map(|(_, _, texts)| texts.iter().copied())
             .collect();
-        assert_eq!(examples.len(), 124);
+        assert_eq!(examples.len(), 131);
         let mut right = 0;
         let mut misses = Vec::new();
         let mut critical_misses = Vec::new();
@@ -1756,5 +1875,113 @@ mod tests {
         assert_eq!(kept.len(), BRIEF_KEEP + 1);
         assert_eq!(kept.last().unwrap().at, 10 + BRIEF_TRIM_AT as u64 - 1);
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+#[cfg(test)]
+mod pc_health_tests {
+    use super::*;
+
+    fn sort(text: &str) -> Brief {
+        classify(
+            &BriefInput {
+                text,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn home_buttons_and_chips_never_sort_as_small_talk() {
+        let mut asks: Vec<&str> = grokhub_core::home::BUTTON_ASKS.to_vec();
+        asks.extend(
+            grokhub_core::chips::SEED_CHIPS
+                .iter()
+                .map(|(_, label)| *label),
+        );
+        for ask in asks {
+            let b = sort(ask);
+            assert_eq!(b.by, "rules", "{ask}: {b:?}");
+            assert_ne!(b.intent, Intent::Chat, "{ask}: {b:?}");
+        }
+        for ask in [
+            grokhub_core::home::TUNE_UP_ASK,
+            grokhub_core::home::FREE_STORAGE_ASK,
+        ] {
+            let b = sort(ask);
+            assert_eq!(
+                (b.intent, b.domain.as_str()),
+                (Intent::Repair, "pc-health"),
+                "{ask}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_up_of_this_pc_is_a_pc_health_repair() {
+        for ask in [
+            "check my pc",
+            "check up on my pc please",
+            "why is my pc so slow",
+            "tune up my computer",
+            "speed up my laptop",
+            "clean up my pc",
+            "is my computer healthy?",
+            "run a health check",
+            "optimize windows",
+            "free up some disk space",
+            "my drive is almost full",
+            "my laptop is running hot",
+        ] {
+            let b = sort(ask);
+            assert_eq!(
+                (b.intent, b.domain.as_str(), b.by.as_str()),
+                (Intent::Repair, "pc-health", "rules"),
+                "{ask}"
+            );
+        }
+    }
+
+    #[test]
+    fn breakages_feature_asks_and_small_talk_stay_where_they_were() {
+        let cases: &[(&str, Intent, &str)] = &[
+            ("my pc keeps crashing", Intent::Repair, "system"),
+            ("the game stutters in ranked", Intent::Repair, "gaming"),
+            ("hey", Intent::Chat, "general"),
+            ("lol same, long day", Intent::Chat, "general"),
+            ("I'm so slow today lol", Intent::Chat, "general"),
+        ];
+        for (ask, intent, domain) in cases {
+            let b = sort(ask);
+            assert_eq!((b.intent, b.domain.as_str()), (*intent, *domain), "{ask}");
+        }
+        // A plain question about space is answered, not a tune-up.
+        let space = sort("how much disk space do I have");
+        assert_eq!(space.intent, Intent::Question);
+        assert_ne!(space.domain, "pc-health");
+        // Reading mail on this computer isn't a check of it.
+        assert_ne!(sort("check my email on this computer").domain, "pc-health");
+        // Asking for a feature is new work, never a check-up.
+        let feature = sort("can you add a tune-up button to the app");
+        assert_ne!(feature.intent, Intent::Repair);
+        assert_ne!(feature.domain, "pc-health");
+    }
+
+    #[test]
+    fn squads_stutters_and_week_plans_have_a_home() {
+        assert_eq!(sort("Find a duo tonight").domain, "gaming");
+        assert_eq!(sort("Fix my stutter").domain, "gaming");
+        assert_eq!(sort("Plan my week").domain, "planning");
+        assert_eq!(sort("Plan my weekend").domain, "planning");
+        assert_eq!(sort("Roast my build").domain, "loadout");
+    }
+
+    #[test]
+    fn a_guess_keeps_the_subject_of_the_ask() {
+        let b = sort("zxq my laptop blorp");
+        if b.by == "default" {
+            assert_eq!(b.domain, "system");
+        }
+        assert_eq!(sort("zxq blorp").domain, "general");
     }
 }

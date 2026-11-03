@@ -687,7 +687,7 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                             .clicked()
                         {
                             actions.push(ModuleAction::OpenChat(
-                                "Check this PC and suggest a tune-up.".into(),
+                                grokhub_core::home::TUNE_UP_ASK.into(),
                             ));
                         }
                         if crate::ui_kit::recipe::button(ui, None, "Details", false, btn, true)
@@ -903,7 +903,9 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             }
         }
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Free up storage") {
-            actions.push(ModuleAction::OpenChat("Free up storage on this PC.".into()));
+            actions.push(ModuleAction::OpenChat(
+                grokhub_core::home::FREE_STORAGE_ASK.into(),
+            ));
         }
     });
 }

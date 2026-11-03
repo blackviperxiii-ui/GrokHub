@@ -18,6 +18,20 @@ const CONFIG_NAME: &str = "prefix_cache.toml";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Settings {
     pub enabled: bool,
+    /// When earlier turns lose their `<cabin-volatile>` notes.
+    pub old_notes: OldNotes,
+}
+
+/// When an earlier turn's `<cabin-volatile>` notes (its talk style, playbook,
+/// memory) leave the history, so only the current turn's notes steer the reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OldNotes {
+    /// At compaction, which rebuilds the prompt anyway, so no cache is lost.
+    #[default]
+    AtCompaction,
+    /// Before every request (`old_notes = "every_turn"`): old notes never
+    /// linger, at the price of the last turn's cached tail each turn.
+    EveryTurn,
 }
 
 thread_local! {
@@ -37,16 +51,23 @@ pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
 
 pub fn settings(config_dir: &Path) -> Settings {
     if let Some(on) = TEST_OVERRIDE.with(|cell| cell.get()) {
-        return Settings { enabled: on };
+        return Settings {
+            enabled: on,
+            ..Settings::default()
+        };
     }
     let Ok(text) = std::fs::read_to_string(config_path(config_dir)) else {
-        return Settings { enabled: true };
+        return Settings {
+            enabled: true,
+            ..Settings::default()
+        };
     };
     parse_file(&text)
 }
 
 fn parse_file(text: &str) -> Settings {
     let mut enabled = true;
+    let mut old_notes = OldNotes::default();
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -55,11 +76,18 @@ fn parse_file(text: &str) -> Settings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
+        let value = value.trim().trim_matches('"');
         if key.trim().eq_ignore_ascii_case("enabled") {
-            enabled = !value.trim().eq_ignore_ascii_case("false");
+            enabled = !value.eq_ignore_ascii_case("false");
+        } else if key.trim().eq_ignore_ascii_case("old_notes") {
+            old_notes = if value.eq_ignore_ascii_case("every_turn") {
+                OldNotes::EveryTurn
+            } else {
+                OldNotes::AtCompaction
+            };
         }
     }
-    Settings { enabled }
+    Settings { enabled, old_notes }
 }
 
 pub fn enabled(config_dir: &Path) -> bool {
@@ -175,6 +203,36 @@ pub(crate) fn split_user_turn(text: &str) -> Option<(&str, &str)> {
     Some((volatile, user))
 }
 
+/// Drop the `<cabin-volatile>` notes from every user turn but the newest, so
+/// an earlier turn's playbook or talk style can't steer this one. Returns
+/// whether anything changed.
+pub fn drop_older_notes(items: &mut [InputItem]) -> bool {
+    let Some(last) = items
+        .iter()
+        .rposition(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for item in &mut items[..last] {
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "user" {
+            continue;
+        }
+        for part in content.iter_mut() {
+            if let ContentPart::InputText(text) = part {
+                if let Some((_, user)) = split_user_turn(text) {
+                    *text = user.to_string();
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Desktop episode worker input: stable system + growing view + volatile step tail.
 pub fn episode_worker_input(
     system_base: &str,
@@ -234,6 +292,56 @@ mod tests {
         set_enabled_for_tests(Some(false));
         assert!(!enabled(&_dir));
         set_enabled_for_tests(None);
+    }
+
+    #[test]
+    fn old_notes_leave_at_compaction_unless_set_to_every_turn() {
+        assert_eq!(parse_file("").old_notes, OldNotes::AtCompaction);
+        assert_eq!(
+            parse_file("old_notes = \"every_turn\"\n").old_notes,
+            OldNotes::EveryTurn
+        );
+        assert_eq!(
+            parse_file("old_notes = soon").old_notes,
+            OldNotes::AtCompaction
+        );
+    }
+
+    #[test]
+    fn only_the_newest_turn_keeps_its_notes() {
+        let mut items = Vec::new();
+        push_stable_system(&mut items, "rules");
+        let hangout = TurnVolatile {
+            playbook: Some("Playbook for this turn: hanging out.".into()),
+            ..Default::default()
+        };
+        push_user_turn(&mut items, &hangout, "lol same", None);
+        items.push(InputItem::Message {
+            role: "assistant".into(),
+            content: vec![ContentPart::InputText("haha".into())],
+        });
+        let tuneup = TurnVolatile {
+            playbook: Some("Playbook for this turn: check up this PC.".into()),
+            ..Default::default()
+        };
+        push_user_turn(&mut items, &tuneup, "check my pc", None);
+        assert!(drop_older_notes(&mut items));
+        let texts: Vec<String> = items
+            .iter()
+            .map(|i| match i {
+                InputItem::Message { content, .. } => match &content[0] {
+                    ContentPart::InputText(t) => t.clone(),
+                    _ => String::new(),
+                },
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(texts[0], "rules");
+        assert_eq!(texts[1], "lol same");
+        assert_eq!(texts[2], "haha");
+        assert!(texts[3].contains("check up this PC") && texts[3].ends_with("check my pc"));
+        // Nothing left to drop the second time.
+        assert!(!drop_older_notes(&mut items));
     }
 
     #[test]
