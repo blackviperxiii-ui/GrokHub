@@ -23,19 +23,18 @@ fn settings_default_on_and_the_file_can_widen_or_turn_it_off() {
     assert_eq!(parse_file("", None), Settings::default());
     assert!(Settings::default().enabled && Settings::default().network_guard);
     let home = Path::new("/home/user");
+    // An absolute path on this OS ("/opt/sdk" has no drive on Windows).
+    let sdk = std::env::temp_dir().join("sdk");
     let s = parse_file(
-        "# mine\nenabled = true\nnetwork_guard = false\nwritable = [\"~/src/other\", '/opt/sdk', \"relative/no\"]\n",
+        &format!(
+            "# mine\nenabled = true\nnetwork_guard = false\nwritable = [\"~/src/other\", '{}', \"relative/no\"]\n",
+            sdk.display()
+        ),
         Some(home),
     );
     assert!(s.enabled);
     assert!(!s.network_guard);
-    assert_eq!(
-        s.writable,
-        [
-            PathBuf::from("/home/user/src/other"),
-            PathBuf::from("/opt/sdk")
-        ]
-    );
+    assert_eq!(s.writable, [home.join("src/other"), sdk]);
     assert!(!parse_file("enabled = FALSE", None).enabled);
 }
 
