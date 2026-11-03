@@ -874,8 +874,14 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
             InputItem::FunctionCallOutput { call_id, output } => {
                 messages.push(json!({"role": "tool", "tool_call_id": call_id, "content": output}));
             }
-            // xAI compaction and sealed reasoning: only xAI can read them.
-            InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
+            // xAI's sealed compaction: its plain-text digest stands in, when it has one.
+            InputItem::ServerCompaction { digest, .. } => {
+                if let Some(text) = crate::compact::fallback_digest_message(digest) {
+                    messages.push(json!({"role": "user", "content": text}));
+                }
+            }
+            // Sealed reasoning: only xAI can read it.
+            InputItem::Reasoning { .. } => {}
         }
     }
     let mut body = json!({"model": model, "stream": false, "messages": messages});
@@ -969,8 +975,14 @@ pub fn anthropic_body(
                     json!({"type": "tool_result", "tool_use_id": call_id, "content": output}),
                 );
             }
-            // xAI compaction and sealed reasoning: only xAI can read them.
-            InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
+            // xAI's sealed compaction: its plain-text digest stands in, when it has one.
+            InputItem::ServerCompaction { digest, .. } => {
+                if let Some(text) = crate::compact::fallback_digest_message(digest) {
+                    push_block(&mut messages, "user", json!({"type": "text", "text": text}));
+                }
+            }
+            // Sealed reasoning: only xAI can read it.
+            InputItem::Reasoning { .. } => {}
         }
     }
     let max_tokens = max_output

@@ -918,7 +918,7 @@ pub fn estimate_input_tokens(items: &[InputItem]) -> u64 {
                     .saturating_add(output.len() as u64);
             }
             // The whole item, `encrypted_content` included: never less than the blob.
-            InputItem::ServerCompaction { raw } | InputItem::Reasoning { raw, .. } => {
+            InputItem::ServerCompaction { raw, .. } | InputItem::Reasoning { raw, .. } => {
                 bytes = bytes.saturating_add(raw.len() as u64);
             }
         }
@@ -1084,8 +1084,16 @@ fn server_compact(
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
+    let digest = fallback_digest(&rest[..tail_at]);
+    let mut items_out = out.items;
+    if let Some(at) = items_out
+        .iter()
+        .rposition(|item| matches!(item, InputItem::ServerCompaction { .. }))
+    {
+        items_out[at] = items_out[at].clone().with_digest(&digest);
+    }
     let mut rebuilt = head.to_vec();
-    rebuilt.extend(out.items);
+    rebuilt.extend(items_out);
     rebuilt.extend_from_slice(&rest[tail_at..]);
     crate::image_budget::apply_image_budget(&mut rebuilt);
     let detail = grokhub_core::wire::CompactDetail {
@@ -1100,6 +1108,107 @@ fn server_compact(
             server: Some(detail),
         },
     )))
+}
+
+/// Most characters a [`fallback_digest`] keeps. The newest lines win.
+pub const FALLBACK_DIGEST_MAX_CHARS: usize = 8_000;
+/// Characters kept from one message in the digest.
+const DIGEST_MESSAGE_CHARS: usize = 300;
+/// Characters kept from one tool call's arguments or one tool result.
+const DIGEST_TOOL_CHARS: usize = 120;
+
+/// A plain-text copy of `folded` for providers that can't read xAI's sealed
+/// compaction: one line per user or assistant message, tool call and tool result,
+/// each clipped, newest kept when the whole runs past
+/// [`FALLBACK_DIGEST_MAX_CHARS`]. An older compaction's own digest comes first,
+/// so chained compactions keep their history. Built locally, no model call.
+pub fn fallback_digest(folded: &[InputItem]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for item in folded {
+        match item {
+            InputItem::ServerCompaction { digest, .. } => {
+                lines.extend(digest.lines().map(str::to_string));
+            }
+            InputItem::Message { role, content } => {
+                let who = match role.as_str() {
+                    "user" => "User",
+                    "assistant" => "Assistant",
+                    _ => continue,
+                };
+                let mut text = Vec::new();
+                for part in content {
+                    match part {
+                        ContentPart::InputText(t) => text.push(t.as_str()),
+                        ContentPart::InputImage(_) => text.push("[image]"),
+                    }
+                }
+                let line = clip_line(&text.join(" "), DIGEST_MESSAGE_CHARS);
+                if !line.is_empty() {
+                    lines.push(format!("{who}: {line}"));
+                }
+            }
+            InputItem::FunctionCall {
+                name, arguments, ..
+            } => {
+                lines.push(format!(
+                    "Tool call: {name}({})",
+                    clip_line(arguments, DIGEST_TOOL_CHARS)
+                ));
+            }
+            InputItem::FunctionCallOutput { output, .. } => {
+                lines.push(format!(
+                    "Tool result: {}",
+                    clip_line(output, DIGEST_TOOL_CHARS)
+                ));
+            }
+            InputItem::Reasoning { .. } => {}
+        }
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    let mut cut = false;
+    for line in lines.iter().rev() {
+        let cost = line.chars().count() + 1;
+        if used + cost > FALLBACK_DIGEST_MAX_CHARS {
+            cut = true;
+            break;
+        }
+        used += cost;
+        kept.push(line);
+    }
+    kept.reverse();
+    let body = kept.join("\n");
+    let body = if cut && !body.is_empty() {
+        format!("[Older lines dropped]\n{body}")
+    } else {
+        body
+    };
+    neutralize_compaction_control_tokens(&body)
+        .replace("</conversation_summary>", "<\u{200b}/conversation_summary>")
+}
+
+/// `text` on one line (whitespace runs become one space), at most `max` chars.
+fn clip_line(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// The message OpenRouter and the local model get in place of a sealed xAI
+/// compaction item, or `None` when it has no digest.
+pub fn fallback_digest_message(digest: &str) -> Option<String> {
+    let digest = digest.trim();
+    (!digest.is_empty()).then(|| {
+        format!(
+            "This session is being continued from a previous conversation that ran out of context. \
+             The digest below is a clipped copy of the earlier portion of the conversation.\n\n\
+             <conversation_summary>\n{digest}\n</conversation_summary>"
+        )
+    })
 }
 
 /// Leading system messages, then the rest.

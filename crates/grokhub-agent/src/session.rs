@@ -1203,7 +1203,7 @@ fn parse_record(value: &Value) -> Option<Record> {
             .get("raw")
             .and_then(Value::as_str)
             .and_then(InputItem::server_compaction)
-            .map(Record::Item),
+            .map(|item| Record::Item(item.with_digest(&string_field(value, "digest")))),
         "usage" => Some(Record::Usage {
             usage: Usage {
                 input_tokens: u64_field(value, "input_tokens"),
@@ -1305,10 +1305,16 @@ fn item_json(item: &InputItem) -> Value {
         }),
         // Its own type: `compaction` is this file's marker line. The item stays
         // the exact text xAI sent, as a string.
-        InputItem::ServerCompaction { raw } => json!({
-            "type": SERVER_COMPACTION_RECORD,
-            "raw": raw,
-        }),
+        InputItem::ServerCompaction { raw, digest } => {
+            let mut record = json!({
+                "type": SERVER_COMPACTION_RECORD,
+                "raw": raw,
+            });
+            if !digest.is_empty() {
+                record["digest"] = json!(digest);
+            }
+            record
+        }
         // Same idea: the sealed item as the exact text xAI sent, and its model.
         InputItem::Reasoning { raw, model } => json!({
             "type": REASONING_RECORD,
@@ -2149,7 +2155,10 @@ mod tests {
         let id = "native-server-compact";
         let raw =
             r#"{ "id":"cmp_7", "type":"compaction","encrypted_content":"gAAAAB+x/y==\u00e9" }"#;
-        let item = InputItem::server_compaction(raw).unwrap();
+        let digest = "User: OLD_TOPIC\nAssistant: old reply";
+        let item = InputItem::server_compaction(raw)
+            .unwrap()
+            .with_digest(digest);
         record_turn(
             id,
             "/work",
@@ -2172,6 +2181,7 @@ mod tests {
         let want = vec![
             InputItem::ServerCompaction {
                 raw: raw.to_string(),
+                digest: digest.to_string(),
             },
             assistant("keep me"),
         ];
@@ -2182,7 +2192,7 @@ mod tests {
         assert_eq!(loaded.input(), want);
         let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
         assert!(
-            file.contains(r#"{"raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
+            file.contains(r#"{"digest":"User: OLD_TOPIC\nAssistant: old reply","raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
             "{file}"
         );
         assert_eq!(
