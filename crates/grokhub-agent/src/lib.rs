@@ -34,6 +34,7 @@ mod research;
 mod retry;
 pub mod route;
 mod run;
+pub mod sandbox;
 mod scan;
 pub mod self_manage;
 mod session;
