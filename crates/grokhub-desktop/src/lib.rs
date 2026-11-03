@@ -24,6 +24,8 @@ mod pixels;
 mod portal;
 #[cfg(target_os = "linux")]
 pub mod screen;
+#[cfg(windows)]
+mod uia;
 #[cfg(target_os = "linux")]
 mod uinput_dev;
 #[cfg(unix)]
@@ -633,10 +635,14 @@ impl DesktopBackend for LiveBackend {
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         trash_paths(paths)
     }
-    // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
+    // Spike-2b: AT-SPI on Linux, UI Automation on Windows. Both capped at 300 ms.
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
         crate::host::target_at(x, y)
+    }
+    #[cfg(windows)]
+    fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+        crate::uia::target_at(x, y)
     }
     fn game_guard(&mut self) -> game_guard::GameGuard {
         game_guard::current()
