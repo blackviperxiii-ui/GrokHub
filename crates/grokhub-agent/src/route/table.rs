@@ -84,8 +84,8 @@ impl SpeedQuality {
             | "background:compact"
             | "chat:quick" => Self::Speed,
             // repair:diagnose is Quality + Flagship lane (strongest reasoner).
-            "plan" | "design" | "code:multi-file" | "debug" | "chat:reason"
-            | "prepare:hard" | "repair:diagnose" => Self::Quality,
+            "plan" | "design" | "code:multi-file" | "debug" | "chat:reason" | "prepare:hard"
+            | "repair:diagnose" => Self::Quality,
             _ => Self::Balanced,
         }
     }

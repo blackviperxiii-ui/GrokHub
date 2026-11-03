@@ -140,7 +140,6 @@ pub(crate) struct Score {
     pub misses: Vec<String>,
 }
 
-
 /// Held out: written after the reader was tuned on [`SET`], never tuned on.
 /// Its numbers are the honest ones.
 pub(crate) const HELD_OUT: &[(&str, AskKind, &str, &str)] = &[
@@ -255,8 +254,16 @@ fn ask_reader_routes_the_labeled_set() {
     report("tuning", &s);
     let pct = |x: usize| 100.0 * x as f64 / s.n as f64;
     assert!(s.n >= 80, "set too small: {}", s.n);
-    assert!(pct(s.lane_same) >= 90.0, "lane accuracy {:.1}%", pct(s.lane_same));
-    assert!(pct(s.effort_ok) >= 90.0, "effort in range {:.1}%", pct(s.effort_ok));
+    assert!(
+        pct(s.lane_same) >= 90.0,
+        "lane accuracy {:.1}%",
+        pct(s.lane_same)
+    );
+    assert!(
+        pct(s.effort_ok) >= 90.0,
+        "effort in range {:.1}%",
+        pct(s.effort_ok)
+    );
     // Under-thinking costs quality; keep it rare.
     assert!(pct(s.under) <= 5.0, "under-effort {:.1}%", pct(s.under));
     // And the whole point: far less reasoning than always-High.
@@ -269,7 +276,11 @@ fn ask_reader_holds_up_on_turns_it_was_not_tuned_on() {
     report("held-out", &s);
     let pct = |x: usize| 100.0 * x as f64 / s.n as f64;
     assert!(s.n >= 40, "held-out too small: {}", s.n);
-    assert!(pct(s.lane_same) >= 80.0, "lane accuracy {:.1}%", pct(s.lane_same));
+    assert!(
+        pct(s.lane_same) >= 80.0,
+        "lane accuracy {:.1}%",
+        pct(s.lane_same)
+    );
     assert!(pct(s.under) <= 10.0, "under-effort {:.1}%", pct(s.under));
 }
 

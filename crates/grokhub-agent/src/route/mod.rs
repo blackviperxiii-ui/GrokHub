@@ -1305,7 +1305,9 @@ impl Router {
                     None if policy::is_new_provider(reg, sent_model) => None,
                     // With no listing, an xAI reasoning model takes low and up:
                     // "none" exists only where a listing names it.
-                    None if takes_effort => Some(EFFORT_LADDER[pick.rung.max(LOW_RUNG)].to_string()),
+                    None if takes_effort => {
+                        Some(EFFORT_LADDER[pick.rung.max(LOW_RUNG)].to_string())
+                    }
                     None => None,
                 };
                 // `minimal` and `max` are not sent: they go out as low and xhigh.
@@ -1879,7 +1881,12 @@ mod tests {
         // Asked: the answering model learns what it really is and at what effort.
         live::stream_routed(
             &echo,
-            &req("grok-4.7", None, &s, "btw what model are you and what effort?"),
+            &req(
+                "grok-4.7",
+                None,
+                &s,
+                "btw what model are you and what effort?",
+            ),
             &CancelToken::new(),
             &mut |_| {},
             "chat:default",

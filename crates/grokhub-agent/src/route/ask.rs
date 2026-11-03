@@ -172,13 +172,89 @@ fn rung_name(r: usize) -> &'static str {
 // ---------------------------------------------------------------- signals
 
 const GREETINGS: &[&str] = &[
-    "hi", "hey", "hello", "yo", "sup", "hiya", "howdy", "thanks", "thank", "thx", "ty", "ok",
-    "okay", "k", "kk", "cool", "nice", "great", "awesome", "lol", "lmao", "haha", "gg", "ggs",
-    "wp", "np", "yes", "yep", "yeah", "yup", "no", "nope", "nah", "bye", "cya", "gn", "gm",
-    "morning", "night", "sweet", "perfect", "got", "it", "good", "bro", "dude", "man", "much",
-    "you", "u", "there", "what's", "whats", "up", "wassup", "love", "it!", "appreciate", "cheers",
-    "sure", "alright", "bet", "word", "dope", "sick", "fire", "based", "w", "l", "rip", "oof",
-    "mb", "my", "bad", "sorry", "kinda", "a", "the", "again", "so", "very", "really", "all",
+    "hi",
+    "hey",
+    "hello",
+    "yo",
+    "sup",
+    "hiya",
+    "howdy",
+    "thanks",
+    "thank",
+    "thx",
+    "ty",
+    "ok",
+    "okay",
+    "k",
+    "kk",
+    "cool",
+    "nice",
+    "great",
+    "awesome",
+    "lol",
+    "lmao",
+    "haha",
+    "gg",
+    "ggs",
+    "wp",
+    "np",
+    "yes",
+    "yep",
+    "yeah",
+    "yup",
+    "no",
+    "nope",
+    "nah",
+    "bye",
+    "cya",
+    "gn",
+    "gm",
+    "morning",
+    "night",
+    "sweet",
+    "perfect",
+    "got",
+    "it",
+    "good",
+    "bro",
+    "dude",
+    "man",
+    "much",
+    "you",
+    "u",
+    "there",
+    "what's",
+    "whats",
+    "up",
+    "wassup",
+    "love",
+    "it!",
+    "appreciate",
+    "cheers",
+    "sure",
+    "alright",
+    "bet",
+    "word",
+    "dope",
+    "sick",
+    "fire",
+    "based",
+    "w",
+    "l",
+    "rip",
+    "oof",
+    "mb",
+    "my",
+    "bad",
+    "sorry",
+    "kinda",
+    "a",
+    "the",
+    "again",
+    "so",
+    "very",
+    "really",
+    "all",
 ];
 
 const FACT_OPENERS: &[&str] = &[
@@ -371,10 +447,41 @@ const CODE_WORDS: &[&str] = &[
 ];
 
 const CODE_TOKENS: &[&str] = &[
-    "fn ", "def ", "let ", "const ", "var ", "impl ", "pub ", "import ", "#include", "return ",
-    "=>", "->", "::", "();", "){", ") {", "};", "</", "/>", "async ", "await ", "self.", "this.",
-    "println!", "console.log", "printf", "#[", "@override", "lambda", "elif ", "else {",
-    "useState", "SELECT ", "INSERT ", "WHERE ",
+    "fn ",
+    "def ",
+    "let ",
+    "const ",
+    "var ",
+    "impl ",
+    "pub ",
+    "import ",
+    "#include",
+    "return ",
+    "=>",
+    "->",
+    "::",
+    "();",
+    "){",
+    ") {",
+    "};",
+    "</",
+    "/>",
+    "async ",
+    "await ",
+    "self.",
+    "this.",
+    "println!",
+    "console.log",
+    "printf",
+    "#[",
+    "@override",
+    "lambda",
+    "elif ",
+    "else {",
+    "useState",
+    "SELECT ",
+    "INSERT ",
+    "WHERE ",
 ];
 
 const CODE_EXTS: &[&str] = &[
@@ -696,10 +803,40 @@ const HARDNESS: &[&str] = &[
 ];
 
 const FOLLOW: &[&str] = &[
-    "and ", "also", "now ", "then ", "what about", "how about", "same for", "do it", "do that",
-    "again", "the other", "the second", "the first", "the last", "next one", "that one",
-    "this one", "more", "another", "instead", "it ", "that ", "those", "them", "keep going",
-    "continue", "go on", "and?", "why?", "how?", "really?", "example?", "shorter", "longer",
+    "and ",
+    "also",
+    "now ",
+    "then ",
+    "what about",
+    "how about",
+    "same for",
+    "do it",
+    "do that",
+    "again",
+    "the other",
+    "the second",
+    "the first",
+    "the last",
+    "next one",
+    "that one",
+    "this one",
+    "more",
+    "another",
+    "instead",
+    "it ",
+    "that ",
+    "those",
+    "them",
+    "keep going",
+    "continue",
+    "go on",
+    "and?",
+    "why?",
+    "how?",
+    "really?",
+    "example?",
+    "shorter",
+    "longer",
 ];
 
 const CORRECTION: &[&str] = &[
@@ -740,7 +877,10 @@ fn hits(t: &str, tokens: &[&str], needles: &[&str]) -> u32 {
             } else if w.len() > 4 {
                 // Starts a word, so "solve" never fires in "resolve".
                 t.match_indices(w).any(|(i, _)| {
-                    t[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+                    t[..i]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|c| !c.is_alphanumeric())
                 })
             } else {
                 tokens.contains(&w)
@@ -798,8 +938,11 @@ fn features(text: &str) -> Features {
         lines: raw.lines().filter(|l| !l.trim().is_empty()).count(),
         questions: raw.matches('?').count() as u32,
         fenced: raw.matches("```").count().div_ceil(2) as u32,
-        inline_code: (raw.matches('`').count().saturating_sub(raw.matches("```").count() * 3) / 2)
-            as u32,
+        inline_code: (raw
+            .matches('`')
+            .count()
+            .saturating_sub(raw.matches("```").count() * 3)
+            / 2) as u32,
         ..Features::default()
     };
     f.code_tokens = CODE_TOKENS.iter().filter(|w| raw.contains(**w)).count() as u32;
@@ -809,7 +952,9 @@ fn features(text: &str) -> Features {
         .filter(|w| {
             let w = w.trim_matches(|c: char| "`'\"(),:;".contains(c));
             let lw = w.to_ascii_lowercase();
-            CODE_EXTS.iter().any(|e| lw.ends_with(e) && lw.len() > e.len())
+            CODE_EXTS
+                .iter()
+                .any(|e| lw.ends_with(e) && lw.len() > e.len())
                 || ((w.contains('/') || w.contains('\\'))
                     && w.contains('.')
                     && !lw.starts_with("http"))
@@ -847,21 +992,43 @@ fn features(text: &str) -> Features {
         + hits(
             &t,
             &tokens,
-            &["must ", "make sure", "without ", "don't ", "do not ", "only ", "never ", "always "],
+            &[
+                "must ",
+                "make sure",
+                "without ",
+                "don't ",
+                "do not ",
+                "only ",
+                "never ",
+                "always ",
+            ],
         );
     f.steps = hits(
         &t,
         &tokens,
-        &["then", "after that", "first", "finally", "next,", "afterwards"],
+        &[
+            "then",
+            "after that",
+            "first",
+            "finally",
+            "next,",
+            "afterwards",
+        ],
     );
     f.follow = hits(&t, &tokens, FOLLOW);
     f.correction = CORRECTION.iter().any(|w| t.contains(w));
-    f.proof = ["prove", "proof", "theorem", "lemma"].iter().any(|w| t.contains(w));
+    f.proof = ["prove", "proof", "theorem", "lemma"]
+        .iter()
+        .any(|w| t.contains(w));
     f.greeting_only = !bare.is_empty()
         && bare.len() <= 6
         && f.chars <= 48
-        && bare.iter().all(|w| GREETINGS.contains(&w.as_str()) || w.is_empty());
-    f.fact_opener = FACT_OPENERS.iter().any(|o| t.starts_with(o) || t.contains(&format!(" {o}")));
+        && bare
+            .iter()
+            .all(|w| GREETINGS.contains(&w.as_str()) || w.is_empty());
+    f.fact_opener = FACT_OPENERS
+        .iter()
+        .any(|o| t.starts_with(o) || t.contains(&format!(" {o}")));
     f
 }
 
@@ -875,10 +1042,7 @@ fn score(f: &Features, cx: &AskContext) -> BTreeMap<AskKind, f64> {
     let mut s = BTreeMap::new();
     let short = f.chars <= 90 && f.lines <= 2;
 
-    s.insert(
-        AskKind::Greeting,
-        if f.greeting_only { 10.0 } else { 0.0 },
-    );
+    s.insert(AskKind::Greeting, if f.greeting_only { 10.0 } else { 0.0 });
     s.insert(
         AskKind::QuickFact,
         if f.fact_opener && short && !codey && f.broken == 0 {
@@ -892,7 +1056,12 @@ fn score(f: &Features, cx: &AskContext) -> BTreeMap<AskKind, f64> {
     s.insert(AskKind::Creative, f.creative as f64 * 3.0);
     s.insert(
         AskKind::Explain,
-        f.explain as f64 * 2.0 + if f.chars > 160 && f.questions > 0 { 0.5 } else { 0.0 },
+        f.explain as f64 * 2.0
+            + if f.chars > 160 && f.questions > 0 {
+                0.5
+            } else {
+                0.0
+            },
     );
     s.insert(
         AskKind::Research,
@@ -1075,7 +1244,30 @@ fn is_follow_up(f: &Features, best: f64, best_kind: AskKind) -> bool {
 }
 
 /// Read one turn. Same words and context, same answer.
+/// The app's own notes that can lead a typed turn: a workboard resume block
+/// and an active skill's steps. Each is followed by a blank line, then the
+/// words the user typed.
+const RESUME_HEAD: &str = "Resuming workboard card ";
+const SKILL_HEAD: &str = "Active skill ";
+const SKILL_LAST: &str = "\n## Verify\n";
+
+/// The words the user typed: `text` without a leading resume or skill block.
+/// Those blocks describe the work, not the ask, so the read never weighs them.
+pub fn own_words(text: &str) -> &str {
+    let t = text.trim_start();
+    let body = if t.starts_with(RESUME_HEAD) {
+        Some(t)
+    } else if t.starts_with(SKILL_HEAD) {
+        t.find(SKILL_LAST).map(|i| &t[i + SKILL_LAST.len()..])
+    } else {
+        None
+    };
+    body.and_then(|b| b.split_once("\n\n"))
+        .map_or(text, |(_, rest)| rest.trim_start())
+}
+
 pub fn read(text: &str, cx: &AskContext) -> AskRead {
+    let text = own_words(text);
     let f = features(text);
     let scores = score(&f, cx);
     let mut ranked: Vec<(AskKind, f64)> = scores.into_iter().collect();
@@ -1240,7 +1432,7 @@ const EFFORT_Q: &[&str] = &[
 /// Does the turn ask which model answers, or at what effort? Only then does
 /// the chat learn it (Settings and the chat never show it on their own).
 pub fn route_question(text: &str) -> RouteQuestion {
-    let t = text.to_lowercase();
+    let t = own_words(text).to_lowercase();
     RouteQuestion {
         model: MODEL_Q.iter().any(|q| t.contains(q)),
         effort: EFFORT_Q.iter().any(|q| t.contains(q)),
@@ -1365,7 +1557,10 @@ mod tests {
             k("Design the database schema for a mod manager"),
             AskKind::Design
         );
-        assert_eq!(k("What are the patch notes for today's update?"), AskKind::Research);
+        assert_eq!(
+            k("What are the patch notes for today's update?"),
+            AskKind::Research
+        );
         assert_eq!(
             k("Explain the difference between TCP and UDP for game netcode"),
             AskKind::Explain
@@ -1458,7 +1653,10 @@ mod tests {
             "<cabin-volatile>\n[Route] two\n</cabin-volatile>\n\nwhat model are you?"
         );
         // An existing volatile block keeps its lines.
-        let mut input = vec![msg(&crate::prefix_cache::user_message_text("Time: 9am", "which effort?"))];
+        let mut input = vec![msg(&crate::prefix_cache::user_message_text(
+            "Time: 9am",
+            "which effort?",
+        ))];
         add_route_note(&mut input, "[Route] three");
         assert_eq!(
             text(&input),
@@ -1475,5 +1673,44 @@ mod tests {
         }
         assert_eq!(prior("ask-test-a"), None);
         assert_eq!(prior(""), None);
+    }
+
+    #[test]
+    fn app_blocks_ahead_of_a_turn_are_not_read() {
+        let resume = "Resuming workboard card w-1 \"Fix the tray icon\" after a restart, from its checkpoint.\n\
+             Goal: Fix the blurry tray icon\nNext: Patch the DPI scaling\nRefs: src/tray.rs\n\
+             Pick up at Next and do not redo done steps.";
+        let turn = grokhub_core::skill::apply_skill_follow(
+            "Thanks, where is my save folder?",
+            Some(resume),
+        );
+        assert_eq!(own_words(&turn), "Thanks, where is my save folder?");
+        let skill = grokhub_core::skill::SkillMd {
+            name: "tidy".into(),
+            instructions: "1. Read src/main.rs\n\n2. Refactor the parser".into(),
+            pitfalls: "Don't break the build".into(),
+            verify: "cargo test passes".into(),
+            ..Default::default()
+        };
+        let block = grokhub_core::skill::skill_follow_block(&skill);
+        let turn = grokhub_core::skill::apply_skill_follow("hey there", Some(&block));
+        assert_eq!(own_words(&turn), "hey there");
+        let cx = AskContext::default();
+        assert_eq!(read(&turn, &cx).kind, AskKind::Greeting);
+        // Plain turns, and a turn that only mentions a card, are read whole.
+        assert_eq!(
+            own_words("fix the parser\n\nthen run tests"),
+            "fix the parser\n\nthen run tests"
+        );
+        assert_eq!(
+            own_words("Resuming workboard card notes"),
+            "Resuming workboard card notes"
+        );
+        // A model question hidden in the block is not the user's question.
+        let turn = grokhub_core::skill::apply_skill_follow(
+            "ok go",
+            Some("Resuming workboard card w-2 \"Ask what model you are\"."),
+        );
+        assert!(!route_question(&turn).any());
     }
 }

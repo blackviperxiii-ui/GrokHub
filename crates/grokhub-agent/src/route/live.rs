@@ -624,6 +624,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         }),
         Some(r) if user_facing(r.class) && !key.is_empty() => {
             let mut band = Band::tuned(r, bump, st.start.as_deref());
+            // The ladder's state, its chat caps and `finish` all key on the
+            // call's own class, so a chat keeps one effort history across lanes.
+            let own = base_row.map_or(r.class, |b| b.class);
             if let Some(a) = &ask {
                 // Start where the read says, shifted by what tuning and the
                 // guard learned for the lane, inside its floor and ceiling.
@@ -632,7 +635,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     .clamp(band.floor as isize, band.ceiling.max(band.floor) as isize)
                     as usize;
             }
-            if ladder::is_new_turn(key, r.class, turn) {
+            if ladder::is_new_turn(key, own, turn) {
                 let sig = if call.signature.is_empty() {
                     topic_signature(call.text)
                 } else {
@@ -657,7 +660,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 steady: ladder::EffortSettings::load(config_dir).steady,
                 ..Obs::default()
             };
-            let hold = ladder::hold_chat_drops(r.class, care_first);
+            let hold = ladder::hold_chat_drops(own, care_first);
             let start = super::goal::goal_start(
                 band,
                 // The read already weighed difficulty into the start.
@@ -665,7 +668,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 steer,
                 goal.as_ref(),
             );
-            let mut pick = ladder::step_holding(key, r.class, turn, band, start, obs, hold);
+            let mut pick = ladder::step_holding(key, own, turn, band, start, obs, hold);
             if call.step_up {
                 // Only this call: the saved state keeps its rung, so the episode drops back after.
                 pick.rung = (pick.rung + 1).min(band.ceiling.max(band.floor));
@@ -1383,11 +1386,7 @@ pub fn stream_routed(
                     note = screen.heads_up_local.clone();
                 }
                 if asks_route {
-                    let n = route_note(
-                        super::local::live_tier(),
-                        sent.effort.as_deref(),
-                        true,
-                    );
+                    let n = route_note(super::local::live_tier(), sent.effort.as_deref(), true);
                     super::ask::add_route_note(&mut sent.input, &n);
                 }
                 let out = super::local::serve_request(class, &sent, cancel);
