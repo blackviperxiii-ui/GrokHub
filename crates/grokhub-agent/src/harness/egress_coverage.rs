@@ -52,7 +52,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; every caller is counted and listed here with the guard it runs first"),
     ("grokhub-core/src/connectivity.rs", 1, "default_http_client: the connectivity re-probe (HEAD to the xAI models URL, no user data; run_probe_if_due sends nothing while Offline only is on) and the net log speed test (offline::refuse first)"),
     ("grokhub-core/src/game_watch_league.rs", 1, "RiotLoopback: League's live client API on 127.0.0.1 only (loopback_self_signed: loopback-only resolver, https only, no redirects); no egress line (on-device)"),
-    ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns and /v1/responses/compact): XAI_MODEL_ENDPOINTS + guard_egress (chat, personal) to api.x.ai"),
+    ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns, /v1/responses/compact, Batch API submits): XAI_MODEL_ENDPOINTS or batch_url + guard_egress (chat, personal) to api.x.ai; get_guarded (Batch API status and results): batch_url + guard_egress (no user data), same agent"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
     ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),
@@ -269,8 +269,11 @@ fn an_agent_from_the_http_facade_counts_as_a_builder() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// The model client posts only from `post_guarded`, after the endpoint allowlist and
-/// the guard, and every xAI URL it names is on [`XAI_MODEL_ENDPOINTS`] (compaction too).
+/// The model client posts only from `post_guarded` and reads only from
+/// `get_guarded` (the Batch API's status and results), each after its endpoint
+/// allowlist and the guard. Every xAI URL it names is on
+/// [`XAI_MODEL_ENDPOINTS`] (compaction too) or is the Batch API root that
+/// `batch_url` checks call by call.
 ///
 /// [`XAI_MODEL_ENDPOINTS`]: crate::harness::XAI_MODEL_ENDPOINTS
 #[test]
@@ -278,17 +281,27 @@ fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
     let raw = fs::read_to_string(crates_dir().join("grokhub-agent/src/client.rs")).unwrap();
     let text = production_text(&raw);
     assert_eq!(text.matches(".post(").count(), 1, "one POST site");
-    let body = text
-        .split("fn post_guarded(")
-        .nth(1)
-        .and_then(|rest| rest.split("\n    fn ").next())
-        .expect("post_guarded");
+    assert_eq!(text.matches(".get(url)").count(), 1, "one GET site");
+    let site = |name: &str| {
+        text.split(&format!("fn {name}("))
+            .nth(1)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .unwrap_or_else(|| panic!("{name}"))
+            .to_string()
+    };
+    let body = site("post_guarded");
     let allow = body
         .find("XAI_MODEL_ENDPOINTS.contains(")
         .expect("allowlist check");
+    let batch = body.find("batch_url(url)").expect("batch check");
     let guard = body.find("guard_egress(").expect("guard");
     let post = body.find(".post(url)").expect("post");
-    assert!(allow < guard && guard < post, "{body}");
+    assert!(allow < guard && batch < guard && guard < post, "{body}");
+    let body = site("get_guarded");
+    let batch = body.find("batch_url(url)").expect("batch check");
+    let guard = body.find("guard_egress(").expect("guard");
+    let get = body.find(".get(url)").expect("get");
+    assert!(batch < guard && guard < get, "{body}");
     let urls: Vec<&str> = text
         .match_indices("\"https://api.x.ai/")
         .map(|(at, _)| {
@@ -300,10 +313,14 @@ fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
         urls,
         vec![
             "https://api.x.ai/v1/responses",
-            "https://api.x.ai/v1/responses/compact"
+            "https://api.x.ai/v1/responses/compact",
+            "https://api.x.ai/v1/batches"
         ]
     );
     for url in &urls {
-        assert!(crate::harness::XAI_MODEL_ENDPOINTS.contains(url), "{url}");
+        assert!(
+            crate::harness::XAI_MODEL_ENDPOINTS.contains(url) || crate::client::batch_url(url),
+            "{url}"
+        );
     }
 }
