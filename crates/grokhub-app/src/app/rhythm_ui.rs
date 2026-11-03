@@ -108,7 +108,7 @@ impl Cabin {
             Some(h) => {
                 self.rhythm_now().accept_brief(h);
                 self.status = format!(
-                    "Your Pulse brief will come around {}. Settings → Behavior changes it.",
+                    "Your Pulse brief will come around {}. Settings → Your PC → Automations & limits changes it.",
                     hour_label(h)
                 );
             }
@@ -377,7 +377,7 @@ mod tests {
         cabin.answer_brief_offer(Some(19));
         assert_eq!(
             cabin.status,
-            "Your Pulse brief will come around 7 PM. Settings → Behavior changes it."
+            "Your Pulse brief will come around 7 PM. Settings → Your PC → Automations & limits changes it."
         );
         assert_eq!(cabin.rhythm_now().brief_offer(), None);
         assert_eq!(cabin.brief_gate(19, T0), Some(true));

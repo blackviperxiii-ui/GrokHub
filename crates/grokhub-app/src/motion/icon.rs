@@ -247,7 +247,6 @@ mod tests {
         assert_eq!(POP_SECS, 0.18);
         assert_eq!(LIFT_PX, 2.0);
         assert_eq!(NUDGE_PX, 2.0);
-        assert_eq!(crate::motion::SETTINGS_SCROLL_SECS, 0.2);
         // Every event stays within 200 ms; the card lift is the ≤150 ms ease.
         for (secs, cap) in [(HOVER_SECS, 0.15), (PRESS_SECS, 0.2), (POP_SECS, 0.2)] {
             assert!(secs <= cap, "{secs}");

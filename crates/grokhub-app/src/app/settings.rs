@@ -39,13 +39,91 @@ pub(super) fn dev_demos_on(var: Option<&str>) -> bool {
     var.map(str::trim) == Some("1")
 }
 
-pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
-    match group {
-        SettingsGroup::General => SettingsSec::Account,
-        // The About heading opens About (version and build), not Update.
-        SettingsGroup::About => SettingsSec::About,
+/// The top row of Settings: the big categories, in order, with their labels.
+pub(super) const SETTINGS_TABS: [(SettingsTab, &str); 6] = [
+    (SettingsTab::Account, "Account"),
+    (SettingsTab::Look, "Look & feel"),
+    (SettingsTab::Ai, "AI & chat"),
+    (SettingsTab::Pc, "Your PC"),
+    (SettingsTab::Privacy, "Privacy & safety"),
+    (SettingsTab::Help, "Help & updates"),
+];
+
+pub(super) fn settings_tab_title(tab: SettingsTab) -> &'static str {
+    SETTINGS_TABS
+        .iter()
+        .find(|(t, _)| *t == tab)
+        .map(|(_, label)| *label)
+        .unwrap_or("Settings")
+}
+
+/// The pages a category holds, top to bottom in the side menu. Every
+/// [`SettingsSec`] is in exactly one category.
+pub(super) fn settings_tab_pages(tab: SettingsTab) -> &'static [SettingsSec] {
+    match tab {
+        SettingsTab::Account => &[SettingsSec::Account, SettingsSec::Connectors],
+        SettingsTab::Look => &[SettingsSec::Appearance],
+        SettingsTab::Ai => &[
+            SettingsSec::AiModels,
+            SettingsSec::Personality,
+            SettingsSec::Playbooks,
+            SettingsSec::Pulse,
+            SettingsSec::Defaults,
+        ],
+        SettingsTab::Pc => &[
+            SettingsSec::Behavior,
+            SettingsSec::Extras,
+            SettingsSec::Automations,
+            SettingsSec::Background,
+        ],
+        SettingsTab::Privacy => &[SettingsSec::Privacy, SettingsSec::Permissions],
+        // About first: the build and version are what people come here for.
+        SettingsTab::Help => &[SettingsSec::About, SettingsSec::Update, SettingsSec::Labs],
     }
 }
+
+/// The category a page sits in, so the top row lights the right button.
+pub(super) fn settings_tab_of(sec: SettingsSec) -> SettingsTab {
+    SETTINGS_TABS
+        .iter()
+        .map(|(t, _)| *t)
+        .find(|t| settings_tab_pages(*t).contains(&sec))
+        .unwrap_or(SettingsTab::Account)
+}
+
+/// A top-row click opens the category's first page.
+pub(super) fn settings_tab_home(tab: SettingsTab) -> SettingsSec {
+    settings_tab_pages(tab)[0]
+}
+
+/// The big button at the top left of Settings: where it goes back to.
+pub(super) fn settings_back_label(back: Nav) -> String {
+    let label = match back {
+        Nav::Home => "Home",
+        Nav::Chat | Nav::Settings => "Chat",
+        Nav::Objectives => "Objectives",
+        Nav::Pulse => "Pulse",
+        Nav::Library => "Library",
+        Nav::Mods => "Mods",
+        Nav::Devices => "Devices",
+        Nav::History => "History",
+        Nav::Journal => "Journal",
+        Nav::Imagine => "Imagine",
+        Nav::Workboard => "Workboard",
+        Nav::Skills => "Skills",
+        Nav::Night => "Automations",
+        Nav::Command => "Command",
+        Nav::Agents => "Queue",
+        Nav::Memory => "Memory",
+    };
+    format!("\u{2190}  Back to {label}")
+}
+
+/// Room above a page's title.
+pub(super) const PAGE_TOP_PAD: f32 = 16.0;
+
+/// Width of the side menu on the right.
+const SETTINGS_SIDE_W: f32 = 240.0;
 
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
@@ -53,7 +131,9 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::AiModels => "AI models",
         SettingsSec::Privacy => "Privacy & data",
         SettingsSec::Appearance => "Appearance",
-        SettingsSec::Behavior => "Behavior",
+        SettingsSec::Behavior => "PC helpers",
+        SettingsSec::Extras => "App & extras",
+        SettingsSec::Automations => "Automations & limits",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
         SettingsSec::Defaults => "Defaults",
@@ -132,10 +212,11 @@ pub(super) fn settings_page_rect(screen: egui::Rect, page: bool, sec: SettingsSe
     egui::Rect::from_center_size(below.center(), settings_modal_size(sec, below.size()))
 }
 
-/// What the sheet dims: the window under the custom titlebar.
+/// What the sheet dims: the window right of the rail and under the custom
+/// titlebar, so the rail still leaves Settings.
 pub(super) fn settings_sheet_cover(screen: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(
-        screen.min + egui::vec2(0.0, crate::theme::TITLEBAR_H),
+        screen.min + egui::vec2(crate::theme::SIDEBAR_W, crate::theme::TITLEBAR_H),
         screen.max,
     )
 }
@@ -153,209 +234,31 @@ fn settings_fresh_view(ctx: &egui::Context) -> bool {
     !matches!(last, Some(at) if at + 1 >= pass)
 }
 
-/// The one Settings scroll, every section on it. Back at the top on a fresh
-/// open and kept while open; `force` is where the scrollspy's jump puts it
-/// this frame.
-fn settings_body_scroll(max_h: f32, fresh: bool, force: Option<f32>) -> egui::ScrollArea {
+/// The page's own scroll. Each page keeps its own place; a fresh open or a
+/// click to another page starts at the top.
+fn settings_body_scroll(max_h: f32, to_top: bool, sec: SettingsSec) -> egui::ScrollArea {
     let body = egui::ScrollArea::vertical()
-        .id_salt("settings-body")
+        .id_salt(("settings-body", sec))
         .auto_shrink([false, false])
         .max_height(max_h);
-    match force {
-        Some(y) => body.vertical_scroll_offset(y),
-        None if fresh => body.vertical_scroll_offset(0.0),
-        None => body,
+    if to_top {
+        body.vertical_scroll_offset(0.0)
+    } else {
+        body
     }
 }
 
-/// Room between one section's last row and the next section's title.
-const SETTINGS_SECTION_GAP: f32 = 28.0;
-/// A section becomes the marked one when its top crosses this share of the view.
-const SPY_LINE: f32 = 0.30;
-/// How far past the line a top must go before the mark moves, either way,
-/// so a top resting on the line doesn't flicker between two sections.
-const SPY_SLACK: f32 = 12.0;
-/// A jump leaves this much room above the section title.
-pub(super) const SPY_TOP_PAD: f32 = 8.0;
-
-/// Which section the Settings nav marks, as an index into `tops` (each
-/// section's top in scroll content, top to bottom). The last one whose top
-/// crossed [`SPY_LINE`] of the view, with [`SPY_SLACK`] of give around
-/// `current`. Scrolled to the end, the last one. Nothing laid out yet: the first.
-pub(super) fn spy_pick(
-    tops: &[f32],
-    offset: f32,
-    view_h: f32,
-    at_end: bool,
-    current: usize,
-) -> usize {
-    if tops.is_empty() {
-        return 0;
-    }
-    let last = tops.len() - 1;
-    if at_end {
-        return last;
-    }
-    let current = current.min(last);
-    let line = offset + view_h * SPY_LINE;
-    let crossed = |line: f32| tops.iter().rposition(|t| *t <= line).unwrap_or(0);
-    let ahead = crossed(line - SPY_SLACK);
-    if ahead > current {
-        return ahead;
-    }
-    let behind = crossed(line + SPY_SLACK);
-    if behind < current {
-        return behind;
-    }
-    current
-}
-
-/// A jump the scrollspy is landing: a nav click, a link from elsewhere, or a
-/// fresh open on a section.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SpyJump {
-    sec: SettingsSec,
-    instant: bool,
-    from: f32,
-    started: Option<f64>,
-}
-
-/// The Settings scrollspy's memory between frames.
-#[derive(Clone, Debug, Default)]
-struct Spy {
-    /// Each section's top in scroll content, last frame, top to bottom.
-    tops: Vec<(SettingsSec, f32)>,
-    offset: f32,
-    max_offset: f32,
-    /// The section last marked. `settings_sec` set to anything else means a
-    /// jump was asked for.
-    marked: Option<SettingsSec>,
-    jump: Option<SpyJump>,
-    /// A jumped-to section stays marked until the scroll leaves where it
-    /// landed: the last sections can't reach the line, and a click on them
-    /// must still mark them.
-    hold: Option<(SettingsSec, Option<f32>)>,
-}
-
-impl Spy {
-    fn id() -> egui::Id {
-        egui::Id::new("settings-scrollspy")
-    }
-
-    fn load(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Spy>(Self::id()))
-            .unwrap_or_default()
-    }
-
-    fn store(self, ctx: &egui::Context) {
-        ctx.data_mut(|d| d.insert_temp(Self::id(), self));
-    }
-
-    /// Start of a frame: notice a fresh open or a section asked for from
-    /// outside, and return where the jump puts the scroll this frame. A jump
-    /// eases over [`crate::motion::SETTINGS_SCROLL_SECS`] and asks for frames
-    /// only until it lands; reduced motion and a fresh open land at once.
-    fn begin(
-        &mut self,
-        ctx: &egui::Context,
-        opened: bool,
-        asked: SettingsSec,
-        reduced: bool,
-    ) -> Option<f32> {
-        if opened {
-            *self = Spy::default();
-        }
-        if opened || self.marked != Some(asked) {
-            self.marked = Some(asked);
-            self.jump = Some(SpyJump {
-                sec: asked,
-                instant: opened || reduced,
-                from: self.offset,
-                started: None,
-            });
-        }
-        let jump = self.jump.as_mut()?;
-        self.hold = Some((jump.sec, None));
-        let Some(top) = self
-            .tops
-            .iter()
-            .find(|(s, _)| *s == jump.sec)
-            .map(|(_, t)| *t)
-        else {
-            // Nothing laid out yet: one frame from the top, then the jump.
-            return opened.then_some(0.0);
-        };
-        let target = (top - SPY_TOP_PAD).clamp(0.0, self.max_offset);
-        let y = if jump.instant {
-            target
-        } else {
-            let now = ctx.input(|i| i.time);
-            let started = *jump.started.get_or_insert(now);
-            let t = ((now - started) as f32 / crate::motion::SETTINGS_SCROLL_SECS).clamp(0.0, 1.0);
-            if t < 1.0 {
-                ctx.request_repaint();
-                jump.from + (target - jump.from) * egui::emath::easing::cubic_out(t)
-            } else {
-                target
-            }
-        };
-        if y == target {
-            self.hold = Some((jump.sec, Some(target)));
-            self.jump = None;
-        }
-        Some(y)
-    }
-
-    /// End of a frame: remember the layout and the scroll, and return the
-    /// section the nav marks.
-    fn end(
-        &mut self,
-        tops: Vec<(SettingsSec, f32)>,
-        offset: f32,
-        view_h: f32,
-        content_h: f32,
-    ) -> SettingsSec {
-        self.max_offset = (content_h - view_h).max(0.0);
-        self.offset = offset;
-        if let Some((_, Some(at))) = self.hold {
-            if (offset - at).abs() > 1.0 {
-                self.hold = None;
-            }
-        }
-        let marked = match self.hold {
-            Some((sec, _)) => sec,
-            None => {
-                let current = self
-                    .marked
-                    .and_then(|m| tops.iter().position(|(s, _)| *s == m))
-                    .unwrap_or(0);
-                let at_end = self.max_offset > 0.0 && offset >= self.max_offset - 1.0;
-                let ys: Vec<f32> = tops.iter().map(|(_, t)| *t).collect();
-                tops.get(spy_pick(&ys, offset, view_h, at_end, current))
-                    .map(|(s, _)| *s)
-                    .or(self.marked)
-                    .unwrap_or(SettingsSec::Account)
-            }
-        };
-        self.tops = tops;
-        self.marked = Some(marked);
-        marked
-    }
-}
-
-/// A section's title in the one Settings scroll. Returns its rect, for the spy.
-fn settings_section_title(ui: &mut egui::Ui, sec: SettingsSec) -> egui::Rect {
+/// The open page's title, above its rows.
+fn settings_section_title(ui: &mut egui::Ui, sec: SettingsSec) {
     ui.label(
         RichText::new(settings_sec_title(sec))
-            .font(crate::theme::title_font(18.0))
+            .font(crate::theme::title_font(20.0))
             .color(crate::theme::fg()),
-    )
-    .rect
+    );
 }
 
 /// Settings → Appearance → Reduce motion.
-pub(super) const REDUCE_MOTION_HINT: &str =
-    "Icons and cards stay still under the pointer, and Settings jumps to a section instead of scrolling.";
+pub(super) const REDUCE_MOTION_HINT: &str = "Icons and cards stay still under the pointer.";
 
 pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
     sec != SettingsSec::Appearance
@@ -749,42 +652,16 @@ impl Cabin {
             close = true;
         }
         let mut next_sec: Option<SettingsSec> = None;
-        // Every section on one scroll, in nav order; the nav marks the one in view.
-        let general = [
-            (SettingsSec::Account, "Account"),
-            (SettingsSec::AiModels, "AI models"),
-            (SettingsSec::Privacy, "Privacy & data"),
-            (SettingsSec::Appearance, "Appearance"),
-            (SettingsSec::Personality, "Personality"),
-            (SettingsSec::Playbooks, "Playbooks"),
-            (SettingsSec::Pulse, "Pulse"),
-            (SettingsSec::Background, "Background"),
-            (SettingsSec::Behavior, "Behavior"),
-            (SettingsSec::Permissions, "Permissions"),
-            (SettingsSec::Connectors, "Connectors"),
-            (SettingsSec::Defaults, "Defaults"),
-            (SettingsSec::Labs, "Labs"),
-        ];
-        let about = [
-            (SettingsSec::Update, "Update"),
-            (SettingsSec::About, "About"),
-        ];
-        let opened = settings_fresh_view(ctx);
-        let mut spy = Spy::load(ctx);
-        let force = spy.begin(
-            ctx,
-            opened,
-            self.settings_sec,
-            crate::motion::reduced_motion_ctx(ctx),
-        );
-        let mut tops: Vec<(SettingsSec, f32)> = Vec::new();
-        let mut spy_view: Option<(f32, f32, f32)> = None;
         let sec = self.settings_sec;
+        let tab = settings_tab_of(sec);
+        let back = settings_back_label(self.page_nav());
+        let opened = settings_fresh_view(ctx);
         let screen = ctx.content_rect();
         let page = crate::theme::is_loadout_paint();
         let modal = settings_page_rect(screen, page, sec);
-        // A page leaves the rail and titlebar live; the sheet dims the rail
-        // but leaves the titlebar (and its window buttons) live.
+        // A page leaves the rail and titlebar live; the sheet dims the page
+        // behind it but leaves the rail and titlebar live too, so any rail
+        // button leaves Settings.
         let cover = if page {
             modal
         } else {
@@ -792,6 +669,9 @@ impl Cabin {
         };
         egui::Area::new(egui::Id::new("settings-overlay"))
             .fixed_pos(cover.min)
+            // Kept where it is: a constrained Area slid left over the rail when
+            // its content ran a few pixels wide, and swallowed every rail click.
+            .constrain(false)
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(ctx, |ui| {
@@ -811,96 +691,83 @@ impl Cabin {
                         .show(ui, |ui| {
                             ui.set_min_size(modal.size());
                             ui.set_max_size(modal.size());
+                            // Top: the way back, the title and Save.
+                            ui.add_space(14.0);
                             ui.horizontal(|ui| {
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(220.0, modal.height()),
-                                    egui::Layout::top_down(egui::Align::Min),
+                                ui.add_space(20.0);
+                                if crate::cards::settings_back(ui, &back) {
+                                    close = true;
+                                }
+                                ui.add_space(14.0);
+                                ui.label(
+                                    RichText::new("Settings")
+                                        .font(crate::theme::title_font(22.0))
+                                        .color(crate::theme::fg()),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        egui::Frame::NONE
-                                            .fill(crate::theme::surface())
-                                            .inner_margin(egui::Margin::same(12))
-                                            .show(ui, |ui| {
-                                                ui.set_width(196.0);
-                                                ui.set_min_height(modal.height() - 24.0);
-                                                if crate::cards::section_label(ui, "General") {
-                                                    next_sec = Some(settings_group_home(SettingsGroup::General));
-                                                }
-                                                for (s, label) in general {
-                                                    if crate::cards::settings_nav(ui, label, sec == s) {
-                                                        next_sec = Some(s);
-                                                    }
-                                                }
-                                                ui.add_space(10.0);
-                                                if crate::cards::section_label(ui, "About") {
-                                                    next_sec = Some(settings_group_home(SettingsGroup::About));
-                                                }
-                                                for (s, label) in about {
-                                                    if crate::cards::settings_nav(ui, label, sec == s) {
-                                                        next_sec = Some(s);
-                                                    }
-                                                }
-                                            });
+                                        ui.add_space(20.0);
+                                        if settings_save_visible(sec)
+                                            && crate::cards::ghost_pill(ui, "Save")
+                                        {
+                                            save = true;
+                                        }
                                     },
                                 );
-                                let body_w = (modal.width() - 220.0).max(280.0);
+                            });
+                            ui.add_space(12.0);
+                            // The big categories, one row across the top.
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add_space(20.0);
+                                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                                for (t, label) in SETTINGS_TABS {
+                                    if crate::cards::settings_tab(ui, label, tab == t) {
+                                        next_sec = Some(settings_tab_home(t));
+                                    }
+                                }
+                            });
+                            ui.add_space(12.0);
+                            let line_y = ui.cursor().top();
+                            ui.painter().hline(
+                                modal.x_range(),
+                                line_y,
+                                egui::Stroke::new(1.0_f32, crate::theme::border()),
+                            );
+                            ui.add_space(1.0);
+                            let rest_h = (modal.bottom() - ui.cursor().top()).max(120.0);
+                            let side_w = SETTINGS_SIDE_W.min(modal.width() * 0.4);
+                            let body_w = (modal.width() - side_w).max(280.0);
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                // Left: only the picked page, on its own scroll.
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2(body_w, modal.height()),
+                                    egui::vec2(body_w, rest_h),
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
                                         ui.set_max_width(body_w);
-                                        ui.add_space(16.0);
-                                        ui.horizontal(|ui| {
-                                            ui.add_space(20.0);
-                                            ui.label(
-                                                RichText::new("Settings")
-                                                    .font(crate::theme::title_font(22.0))
-                                                    .color(crate::theme::fg()),
-                                            );
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    ui.add_space(16.0);
-                                                    if crate::theme::felt_label_button(
-                                                        ui,
-                                                        "×",
-                                                        Color32::TRANSPARENT,
-                                                        crate::theme::muted(),
-                                                        6.0,
-                                                        egui::vec2(28.0, 28.0),
-                                                        None,
-                                                        false,
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        close = true;
-                                                    }
-                                                    if settings_save_visible(sec)
-                                                        && crate::cards::ghost_pill(ui, "Save")
-                                                    {
-                                                        save = true;
-                                                    }
-                                                },
-                                            );
-                                        });
-                                        ui.add_space(12.0);
+                                        ui.set_min_height(rest_h);
                                         // Personality owns its own grid scroll; keep the body
                                         // height capped so the panel never grows past the window.
-                                        let body_h = (ui.available_height() - 8.0).max(120.0);
-                                        let body = settings_body_scroll(body_h, opened, force);
-                                        let shown = body.show(ui, |ui| {
+                                        let body = settings_body_scroll(rest_h, opened || next_sec.is_some(), sec);
+                                        body.show(ui, |ui| {
                                                 ui.set_width((body_w - 40.0).max(240.0));
                                                 ui.set_max_width((body_w - 40.0).max(240.0));
-                                                // The content's top, wherever the scroll has it.
-                                                let origin = ui.max_rect().top();
-                                                ui.add_space(8.0);
-                                                for s in general.iter().chain(about.iter()).map(|(s, _)| *s) {
+                                                ui.add_space(PAGE_TOP_PAD);
+                                                let s = sec;
                                                 ui.push_id(("settings-sec", s), |ui| {
                                                 ui.indent("settings-body", |ui| {
                                                     ui.set_max_width(ui.available_width());
-                                                    let title = settings_section_title(ui, s);
-                                                    tops.push((s, title.top() - origin));
+                                                    settings_section_title(ui, s);
                                                     ui.add_space(8.0);
-                                                    match s {
+                                                    // Your PC's three pages share one arm.
+                                                    let arm = match s {
+                                                        SettingsSec::Extras | SettingsSec::Automations => {
+                                                            SettingsSec::Behavior
+                                                        }
+                                                        other => other,
+                                                    };
+                                                    match arm {
                                                         SettingsSec::Account => {
                                                             let name_before = self.cfg.display_name.clone();
                                                             crate::cards::settings_field(
@@ -1100,127 +967,123 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Behavior => {
-                                                            // First, so small windows don't clip them.
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "PC helpers",
-                                                                None,
-                                                            );
-                                                            self.ui_wind_down_row(ui);
-                                                            self.ui_downloads_tidy_row(ui);
-                                                            self.ui_workboard_tidy_row(ui);
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "Tray & wall",
-                                                                None,
-                                                            );
-                                                            let mut close_to_tray = self.cfg.close_to_tray;
-                                                            if settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
-                                                                self.set_close_to_tray(close_to_tray);
+                                                            // PC helpers first, so small windows don't clip them.
+                                                            if s == SettingsSec::Behavior {
+                                                                self.ui_wind_down_row(ui);
+                                                                self.ui_downloads_tidy_row(ui);
+                                                                self.ui_workboard_tidy_row(ui);
                                                             }
-                                                            let mut living_wall = self.cfg.imagine_wall;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Living wall",
-                                                                grokhub_core::brand::filled("Every few hours {product} paints a new cover. Twenty live. Oldest leaves first."),
-                                                                &mut living_wall,
-                                                            ) {
-                                                                self.set_living_wall(living_wall);
-                                                            }
-                                                            #[cfg(feature = "fx")]
-                                                            {
-                                                                let mut composer_glow = self.cfg.composer_glow;
+                                                            if s == SettingsSec::Extras {
+                                                                crate::ui_kit::section_header(
+                                                                    ui,
+                                                                    "Tray & wall",
+                                                                    None,
+                                                                );
+                                                                let mut close_to_tray = self.cfg.close_to_tray;
+                                                                if settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
+                                                                    self.set_close_to_tray(close_to_tray);
+                                                                }
+                                                                let mut living_wall = self.cfg.imagine_wall;
                                                                 if settings_toggle(
                                                                     ui,
-                                                                    "Composer glow (GPU effects)",
-                                                                    crate::fx::settings_caption(),
-                                                                    &mut composer_glow,
+                                                                    "Living wall",
+                                                                    grokhub_core::brand::filled("Every few hours {product} paints a new cover. Twenty live. Oldest leaves first."),
+                                                                    &mut living_wall,
                                                                 ) {
-                                                                    self.set_composer_glow(composer_glow);
+                                                                    self.set_living_wall(living_wall);
+                                                                }
+                                                                #[cfg(feature = "fx")]
+                                                                {
+                                                                    let mut composer_glow = self.cfg.composer_glow;
+                                                                    if settings_toggle(
+                                                                        ui,
+                                                                        "Composer glow (GPU effects)",
+                                                                        crate::fx::settings_caption(),
+                                                                        &mut composer_glow,
+                                                                    ) {
+                                                                        self.set_composer_glow(composer_glow);
+                                                                    }
+                                                                }
+                                                                let mut composer_autocomplete =
+                                                                    self.cfg.composer_autocomplete;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Sentence autocomplete",
+                                                                    "Muted ghost text finishes your line in the composer. Tab accepts; off by default.",
+                                                                    &mut composer_autocomplete,
+                                                                ) {
+                                                                    self.set_composer_autocomplete(
+                                                                        composer_autocomplete,
+                                                                    );
+                                                                }
+                                                                let mut reminders = self.cfg.proactive_reminders;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Reminder notifications",
+                                                                    "A system notification when a card on your board is due within the hour. Quiet hours hold it.",
+                                                                    &mut reminders,
+                                                                ) {
+                                                                    self.set_proactive_reminders(reminders);
+                                                                }
+                                                                self.ui_focus_help_row(ui);
+                                                                self.ui_screenshot_explain_settings(ui);
+                                                                self.ui_pc_health_row(ui);
+                                                                self.ui_code_resume_row(ui);
+                                                                self.ui_backup_row(ui);
+                                                                self.ui_net_log_row(ui);
+                                                                self.ui_game_companion_row(ui);
+                                                                self.ui_game_watch_row(ui);
+                                                                self.ui_model_drop_row(ui);
+                                                                let mut dock_panels = self.cfg.dock_panels;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Dockable panels",
+                                                                    "Main pages become rearrangeable tabs. Off keeps today's fixed layout. Layout saves in dock.json.",
+                                                                    &mut dock_panels,
+                                                                ) {
+                                                                    self.set_dock_panels(dock_panels);
                                                                 }
                                                             }
-                                                            let mut composer_autocomplete =
-                                                                self.cfg.composer_autocomplete;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Sentence autocomplete",
-                                                                "Muted ghost text finishes your line in the composer. Tab accepts; off by default.",
-                                                                &mut composer_autocomplete,
-                                                            ) {
-                                                                self.set_composer_autocomplete(
-                                                                    composer_autocomplete,
+                                                            if s == SettingsSec::Automations {
+                                                                let quiet_menu = quiet_hours_menu(
+                                                                    &self.cfg.quiet_start,
+                                                                    &self.cfg.quiet_end,
                                                                 );
-                                                            }
-                                                            let mut reminders = self.cfg.proactive_reminders;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Reminder notifications",
-                                                                "A system notification when a card on your board is due within the hour. Quiet hours hold it.",
-                                                                &mut reminders,
-                                                            ) {
-                                                                self.set_proactive_reminders(reminders);
-                                                            }
-                                                            self.ui_focus_help_row(ui);
-                                                            self.ui_screenshot_explain_settings(ui);
-                                                            self.ui_pc_health_row(ui);
-                                                            self.ui_code_resume_row(ui);
-                                                            self.ui_backup_row(ui);
-                                                            self.ui_net_log_row(ui);
-                                                            self.ui_game_companion_row(ui);
-                                                            self.ui_game_watch_row(ui);
-                                                            self.ui_model_drop_row(ui);
-                                                            let mut dock_panels = self.cfg.dock_panels;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Dockable panels",
-                                                                "Main pages become rearrangeable tabs. Off keeps today's fixed layout. Layout saves in dock.json.",
-                                                                &mut dock_panels,
-                                                            ) {
-                                                                self.set_dock_panels(dock_panels);
-                                                            }
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "Automations & limits",
-                                                                None,
-                                                            );
-                                                            let quiet_menu = quiet_hours_menu(
-                                                                &self.cfg.quiet_start,
-                                                                &self.cfg.quiet_end,
-                                                            );
-                                                            let quiet_labels: Vec<String> =
-                                                                quiet_menu.iter().map(|(l, _, _)| l.clone()).collect();
-                                                            let quiet_selected = quiet_hours_choice_label(
-                                                                &self.cfg.quiet_start,
-                                                                &self.cfg.quiet_end,
-                                                            );
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                "Quiet hours",
-                                                                grokhub_core::brand::filled("Inside quiet hours {product} holds a destructive automation and stops anticipating. Off is start and end equal."),
-                                                                &quiet_selected,
-                                                                &quiet_labels,
-                                                            ) {
-                                                                if let Some((_, start, end)) = quiet_menu.get(i) {
-                                                                    self.cfg.quiet_start = start.clone();
-                                                                    self.cfg.quiet_end = end.clone();
-                                                                    self.quiet_start_buf = start.clone();
-                                                                    self.quiet_end_buf = end.clone();
-                                                                    self.persist_cfg();
-                                                                    self.status = "Saved".into();
+                                                                let quiet_labels: Vec<String> =
+                                                                    quiet_menu.iter().map(|(l, _, _)| l.clone()).collect();
+                                                                let quiet_selected = quiet_hours_choice_label(
+                                                                    &self.cfg.quiet_start,
+                                                                    &self.cfg.quiet_end,
+                                                                );
+                                                                if let Some(i) = settings_dropdown(
+                                                                    ui,
+                                                                    "Quiet hours",
+                                                                    grokhub_core::brand::filled("Inside quiet hours {product} holds a destructive automation and stops anticipating. Off is start and end equal."),
+                                                                    &quiet_selected,
+                                                                    &quiet_labels,
+                                                                ) {
+                                                                    if let Some((_, start, end)) = quiet_menu.get(i) {
+                                                                        self.cfg.quiet_start = start.clone();
+                                                                        self.cfg.quiet_end = end.clone();
+                                                                        self.quiet_start_buf = start.clone();
+                                                                        self.quiet_end_buf = end.clone();
+                                                                        self.persist_cfg();
+                                                                        self.status = "Saved".into();
+                                                                    }
                                                                 }
+                                                                self.ui_rhythm_rows(ui);
+                                                                self.ui_ask_offers(ui);
+                                                                self.ui_dream_time_row(ui);
+                                                                self.ui_quiet_self_review_rows(ui);
+                                                                self.ui_self_change_history(ui);
+                                                                self.ui_memory_retention_row(ui);
+                                                                self.ui_chat_archive_row(ui);
+                                                                if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
+                                                                    self.open_setup(super::setup_wizard::SetupStep::Welcome);
+                                                                }
+                                                                ui.add_space(8.0);
+                                                                self.ui_home_learned(ui);
                                                             }
-                                                            self.ui_rhythm_rows(ui);
-                                                            self.ui_ask_offers(ui);
-                                                            self.ui_dream_time_row(ui);
-                                                            self.ui_quiet_self_review_rows(ui);
-                                                            self.ui_self_change_history(ui);
-                                                            self.ui_memory_retention_row(ui);
-                                                            self.ui_chat_archive_row(ui);
-                                                            if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
-                                                                self.open_setup(super::setup_wizard::SetupStep::Welcome);
-                                                            }
-                                                            ui.add_space(8.0);
-                                                            self.ui_home_learned(ui);
                                                         }
                                                         SettingsSec::Update => {
                                                             if let Some(notice) = cabin_notice.as_deref() {
@@ -1522,28 +1385,39 @@ impl Cabin {
                                                         SettingsSec::Pulse => self.ui_settings_pulse(ui),
                                                         SettingsSec::Background => self.ui_settings_background(ui),
                                                         SettingsSec::Privacy => self.ui_settings_privacy(ui),
+                                                        // Mapped to the Behavior arm above.
+                                                        SettingsSec::Extras | SettingsSec::Automations => {}
                                                     }
                                                 });
                                                 });
-                                                ui.add_space(SETTINGS_SECTION_GAP);
+                                                ui.add_space(24.0);
+                                            });
+                                    },
+                                );
+                                // Right: the pages of the picked category.
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(side_w, rest_h),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        egui::Frame::NONE
+                                            .fill(crate::theme::surface())
+                                            .inner_margin(egui::Margin::same(12))
+                                            .show(ui, |ui| {
+                                                ui.set_width(side_w - 24.0);
+                                                ui.set_min_height(rest_h - 24.0);
+                                                crate::cards::section_label(ui, settings_tab_title(tab));
+                                                for &s in settings_tab_pages(tab) {
+                                                    if crate::cards::settings_nav(ui, settings_sec_title(s), sec == s) {
+                                                        next_sec = Some(s);
+                                                    }
                                                 }
                                             });
-                                        spy_view = Some((
-                                            shown.state.offset.y,
-                                            shown.inner_rect.height(),
-                                            shown.content_size.y,
-                                        ));
                                     },
                                 );
                             });
                         });
                 });
             });
-        if let Some((offset, view_h, content_h)) = spy_view {
-            self.settings_sec = spy.end(tops, offset, view_h, content_h);
-        }
-        spy.store(ctx);
-        // A nav click wins over the spy; next frame's spy scrolls to it.
         if let Some(s) = next_sec {
             self.settings_sec = s;
         }
@@ -1865,20 +1739,29 @@ mod tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
             settings_page_rect(screen, false, SettingsSec::Labs)
         };
-        // 1280x800: 80% of the 760 px under the titlebar, floored at 920x620.
+        // 1280x800: 80% of the 1240x760 right of the rail and under the
+        // titlebar, floored at 920x620, centred in that space.
         let r = sheet(1280.0, 800.0);
-        assert_eq!(r.size(), egui::vec2(1024.0, 620.0));
-        assert_eq!(r.center(), egui::pos2(640.0, 420.0));
+        assert_eq!(r.size(), egui::vec2(992.0, 620.0));
+        assert_eq!(r.center(), egui::pos2(660.0, 420.0));
         // Maximized 1920x1080 grows, up to 1280 wide.
         let r = sheet(1920.0, 1080.0);
         assert_eq!(r.size(), egui::vec2(1280.0, 832.0));
-        assert_eq!(r.center(), egui::pos2(960.0, 560.0));
+        assert_eq!(r.center(), egui::pos2(980.0, 560.0));
         // A small window caps it with a 24 px margin, still under the titlebar.
         let r = sheet(658.0, 458.0);
-        assert_eq!(r.size(), egui::vec2(610.0, 370.0));
+        assert_eq!(r.size(), egui::vec2(570.0, 370.0));
         assert!(r.min.y >= crate::theme::TITLEBAR_H, "{r:?}");
+        assert!(
+            r.min.x >= crate::theme::SIDEBAR_W,
+            "clear of the rail: {r:?}"
+        );
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
-        assert_eq!(settings_sheet_cover(screen).min, egui::pos2(0.0, 40.0));
+        // The rail stays out of the dimmed cover, so it still leaves Settings.
+        assert_eq!(
+            settings_sheet_cover(screen).min,
+            egui::pos2(crate::theme::SIDEBAR_W, 40.0)
+        );
     }
 
     #[test]
@@ -1898,22 +1781,22 @@ mod tests {
         // Closed for a frame, then opened again.
         pass(false);
         pass(true);
-        // Every section shares one scroll now, so only a fresh open is fresh.
+        // Only a fresh open is fresh, so a page lands at its top once.
         assert_eq!(seen, [true, false, false, true]);
     }
 
     #[test]
-    fn the_body_scrolls_back_to_the_top_only_when_reopened() {
+    fn a_page_keeps_its_place_and_a_new_page_starts_at_the_top() {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
-        // One frame of a tall body, optionally wheeled down or forced; its offset after.
-        let frame = |open: bool, wheel: f32, force: Option<f32>| -> Option<f32> {
+        // One frame of a tall page, optionally wheeled down; its offset after.
+        let frame = |sec: SettingsSec, to_top: bool, wheel: f32| -> f32 {
             let mut raw = egui::RawInput {
                 screen_rect: Some(screen),
                 ..Default::default()
             };
-            if wheel != 0.0 {
-                raw.events = vec![
+            raw.events = if wheel != 0.0 {
+                vec![
                     egui::Event::PointerMoved(egui::pos2(300.0, 150.0)),
                     egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
@@ -1921,238 +1804,117 @@ mod tests {
                         phase: egui::TouchPhase::Move,
                         modifiers: egui::Modifiers::NONE,
                     },
-                ];
+                ]
             } else {
-                // Off the body, so a wheel still easing from the last frame moves nothing.
-                raw.events = vec![egui::Event::PointerGone];
-            }
-            let mut offset = None;
+                // Off the page, so a wheel still easing from the last frame moves nothing.
+                vec![egui::Event::PointerGone]
+            };
+            let mut offset = 0.0;
             let _ = crate::theme::test_pass(&ctx, raw, |ui| {
-                if !open {
-                    return;
-                }
-                let fresh = settings_fresh_view(ui.ctx());
-                let out = settings_body_scroll(300.0, fresh, force).show(ui, |ui| {
+                let out = settings_body_scroll(300.0, to_top, sec).show(ui, |ui| {
                     ui.allocate_space(egui::vec2(200.0, 2000.0));
                 });
-                offset = Some(out.state.offset.y);
+                offset = out.state.offset.y;
             });
             offset
         };
-        frame(true, 0.0, None);
-        frame(true, 400.0, None);
-        // Still open: the scroll is kept.
-        let kept = frame(true, 0.0, None).unwrap();
+        frame(SettingsSec::Behavior, true, 0.0);
+        frame(SettingsSec::Behavior, false, 400.0);
+        let kept = frame(SettingsSec::Behavior, false, 0.0);
         assert!(kept > 100.0, "kept {kept}");
-        // A jump puts it exactly where the spy says.
-        assert_eq!(frame(true, 0.0, Some(640.0)), Some(640.0));
-        assert_eq!(frame(true, 0.0, None), Some(640.0));
-        // Closed for a frame and reopened: the top.
-        frame(false, 0.0, None);
-        assert_eq!(frame(true, 0.0, None), Some(0.0));
+        // Another page has its own scroll, from the top.
+        assert_eq!(frame(SettingsSec::Extras, true, 0.0), 0.0);
+        // A click back to the page starts it at the top too.
+        assert_eq!(frame(SettingsSec::Behavior, true, 0.0), 0.0);
     }
 
     #[test]
-    fn the_spy_marks_the_section_whose_top_crossed_thirty_percent() {
-        // Four sections, a 600 px view: the line sits 180 px under the scroll top.
-        let tops = [0.0, 400.0, 900.0, 1500.0];
-        // Load: the first section.
-        assert_eq!(spy_pick(&tops, 0.0, 600.0, false, 0), 0);
-        assert_eq!(spy_pick(&[], 0.0, 600.0, false, 3), 0);
-        // 400 is past the line (410) but not by the slack: still the first.
-        assert_eq!(spy_pick(&tops, 230.0, 600.0, false, 0), 0);
-        // 12 px past it: the second.
-        assert_eq!(spy_pick(&tops, 232.0, 600.0, false, 0), 1);
-        // Back up a little: 400 sits under the line by less than the slack.
-        assert_eq!(spy_pick(&tops, 220.0, 600.0, false, 1), 1);
-        // Back past it by the slack: the first again.
-        assert_eq!(spy_pick(&tops, 207.0, 600.0, false, 1), 0);
-        // A fast scroll skips straight to the section in view.
-        assert_eq!(spy_pick(&tops, 1400.0, 600.0, false, 0), 3);
-        assert_eq!(spy_pick(&tops, 0.0, 600.0, false, 3), 0);
-        // Scrolled to the end: the last, even with its top under the line.
-        assert_eq!(spy_pick(&tops, 1000.0, 600.0, true, 1), 3);
-        // A stale index from a longer list is clamped.
-        assert_eq!(spy_pick(&tops[..2], 0.0, 600.0, false, 9), 0);
-    }
-
-    #[test]
-    fn the_spy_does_not_flicker_at_a_boundary() {
-        let tops = [0.0, 400.0];
-        // Wobble one pixel either side of the exact crossing (offset 220).
-        let mut marked = 0;
-        let mut seen = Vec::new();
-        for offset in [218.0, 221.0, 219.0, 222.0, 220.0, 219.0] {
-            marked = spy_pick(&tops, offset, 600.0, false, marked);
-            seen.push(marked);
-        }
-        assert_eq!(seen, [0, 0, 0, 0, 0, 0]);
-    }
-
-    /// Runs the spy over a fake page: four sections 500 px apart, 1700 px in
-    /// all, in a 400 px view (so the scroll stops at 1300).
-    fn spy_frame(
-        ctx: &egui::Context,
-        spy: &mut Spy,
-        time: f64,
-        opened: bool,
-        asked: SettingsSec,
-        reduced: bool,
-        wheel_to: Option<f32>,
-    ) -> (Option<f32>, SettingsSec, std::time::Duration) {
-        let order = [
+    fn every_page_sits_in_exactly_one_category() {
+        let all = [
             SettingsSec::Account,
+            SettingsSec::AiModels,
             SettingsSec::Privacy,
             SettingsSec::Appearance,
+            SettingsSec::Behavior,
+            SettingsSec::Extras,
+            SettingsSec::Automations,
+            SettingsSec::Update,
             SettingsSec::About,
+            SettingsSec::Defaults,
+            SettingsSec::Labs,
+            SettingsSec::Permissions,
+            SettingsSec::Connectors,
+            SettingsSec::Personality,
+            SettingsSec::Playbooks,
+            SettingsSec::Pulse,
+            SettingsSec::Background,
         ];
-        let raw = egui::RawInput {
-            time: Some(time),
-            ..Default::default()
-        };
-        let mut got = (None, SettingsSec::Account);
-        let out = crate::theme::test_pass(ctx, raw, |ui| {
-            let force = spy.begin(ui.ctx(), opened, asked, reduced);
-            let offset = force.or(wheel_to).unwrap_or(spy.offset);
-            let tops = order
+        for sec in all {
+            let homes: Vec<SettingsTab> = SETTINGS_TABS
                 .iter()
-                .enumerate()
-                .map(|(i, s)| (*s, 8.0 + i as f32 * 500.0));
-            got = (force, spy.end(tops.collect(), offset, 400.0, 1700.0));
-        });
-        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
-        (got.0, got.1, delay)
+                .map(|(t, _)| *t)
+                .filter(|t| settings_tab_pages(*t).contains(&sec))
+                .collect();
+            assert_eq!(homes.len(), 1, "{sec:?} sits in {homes:?}");
+            assert_eq!(settings_tab_of(sec), homes[0]);
+        }
+        let listed: usize = SETTINGS_TABS
+            .iter()
+            .map(|(t, _)| settings_tab_pages(*t).len())
+            .sum();
+        assert_eq!(listed, all.len(), "no page is listed twice");
     }
 
     #[test]
-    fn a_nav_click_scrolls_smoothly_and_marks_the_section_at_once() {
-        let ctx = egui::Context::default();
-        let mut spy = Spy::default();
-        // A fresh open lays out from the top, then lands on the asked section at once.
-        let (y, marked, _) =
-            spy_frame(&ctx, &mut spy, 0.0, true, SettingsSec::Account, false, None);
-        assert_eq!((y, marked), (Some(0.0), SettingsSec::Account));
-        let (y, marked, idle) = spy_frame(
-            &ctx,
-            &mut spy,
-            1.0,
-            false,
-            SettingsSec::Account,
-            false,
-            None,
-        );
-        assert_eq!((y, marked), (Some(0.0), SettingsSec::Account));
-        let (_, _, idle2) = spy_frame(
-            &ctx,
-            &mut spy,
-            2.0,
-            false,
-            SettingsSec::Account,
-            false,
-            None,
+    fn the_top_row_reads_in_plain_words_and_opens_the_first_page() {
+        let labels: Vec<&str> = SETTINGS_TABS.iter().map(|(_, l)| *l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Account",
+                "Look & feel",
+                "AI & chat",
+                "Your PC",
+                "Privacy & safety",
+                "Help & updates"
+            ]
         );
         assert_eq!(
-            idle2,
-            std::time::Duration::MAX,
-            "an idle Settings asks for no frame: {idle:?}"
+            settings_tab_home(SettingsTab::Account),
+            SettingsSec::Account
         );
-        // Click Appearance (top 1008, so the scroll goes to 1000): marked at once,
-        // the scroll starts from where it was and asks for frames while it moves.
-        let (y, marked, delay) = spy_frame(
-            &ctx,
-            &mut spy,
-            3.0,
-            false,
-            SettingsSec::Appearance,
-            false,
-            None,
-        );
-        assert_eq!((y, marked), (Some(0.0), SettingsSec::Appearance));
-        assert_eq!(delay, std::time::Duration::ZERO);
-        let half = 3.0 + f64::from(crate::motion::SETTINGS_SCROLL_SECS) * 0.5;
-        let (y, marked, _) = spy_frame(
-            &ctx,
-            &mut spy,
-            half,
-            false,
-            SettingsSec::Appearance,
-            false,
-            None,
-        );
-        let y = y.unwrap();
-        assert!(y > 500.0 && y < 1000.0, "half way, eased: {y}");
         assert_eq!(
-            marked,
-            SettingsSec::Appearance,
-            "no flicker through Privacy"
+            settings_tab_home(SettingsTab::Look),
+            SettingsSec::Appearance
         );
-        let end = 3.0 + f64::from(crate::motion::SETTINGS_SCROLL_SECS) + 0.001;
-        let (y, marked, _) = spy_frame(
-            &ctx,
-            &mut spy,
-            end,
-            false,
-            SettingsSec::Appearance,
-            false,
-            None,
+        assert_eq!(settings_tab_home(SettingsTab::Ai), SettingsSec::AiModels);
+        assert_eq!(settings_tab_home(SettingsTab::Pc), SettingsSec::Behavior);
+        assert_eq!(
+            settings_tab_home(SettingsTab::Privacy),
+            SettingsSec::Privacy
         );
-        assert_eq!((y, marked), (Some(1000.0), SettingsSec::Appearance));
-        let (y, marked, delay) = spy_frame(
-            &ctx,
-            &mut spy,
-            end + 1.0,
-            false,
-            SettingsSec::Appearance,
-            false,
-            None,
+        assert_eq!(settings_tab_home(SettingsTab::Help), SettingsSec::About);
+        assert_eq!(
+            settings_tab_pages(SettingsTab::Pc)
+                .iter()
+                .map(|s| settings_sec_title(*s))
+                .collect::<Vec<_>>(),
+            [
+                "PC helpers",
+                "App & extras",
+                "Automations & limits",
+                "Background"
+            ]
         );
-        assert_eq!((y, marked), (None, SettingsSec::Appearance));
-        assert_eq!(delay, std::time::Duration::MAX, "landed: no more frames");
-        // About's top can't reach the top of the view: the scroll goes as far as it can.
-        spy_frame(&ctx, &mut spy, 10.0, false, SettingsSec::About, false, None);
-        let (y, marked, _) =
-            spy_frame(&ctx, &mut spy, 11.0, false, SettingsSec::About, false, None);
-        assert_eq!((y, marked), (Some(1300.0), SettingsSec::About));
-        // The user scrolls away: the spy takes over again.
-        let (_, marked, _) = spy_frame(
-            &ctx,
-            &mut spy,
-            12.0,
-            false,
-            SettingsSec::About,
-            false,
-            Some(520.0),
-        );
-        assert_eq!(marked, SettingsSec::Privacy);
+        assert_eq!(settings_tab_title(SettingsTab::Pc), "Your PC");
     }
 
     #[test]
-    fn reduced_motion_jumps_in_one_frame() {
-        let ctx = egui::Context::default();
-        let mut spy = Spy::default();
-        spy_frame(&ctx, &mut spy, 0.0, true, SettingsSec::Account, true, None);
-        spy_frame(&ctx, &mut spy, 1.0, false, SettingsSec::Account, true, None);
-        let (y, marked, delay) = spy_frame(
-            &ctx,
-            &mut spy,
-            2.0,
-            false,
-            SettingsSec::Appearance,
-            true,
-            None,
-        );
-        assert_eq!((y, marked), (Some(1000.0), SettingsSec::Appearance));
-        assert_eq!(
-            delay,
-            std::time::Duration::MAX,
-            "nothing eases, so no frame is asked for"
-        );
-        // Opening on a section lands there on the first laid-out frame either way.
-        let mut spy = Spy::default();
-        let (y, marked, _) = spy_frame(&ctx, &mut spy, 5.0, true, SettingsSec::About, false, None);
-        assert_eq!((y, marked), (Some(0.0), SettingsSec::About));
-        let (y, marked, _) = spy_frame(&ctx, &mut spy, 6.0, false, SettingsSec::About, false, None);
-        assert_eq!((y, marked), (Some(1300.0), SettingsSec::About));
+    fn the_back_button_names_the_page_it_returns_to() {
+        assert_eq!(settings_back_label(Nav::Pulse), "\u{2190}  Back to Pulse");
+        assert_eq!(settings_back_label(Nav::Home), "\u{2190}  Back to Home");
+        // Settings opened from nowhere goes back to Chat.
+        assert_eq!(settings_back_label(Nav::Settings), "\u{2190}  Back to Chat");
     }
 
     #[test]

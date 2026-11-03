@@ -83,7 +83,8 @@ impl Cabin {
                         ui.add_space(8.0);
                         if crate::cards::titlebar_update_chip(ui, &quiet) {
                             self.nav = Nav::Settings;
-                            self.settings_sec = SettingsSec::Behavior;
+                            // Quiet hours live on Your PC → Automations & limits.
+                            self.settings_sec = SettingsSec::Automations;
                         }
                     }
                     ui.add_space(8.0);
@@ -525,10 +526,16 @@ impl Cabin {
         self.nav = Nav::Settings;
     }
 
-    /// The rail row to light: Profile while Settings shows Account.
+    /// The rail row to light: Profile while Settings shows Account, and no
+    /// page row on any other Settings page (the gear lights instead), so the
+    /// rail never claims the page hidden under Settings.
     pub(super) fn rail_id(&self) -> &'static str {
-        if self.nav == Nav::Settings && self.settings_sec == SettingsSec::Account {
-            return "profile";
+        if self.nav == Nav::Settings && !self.settings_menu_open {
+            return if self.settings_sec == SettingsSec::Account {
+                "profile"
+            } else {
+                "settings"
+            };
         }
         self.nav_id()
     }

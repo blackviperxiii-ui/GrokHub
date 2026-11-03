@@ -82,9 +82,9 @@ pub(super) fn hw_unknown(hw: &Hardware) -> bool {
 }
 
 pub(super) const SETUP_DONE_STATUS: &str =
-    "Setup saved. Settings → Behavior → Setup opens it again.";
+    "Setup saved. Settings → Your PC → Automations & limits → Setup opens it again.";
 pub(super) const SETUP_SKIPPED_STATUS: &str =
-    "Setup skipped. Settings → Behavior → Setup opens it again.";
+    "Setup skipped. Settings → Your PC → Automations & limits → Setup opens it again.";
 
 pub(super) fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = std::process::Command::new(cmd);
@@ -365,7 +365,7 @@ impl Cabin {
                         welcome.as_str(),
                         "A quick setup: two app settings, then an optional on-device model for background work. You can skip any step.",
                     ),
-                    SetupStep::App => ("App setup", "Change either of these later in Settings → Behavior."),
+                    SetupStep::App => ("App setup", "Change either of these later in Settings → Your PC → App & extras."),
                     SetupStep::LocalAi => (
                         "On-device model",
                         "An on-device model can run background work like dream and summaries on this machine. Chat stays on your cloud model.",
@@ -469,7 +469,7 @@ mod tests {
         assert!(app.cfg.setup_done);
         assert_eq!(
             app.status,
-            "Setup skipped. Settings → Behavior → Setup opens it again."
+            "Setup skipped. Settings → Your PC → Automations & limits → Setup opens it again."
         );
         let mut saved = String::new();
         for _ in 0..200 {
@@ -493,7 +493,7 @@ mod tests {
             (next.setup.step, next.status.as_str()),
             (
                 None,
-                "Setup saved. Settings → Behavior → Setup opens it again."
+                "Setup saved. Settings → Your PC → Automations & limits → Setup opens it again."
             )
         );
         let _ = std::fs::remove_dir_all(root);

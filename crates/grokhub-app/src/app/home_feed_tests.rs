@@ -201,8 +201,8 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         .and_then(|s| s.split("fn ui_sidebar(").next())
         .expect("titlebar");
     assert!(
-        title.contains("quiet_until_chip") && title.contains("SettingsSec::Behavior"),
-        "quiet-hours chip is titlebar chrome; Behavior stays SoT: {title}"
+        title.contains("quiet_until_chip") && title.contains("SettingsSec::Automations"),
+        "quiet-hours chip is titlebar chrome; Automations & limits stays SoT: {title}"
     );
     let hist = src
         .split("fn ui_history(")

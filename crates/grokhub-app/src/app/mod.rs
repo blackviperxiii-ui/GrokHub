@@ -327,7 +327,12 @@ enum SettingsSec {
     AiModels,
     Privacy,
     Appearance,
+    /// Your PC → PC helpers.
     Behavior,
+    /// Your PC → App & extras.
+    Extras,
+    /// Your PC → Automations & limits.
+    Automations,
     Update,
     About,
     Defaults,
@@ -340,10 +345,15 @@ enum SettingsSec {
     Background,
 }
 
+/// Settings' top row: the big categories. Each holds a few [`SettingsSec`] pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SettingsGroup {
-    General,
-    About,
+enum SettingsTab {
+    Account,
+    Look,
+    Ai,
+    Pc,
+    Privacy,
+    Help,
 }
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;

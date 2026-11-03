@@ -1494,11 +1494,6 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     resp.clicked()
 }
 
-pub fn settings_note(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(13.0).color(crate::theme::muted()));
-    ui.add_space(8.0);
-}
-
 pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: Color32) -> bool {
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
     let (resp, rect) = if crate::theme::is_loadout_paint() {
@@ -2679,6 +2674,10 @@ fn push_tile_metric(metric: TileMetric) {
 fn take_tile_metrics() -> Vec<TileMetric> {
     TILE_METRICS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
+
+#[path = "cards_settings.rs"]
+mod settings_buttons;
+pub use settings_buttons::{settings_back, settings_note, settings_tab};
 
 #[cfg(test)]
 #[path = "cards_look_tests.rs"]
