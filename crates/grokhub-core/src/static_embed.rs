@@ -318,8 +318,10 @@ pub fn from_blob(b: &[u8], dim: usize) -> Option<Vec<f32>> {
         return None;
     }
     Some(
-        b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
     )
 }
@@ -365,8 +367,10 @@ fn read_f32_tensor(bytes: &[u8], name: &str) -> Result<(Vec<usize>, Vec<f32>), S
         return Err("tensor data doesn't match its shape".into());
     }
     let data = bytes[a..b]
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     Ok((shape, data))
 }

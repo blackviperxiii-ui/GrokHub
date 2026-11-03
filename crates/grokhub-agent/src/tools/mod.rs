@@ -235,7 +235,8 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
-    match tasks.spawn_for(ctx.workspace, command, ctx.owner) {
+    let plan = crate::sandbox::plan_for_call("run_terminal_command", args, ctx.workspace);
+    match tasks.spawn_for(ctx.workspace, command, ctx.owner, plan) {
         Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
         Err(err) => ToolOutput::err(err),
     }

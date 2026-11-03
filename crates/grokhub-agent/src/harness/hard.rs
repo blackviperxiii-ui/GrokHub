@@ -1770,7 +1770,7 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         let cmd = command_arg(arguments)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        return command_class(&cmd);
+        return command_class(&cmd).or_else(|| asks_outside_sandbox(arguments));
     }
     if let Some(class) =
         crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default())
@@ -1799,6 +1799,14 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         return Some(HardClass::Credentials);
     }
     name_class(name)
+}
+
+/// HX-11: a shell call that asks to run on the whole machine, outside the
+/// sandbox, always asks first.
+fn asks_outside_sandbox(arguments: &str) -> Option<HardClass> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    (v.get(crate::sandbox::OUTSIDE_ARG).and_then(|b| b.as_bool()) == Some(true))
+        .then_some(HardClass::IrreversibleOs)
 }
 
 /// Named tools (native, MCP `server__tool`, and the spike stubs).
