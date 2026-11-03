@@ -1,0 +1,1 @@
+- Grok 4.3 now gets the effort level the router picks (low to extra high), not only None.
