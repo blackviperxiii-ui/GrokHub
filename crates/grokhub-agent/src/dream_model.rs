@@ -141,6 +141,7 @@ fn one_call(
     cap: u32,
 ) -> Result<String, ()> {
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         // The live `background:dream` row starts at low and ceilings at medium.
         effort: Some("medium".into()),

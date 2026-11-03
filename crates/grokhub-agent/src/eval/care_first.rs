@@ -442,6 +442,7 @@ pub fn status_line(report: &CareFirstReport) -> String {
 fn sample_ms(system: &str, reply: &str) -> Result<f64, String> {
     let start = Instant::now();
     let req = ResponsesRequest {
+        text_format: None,
         model: "scripted".into(),
         effort: None,
         input: vec![

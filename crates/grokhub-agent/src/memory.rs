@@ -219,6 +219,7 @@ pub fn dream(
     }
     let prompt = dream_prompt(&workspace_body, &global_body);
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: Some("low".into()),
         input: vec![

@@ -739,6 +739,7 @@ fn request_tool_output_summary(
         content: vec![ContentPart::InputText(user)],
     }];
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: effort.map(str::to_string),
         input,
@@ -1290,6 +1291,7 @@ pub fn request_summary(
         content: vec![ContentPart::InputText(prompt)],
     });
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: effort.map(str::to_string),
         input,

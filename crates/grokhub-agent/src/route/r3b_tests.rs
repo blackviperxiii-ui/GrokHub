@@ -111,6 +111,7 @@ fn setup(label: &str) -> (PathBuf, Arc<Wire>) {
 
 fn hello() -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: OR_MODEL.into(),
         effort: Some("high".into()),
         input: vec![InputItem::Message {
@@ -807,6 +808,7 @@ fn the_self_tuner_never_promotes_a_provider() {
 /// System, user, a tool call and its output, and one function tool plus a hosted one.
 fn turn(effort: &str) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: "m".into(),
         effort: Some(effort.into()),
         input: vec![
@@ -1235,6 +1237,7 @@ impl ModelClient for XaiRec {
 
 fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: "grok-4.7".into(),
         effort: None,
         input: lines

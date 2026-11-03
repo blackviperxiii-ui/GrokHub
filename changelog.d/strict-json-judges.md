@@ -1,0 +1,1 @@
+- The auto-review judge, the close-check and VerifyGate now ask Grok for strict JSON (structured outputs), so their replies always parse; other providers and the local model keep the text reader.
