@@ -62,7 +62,9 @@ use grokhub_core::model_registry::{Credential, ModelState, Registry, EFFORT_LADD
 
 use table::RoutingTable;
 
-use crate::client::{ClientError, InputItem, ModelClient, ResponsesRequest, TurnOutput, Usage};
+use crate::client::{
+    ClientError, InputItem, ModelClient, ResponsesRequest, TextFormat, TurnOutput, Usage,
+};
 use crate::CancelToken;
 
 pub use live::{route_log, RouteCall, RouteDone};
@@ -100,6 +102,8 @@ pub struct ModelCall {
     /// The episode just re-planned: this call goes one model and one rung up
     /// ([`STEP_UP_RULE`]). The episode stays on its own model afterwards.
     pub step_up: bool,
+    /// A strict JSON schema for the reply, sent only when a Grok model answers.
+    pub text_format: Option<TextFormat>,
 }
 
 /// The route rule on a call stepped up after a re-plan.
@@ -124,7 +128,14 @@ impl ModelCall {
             session: String::new(),
             deadline_ms: None,
             step_up: false,
+            text_format: None,
         }
+    }
+
+    /// The reply must follow `format` when a Grok model answers it.
+    pub fn with_text_format(mut self, format: TextFormat) -> Self {
+        self.text_format = Some(format);
+        self
     }
 
     /// The task is time-boxed: it must finish by `deadline_ms`.
@@ -153,6 +164,7 @@ impl ModelCall {
             tools: self.tools.clone(),
             hosted_search: false,
             call_timeout: None,
+            text_format: self.text_format,
         }
     }
 }
@@ -1760,6 +1772,7 @@ mod tests {
 
     fn req(model: &str, effort: Option<&str>, session: &str, text: &str) -> ResponsesRequest {
         ResponsesRequest {
+            text_format: None,
             model: model.into(),
             effort: effort.map(str::to_string),
             input: vec![InputItem::Message {
@@ -1804,7 +1817,7 @@ mod tests {
                 "{class}"
             );
         }
-        let body = r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","reasoning":{"effort":"low"},"stream":true,"tools":[{"type":"web_search"},{"type":"x_search"}]}"#;
+        let body = r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","prompt_cache_key":"golden-session","reasoning":{"effort":"low"},"store":false,"stream":true,"tools":[{"type":"web_search"},{"type":"x_search"}]}"#;
         live::stream_routed(
             &echo,
             &req("grok-4.7", Some("low"), "golden-session", "hi"),
@@ -2228,7 +2241,7 @@ mod tests {
             assert_eq!(
                 body(model),
                 format!(
-                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"model":"{model}","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
+                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"model":"{model}","prompt_cache_key":"s","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
                 )
             );
         }

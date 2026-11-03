@@ -30,5 +30,6 @@
 - `GROKHUB_CONFIG` is process-global: tests take `hold_test_config` and a `test_config_root`; CI runs nextest (each test in its own process), and a plain `cargo test` runs one test at a time (`.cargo/config.toml`).
 - `atomic_write` creates the temp file 0600 (user-only DACL on Windows via `crates/grokhub-app/src/win_acl.rs`) before any bytes land.
 - `diagnostics_mode` (Labs): off by default; camelCase `diagnosticsMode` on disk.
+- `batch_background` (snake_case, read by `crates/grokhub-agent/src/batch.rs`, not `AppConfig`): `false` keeps the night passes on normal calls. Anything else lets an API-key sign-in send the dream and the weekly self-review through xAI's Batch API.
 ## See also
 - [app-module](app-module.md), [amr](amr.md), [grokhub-app](grokhub-app.md), [heartbeat](heartbeat.md)

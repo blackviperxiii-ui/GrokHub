@@ -11,6 +11,8 @@ pub enum SseEvent {
     TextDelta(String),
     ReasoningDelta(String),
     FunctionCall(FunctionCall),
+    /// An xAI `reasoning` output item with `encrypted_content`, as JSON text.
+    ReasoningItem(String),
     /// Stream finished. `incomplete` is set for `response.incomplete` or a
     /// final response with `status: "incomplete"` (output-token cut-off).
     Completed {
@@ -95,7 +97,7 @@ impl SseParser {
         }
         if kind == "response.output_item.done" {
             return self
-                .take_call(v.get("item").unwrap_or(&v))
+                .take_item(v.get("item").unwrap_or(&v))
                 .into_iter()
                 .collect();
         }
@@ -109,7 +111,7 @@ impl SseParser {
             {
                 if let Some(items) = output.as_array() {
                     for item in items {
-                        if let Some(ev) = self.take_call(item) {
+                        if let Some(ev) = self.take_item(item) {
                             out.push(ev);
                         }
                     }
@@ -129,6 +131,25 @@ impl SseParser {
             return vec![SseEvent::Error(error_message(&v))];
         }
         Vec::new()
+    }
+
+    /// A function call or a sealed reasoning item, each once: `response.completed`
+    /// repeats what `response.output_item.done` already sent.
+    fn take_item(&mut self, item: &Value) -> Option<SseEvent> {
+        if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+            let raw = serde_json::to_string(item).ok()?;
+            crate::client::InputItem::reasoning(&raw, "")?;
+            let key = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| format!("reasoning:{id}"))
+                .unwrap_or_else(|| raw.clone());
+            return self
+                .seen
+                .insert(key)
+                .then_some(SseEvent::ReasoningItem(raw));
+        }
+        self.take_call(item)
     }
 
     fn take_call(&mut self, item: &Value) -> Option<SseEvent> {
@@ -417,5 +438,29 @@ mod tests {
             .is_empty());
         let ev = p.push("ta\":\"ab\"}\n\n");
         assert_eq!(ev, vec![SseEvent::TextDelta("ab".into())]);
+    }
+
+    /// grok-4.x sends its sealed reasoning as an output item; it comes back once,
+    /// whole, even when `response.completed` repeats it.
+    #[test]
+    fn a_sealed_reasoning_item_is_kept_once() {
+        let mut p = SseParser::new();
+        let item = r#"{"id":"rs_1","summary":[],"type":"reasoning","status":"completed","encrypted_content":"gAAAA=="}"#;
+        let ev = p.push(&frame(&format!(
+            r#"{{"type":"response.output_item.done","item":{item}}}"#
+        )));
+        assert_eq!(
+            ev,
+            vec![SseEvent::ReasoningItem(
+                r#"{"encrypted_content":"gAAAA==","id":"rs_1","status":"completed","summary":[],"type":"reasoning"}"#
+                    .into()
+            )]
+        );
+        let done = p.push(&frame(&format!(
+            r#"{{"type":"response.completed","response":{{"usage":{{"input_tokens":1,"output_tokens":1}},"output":[{item}]}}}}"#
+        )));
+        assert_eq!(done.len(), 1, "{done:?}");
+        assert!(matches!(done[0], SseEvent::Completed { .. }));
+        p.finish().unwrap();
     }
 }

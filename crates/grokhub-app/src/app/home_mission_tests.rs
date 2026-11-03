@@ -146,20 +146,14 @@ fn home_chips_follow_the_engine_learn_and_dismiss() {
 #[test]
 fn home_chip_labels_match_mission_control_preset() {
     let src = include_str!("home/page.rs");
-    let chips = src
-        .split("HOME_CHIPS:")
-        .nth(1)
-        .and_then(|s| s.split("];").next())
-        .expect("HOME_CHIPS array");
-    for label in [
-        "Fix my stutter",
-        "Find a duo tonight",
-        "Free up storage",
-        "Plan my week",
-    ] {
+    assert!(
+        src.contains("use grokhub_core::home::HOME_CHIPS;"),
+        "Home paints the shared preset"
+    );
+    for label in HOME_FIXED {
         assert!(
-            chips.contains(label),
-            "Mission Control chips must include {label}: {chips}"
+            grokhub_core::home::HOME_CHIPS.contains(&label),
+            "Mission Control chips must include {label}"
         );
     }
 }

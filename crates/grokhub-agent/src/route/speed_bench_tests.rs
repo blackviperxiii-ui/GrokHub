@@ -222,6 +222,7 @@ impl HaltCheck for NeverHalt {
 
 fn chat_turn(stub: &Stub, i: usize) {
     let req = ResponsesRequest {
+        text_format: None,
         model: "grok-4.7".into(),
         effort: None,
         input: vec![InputItem::Message {

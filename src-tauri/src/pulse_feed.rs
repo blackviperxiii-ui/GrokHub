@@ -365,6 +365,7 @@ fn ask(
     messages: &[(String, String)],
 ) -> Result<String, String> {
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: Some(grokhub_core::BACKGROUND_EFFORT.to_string()),
         input: messages

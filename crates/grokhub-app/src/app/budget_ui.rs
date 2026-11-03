@@ -103,6 +103,10 @@ pub(super) enum BudgetCard {
     Nudge(String),
 }
 
+/// One background tally: the budget, the nudge facts, this week's spend in
+/// USD and the last day's Grok cache share.
+pub(super) type Tally = (Budget, NudgeFacts, f64, Option<u8>);
+
 /// The minute tally Home's AI usage tile reads.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct WeekSpend {
@@ -112,9 +116,11 @@ pub(super) struct WeekSpend {
 
 #[derive(Debug, Default)]
 pub(super) struct BudgetUi {
-    pub rx: Option<mpsc::Receiver<(Budget, NudgeFacts, f64)>>,
+    pub rx: Option<mpsc::Receiver<Tally>>,
     /// This week's model spend in USD and its share of the cap, from the last tally.
     pub week: Option<WeekSpend>,
+    /// The last 24 hours' Grok prompt-cache share, from the same tally.
+    pub cache_pct: Option<u8>,
     pub last: Option<Instant>,
     pub card: Option<BudgetCard>,
     pub facts: NudgeFacts,
@@ -222,8 +228,9 @@ impl Cabin {
     pub(super) fn tick_budget(&mut self, now: u64) {
         if let Some(rx) = self.harness.router.budget.rx.take() {
             match rx.try_recv() {
-                Ok((b, facts, usd)) => {
+                Ok((b, facts, usd, cache_pct)) => {
                     self.harness.router.budget.week = Some(WeekSpend { usd, pct: b.pct });
+                    self.harness.router.budget.cache_pct = cache_pct;
                     self.budget_landed(&b, facts, now);
                 }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.budget.rx = Some(rx),
@@ -248,8 +255,14 @@ impl Cabin {
             let reg = load_registry(&dir);
             let week = budget::load_week(&dir, &reg, now);
             let b = Budget::of(&week, reg.entitlement.credential, cap);
-            let facts = budget::nudge_facts(&budget::read_records(&dir), now);
-            let _ = tx.send((b, facts, week.spent_usd));
+            let records = budget::read_records(&dir);
+            let facts = budget::nudge_facts(&records, now);
+            let cache = grokhub_agent::cache_watch::share_since(
+                &records,
+                now.saturating_sub(grokhub_agent::cache_watch::WINDOW_MS),
+            )
+            .map(|share| share.pct);
+            let _ = tx.send((b, facts, week.spent_usd, cache));
         });
     }
 

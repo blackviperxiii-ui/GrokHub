@@ -187,6 +187,7 @@ fn request(skill: &str, turn: &Turn) -> ResponsesRequest {
         system.push_str(turn.truth);
     }
     ResponsesRequest {
+        text_format: None,
         model: "scripted".into(),
         effort: None,
         input: vec![

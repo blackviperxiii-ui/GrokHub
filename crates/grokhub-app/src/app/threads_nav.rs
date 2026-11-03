@@ -913,9 +913,8 @@ impl Cabin {
             self.active_skill_follow = None;
             self.goal_step = 0;
         }
-        threads::forget_main_history();
         self.status = "Main chat cleared".into();
-        self.persist();
+        self.persist_forgetting(threads::Forget::Main);
     }
 
     /// Chat `thread`'s messages: the open chat's live copy, or its stored row.
@@ -1099,8 +1098,7 @@ impl Cabin {
         self.rename_idx = None;
         self.status = "Deleted all chats".into();
         self.stamp_current_access();
-        threads::forget_all_history();
-        self.persist();
+        self.persist_forgetting(threads::Forget::All);
     }
 
     /// History's "Delete all" button. The first click only arms it; a second

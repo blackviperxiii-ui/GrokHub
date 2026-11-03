@@ -513,8 +513,9 @@ mod tests {
             root.join("steamapps").join("libraryfolders.vdf"),
             format!(
                 "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n\t\"1\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
-                root.display(),
-                second.display()
+                // Steam writes a Windows path with its backslashes escaped.
+                root.display().to_string().replace('\\', "\\\\"),
+                second.display().to_string().replace('\\', "\\\\")
             ),
         )
         .expect("libraryfolders");

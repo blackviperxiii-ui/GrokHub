@@ -31,6 +31,16 @@
 //! At age = half_life the score is half the rank. At equal rank, a newer
 //! entry has a smaller age and a higher score, so it sorts first.
 //!
+//! ## Meaning (HX-12)
+//!
+//! With the small local embedding model on disk (`memory_embed`), recall also
+//! compares the ask and each note by cosine. A note at or over
+//! [`SEMANTIC_FLOOR`] gains `top × 0.5 × (cos − floor) / (1 − floor)`, decayed by
+//! the same half-life, where `top` is the best word match's score (1 when
+//! nothing matched by words). Up to [`SEMANTIC_ONLY_CAP`] notes that share no
+//! word with the ask can join that way. Vectors are cached in the index by
+//! content hash. Without the model, recall is word search alone, unchanged.
+//!
 //! Recalled text is untrusted. First-turn injection fences it and caps it.
 //! The block is prompt text only. It cannot change a permission gate or a mode.
 
@@ -67,6 +77,14 @@ const LEGACY_MIN_SHARE: f64 = 0.25;
 const AMR_PACK_CAP: usize = 8;
 /// A paragraph longer than this is indexed as several chunks, split at line breaks.
 const CHUNK_BYTES: usize = 600;
+/// Least cosine for a note found by meaning alone (HX-12).
+pub const SEMANTIC_FLOOR: f32 = 0.45;
+/// How much a meaning match adds, against the best word match's score.
+const SEMANTIC_WEIGHT: f64 = 0.5;
+/// Notes found by meaning but not by words, at most, per recall.
+const SEMANTIC_ONLY_CAP: usize = 2;
+/// Notes compared by meaning, at most, per recall.
+const SEMANTIC_POOL: usize = 8;
 /// What a prompt with no content words searches for.
 const FALLBACK_QUERY: &str = "project conventions preferences architecture";
 /// Words that say nothing about what to recall. Dropped from every query.
@@ -219,6 +237,7 @@ pub fn dream(
     }
     let prompt = dream_prompt(&workspace_body, &global_body);
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: Some("low".into()),
         input: vec![
@@ -526,7 +545,14 @@ fn legacy_injection_bodies(
         return None;
     }
     let query = injection_query(user_text);
-    let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
+    let model = crate::memory_embed::embedder();
+    let hits = recall_hybrid(
+        &query,
+        now_secs(),
+        &scope_paths(workspace),
+        model.as_deref(),
+    )
+    .ok()?;
     Some(pack_legacy(hits, already))
 }
 
@@ -693,8 +719,9 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
         .into_iter()
         .filter(|w| w.chars().count() >= 3)
         .collect();
+    let store = amr_store();
     let mut out: Vec<String> = Vec::new();
-    for hit in amr_store().recall_ranked(&words) {
+    for hit in store.recall_ranked(&words) {
         if out.len() >= AMR_PACK_CAP {
             break;
         }
@@ -702,7 +729,37 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
             out.push(hit.line);
         }
     }
+    if let Some(model) = crate::memory_embed::embedder() {
+        amr_semantic_lines(&store, &model, user_text, &mut out);
+    }
     out
+}
+
+/// Add up to [`SEMANTIC_ONLY_CAP`] AMR lines found by meaning (HX-12) after
+/// the word matches, within [`AMR_PACK_CAP`]. Superseded facts never come back.
+fn amr_semantic_lines(
+    store: &grokhub_core::amr::AmrStore,
+    model: &grokhub_core::static_embed::StaticModel,
+    user_text: &str,
+    out: &mut Vec<String>,
+) {
+    let Some(query) = model.encode(&injection_query(user_text)) else {
+        return;
+    };
+    let room = AMR_PACK_CAP
+        .saturating_sub(out.len())
+        .min(SEMANTIC_ONLY_CAP);
+    let encode = |text: &str| model.encode(text);
+    let mut added = 0;
+    for hit in store.recall_semantic(&query, &encode, SEMANTIC_FLOOR, AMR_PACK_CAP) {
+        if added >= room {
+            break;
+        }
+        if !out.contains(&hit.line) {
+            out.push(hit.line);
+            added += 1;
+        }
+    }
 }
 
 /// The recalled lines in a history's memory block (Spike-4c), so egress can
@@ -913,6 +970,168 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
     Ok(hits)
 }
 
+/// [`recall`], plus notes found by meaning when `model` is there (see the
+/// module docs). With `model` `None` this is [`recall`] exactly.
+pub fn recall_hybrid(
+    query: &str,
+    now: i64,
+    paths: &[String],
+    model: Option<&grokhub_core::static_embed::StaticModel>,
+) -> Result<Vec<Hit>, String> {
+    let lexical = recall(query, now, paths)?;
+    let Some(model) = model else {
+        return Ok(lexical);
+    };
+    let Some(query_vec) = model.encode(query) else {
+        return Ok(lexical);
+    };
+    let near = nearest_entries(model, &query_vec, paths)?;
+    Ok(fuse(lexical, near, now))
+}
+
+/// A note and its cosine to the ask.
+struct Near {
+    body: String,
+    scope: String,
+    created_at: i64,
+    cos: f32,
+}
+
+/// One entry with its cached vector: body, scope, created_at, hash, vector.
+type EntryRow = (String, String, i64, String, Option<Vec<u8>>);
+
+/// Up to [`SEMANTIC_POOL`] notes in `paths` at or over [`SEMANTIC_FLOOR`],
+/// closest first. Vectors missing from the cache are made and stored.
+fn nearest_entries(
+    model: &grokhub_core::static_embed::StaticModel,
+    query_vec: &[f32],
+    paths: &[String],
+) -> Result<Vec<Near>, String> {
+    use grokhub_core::static_embed::{cosine, from_blob, to_blob};
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tag = crate::memory_embed::MODEL.id;
+    let conn = open_db()?;
+    let slots: Vec<String> = (0..paths.len()).map(|i| format!("?{}", i + 2)).collect();
+    let sql = format!(
+        "SELECT e.body, e.scope, e.created_at, e.content_hash, v.vec \
+         FROM entries e \
+         LEFT JOIN entry_vectors v ON v.content_hash = e.content_hash AND v.model = ?1 \
+         WHERE e.path IN ({})",
+        slots.join(", ")
+    );
+    let mut args: Vec<&str> = Vec::with_capacity(paths.len() + 1);
+    args.push(tag);
+    args.extend(paths.iter().map(String::as_str));
+    let rows: Vec<EntryRow> = {
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_map(params_from_iter(args), |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .map_err(|err| err.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|err| err.to_string())?
+    };
+    let mut fresh: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut near = Vec::new();
+    for (body, scope, created_at, hash, blob) in rows {
+        let vec = match blob.and_then(|b| from_blob(&b, model.dim())) {
+            Some(v) => v,
+            None => {
+                let Some(v) = model.encode(&body) else {
+                    continue;
+                };
+                fresh.push((hash, to_blob(&v)));
+                v
+            }
+        };
+        let cos = cosine(query_vec, &vec);
+        if cos >= SEMANTIC_FLOOR {
+            near.push(Near {
+                body,
+                scope,
+                created_at,
+                cos,
+            });
+        }
+    }
+    if !fresh.is_empty() {
+        // The cache is a speed-up only: a failed write is made again next time.
+        let _ = immediate(&conn, || {
+            for (hash, blob) in &fresh {
+                conn.execute(
+                    "INSERT OR REPLACE INTO entry_vectors (content_hash, model, vec) VALUES (?1, ?2, ?3)",
+                    params![hash, tag, blob],
+                )
+                .map_err(|err| err.to_string())?;
+            }
+            conn.execute(
+                "DELETE FROM entry_vectors WHERE content_hash NOT IN (SELECT content_hash FROM entries)",
+                [],
+            )
+            .map_err(|err| err.to_string())?;
+            Ok(())
+        });
+    }
+    near.sort_by(|a, b| {
+        b.cos
+            .total_cmp(&a.cos)
+            .then_with(|| a.scope.cmp(&b.scope))
+            .then_with(|| a.body.cmp(&b.body))
+    });
+    near.truncate(SEMANTIC_POOL);
+    Ok(near)
+}
+
+/// Word hits with each meaning match's boost added, plus up to
+/// [`SEMANTIC_ONLY_CAP`] notes found by meaning alone. Best first.
+fn fuse(mut hits: Vec<Hit>, near: Vec<Near>, now: i64) -> Vec<Hit> {
+    let top = hits
+        .iter()
+        .map(|h| h.score)
+        .fold(0.0f64, f64::max)
+        .max(f64::MIN_POSITIVE);
+    let top = if hits.is_empty() { 1.0 } else { top };
+    let boost = |cos: f32, created_at: i64| {
+        let share = f64::from((cos - SEMANTIC_FLOOR) / (1.0 - SEMANTIC_FLOOR)).clamp(0.0, 1.0);
+        let age = now.saturating_sub(created_at) as f64;
+        // `combine_score` with a rank of 1 is the decay alone.
+        top * SEMANTIC_WEIGHT * share * combine_score(-1.0, age, HALF_LIFE_SECS)
+    };
+    let mut only = 0usize;
+    for n in near {
+        if let Some(hit) = hits
+            .iter_mut()
+            .find(|h| h.body == n.body && h.scope == n.scope)
+        {
+            hit.score += boost(n.cos, hit.created_at);
+        } else if only < SEMANTIC_ONLY_CAP {
+            only += 1;
+            hits.push(Hit {
+                score: boost(n.cos, n.created_at),
+                body: n.body,
+                scope: n.scope,
+                created_at: n.created_at,
+                bm25: 0.0,
+            });
+        }
+    }
+    hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.scope.cmp(&b.scope))
+            .then_with(|| a.body.cmp(&b.body))
+    });
+    hits
+}
+
 /// Search the notes one workspace may recall from (global, this workspace's
 /// `MEMORY.md`, its flush file), best first. Stale files are reindexed first.
 pub fn search(workspace: &Path, query: &str) -> Result<Vec<Hit>, String> {
@@ -925,7 +1144,8 @@ pub(crate) fn search_at(workspace: &Path, query: &str, now: i64) -> Result<Vec<H
         return Ok(Vec::new());
     }
     rebuild_if_stale(workspace)?;
-    recall(query, now, &scope_paths(workspace))
+    let model = crate::memory_embed::embedder();
+    recall_hybrid(query, now, &scope_paths(workspace), model.as_deref())
 }
 
 pub fn global_memory_path() -> PathBuf {
@@ -1466,6 +1686,12 @@ fn open_db() -> Result<Connection, String> {
         CREATE TABLE IF NOT EXISTS files (
             path TEXT PRIMARY KEY,
             stamp TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS entry_vectors (
+            content_hash TEXT NOT NULL,
+            model TEXT NOT NULL,
+            vec BLOB NOT NULL,
+            PRIMARY KEY (content_hash, model)
         );",
     )
     .map_err(|err| err.to_string())?;

@@ -186,6 +186,7 @@ fn a_local_chat_turn_hands_its_effort_to_the_runtime() {
     let _on = ForceOn::with(Some(Arc::new(EffortRt)));
     let go = crate::client::CancelToken::new();
     let req = |effort: Option<&str>, tools: Vec<Value>| ResponsesRequest {
+        text_format: None,
         model: "local:small".into(),
         effort: effort.map(str::to_string),
         input: vec![InputItem::Message {
@@ -600,6 +601,7 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
     let _rt = ForceOn::with(Some(Arc::new(FakeRt)));
     let _off = grokhub_core::offline::force_for_thread(true);
     let req = ResponsesRequest {
+        text_format: None,
         model: "grok-4.7".into(),
         effort: None,
         input: vec![InputItem::Message {

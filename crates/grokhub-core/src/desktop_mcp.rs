@@ -452,8 +452,9 @@ pub trait DesktopBackend {
         Err(TRASH_MSG.into())
     }
     /// Spike-2b: the accessible control at a screen point, read-only. `None`
-    /// means unknown (no reader, a timeout, or no control there). The
-    /// default (Windows, fakes) is unknown: no UIA reader (D3).
+    /// means unknown (no reader, a timeout, or no control there). The live
+    /// backend reads AT-SPI on Linux and UI Automation on Windows; the default
+    /// (fakes, macOS) is unknown.
     fn target_at(&mut self, x: i32, y: i32) -> Option<ClickTarget> {
         let _ = (x, y);
         None

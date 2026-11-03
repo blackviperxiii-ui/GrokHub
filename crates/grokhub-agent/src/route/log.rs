@@ -211,7 +211,8 @@ pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)>
     (input > 0).then(|| (episode, cached * 100 / input))
 }
 
-/// `/why`: one line per recent route, at most [`WHY_LINES`]. When the newest
+/// `/why`: one line per recent route, at most [`WHY_LINES`], then the last
+/// day's Grok cache share ([`crate::cache_watch::why_line`]). When the newest
 /// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
 /// cache, the oldest line makes room for that flag.
 pub fn why_text(config_dir: &Path) -> String {
@@ -229,8 +230,9 @@ pub fn why_text(config_dir: &Path) -> String {
     let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
         format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
     });
-    while !routes.is_empty() && routes.len() + usize::from(flag.is_some()) + brief.len() > WHY_LINES
-    {
+    let share = crate::cache_watch::why_line(&scanned, grokhub_core::now_ms());
+    let extra = usize::from(flag.is_some()) + usize::from(share.is_some());
+    while !routes.is_empty() && routes.len() + extra + brief.len() > WHY_LINES {
         routes.remove(0);
     }
     let mut lines: Vec<String> = brief;
@@ -254,6 +256,7 @@ pub fn why_text(config_dir: &Path) -> String {
             r.class, r.used.model, r.reason, used, goal
         )
     }));
+    lines.extend(share);
     lines.extend(flag);
     lines.join("\n")
 }

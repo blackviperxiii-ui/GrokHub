@@ -687,7 +687,7 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
                             .clicked()
                         {
                             actions.push(ModuleAction::OpenChat(
-                                "Check this PC and suggest a tune-up.".into(),
+                                grokhub_core::home::TUNE_UP_ASK.into(),
                             ));
                         }
                         if crate::ui_kit::recipe::button(ui, None, "Details", false, btn, true)
@@ -741,6 +741,7 @@ fn paint_usage(
         cabin.cfg.daily_token_budget,
         cabin.harness.router.budget.week,
         cabin.cfg.weekly_spend_cap_usd,
+        cabin.harness.router.budget.cache_pct,
     );
     let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
@@ -755,12 +756,14 @@ fn paint_usage(
     }
 }
 
-/// Today's tokens against the daily cap, plus this week's spend when known.
+/// Today's tokens against the daily cap, plus this week's spend and the last
+/// day's Grok cache share when known. A share under the cache floor is flagged.
 pub(super) fn usage_text(
     used: u64,
     cap: u64,
     week: Option<crate::app::budget_ui::WeekSpend>,
     week_cap_usd: u32,
+    cache_pct: Option<u8>,
 ) -> TileText {
     use grokhub_core::{budget_level, compact_tokens, BudgetLevel};
     let caption = if cap == 0 {
@@ -775,13 +778,24 @@ pub(super) fn usage_text(
         _ if used == 0 => Tone::Quiet,
         _ => Tone::Normal,
     };
-    let detail = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
+    let spend = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
         if week_cap_usd > 0 {
             format!("${:.2} of ${week_cap_usd} this week", w.usd)
         } else {
             format!("${:.2} this week", w.usd)
         }
     });
+    let cache = cache_pct.map(|pct| {
+        if pct < grokhub_agent::cache_watch::FLOOR_PCT {
+            format!("cache {pct}% (low)")
+        } else {
+            format!("cache {pct}%")
+        }
+    });
+    let detail = match (spend, cache) {
+        (Some(s), Some(c)) => Some(format!("{s} · {c}")),
+        (s, c) => s.or(c),
+    };
     TileText {
         big: compact_tokens(used),
         caption,
@@ -889,7 +903,9 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             }
         }
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Free up storage") {
-            actions.push(ModuleAction::OpenChat("Free up storage on this PC.".into()));
+            actions.push(ModuleAction::OpenChat(
+                grokhub_core::home::FREE_STORAGE_ASK.into(),
+            ));
         }
     });
 }

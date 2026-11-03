@@ -215,6 +215,7 @@ impl ModelClient for FakeModel {
         Ok(TurnOutput {
             text,
             reasoning: WORKER_THOUGHT.into(),
+            reasoning_items: Vec::new(),
             calls,
             usage,
             truncated,

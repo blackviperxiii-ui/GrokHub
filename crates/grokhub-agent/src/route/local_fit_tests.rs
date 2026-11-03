@@ -37,6 +37,7 @@ fn real_request(history: Vec<InputItem>) -> ResponsesRequest {
     let mut input = vec![text("system", &system)];
     input.extend(history);
     ResponsesRequest {
+        text_format: None,
         model: "local".into(),
         effort: None,
         input,
@@ -202,6 +203,7 @@ fn a_huge_agents_md_is_cut_at_a_line_and_says_so() {
         lines.join("\n")
     );
     let req = ResponsesRequest {
+        text_format: None,
         model: "local".into(),
         effort: None,
         input: vec![text("system", &system), text("user", "hi")],

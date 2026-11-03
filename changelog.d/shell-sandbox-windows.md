@@ -1,0 +1,1 @@
+- On Windows, model-written shell commands now run with a write-restricted token: writes land only in the workspace, temp folders and tool caches (each gets one inheritable allow entry for Loadout's capability SID), and network goes through the egress guard's proxy, the same as on Linux.

@@ -41,10 +41,19 @@ pub(super) struct PersistSnap {
     pub(super) hub: Option<Arc<Mutex<HubState>>>,
     pub(super) projects: Option<Vec<ProjectNode>>,
     pub(super) secrets: Option<crate::secrets::Secrets>,
+    /// Backup cleanup this snapshot's threads.json save owes: set only on the
+    /// snapshot taken right after Clear chat or Delete all.
+    pub(super) forget: threads::Forget,
 }
 
 /// Write every full-snap store. Returns the first failure; later stores still try.
-pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) -> Result<(), String> {
+/// `forget` is the backup cleanup still owed; a threads.json save that does it
+/// sets it back to `Nothing`.
+pub(super) fn write_persist_disk(
+    dir: &std::path::Path,
+    snap: &PersistSnap,
+    forget: &mut threads::Forget,
+) -> Result<(), String> {
     let mut first = Ok(());
     let mut note = |r: Result<(), String>| {
         if first.is_ok() {
@@ -53,7 +62,11 @@ pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) -> R
             }
         }
     };
-    note(threads::save(&snap.threads));
+    let saved = threads::save_forgetting(&snap.threads, *forget);
+    if saved.is_ok() {
+        *forget = threads::Forget::Nothing;
+    }
+    note(saved);
     let msgs = snap
         .threads
         .iter()
@@ -95,6 +108,9 @@ pub(super) struct PersistMark {
     r#gen: u64,
     projects: u64,
     secrets: u64,
+    /// Clear chat or Delete all cleanup that no threads.json save has done yet.
+    /// If that save fails, the next one still owes it.
+    forget: threads::Forget,
 }
 
 impl PersistMark {
@@ -120,14 +136,15 @@ pub(super) fn write_persist_disk_in_order(
     mark: &Mutex<PersistMark>,
 ) -> Result<(), String> {
     let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
+    mark.forget = mark.forget.max(snap.forget);
     if r#gen > mark.r#gen {
         // A newer secrets-only write may have landed first; keep its tokens.
         let r = if snap.secrets.is_some() && !mark.take_secrets(r#gen) {
             let mut fresh = snap.clone();
             fresh.secrets = None;
-            write_persist_disk(dir, &fresh)
+            write_persist_disk(dir, &fresh, &mut mark.forget)
         } else {
-            write_persist_disk(dir, snap)
+            write_persist_disk(dir, snap, &mut mark.forget)
         };
         mark.r#gen = r#gen;
         if snap.projects.is_some() {
@@ -160,7 +177,15 @@ pub(super) fn write_persist_disk_in_order(
 
 impl Cabin {
     pub(super) fn persist(&mut self) {
+        self.persist_forgetting(threads::Forget::Nothing);
+    }
+
+    /// [`Self::persist`] that also cleans the threads.json backups, for Clear
+    /// chat and Delete all. Call it after the wipe: this snapshot carries the
+    /// cleanup, so a save queued before it cannot do the job early.
+    pub(super) fn persist_forgetting(&mut self, forget: threads::Forget) {
         let mut snap = self.persist_snap();
+        snap.forget = forget;
         if snap.projects.is_some() {
             self.projects_dirty = false;
         }
@@ -212,6 +237,7 @@ impl Cabin {
             projects,
             // Idle persist must not write secrets.json from a stale snap.
             secrets: None,
+            forget: threads::Forget::Nothing,
         }
     }
 

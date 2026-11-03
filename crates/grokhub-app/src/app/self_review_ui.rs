@@ -797,11 +797,11 @@ impl Cabin {
     #[cfg(not(test))]
     fn self_review_client(&mut self) -> Result<Box<dyn grokhub_agent::ModelClient + Send>, String> {
         let (bearer, kind) = self.native_cred()?;
-        Ok(Box::new(grokhub_agent::XaiClient::new(
-            bearer,
-            kind,
-            std::time::Duration::from_secs(120),
-        )))
+        // The weekly pass can wait: on an API key it goes through the Batch API.
+        Ok(Box::new(
+            grokhub_agent::XaiClient::new(bearer, kind, std::time::Duration::from_secs(120))
+                .deferrable(&config::config_dir()),
+        ))
     }
 
     #[cfg(test)]

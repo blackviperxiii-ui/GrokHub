@@ -413,7 +413,6 @@ pub fn run_loop(
         })
         .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
-    scrub_turn_labels(history);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
@@ -436,6 +435,11 @@ pub fn run_loop(
             volatile_intentions,
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
+        if crate::prefix_cache::settings(&config_dir).old_notes
+            == crate::prefix_cache::OldNotes::EveryTurn
+        {
+            crate::prefix_cache::drop_older_notes(history);
+        }
     } else {
         if first_turn {
             let base = style.map(|s| grokhub_core::talk::restyle_caps(input.system, s, soft_caps));
@@ -481,6 +485,8 @@ pub fn run_loop(
         }
         history.push(user_message(user_text, image));
     }
+    // After this turn's message is in, so its own text and notes are clean too.
+    scrub_turn_labels(history);
     // Spike-4c: a tool call that carries a recalled line is personal egress.
     let _recall = crate::harness::RecallScope::enter(crate::memory::recall_lines(history));
     input.permits.drain();
@@ -550,6 +556,8 @@ pub fn run_loop(
     // At most one trim pass changes the history per turn, so it costs the prompt
     // cache one miss and later requests extend the trimmed history again.
     let mut trimmed = false;
+    // The last request's real prompt size and the history length it was sent with.
+    let mut prompt_mark: Option<(u64, usize)> = None;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
@@ -573,13 +581,14 @@ pub fn run_loop(
         if !trimmed
             && crate::compact::trim_pass(
                 history,
-                input.context_length,
+                crate::compact::trim_window(input.model, input.context_length),
                 &crate::perm::config_dir(),
                 input.workspace,
                 input.conversation_id,
             ) > 0
         {
             trimmed = true;
+            prompt_mark = None;
             crate::prefix_guard::note_trim(&guard_key);
         }
         // Compact when the context fills (or before a long-context price step).
@@ -589,13 +598,19 @@ pub fn run_loop(
             input.model,
             crate::compact::estimate_input_tokens(history),
         );
-        let over = crate::compact::needs_auto_compact(history, input.context_length) || long;
+        // xAI bills the whole request at about 2x from 200k prompt tokens, so a
+        // Grok chat compacts before that, whatever the model's window.
+        let projected = crate::compact::projected_prompt_tokens(history, prompt_mark);
+        let step = crate::compact::crosses_price_step(input.model, input.context_length, projected);
+        let over =
+            crate::compact::needs_auto_compact(history, input.context_length) || long || step;
         let may_compact = over && (!compacted_once || turns_since_compact >= 1);
         if may_compact {
             match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
                 CompactPass::Ok => {
                     compacted_once = true;
                     turns_since_compact = 0;
+                    prompt_mark = None;
                 }
                 CompactPass::Cancelled => {
                     return finish(input, StopReason::Cancelled, usage, compacted_once, true);
@@ -603,6 +618,7 @@ pub fn run_loop(
                 CompactPass::Failed => {}
             }
         }
+        let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
         let tools = match bound_job_tool_set(input.conversation_id) {
@@ -610,6 +626,7 @@ pub fn run_loop(
             None => tools::schemas_for(&gate),
         };
         let req = ResponsesRequest {
+            text_format: None,
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
@@ -646,6 +663,20 @@ pub fn run_loop(
         ) {
             Ok(turn) => {
                 overflow_compacted = false;
+                if turn.usage.input_tokens > 0 {
+                    // A request that still went over (one huge message, a failed
+                    // compact) is logged so the cost isn't a surprise.
+                    if crate::compact::price_step_model(input.model)
+                        && turn.usage.input_tokens >= crate::compact::XAI_PRICE_STEP_TOKENS
+                    {
+                        record_price_step(
+                            input.conversation_id,
+                            input.model,
+                            turn.usage.input_tokens,
+                        );
+                    }
+                    prompt_mark = Some((turn.usage.input_tokens, sent_len));
+                }
                 turn
             }
             Err(ClientError::Cancelled) => {
@@ -698,6 +729,9 @@ pub fn run_loop(
         emit_usage(on_event, &usage, history, input.context_length);
         // Close-check reads this after the reply is stored on the history.
         let last_assistant = turn.text.clone();
+        // xAI's sealed reasoning goes first, as it came: the next request sends it
+        // back so the model keeps its working and the prompt cache keeps matching.
+        history.extend(turn.reasoning_items.iter().cloned());
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
@@ -1195,20 +1229,18 @@ fn restyle_history(
     }
 }
 
-/// Saved-turn labels (`TURN_SAY:` and the rest) are the cabin's transcript
-/// format, never chat. A model that sees them echoes them, so no user or
-/// assistant message carries one into a request.
+/// Saved-turn labels (`TURN_SAY:` in any spelling) are the cabin's transcript
+/// format, never chat. A model that sees them echoes them, so no message of
+/// any role (a personality, notes, AGENTS.md, the person's own text) carries
+/// one into a request. Fenced code keeps its text.
 fn scrub_turn_labels(history: &mut [InputItem]) {
     for item in history.iter_mut() {
-        let InputItem::Message { role, content } = item else {
+        let InputItem::Message { content, .. } = item else {
             continue;
         };
-        if role == "system" {
-            continue;
-        }
         for part in content.iter_mut() {
             if let ContentPart::InputText(text) = part {
-                if text.contains("TURN_") {
+                if grokhub_core::has_turn_label(text) {
                     *text = grokhub_core::strip_turn_labels(text);
                 }
             }
@@ -1322,6 +1354,15 @@ pub(crate) fn push_output(
 }
 
 /// Trail span for a length-truncated model reply (`turn_truncated`).
+/// Trail span: a Grok request was billed past xAI's long-context price step.
+fn record_price_step(conversation_id: &str, model: &str, input_tokens: u64) {
+    let args = serde_json::json!({"model": model, "input_tokens": input_tokens}).to_string();
+    let reason = "prompt at or over the 200k long-context price step";
+    let span = crate::harness::Span::deny(conversation_id, "price_step", &args, reason, "soft")
+        .in_turn(conversation_id, 0);
+    let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
+}
+
 fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u32) {
     let reason = reason.unwrap_or("max_output_tokens");
     let args = serde_json::json!({
@@ -1862,6 +1903,7 @@ mod tests {
             Ok(crate::TurnOutput {
                 text: turn.text,
                 reasoning: String::new(),
+                reasoning_items: Vec::new(),
                 calls: turn.calls,
                 usage: turn.usage,
                 truncated: turn.truncated,
@@ -3081,6 +3123,7 @@ mod tests {
                 if output.contains(*grokhub_core::desktop_mcp::OFF_MSG)
         )));
         let body = crate::responses_body(&crate::ResponsesRequest {
+            text_format: None,
             model: "grok-4.7".into(),
             effort: None,
             input: Vec::new(),
@@ -4332,7 +4375,7 @@ mod tests {
         let short = format!(
             "CABIN RULES\n\n{voice}\n\n\
              Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.\n\n\
              {VOLATILE_SAFETY_CLOSER}"
         );
         let seen = script.seen.lock().unwrap()[0].clone();
@@ -4778,21 +4821,109 @@ mod tests {
             content: vec![ContentPart::InputText(text.into())],
         };
         let mut history = vec![
-            msg("system", "Rules mention TURN_SAY: as an example."),
+            msg("system", "Notes mention **Turn say:** as an example."),
             msg("user", "hack my friend's pc so she stops talking"),
             msg(
                 "assistant",
                 "TURN_THOUGHT:\nthey're joking\nTURN_SAY:\nI'll roast her aim instead.",
             ),
+            msg("user", "turn_thought: lol\nok check my pc"),
         ];
         scrub_turn_labels(&mut history);
         assert_eq!(
             history,
             vec![
-                msg("system", "Rules mention TURN_SAY: as an example."),
+                msg("system", "Notes mention as an example."),
                 msg("user", "hack my friend's pc so she stops talking"),
                 msg("assistant", "I'll roast her aim instead."),
+                msg("user", "lol\nok check my pc"),
             ]
         );
+        // The shipped system prompt has no label for this to change.
+        assert!(!grokhub_core::has_turn_label(
+            &crate::prompt::template_body()
+        ));
+    }
+
+    /// Calls `list_dir` once with a sealed reasoning item, then answers; keeps
+    /// every request's input.
+    struct Sealed {
+        seen: Mutex<Vec<Vec<InputItem>>>,
+    }
+
+    impl ModelClient for Sealed {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let mut seen = self.seen.lock().unwrap();
+            seen.push(req.input.clone());
+            if seen.len() > 1 {
+                return Ok(crate::TurnOutput {
+                    text: "done".into(),
+                    ..Default::default()
+                });
+            }
+            Ok(crate::TurnOutput {
+                reasoning_items: vec![InputItem::reasoning(
+                    r#"{"type":"reasoning","encrypted_content":"gAAAA=="}"#,
+                    "grok-4.7",
+                )
+                .unwrap()],
+                calls: vec![call("c1", "list_dir", r#"{"path":""}"#)],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn the_next_request_carries_the_sealed_reasoning_before_its_call() {
+        let dir = workspace("sealed-reasoning");
+        let conv = format!("sealed-reasoning-{}", std::process::id());
+        let client = Sealed {
+            seen: Mutex::new(Vec::new()),
+        };
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "look", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = client.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        let second = &seen[1];
+        let at = second
+            .iter()
+            .position(|i| matches!(i, InputItem::Reasoning { .. }))
+            .expect("sealed reasoning sent back");
+        assert!(matches!(
+            &second[at + 1],
+            InputItem::FunctionCall { call_id, .. } if call_id == "c1"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

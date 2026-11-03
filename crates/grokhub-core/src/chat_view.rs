@@ -793,8 +793,9 @@ fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
 
 /// Drop “an image is attached” narration. Cabin eyes / a drop already sent the frame.
 pub fn scrub_thought(text: &str) -> String {
+    let text = crate::turn_timeline::thought_text(text);
     let mut out = String::new();
-    for chunk in split_thought_chunks(text) {
+    for chunk in split_thought_chunks(&text) {
         if thought_chunk_is_attach_noise(chunk) || thought_chunk_is_false_no_computer(chunk) {
             continue;
         }

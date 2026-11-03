@@ -18,12 +18,7 @@ const COMPOSE_H_ID: &str = "home-mission-compose-h";
 
 /// Home chips in deck screenshots only (Mission Control preset). Real Home
 /// paints the ranked row from the chip engine (`Cabin::home_chips`).
-pub(in crate::app) const HOME_CHIPS: [&str; 4] = [
-    "Fix my stutter",
-    "Find a duo tonight",
-    "Free up storage",
-    "Plan my week",
-];
+pub(in crate::app) use grokhub_core::home::HOME_CHIPS;
 
 impl Cabin {
     pub(in crate::app) fn ui_home_mission(&mut self, ui: &mut egui::Ui) {

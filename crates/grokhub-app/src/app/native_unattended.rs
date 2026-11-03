@@ -302,6 +302,7 @@ fn one_shot_request(
     search: bool,
 ) -> grokhub_agent::ResponsesRequest {
     grokhub_agent::ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: Some(grokhub_core::BACKGROUND_EFFORT.to_string()),
         input: vec![grokhub_agent::InputItem::Message {

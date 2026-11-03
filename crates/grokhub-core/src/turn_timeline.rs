@@ -365,63 +365,335 @@ pub fn turn_says(content: &str) -> Option<String> {
     Some(says.join("\n\n"))
 }
 
-/// Text with no saved-turn labels, for a model prompt or the screen. A timeline,
-/// or a reply that echoes one, keeps only its replies: thoughts and tool rows go.
-/// A label left anywhere else in a line is dropped.
+/// Which part of a turn a label opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelKind {
+    Thought,
+    Tool,
+    Say,
+}
+
+/// Wrapping a model puts around a label: `**TURN_SAY:**`, `## Turn say`,
+/// `[TURN_THOUGHT]`, `<turn_say>`, `` `TURN_SAY:` ``.
+fn is_label_decoration(c: char) -> bool {
+    matches!(c, '*' | '#' | '[' | ']' | '<' | '>' | '`' | '/')
+}
+
+const LABEL_KINDS: [(&str, LabelKind); 3] = [
+    ("thought", LabelKind::Thought),
+    ("tool", LabelKind::Tool),
+    ("say", LabelKind::Say),
+];
+
+/// A turn label at the very start of `s`, in any spelling a model writes it:
+/// any case, `TURN_SAY`, `turn say`, `Turn-Say`, `TURNSAY`, a plural, with a
+/// colon (or a full-width one), and wrapped in `**`, `#`, `[ ]` or `< >`. With
+/// no colon it counts only when nothing else follows on the line, so prose like
+/// "your turn, say hi" stays prose. Returns the kind and the label's length.
+fn label_at(s: &str) -> Option<(LabelKind, usize)> {
+    let lead = s.len()
+        - s.trim_start_matches(|c| is_label_decoration(c) || c == ' ')
+            .len();
+    let rest = &s[lead..];
+    let head = rest.get(..4)?;
+    if !head.eq_ignore_ascii_case("turn") {
+        return None;
+    }
+    let mut i = lead + 4;
+    if let Some(c) = s[i..].chars().next() {
+        if matches!(c, '_' | ' ' | '-') {
+            i += 1;
+        }
+    }
+    let (kind, word) = LABEL_KINDS.iter().find_map(|(word, kind)| {
+        s.get(i..i + word.len())
+            .filter(|w| w.eq_ignore_ascii_case(word))
+            .map(|_| (*kind, word.len()))
+    })?;
+    i += word;
+    if s[i..].starts_with(['s', 'S']) {
+        i += 1;
+    }
+    // A longer word ("TURN_SAYING") is not a label.
+    if s[i..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    i += s[i..].len() - s[i..].trim_start_matches(is_label_decoration).len();
+    let after = &s[i..];
+    let colon = if after.starts_with(':') {
+        1
+    } else if after.starts_with('：') {
+        '：'.len_utf8()
+    } else {
+        0
+    };
+    if colon > 0 {
+        i += colon;
+        // `**TURN_SAY:**` closes its bold after the colon.
+        i += s[i..].len() - s[i..].trim_start_matches(is_label_decoration).len();
+    } else if !after.trim().is_empty() {
+        return None;
+    }
+    Some((kind, i))
+}
+
+/// Every label in one line: where it starts, its kind, where it ends. A label
+/// starts the line or follows a space or decoration, never inside a word.
+fn labels_in(line: &str) -> Vec<(usize, LabelKind, usize)> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while from < line.len() {
+        let Some(at) = line[from..]
+            .char_indices()
+            .map(|(i, _)| from + i)
+            .find(|&i| {
+                line[i..].starts_with(is_label_decoration)
+                    || line
+                        .get(i..i + 4)
+                        .is_some_and(|w| w.eq_ignore_ascii_case("turn"))
+            })
+        else {
+            break;
+        };
+        let starts_word = line[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || is_label_decoration(c));
+        match label_at(&line[at..]).filter(|_| starts_word) {
+            Some((kind, len)) => {
+                found.push((at, kind, at + len));
+                from = at + len;
+            }
+            None => {
+                from = at + line[at..].chars().next().map_or(1, char::len_utf8);
+            }
+        }
+    }
+    found
+}
+
+/// Whether `text` holds a turn label anywhere outside fenced code.
+pub fn has_turn_label(text: &str) -> bool {
+    if !text
+        .as_bytes()
+        .windows(4)
+        .any(|w| w.eq_ignore_ascii_case(b"turn"))
+    {
+        return false;
+    }
+    let mut fence = false;
+    text.lines().any(|line| {
+        if is_fence(line) {
+            fence = !fence;
+            return false;
+        }
+        !fence && !labels_in(line).is_empty()
+    })
+}
+
+fn is_fence(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("```") || t.starts_with("~~~")
+}
+
+/// Text with no turn labels, for a model prompt or the screen. A timeline, or a
+/// reply that echoes one in any spelling, keeps only its replies: thoughts and
+/// tool rows go. Text on the same line after a say label stays. A thought that
+/// opens mid-line ends at the next say label or blank line. Fenced code is left
+/// alone. When there is nothing but thought, the thought is the reply, so an
+/// answer never vanishes. Text with no label comes back unchanged.
 pub fn strip_turn_labels(text: &str) -> String {
-    if !text.contains("TURN_") {
+    if !has_turn_label(text) {
         return text.to_string();
     }
-    let mut cut = text.len();
-    let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        if is_turn_marker(line.trim_start()) {
-            cut = at;
-            break;
+    #[derive(PartialEq)]
+    enum Mode {
+        Say,
+        Thought { ends_at_blank: bool },
+        Tool,
+    }
+    let mut mode = Mode::Say;
+    let mut says: Vec<Vec<String>> = vec![Vec::new()];
+    let mut thoughts: Vec<String> = Vec::new();
+    let mut saw_tool = false;
+    let mut fence = false;
+    let say_line = |says: &mut Vec<Vec<String>>, line: &str| {
+        if let Some(last) = says.last_mut() {
+            last.push(line.to_string());
         }
-        at += line.len();
-    }
-    let (head, tail) = text.split_at(cut);
-    let mut kept: Vec<String> = Vec::new();
-    if !head.trim().is_empty() {
-        kept.push(head.trim().to_string());
-    }
-    let tail: String = tail
-        .lines()
-        .map(|l| {
-            if is_turn_marker(l.trim_start()) {
-                l.trim_start()
-            } else {
-                l
+    };
+    for line in text.lines() {
+        if fence || is_fence(line) {
+            if is_fence(line) {
+                fence = !fence;
             }
-        })
+            match mode {
+                Mode::Say => say_line(&mut says, line),
+                Mode::Thought { .. } => thoughts.push(line.to_string()),
+                Mode::Tool => {}
+            }
+            continue;
+        }
+        if line.trim().is_empty() {
+            match mode {
+                Mode::Thought {
+                    ends_at_blank: true,
+                }
+                | Mode::Tool => {
+                    mode = Mode::Say;
+                    says.push(Vec::new());
+                }
+                Mode::Thought { .. } => thoughts.push(String::new()),
+                Mode::Say => say_line(&mut says, ""),
+            }
+            continue;
+        }
+        let labels = labels_in(line);
+        if labels.is_empty() {
+            match mode {
+                Mode::Say => say_line(&mut says, line),
+                Mode::Thought { .. } => thoughts.push(line.to_string()),
+                Mode::Tool => {}
+            }
+            continue;
+        }
+        let mut kept = String::new();
+        let mut thought = String::new();
+        let mut cursor = 0;
+        for (at, kind, end) in labels {
+            let piece = &line[cursor..at];
+            match mode {
+                Mode::Say => kept.push_str(piece),
+                Mode::Thought { .. } => thought.push_str(piece),
+                Mode::Tool => {}
+            }
+            let at_line_start = line[..at].trim().is_empty();
+            mode = match kind {
+                LabelKind::Say => {
+                    if mode != Mode::Say {
+                        if !kept.trim().is_empty() {
+                            say_line(&mut says, kept.trim_end());
+                            kept.clear();
+                        }
+                        says.push(Vec::new());
+                    }
+                    Mode::Say
+                }
+                LabelKind::Thought => Mode::Thought {
+                    ends_at_blank: !at_line_start,
+                },
+                LabelKind::Tool => {
+                    saw_tool = true;
+                    Mode::Tool
+                }
+            };
+            cursor = end;
+        }
+        let rest = &line[cursor..];
+        match mode {
+            Mode::Say => kept.push_str(rest),
+            Mode::Thought { .. } => thought.push_str(rest),
+            // A tool row is one line; what follows it on later lines is unlabelled.
+            Mode::Tool => {}
+        }
+        let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !kept.is_empty() {
+            say_line(&mut says, &kept);
+        }
+        let thought = thought.trim();
+        if !thought.is_empty() {
+            thoughts.push(thought.to_string());
+        }
+    }
+    let reply = says
+        .iter()
+        .map(|lines| lines.join("\n").trim().to_string())
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
-        .join("\n");
-    if let Some(says) = turn_says(&tail) {
-        kept.extend(
-            says.split("\n\n")
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
-        );
+        .join("\n\n");
+    if reply.is_empty() && !saw_tool {
+        return thoughts.join("\n").trim().to_string();
     }
-    kept.join("\n\n")
-        .lines()
+    reply
+}
+
+/// How many bytes at the end of a growing reply could be the start of a turn
+/// label (`TURN_TH` before `OUGHT:` arrives). The screen holds them back until
+/// the next chunk shows what they are, so a label never flashes mid-stream.
+pub fn label_holdback(text: &str) -> usize {
+    const MAX: usize = 24;
+    let floor = text.len().saturating_sub(MAX);
+    for (at, _) in text.char_indices().filter(|(i, _)| *i >= floor) {
+        let starts_word = text[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || is_label_decoration(c));
+        if starts_word && could_become_label(&text[at..]) {
+            return text.len() - at;
+        }
+    }
+    0
+}
+
+/// A reply still streaming, as the screen shows it: labels stripped, and a
+/// label still arriving at the end held back until the next chunk.
+pub fn live_reply_text(text: &str) -> String {
+    strip_turn_labels(&text[..text.len() - label_holdback(text)])
+}
+
+/// A thought as its card shows it: the words stay, label words go.
+pub fn thought_text(text: &str) -> String {
+    let text = &text[..text.len() - label_holdback(text)];
+    if !has_turn_label(text) {
+        return text.to_string();
+    }
+    let mut fence = false;
+    text.lines()
         .map(|line| {
-            let mut out = line.to_string();
-            for label in [TURN_THOUGHT, TURN_TOOL, TURN_SAY] {
-                out = out.replace(label, "");
+            if is_fence(line) {
+                fence = !fence;
+                return line.to_string();
             }
-            if out.len() == line.len() {
-                out
-            } else {
-                out.split_whitespace().collect::<Vec<_>>().join(" ")
+            let labels = labels_in(line);
+            if fence || labels.is_empty() {
+                return line.to_string();
             }
+            let mut out = String::new();
+            let mut cursor = 0;
+            for (at, _, end) in labels {
+                out.push_str(&line[cursor..at]);
+                out.push(' ');
+                cursor = end;
+            }
+            out.push_str(&line[cursor..]);
+            out.split_whitespace().collect::<Vec<_>>().join(" ")
         })
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
         .to_string()
+}
+
+/// `s` is a strict start of some label spelling (`TURN_TH`, `turn s`), so the
+/// next chunk may finish it.
+fn could_become_label(s: &str) -> bool {
+    let body = s.trim_start_matches(is_label_decoration);
+    if body.is_empty() || body.contains('\n') {
+        return false;
+    }
+    let lower = body.to_ascii_lowercase();
+    ["_", " ", "-", ""].iter().any(|sep| {
+        LABEL_KINDS.iter().any(|(word, _)| {
+            let form = format!("turn{sep}{word}s:");
+            let single = format!("turn{sep}{word}:");
+            (form.starts_with(&lower) && lower.len() < form.len())
+                || (single.starts_with(&lower) && lower.len() < single.len())
+        })
+    })
 }
 
 /// The newest reply segment of a live turn.
@@ -918,5 +1190,125 @@ mod tests {
             strip_turn_labels("Plain reply.\n\nTwo lines."),
             "Plain reply.\n\nTwo lines."
         );
+    }
+
+    #[test]
+    fn every_label_spelling_is_stripped_and_prose_is_not() {
+        for label in [
+            "TURN_THOUGHT:",
+            "turn_thought:",
+            "Turn Thought:",
+            "TURN-THOUGHT:",
+            "TURNTHOUGHT:",
+            "TURN_THOUGHTS:",
+            "**TURN_THOUGHT:**",
+            "**TURN_THOUGHT**:",
+            "## Turn thought",
+            "[TURN_THOUGHT]",
+            "<turn_thought>",
+            "TURN_THOUGHT：",
+            "TURN_THOUGHT",
+        ] {
+            let text = format!("{label}\nthey want a tune-up\nTURN_SAY:\nRunning the checks now.");
+            assert_eq!(
+                strip_turn_labels(&text),
+                "Running the checks now.",
+                "{label}"
+            );
+        }
+        for say in ["TURN_SAY:", "**Turn say:**", "turn_says:", "[TURN_SAY]"] {
+            let text = format!("TURN_THOUGHT:\nplan\n{say}\nHi.");
+            assert_eq!(strip_turn_labels(&text), "Hi.", "{say}");
+        }
+        for prose in [
+            "Your turn, say hi to the squad.",
+            "Take a turn thought experiment.",
+            "Return the saying.",
+            "turn say what you mean",
+        ] {
+            assert_eq!(strip_turn_labels(prose), prose);
+            assert!(!has_turn_label(prose), "{prose}");
+        }
+    }
+
+    #[test]
+    fn same_line_text_stays_and_thought_only_becomes_the_reply() {
+        assert_eq!(strip_turn_labels("TURN_SAY: On it."), "On it.");
+        assert_eq!(
+            strip_turn_labels("TURN_THOUGHT: check disk first TURN_SAY: Checking your disk."),
+            "Checking your disk."
+        );
+        assert_eq!(
+            strip_turn_labels("Sure. **TURN_THOUGHT:** they seem tired\n\nWant a quick check?"),
+            "Sure.\n\nWant a quick check?"
+        );
+        assert_eq!(
+            strip_turn_labels("TURN_THOUGHT:\nI'll run the disk check."),
+            "I'll run the disk check."
+        );
+        // A saved work hop with no reply stays empty: its tool rows say what happened.
+        assert_eq!(
+            strip_turn_labels("TURN_THOUGHT:\nlook\nTURN_TOOL: done\tRead\t\n"),
+            ""
+        );
+    }
+
+    #[test]
+    fn labels_inside_fenced_code_are_left_alone() {
+        let text = "Here's the format:\n```\nTURN_SAY:\nhello\n```\nThat's it.";
+        assert_eq!(strip_turn_labels(text), text);
+        assert!(!has_turn_label(text));
+        let mixed = "TURN_THOUGHT:\nshow them\nTURN_SAY:\n```\nTURN_SAY: kept\n```";
+        assert_eq!(strip_turn_labels(mixed), "```\nTURN_SAY: kept\n```");
+    }
+
+    #[test]
+    fn a_label_split_across_chunks_never_shows_on_screen() {
+        let full = "TURN_THOUGHT: they want hi\nTURN_SAY: hi";
+        for size in 1..=7 {
+            let mut streamed = String::new();
+            let mut at = 0;
+            while at < full.len() {
+                let end = (at + size).min(full.len());
+                streamed.push_str(&full[at..end]);
+                at = end;
+                let held = label_holdback(&streamed);
+                let shown = strip_turn_labels(&streamed[..streamed.len() - held]);
+                assert!(
+                    "hi".starts_with(shown.trim())
+                        || shown.trim() == "they want hi"
+                        || "they want hi".starts_with(shown.trim()),
+                    "chunk {size}: showed {shown:?}"
+                );
+                assert!(!shown.to_ascii_lowercase().contains("turn"), "{shown:?}");
+            }
+            assert_eq!(strip_turn_labels(&streamed), "hi");
+        }
+        assert_eq!(label_holdback("Checking now TURN_TH"), "TURN_TH".len());
+        assert_eq!(label_holdback("**Turn s"), "**Turn s".len());
+        assert_eq!(label_holdback("All done."), 0);
+        assert_eq!(label_holdback("Return"), 0);
+    }
+
+    #[test]
+    fn thought_cards_keep_their_words_without_label_words() {
+        assert_eq!(
+            thought_text("TURN_THOUGHT: check disk, then TURN_SAY: tell them"),
+            "check disk, then tell them"
+        );
+        assert_eq!(thought_text("plain thought"), "plain thought");
+        assert_eq!(live_reply_text("Checking now **TURN_"), "Checking now ");
+    }
+
+    #[test]
+    fn a_raw_saved_reply_never_reloads_as_a_thought_card() {
+        let raw = "TURN_THOUGHT:\nthey asked for a check\nTURN_SAY:\nYour disk is 92% full.";
+        let saved = strip_turn_labels(raw);
+        assert_eq!(saved, "Your disk is 92% full.");
+        assert!(decode_turn(&saved).is_none());
+        // A reply that only thought still saves its words as the reply.
+        let only = strip_turn_labels("turn_thought: checking the disk now");
+        assert_eq!(only, "checking the disk now");
+        assert!(decode_turn(&only).is_none());
     }
 }

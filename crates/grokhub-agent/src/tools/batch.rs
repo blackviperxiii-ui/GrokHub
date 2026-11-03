@@ -1,5 +1,7 @@
 //! Batched read-only tool round (Reason harness R5): consecutive gate-readonly
 //! calls in one model reply may execute dispatch in parallel (bounded pool).
+//!
+//! On by default. `batched_tools.toml` with `enabled = false` turns it off.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,9 +16,15 @@ const CONFIG_NAME: &str = "batched_tools.toml";
 
 pub const MAX_PARALLEL: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
@@ -31,7 +39,7 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = false;
+    let mut enabled = true;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -40,8 +48,8 @@ fn parse_file(text: &str) -> Settings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            enabled = true;
+        if key.trim().eq_ignore_ascii_case("enabled") {
+            enabled = !value.trim().eq_ignore_ascii_case("false");
         }
     }
     Settings { enabled }
@@ -147,10 +155,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_off() {
+    fn settings_default_on_and_file_disables() {
         let dir = std::env::temp_dir().join(format!("gh-batch-off-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        assert!(settings(&dir).enabled);
+        assert!(parse_file("").enabled);
+        assert!(parse_file("# nothing set\n").enabled);
+        std::fs::write(dir.join(CONFIG_NAME), "enabled = false\n").unwrap();
         assert!(!settings(&dir).enabled);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(deploy.trigger, "deploy the site");
         assert_eq!(
             deploy.folder,
-            cfg.join("skills/deploy-site").display().to_string()
+            cfg.join("skills").join("deploy-site").display().to_string()
         );
         let tidy = find(&page, "tidy");
         assert_eq!(tidy.source, Source::Cabin);
