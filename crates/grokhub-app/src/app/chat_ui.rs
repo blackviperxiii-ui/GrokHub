@@ -2264,7 +2264,7 @@ impl Cabin {
                             let view = ChatView {
                                 kind: ChatKind::Thought,
                                 title: "Thought".into(),
-                                body: b.body.clone(),
+                                body: grokhub_core::thought_text(&b.body),
                             };
                             let painted = paint_chat_block(
                                 ui,
@@ -2295,7 +2295,7 @@ impl Cabin {
                             let view = ChatView {
                                 kind: ChatKind::Assistant,
                                 title: String::new(),
-                                body: grokhub_core::strip_turn_labels(&b.body),
+                                body: grokhub_core::live_reply_text(&b.body),
                             };
                             act = paint_chat_block_with(
                                 ui,

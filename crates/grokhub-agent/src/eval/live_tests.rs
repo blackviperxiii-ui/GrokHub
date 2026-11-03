@@ -55,16 +55,16 @@ fn find(id: &str) -> LiveTask {
 }
 
 #[test]
-fn twenty_tasks_with_both_sets_and_recall() {
+fn twenty_three_tasks_with_both_sets_and_recall() {
     let all = tasks();
-    assert_eq!(all.len(), 20);
+    assert_eq!(all.len(), 23);
     let mut ids: Vec<&str> = all.iter().map(|t| t.id).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 20);
+    assert_eq!(ids.len(), 23);
     assert_eq!(
         all.iter().filter(|t| t.set == TaskSet::Regression).count(),
-        8
+        10
     );
     assert_eq!(all.iter().filter(|t| t.recall).count(), 3);
 }
@@ -78,6 +78,23 @@ fn checks_read_the_reply_and_the_workspace() {
     assert!(check(&find("math-pixels"), "That's 3,686,400 pixels.", ws));
     assert!(!check(&find("math-pixels"), "About 3.7 million.", ws));
     assert!(check(&find("exact-word"), "READY", ws));
+    // A label leak fails any case, however it's spelled.
+    assert!(!check(&find("exact-word"), "TURN_SAY: READY", ws));
+    assert!(check(
+        &find("pc-check-after-hangout"),
+        "Your C: drive is 92% full and two updates are waiting.",
+        ws
+    ));
+    assert!(!check(
+        &find("pc-check-after-hangout"),
+        "Long days are the worst. Want to talk about it?",
+        ws
+    ));
+    assert!(!check(
+        &find("hangout-stays-hangout"),
+        "Want me to run a tune-up while you chill?",
+        ws
+    ));
     assert!(!check(
         &find("exact-word"),
         "Sure! The word is READY, as asked.",

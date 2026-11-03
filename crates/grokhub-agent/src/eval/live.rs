@@ -298,8 +298,47 @@ pub fn tasks() -> Vec<LiveTask> {
                 ],
             )
         },
+        LiveTask {
+            any: PC_CHECK_WORDS,
+            ..task(
+                "pc-check-cold",
+                Cap,
+                &["Check this PC and suggest a tune-up."],
+            )
+        },
+        LiveTask {
+            any: PC_CHECK_WORDS,
+            ..task(
+                "pc-check-after-hangout",
+                Reg,
+                &["hey", "lol same, long day", "Check this PC and suggest a tune-up."],
+            )
+        },
+        LiveTask {
+            none: &["tune-up", "diagnos", "scan your", "check your pc"],
+            ..task(
+                "hangout-stays-hangout",
+                Reg,
+                &["hey", "just vibing, nothing to do"],
+            )
+        },
     ]
 }
+
+/// A check-up reply talks about the machine, not small talk.
+const PC_CHECK_WORDS: &[&str] = &[
+    "disk",
+    "storage",
+    "drive",
+    "memory",
+    "ram",
+    "update",
+    "service",
+    "startup",
+    "cpu",
+    "temperature",
+    "error",
+];
 
 /// Commas, spaces in numbers and case don't count against an answer.
 fn norm(text: &str) -> String {
@@ -317,6 +356,10 @@ pub fn check(task: &LiveTask, reply: &str, workspace: &Path) -> bool {
         return false;
     }
     if task.none.iter().any(|n| has(n)) {
+        return false;
+    }
+    // No case may show a turn label, in any spelling, in the raw stream.
+    if grokhub_core::has_turn_label(reply) {
         return false;
     }
     if task.max_chars > 0 && reply.trim().chars().count() > task.max_chars {
