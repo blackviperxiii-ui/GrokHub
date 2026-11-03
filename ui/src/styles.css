@@ -245,7 +245,8 @@ button.link:disabled,
 .chip:disabled,
 .tabs button:disabled,
 .switch button:disabled,
-.settings-nav button:disabled {
+.settings-nav button:disabled,
+.settings-tabs button:disabled {
   background: transparent;
   color: var(--text);
   opacity: 0.5;
@@ -258,7 +259,8 @@ button.link:disabled,
 button.quiet,
 .tabs button,
 .switch button,
-.settings-nav button {
+.settings-nav button,
+.settings-tabs button {
   background: transparent;
   color: var(--text);
   border-color: var(--border);
@@ -267,14 +269,16 @@ button.quiet,
 button.quiet:hover:not(:disabled),
 .tabs button:hover:not(:disabled),
 .switch button:hover:not(:disabled),
-.settings-nav button:hover:not(:disabled) {
+.settings-nav button:hover:not(:disabled),
+.settings-tabs button:hover:not(:disabled) {
   filter: none;
   background: var(--hover);
 }
 
 .tabs button[aria-pressed="true"],
 .switch button[aria-pressed="true"],
-.settings-nav button[aria-pressed="true"] {
+.settings-nav button[aria-pressed="true"],
+.settings-tabs button[aria-pressed="true"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
@@ -941,24 +945,55 @@ button.md-copy {
   font-size: 1.2em;
 }
 
-/* The sections stay put on the left; each page scrolls inside its own pane. */
+/* Settings: a Back button and the categories across the top, the open page
+   in the middle, that category's pages down the right. Only the page scrolls. */
 .settings-page {
   display: flex;
-  gap: 24px;
-  align-items: stretch;
+  flex-direction: column;
+  gap: 12px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-.settings-nav {
+.settings-top {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 140px;
-  position: relative;
-  overflow-y: auto;
-  align-self: stretch;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Big and labelled, so leaving Settings is never a hunt for a small ×. */
+.settings-back {
+  min-height: 44px;
+  padding: 0 18px;
+  font-weight: 600;
+}
+
+.settings-title {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tabs button {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 1rem;
+}
+
+.settings-body {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-pane {
@@ -973,10 +1008,6 @@ button.md-copy {
   position: sticky;
   top: 0;
   z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   max-width: 520px;
   margin-bottom: 12px;
   padding: 4px 0 8px;
@@ -990,16 +1021,57 @@ button.md-copy {
   font-weight: 600;
 }
 
-.settings-nav button {
-  text-align: left;
+.settings-side {
+  flex: none;
+  width: 200px;
+  overflow-y: auto;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
 }
 
-/* Phones: the sections become a row above the page. */
+.settings-side h2 {
+  margin: 4px 0 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}
+
+.settings-nav button {
+  text-align: left;
+  min-height: 40px;
+}
+
+/* Phones: the categories scroll sideways in one row, and the category's pages
+   sit in a row above the page instead of down the side. */
 @media (max-width: 600px) {
   .settings-page {
+    overflow-y: auto;
+  }
+
+  .settings-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+    flex: none;
+  }
+
+  .settings-tabs button {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .settings-body {
     flex-direction: column;
     gap: 12px;
-    overflow-y: auto;
+    flex: none;
   }
 
   .settings-pane {
@@ -1007,19 +1079,25 @@ button.md-copy {
     overflow: visible;
   }
 
-  /* One row that scrolls sideways; the next section peeks in (peek.ts). */
-  .settings-nav {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    max-width: 100%;
-    min-width: 0;
-    flex: none;
+  .settings-side {
+    order: -1;
+    width: auto;
+    padding-left: 0;
+    border-left: none;
     position: sticky;
     top: 0;
     z-index: 2;
     background: var(--bg);
+  }
+
+  .settings-side h2 {
+    display: none;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
     padding-bottom: 4px;
   }
 

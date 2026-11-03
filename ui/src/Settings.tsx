@@ -26,7 +26,14 @@ import { Permissions } from "./Permissions";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Privacy } from "./Privacy";
-import { SECTION_LABELS, sections, type Section } from "./sections";
+import {
+  CATEGORY_LABELS,
+  SECTION_LABELS,
+  categories,
+  categoryOf,
+  categorySections,
+  type Section,
+} from "./sections";
 import { Toggle } from "./Toggle";
 import { Updates } from "./Updates";
 import { WebAccess } from "./WebAccess";
@@ -55,11 +62,14 @@ export function Settings({
   caps,
   goTo,
   onClose,
+  backTo,
 }: {
   caps: Capabilities;
   goTo?: { section: Section; n: number };
   /** Leaves Settings for the screen that was open before it. */
   onClose?: () => void;
+  /** The name of that screen, for the Back button ("Back to Chat"). */
+  backTo?: string;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
@@ -70,11 +80,11 @@ export function Settings({
   const [key, setKey] = useState("");
   const { note, ok, fail, clear } = useNote();
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
-  const nav = useRef<HTMLElement>(null);
+  const tabs = useRef<HTMLElement>(null);
   const page = useRef<HTMLDivElement>(null);
   const pane = useRef<HTMLDivElement>(null);
-  // On a phone the sections are one row that scrolls; the next one peeks in.
-  usePeek(nav, "x", settings !== null && sections(caps).length);
+  // On a phone the categories are one row that scrolls; the next one peeks in.
+  usePeek(tabs, "x", settings !== null && categories(caps).length);
 
   // A new palette pick opens its section. Settings stays mounted between visits,
   // so showing it again keeps the section that was open.
@@ -203,60 +213,86 @@ export function Settings({
     clear();
   }
 
+  const category = categoryOf(section);
+
   return (
     <div className="settings-page" ref={page}>
+      <header className="settings-top">
+        {onClose && (
+          <button type="button" className="settings-back" onClick={onClose}>
+            <span aria-hidden="true">←</span> {backTo ? `Back to ${backTo}` : "Back"}
+          </button>
+        )}
+        <span className="settings-title">Settings</span>
+      </header>
       <nav
-        ref={nav}
-        className="settings-nav"
-        aria-label="Settings sections"
+        ref={tabs}
+        className="settings-tabs"
+        aria-label="Settings categories"
         onKeyDown={(e) => onArrowFocus(e)}
       >
-        {sections(caps).map((name) => (
+        {categories(caps).map((cat) => (
           <button
-            key={name}
+            key={cat}
             type="button"
-            aria-pressed={section === name}
-            onClick={() => open(name)}
+            aria-pressed={category === cat}
+            onClick={() => open(categorySections(caps, cat)[0])}
           >
-            {SECTION_LABELS[name]}
+            {CATEGORY_LABELS[cat]}
           </button>
         ))}
       </nav>
-      <div className="settings-pane" ref={pane}>
-        <header className="settings-head">
-          <h1>{SECTION_LABELS[section]}</h1>
-          {onClose && (
-            <button type="button" className="quiet" onClick={onClose} aria-label="Close settings">
-              Close
-            </button>
-          )}
-        </header>
-        <section className="settings" aria-label={SECTION_LABELS[section]}>
-        {section === "general" && general()}
-        {section === "account" && account()}
-        <StatusLine note={note} className="note" />
-        {section === "defaults" && <Defaults settings={loaded} onSaved={show} />}
-        {section === "behavior" && (
-          <Behavior
-            tray={caps.tray}
-            onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
-          />
-        )}
-        {section === "behavior" && <WorkboardTidy />}
-        {section === "appearance" && (
-          <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
-        )}
-        {section === "personality" && <Personality />}
-        {section === "playbooks" && <Playbooks />}
-        {section === "permissions" && <Permissions />}
-        {section === "privacy" && <Privacy />}
-        {section === "background" && <Background />}
-        {section === "pulse" && caps.pulse && <Interests />}
-        {section === "localAi" && caps.localAi && <LocalAi />}
-        {section === "webAccess" && caps.webAccess && <WebAccess />}
-        {section === "labs" && caps.plugins && <Labs />}
-        {section === "about" && <About version={loaded.version} />}
-        </section>
+      <div className="settings-body">
+        <div className="settings-pane" ref={pane}>
+          <header className="settings-head">
+            <h1>{SECTION_LABELS[section]}</h1>
+          </header>
+          <section className="settings" aria-label={SECTION_LABELS[section]}>
+            {section === "general" && general()}
+            {section === "account" && account()}
+            <StatusLine note={note} className="note" />
+            {section === "defaults" && <Defaults settings={loaded} onSaved={show} />}
+            {section === "behavior" && (
+              <Behavior
+                tray={caps.tray}
+                onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
+              />
+            )}
+            {section === "behavior" && <WorkboardTidy />}
+            {section === "appearance" && (
+              <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
+            )}
+            {section === "personality" && <Personality />}
+            {section === "playbooks" && <Playbooks />}
+            {section === "permissions" && <Permissions />}
+            {section === "privacy" && <Privacy />}
+            {section === "background" && <Background />}
+            {section === "pulse" && caps.pulse && <Interests />}
+            {section === "localAi" && caps.localAi && <LocalAi />}
+            {section === "webAccess" && caps.webAccess && <WebAccess />}
+            {section === "labs" && caps.plugins && <Labs />}
+            {section === "about" && <About version={loaded.version} />}
+          </section>
+        </div>
+        <aside className="settings-side">
+          <h2>{CATEGORY_LABELS[category]}</h2>
+          <nav
+            className="settings-nav"
+            aria-label="Settings sections"
+            onKeyDown={(e) => onArrowFocus(e)}
+          >
+            {categorySections(caps, category).map((name) => (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={section === name}
+                onClick={() => open(name)}
+              >
+                {SECTION_LABELS[name]}
+              </button>
+            ))}
+          </nav>
+        </aside>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
@@ -109,11 +109,10 @@ export function App() {
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
   const barAway = useHidingBar(palette);
-  // Closing Settings goes back to the screen that was open before it.
-  const before = useRef<View>("chat");
-  useEffect(() => {
-    if (view !== "settings") before.current = view;
-  }, [view]);
+  // Closing Settings goes back to the screen that was open before it, and its
+  // Back button names that screen.
+  const [before, setBefore] = useState<View>("chat");
+  if (view !== "settings" && before !== view) setBefore(view);
   useOverscroll();
   useEffect(() => {
     const idle = window.requestIdleCallback;
@@ -485,7 +484,12 @@ export function App() {
       )}
       {opened.has("settings") && (
         <Page shown={view === "settings"}>
-          <Settings caps={caps} goTo={goTo} onClose={() => setView(before.current)} />
+          <Settings
+            caps={caps}
+            goTo={goTo}
+            onClose={() => setView(before)}
+            backTo={VIEW_LABELS[before]}
+          />
         </Page>
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (
