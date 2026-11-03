@@ -445,8 +445,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             for tab in Tab::ORDER {
-                if crate::cards::felt_segment(ui, tab.label(), view.tab == tab).clicked()
-                {
+                if crate::cards::felt_segment(ui, tab.label(), view.tab == tab).clicked() {
                     view.tab = tab;
                     view.page = 0;
                     view.open = None;
@@ -1053,7 +1052,11 @@ pub(super) fn finds_page(
         .collect();
     Page {
         total: Some(mine.len() as u64),
-        mods: mine.into_iter().skip(page as usize * per).take(per).collect(),
+        mods: mine
+            .into_iter()
+            .skip(page as usize * per)
+            .take(per)
+            .collect(),
     }
 }
 

@@ -176,9 +176,7 @@ pub fn plan(games: &[GameRef], store: &Store, now: u64) -> Vec<Group> {
             let jobs = g
                 .sources
                 .iter()
-                .flat_map(|s| {
-                    [Browse::Popular, Browse::Trending].map(|b| (*s, Query::browse(b)))
-                })
+                .flat_map(|s| [Browse::Popular, Browse::Trending].map(|b| (*s, Query::browse(b))))
                 .collect();
             Some((Reason::Weekly, jobs))
         } else if due(store.explored.get(&g.id), EXPLORE_SECS, now) {

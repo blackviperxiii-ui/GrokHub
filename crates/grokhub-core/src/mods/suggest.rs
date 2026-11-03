@@ -51,9 +51,8 @@ pub struct Play {
 /// and not played since gets a small weight so its mods can show.
 pub fn game_weight(p: &Play, now: u64) -> f64 {
     if p.last_played == 0 || now.saturating_sub(p.last_played) > PLAY_WINDOW_SECS {
-        let new = p.added > 0
-            && p.added > p.last_played
-            && now.saturating_sub(p.added) < NEW_GAME_SECS;
+        let new =
+            p.added > 0 && p.added > p.last_played && now.saturating_sub(p.added) < NEW_GAME_SECS;
         return if new { NEW_GAME_WEIGHT } else { 0.0 };
     }
     let hours = p.playtime_min as f64 / 60.0;
@@ -491,7 +490,14 @@ mod tests {
             .collect();
         pool.push(cand("b", "b0", 10));
         pool.push(cand("c", "c0", 10));
-        let ranked = rank(&pool, &plays, &Have::default(), &Prefs::default(), false, NOW);
+        let ranked = rank(
+            &pool,
+            &plays,
+            &Have::default(),
+            &Prefs::default(),
+            false,
+            NOW,
+        );
         assert_eq!(ranked.len(), 8);
         let row = pick(&ranked);
         assert_eq!(row.len(), MAX_SUGGESTIONS);
@@ -505,7 +511,14 @@ mod tests {
         );
         // One game alone still fills all five.
         let only_a: Vec<Candidate> = pool.iter().filter(|c| c.game == "a").cloned().collect();
-        let row = pick(&rank(&only_a, &plays, &Have::default(), &Prefs::default(), false, NOW));
+        let row = pick(&rank(
+            &only_a,
+            &plays,
+            &Have::default(),
+            &Prefs::default(),
+            false,
+            NOW,
+        ));
         assert_eq!(ids(&row), ["a0", "a1", "a2", "a3", "a4"]);
     }
 
@@ -520,7 +533,11 @@ mod tests {
         assert_eq!(game_weight(&p, NOW), 0.0, "past two weeks");
         let mut idle = play("idle", 900, 90);
         idle.added = NOW - DAY;
-        assert_eq!(game_weight(&idle, NOW), 0.5, "reinstalled after a long break");
+        assert_eq!(
+            game_weight(&idle, NOW),
+            0.5,
+            "reinstalled after a long break"
+        );
     }
 
     #[test]
@@ -532,10 +549,20 @@ mod tests {
         stale.found = NOW - 30 * DAY;
         // "same" is as popular as the new find; only the find's lift differs.
         let pool = [cand("stardew", "same", 10), fresh, stale];
-        let out = rank(&pool, &plays, &Have::default(), &Prefs::default(), false, NOW);
+        let out = rank(
+            &pool,
+            &plays,
+            &Have::default(),
+            &Prefs::default(),
+            false,
+            NOW,
+        );
         assert_eq!(ids(&out), ["seen", "new", "same"]);
         assert_eq!(out[1].why, Why::NewFind);
-        assert_eq!(out[1].why.line("Stardew Valley"), "New find for Stardew Valley");
+        assert_eq!(
+            out[1].why.line("Stardew Valley"),
+            "New find for Stardew Valley"
+        );
         assert_eq!(out[0].why, Why::Popular, "a month-old find is just popular");
     }
 

@@ -55,7 +55,10 @@ fn seen_games_get_top_mods_weekly_and_one_deeper_page_daily() {
     let mut store = Store::default();
     let new = plan(&games, &store, NOW).remove(0);
     store.finish(&new, NOW);
-    assert!(plan(&games, &store, NOW + 60).is_empty(), "nothing right after");
+    assert!(
+        plan(&games, &store, NOW + 60).is_empty(),
+        "nothing right after"
+    );
     let day = plan(&games, &store, NOW + DAY);
     assert_eq!(shape(&day), [("stardew".into(), Reason::Explore, 1)]);
     let mut p2 = Query::browse(Browse::Popular);
@@ -146,7 +149,13 @@ fn finds_keep_first_seen_and_drop_the_stalest_over_the_cap() {
     assert_eq!(f[0].m.downloads, 20, "refreshed");
     assert!(f[0].trending && f[1].trending);
     // Same id on another source is another mod.
-    store.record("stardew", Source::CurseForge, &page(&[("1", 1)]), false, NOW);
+    store.record(
+        "stardew",
+        Source::CurseForge,
+        &page(&[("1", 1)]),
+        false,
+        NOW,
+    );
     assert_eq!(store.finds["stardew"].len(), 3);
 
     let mut big = Store::default();
@@ -175,8 +184,20 @@ fn new_finds_are_newest_first_and_unseen_counts_since_the_last_look() {
     let mut store = Store::default();
     let mut adult = page(&[("a", 1)]);
     adult.mods[0].adult = true;
-    store.record("g", Source::Nexus, &page(&[("old", 9)]), false, NOW - NEW_SECS);
-    store.record("g", Source::Nexus, &page(&[("x", 1), ("y", 5)]), false, NOW - DAY);
+    store.record(
+        "g",
+        Source::Nexus,
+        &page(&[("old", 9)]),
+        false,
+        NOW - NEW_SECS,
+    );
+    store.record(
+        "g",
+        Source::Nexus,
+        &page(&[("x", 1), ("y", 5)]),
+        false,
+        NOW - DAY,
+    );
     store.record("g", Source::Nexus, &page(&[("z", 1)]), false, NOW);
     store.record("g", Source::Nexus, &adult, false, NOW);
     let ids = |v: Vec<&Find>| v.iter().map(|f| f.m.id.clone()).collect::<Vec<_>>();
@@ -249,7 +270,12 @@ fn blocked_games_never_reach_the_network() {
     assert_eq!(GameRef::ready("not-a-game", &c), None);
     // Even a hand-made ref for a blocked game sends nothing.
     let mut store = Store::default();
-    let r = sweep(&c, &mut store, &[game("apex", &[Source::Nexus])], NOW * 1000);
+    let r = sweep(
+        &c,
+        &mut store,
+        &[game("apex", &[Source::Nexus])],
+        NOW * 1000,
+    );
     assert_eq!(r.pages, 0);
     assert!(sent.lock().unwrap().is_empty());
 }
@@ -264,11 +290,18 @@ fn a_rate_limit_ends_the_sweep_and_leaves_the_game_for_next_time() {
             ..Default::default()
         },
     );
-    let c = ModClient::new(Box::new(fake), &temp_config("discover-429"), Keys::default());
+    let c = ModClient::new(
+        Box::new(fake),
+        &temp_config("discover-429"),
+        Keys::default(),
+    );
     let mc = GameRef::ready("minecraft", &c).unwrap();
     let mut store = Store::default();
     let r = sweep(&c, &mut store, &[mc], NOW * 1000);
     assert!(r.stopped.is_some());
     assert!(r.new_games.is_empty());
-    assert!(!store.seen.contains_key("minecraft"), "tried again next sweep");
+    assert!(
+        !store.seen.contains_key("minecraft"),
+        "tried again next sweep"
+    );
 }

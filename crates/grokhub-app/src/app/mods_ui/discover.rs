@@ -33,8 +33,7 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 
 fn with_store<T>(f: impl FnOnce(&Store) -> T) -> T {
     let mut s = state();
-    f(s
-        .store
+    f(s.store
         .get_or_insert_with(|| Store::load(&crate::config::config_dir())))
 }
 
@@ -117,7 +116,12 @@ pub(super) fn added(game: &str) -> u64 {
 /// A game's new finds, newest first.
 pub(super) fn new_finds(game: &str, adult_ok: bool) -> Vec<Find> {
     let now = grokhub_core::now_ms() / 1000;
-    with_store(|s| s.new_finds(game, adult_ok, now).into_iter().cloned().collect())
+    with_store(|s| {
+        s.new_finds(game, adult_ok, now)
+            .into_iter()
+            .cloned()
+            .collect()
+    })
 }
 
 /// Every find for these games, for the For you pool.
