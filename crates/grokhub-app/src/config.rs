@@ -24,6 +24,15 @@ pub const JSON_STORE_CAP: usize = 32 * 1024 * 1024;
 /// the app always reads back what it wrote.
 pub const HISTORY_STORE_CAP: usize = 512 * 1024 * 1024;
 
+/// Waits between replace tries on Windows: about 1.5 s in all.
+const REPLACE_BACKOFF_MS: [u64; 10] = [10, 20, 40, 80, 160, 250, 250, 250, 250, 250];
+
+/// A replace Windows refused because another handle holds the file: access
+/// denied (5) or a sharing violation (32). Anything else fails at once.
+fn replace_refused(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(5 | 32))
+}
+
 /// Write, fsync, then rename so a kill mid-persist cannot leave a truncated JSON.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path
@@ -46,14 +55,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     drop(f);
-    // Windows refuses a replace while another writer's replace holds the
-    // destination; that clears within a few ms.
+    // Windows refuses a replace while any handle without delete sharing holds
+    // the destination: another writer's replace, a reader, or a virus scanner or
+    // indexer that opened the file just written. Those clear within a second, so
+    // a refusal waits with backoff before it counts.
     let mut renamed = fs::rename(&tmp, path);
-    for _ in 0..5 {
-        if renamed.is_ok() || !cfg!(windows) {
-            break;
+    for wait_ms in REPLACE_BACKOFF_MS {
+        match &renamed {
+            Err(e) if cfg!(windows) && replace_refused(e) => {}
+            _ => break,
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
         renamed = fs::rename(&tmp, path);
     }
     renamed.map_err(|e| {
@@ -2651,6 +2663,19 @@ mod tests {
             atomic.contains("sync_all") && atomic.contains("rename"),
             "atomic_write must stay fsync+rename: {atomic}"
         );
+    }
+
+    /// Only a held file makes a Windows replace wait; a missing folder or a
+    /// full disk fails at once, and the waits stay under two seconds.
+    #[test]
+    fn only_a_held_destination_makes_a_replace_wait() {
+        use std::io::{Error, ErrorKind};
+        assert!(replace_refused(&Error::from_raw_os_error(5)));
+        assert!(replace_refused(&Error::from_raw_os_error(32)));
+        assert!(replace_refused(&Error::from(ErrorKind::PermissionDenied)));
+        assert!(!replace_refused(&Error::from(ErrorKind::NotFound)));
+        assert!(!replace_refused(&Error::from(ErrorKind::StorageFull)));
+        assert!(REPLACE_BACKOFF_MS.iter().sum::<u64>() < 2_000);
     }
 
     /// A background persist and a ledgered save can write automations.json
