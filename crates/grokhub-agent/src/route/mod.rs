@@ -1785,7 +1785,7 @@ mod tests {
                 "{class}"
             );
         }
-        let body = r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","reasoning":{"effort":"low"},"stream":true,"tools":[{"type":"web_search"},{"type":"x_search"}]}"#;
+        let body = r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","prompt_cache_key":"golden-session","reasoning":{"effort":"low"},"store":false,"stream":true,"tools":[{"type":"web_search"},{"type":"x_search"}]}"#;
         live::stream_routed(
             &echo,
             &req("grok-4.7", Some("low"), "golden-session", "hi"),
@@ -2139,7 +2139,7 @@ mod tests {
             assert_eq!(
                 body(model),
                 format!(
-                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"model":"{model}","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
+                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"model":"{model}","prompt_cache_key":"s","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
                 )
             );
         }

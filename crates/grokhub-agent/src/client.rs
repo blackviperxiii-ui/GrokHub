@@ -105,9 +105,43 @@ pub enum InputItem {
     ServerCompaction {
         raw: String,
     },
+    /// One xAI `reasoning` output item with its `encrypted_content`, kept as the
+    /// JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
+    /// back to xAI unchanged on the next request, so the model keeps its own
+    /// reasoning between tool steps and the prompt cache keeps matching. Other
+    /// providers and the local model never see it, and it goes only to the
+    /// model that wrote it (`model`), since another model can't read it and the
+    /// cache is per model anyway. Build it with [`InputItem::reasoning`].
+    Reasoning {
+        raw: String,
+        model: String,
+    },
 }
 
 impl InputItem {
+    /// A [`InputItem::Reasoning`] from one item's JSON text, or `None` when it is
+    /// not a JSON object of type `reasoning` with a non-empty `encrypted_content`.
+    pub fn reasoning(raw: &str, model: &str) -> Option<InputItem> {
+        let value: Value = serde_json::from_str(raw).ok()?;
+        let typed = value.get("type").and_then(Value::as_str) == Some("reasoning");
+        let sealed = value
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        (typed && sealed).then(|| InputItem::Reasoning {
+            raw: raw.to_string(),
+            model: model.trim().to_string(),
+        })
+    }
+
+    /// xAI-only opaque items: server compaction and encrypted reasoning.
+    pub fn is_opaque(&self) -> bool {
+        matches!(
+            self,
+            InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. }
+        )
+    }
+
     /// A [`InputItem::ServerCompaction`] from one item's JSON text, or `None`
     /// when it is not a JSON object of type `compaction`.
     pub fn server_compaction(raw: &str) -> Option<InputItem> {
@@ -167,6 +201,9 @@ pub enum StreamEvent {
 pub struct TurnOutput {
     pub text: String,
     pub reasoning: String,
+    /// xAI sealed reasoning ([`InputItem::Reasoning`]), in order, tagged with the
+    /// model that wrote it. It goes into the history ahead of this turn's reply.
+    pub reasoning_items: Vec<InputItem>,
     pub calls: Vec<FunctionCall>,
     pub usage: Usage,
     /// True when the stream ended as `response.incomplete` (or status
@@ -403,8 +440,9 @@ pub fn request_headers(bearer: &str, conv_id: &str) -> Vec<(String, String)> {
     ]
 }
 
+/// Every item as it would be sent, sealed reasoning included.
 pub fn input_wire_value(items: &[InputItem]) -> Value {
-    Value::Array(input_wire(items).0)
+    Value::Array(input_wire(items, None).0)
 }
 
 pub fn input_wire_len(items: &[InputItem]) -> usize {
@@ -413,7 +451,9 @@ pub fn input_wire_len(items: &[InputItem]) -> usize {
         .unwrap_or(0)
 }
 
-fn input_wire(items: &[InputItem]) -> (Vec<Value>, bool) {
+/// The `input` list for `model`. A sealed reasoning item goes only to the model
+/// that wrote it; `None` keeps every one (size estimates).
+fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
     let mut input = Vec::new();
     let mut has_image = false;
     for item in items {
@@ -458,6 +498,16 @@ fn input_wire(items: &[InputItem]) -> (Vec<Value>, bool) {
                     input.push(item);
                 }
             }
+            // Built only from valid JSON ([`InputItem::reasoning`]).
+            InputItem::Reasoning { raw, model: wrote } => {
+                let same = model.is_none_or(|m| m.trim().eq_ignore_ascii_case(wrote));
+                if let Some(item) = same
+                    .then(|| serde_json::from_str::<Value>(raw).ok())
+                    .flatten()
+                {
+                    input.push(item);
+                }
+            }
         }
     }
     (input, has_image)
@@ -470,7 +520,7 @@ pub fn compact_body(req: &CompactRequest) -> Value {
     } else {
         req.model.trim()
     };
-    json!({"model": model, "input": input_wire_value(&req.input)})
+    json!({"model": model, "input": input_wire(&req.input, Some(model)).0})
 }
 
 /// Largest compaction reply read (the opaque item grows with the conversation).
@@ -519,7 +569,12 @@ pub fn parse_compact_reply(body: &str) -> Result<CompactOutput, ClientError> {
 }
 
 pub fn responses_body(req: &ResponsesRequest) -> Value {
-    let (input, has_image) = input_wire(&req.input);
+    let model = if req.model.trim().is_empty() {
+        DEFAULT_MODEL
+    } else {
+        req.model.trim()
+    };
+    let (input, has_image) = input_wire(&req.input, Some(model));
     let mut tools = req.tools.clone();
     if req.hosted_search {
         // xAI hosted search: drop the cabin function tool of the same name so
@@ -529,11 +584,6 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         tools.push(json!({"type": "web_search"}));
         tools.push(json!({"type": "x_search"}));
     }
-    let model = if req.model.trim().is_empty() {
-        DEFAULT_MODEL
-    } else {
-        req.model.trim()
-    };
     let mut body = json!({
         "model": model,
         "stream": true,
@@ -550,13 +600,53 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
     // A non-grok id isn't ours to judge.
     let takes_effort = grokhub_core::accepts_reasoning_effort(model)
         || !model.to_ascii_lowercase().starts_with("grok-");
-    if let Some(effort) = effort.filter(|s| takes_effort && !s.is_empty() && *s != "none") {
+    // `none` switches reasoning off; only Grok 4.3 takes it (Fast).
+    let takes_none = grokhub_core::accepts_effort_none(model);
+    if let Some(effort) = effort.filter(|s| {
+        !s.is_empty()
+            && if *s == "none" {
+                takes_none
+            } else {
+                takes_effort
+            }
+    }) {
         body["reasoning"] = json!({"effort": effort});
     }
     if has_image {
         body["store"] = json!(false);
     }
+    if is_grok_model(model) {
+        // Routes this chat's requests to the same warm server (xAI's cache key
+        // on the Responses API; `x-grok-conv-id` is the Chat Completions one).
+        let key = req.conversation_id.trim();
+        if !key.is_empty() {
+            body["prompt_cache_key"] = json!(key);
+        }
+        if returns_encrypted_reasoning(model) {
+            // History is managed here, so ask for the reasoning back and pass
+            // it in on the next request ([`InputItem::Reasoning`]).
+            body["store"] = json!(false);
+            body["include"] = json!(["reasoning.encrypted_content"]);
+        }
+    }
     body
+}
+
+/// An xAI Grok id as the Responses API takes it (not an OpenRouter slug).
+pub fn is_grok_model(model: &str) -> bool {
+    model.trim().to_ascii_lowercase().starts_with("grok-")
+}
+
+/// A Grok reasoning model: xAI returns its reasoning as an encrypted item that
+/// must go back unchanged for the prompt cache to keep matching.
+pub fn returns_encrypted_reasoning(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    if !is_grok_model(&m) || m.contains("non-reasoning") || m.contains("imagine") {
+        return false;
+    }
+    grokhub_core::accepts_reasoning_effort(&m)
+        || grokhub_core::accepts_effort_none(&m)
+        || m.starts_with("grok-3-mini")
 }
 
 pub struct XaiClient {
@@ -702,7 +792,19 @@ impl XaiClient {
             req.call_timeout,
             body,
         )?;
-        read_sse(response.into_reader(), cancel, sink)
+        let mut turn = read_sse(response.into_reader(), cancel, sink)?;
+        let wrote = req.model.trim();
+        let wrote = if wrote.is_empty() {
+            DEFAULT_MODEL
+        } else {
+            wrote
+        };
+        for item in &mut turn.reasoning_items {
+            if let InputItem::Reasoning { model, .. } = item {
+                *model = wrote.to_string();
+            }
+        }
+        Ok(turn)
     }
 
     fn compact_once(
@@ -890,6 +992,7 @@ fn read_sse<R: Read>(
     let mut buf = [0u8; 4096];
     let mut text = String::new();
     let mut reasoning = String::new();
+    let mut reasoning_items = Vec::new();
     let mut calls = Vec::new();
     let mut usage = Usage::default();
     let mut truncated = false;
@@ -920,6 +1023,7 @@ fn read_sse<R: Read>(
             sink,
             &mut text,
             &mut reasoning,
+            &mut reasoning_items,
             &mut calls,
             &mut usage,
             &mut truncated,
@@ -933,6 +1037,7 @@ fn read_sse<R: Read>(
             sink,
             &mut text,
             &mut reasoning,
+            &mut reasoning_items,
             &mut calls,
             &mut usage,
             &mut truncated,
@@ -944,6 +1049,7 @@ fn read_sse<R: Read>(
         sink,
         &mut text,
         &mut reasoning,
+        &mut reasoning_items,
         &mut calls,
         &mut usage,
         &mut truncated,
@@ -952,6 +1058,7 @@ fn read_sse<R: Read>(
     Ok(TurnOutput {
         text,
         reasoning,
+        reasoning_items,
         calls,
         usage,
         truncated,
@@ -964,6 +1071,7 @@ fn fold_events(
     sink: &mut dyn FnMut(StreamEvent),
     text: &mut String,
     reasoning: &mut String,
+    reasoning_items: &mut Vec<InputItem>,
     calls: &mut Vec<FunctionCall>,
     usage: &mut Usage,
     truncated: &mut bool,
@@ -980,6 +1088,9 @@ fn fold_events(
                 sink(StreamEvent::ReasoningDelta(delta));
             }
             SseEvent::FunctionCall(call) => calls.push(call),
+            SseEvent::ReasoningItem(raw) => {
+                reasoning_items.extend(InputItem::reasoning(&raw, ""));
+            }
             SseEvent::Completed {
                 usage: next,
                 incomplete,
@@ -1180,7 +1291,11 @@ mod tests {
         assert_eq!(body["model"], DEFAULT_MODEL);
         assert_eq!(body["stream"], true);
         assert_eq!(body["reasoning"]["effort"], "high");
-        assert!(body.get("store").is_none());
+        // Grok reasoning comes back sealed: not stored on xAI's side, sent back
+        // whole, under a cache key that pins the chat to one cache.
+        assert_eq!(body["store"], false);
+        assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        assert_eq!(body["prompt_cache_key"], "c");
         let tools = body["tools"].as_array().unwrap();
         assert!(tools
             .iter()
@@ -1356,5 +1471,93 @@ mod tests {
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
             ]})
         );
+    }
+
+    fn grok_req(model: &str, effort: Option<&str>) -> ResponsesRequest {
+        ResponsesRequest {
+            model: model.into(),
+            effort: effort.map(Into::into),
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hi".into())],
+            }],
+            conversation_id: "chat-9".into(),
+            tools: Vec::new(),
+            hosted_search: false,
+            call_timeout: None,
+        }
+    }
+
+    const SEALED: &str = r#"{"id":"rs_1","summary":[],"type":"reasoning","status":"completed","encrypted_content":"gAAAA=="}"#;
+
+    #[test]
+    fn grok_bodies_carry_the_cache_key_and_ask_for_sealed_reasoning() {
+        let body = responses_body(&grok_req("grok-4.7", Some("high"))).to_string();
+        assert_eq!(
+            body,
+            r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","prompt_cache_key":"chat-9","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[]}"#
+        );
+        // A non-reasoning Grok still pins its cache, and asks for nothing sealed.
+        let body = responses_body(&grok_req("grok-4.20-0309-non-reasoning", None)).to_string();
+        assert_eq!(
+            body,
+            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.20-0309-non-reasoning","prompt_cache_key":"chat-9","stream":true,"tools":[]}"#
+        );
+        // Another provider's model gets neither.
+        let body = responses_body(&grok_req("vendor/model", None)).to_string();
+        assert_eq!(
+            body,
+            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"vendor/model","stream":true,"tools":[]}"#
+        );
+        // No chat id, no key.
+        let mut anon = grok_req("grok-4.7", None);
+        anon.conversation_id = String::new();
+        assert!(responses_body(&anon).get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn effort_none_goes_out_only_to_grok_4_3() {
+        let body = responses_body(&grok_req("grok-4.3", Some("none")));
+        assert_eq!(body["reasoning"], json!({"effort": "none"}));
+        assert_eq!(body["store"], false);
+        let body = responses_body(&grok_req("grok-4.3-latest", Some("none")));
+        assert_eq!(body["reasoning"], json!({"effort": "none"}));
+        assert!(responses_body(&grok_req("grok-4.7", Some("none")))
+            .get("reasoning")
+            .is_none());
+        assert!(responses_body(&grok_req("grok-4.30", Some("none")))
+            .get("reasoning")
+            .is_none());
+        assert!(grokhub_core::accepts_effort_none("GROK-4.3"));
+        assert!(!grokhub_core::accepts_effort_none("grok-4"));
+    }
+
+    #[test]
+    fn sealed_reasoning_goes_back_only_to_the_model_that_wrote_it() {
+        let sealed = InputItem::reasoning(SEALED, "grok-4.7").unwrap();
+        let mut req = grok_req("grok-4.7", Some("high"));
+        req.input.push(sealed.clone());
+        let body = responses_body(&req);
+        assert_eq!(
+            body["input"][1],
+            serde_json::from_str::<Value>(SEALED).unwrap()
+        );
+        assert_eq!(body["input"].as_array().unwrap().len(), 2);
+        // The router moved the chat to another model: the item stays home.
+        req.model = "GROK-4.3".into();
+        assert_eq!(responses_body(&req)["input"].as_array().unwrap().len(), 1);
+        req.model = "Grok-4.7".into();
+        assert_eq!(responses_body(&req)["input"].as_array().unwrap().len(), 2);
+        // Size estimates count every item whatever the model.
+        assert_eq!(input_wire_value(&req.input).as_array().unwrap().len(), 2);
+        // Not sealed, or not reasoning: not kept.
+        assert!(
+            InputItem::reasoning(r#"{"type":"reasoning","encrypted_content":""}"#, "m").is_none()
+        );
+        assert!(
+            InputItem::reasoning(r#"{"type":"message","encrypted_content":"x"}"#, "m").is_none()
+        );
+        assert!(InputItem::reasoning("not json", "m").is_none());
+        assert!(sealed.is_opaque());
     }
 }

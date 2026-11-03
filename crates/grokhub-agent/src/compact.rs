@@ -870,12 +870,56 @@ pub fn estimate_input_tokens(items: &[InputItem]) -> u64 {
                     .saturating_add(output.len() as u64);
             }
             // The whole item, `encrypted_content` included: never less than the blob.
-            InputItem::ServerCompaction { raw } => {
+            InputItem::ServerCompaction { raw } | InputItem::Reasoning { raw, .. } => {
                 bytes = bytes.saturating_add(raw.len() as u64);
             }
         }
     }
     estimate_token_bytes(bytes).saturating_add(tokens::estimate_image_tokens(images))
+}
+
+/// xAI bills every token of a request (cached ones too) at about twice the rate
+/// once its prompt reaches this many tokens (docs.x.ai pricing, every Grok 4 model).
+pub const XAI_PRICE_STEP_TOKENS: u64 = 200_000;
+
+/// A Grok chat compacts once its next prompt would reach this many tokens: the
+/// price step less room for the tool schemas and the estimate's error.
+pub const XAI_COMPACT_CEILING: u64 = 180_000;
+
+/// The model is billed with xAI's long-context step: a Grok id, or an
+/// OpenRouter `x-ai/` slug (OpenRouter passes xAI's prices on).
+pub fn price_step_model(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.strip_prefix("x-ai/").unwrap_or(&m).starts_with("grok-")
+}
+
+/// The window trim works in: the model's own, capped at the price step for a
+/// Grok model so trimming starts in time, whatever the window (500k, 1M).
+/// `0` (auto-compact off) stays `0`.
+pub fn trim_window(model: &str, context_length: u64) -> u64 {
+    if context_length > 0 && price_step_model(model) {
+        context_length.min(XAI_PRICE_STEP_TOKENS)
+    } else {
+        context_length
+    }
+}
+
+/// Prompt tokens the next request will carry. `mark` is the last request's real
+/// `input_tokens` from the provider and the history length it was sent with;
+/// what was added since is estimated. With no real count yet the estimate is
+/// read at 3 bytes a token (code and JSON run denser than prose).
+pub fn projected_prompt_tokens(items: &[InputItem], mark: Option<(u64, usize)>) -> u64 {
+    match mark {
+        Some((real, sent_len)) if sent_len <= items.len() => {
+            real.saturating_add(estimate_input_tokens(&items[sent_len..]))
+        }
+        _ => estimate_input_tokens(items).saturating_mul(4) / 3,
+    }
+}
+
+/// A Grok request would cross xAI's long-context price step: compact first.
+pub fn crosses_price_step(model: &str, context_length: u64, projected: u64) -> bool {
+    context_length > 0 && price_step_model(model) && projected >= XAI_COMPACT_CEILING
 }
 
 pub fn needs_auto_compact(items: &[InputItem], context_length: u64) -> bool {
@@ -1288,6 +1332,8 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
                 used = used.saturating_add(cost);
                 acc.push(items[i].clone());
             }
+            // Sealed reasoning is optional context: leave it out of the kept tail.
+            InputItem::Reasoning { .. } => continue,
             InputItem::Message { .. } | InputItem::ServerCompaction { .. } => break,
         }
     }
@@ -2357,5 +2403,42 @@ mod tests {
             crate::run::StopReason::Error(CONTEXT_STILL_TOO_LARGE.into())
         );
         assert!(out.compacted);
+    }
+
+    #[test]
+    fn grok_chats_are_held_under_the_200k_price_step() {
+        assert!(price_step_model("grok-4.7"));
+        assert!(price_step_model("x-ai/Grok-4.3"));
+        assert!(!price_step_model("vendor/model"));
+        assert!(!price_step_model("qwen3:8b"));
+        assert_eq!(trim_window("grok-4.3", 1_000_000), 200_000);
+        assert_eq!(trim_window("grok-4.7", 500_000), 200_000);
+        assert_eq!(trim_window("grok-4.7", 128_000), 128_000);
+        assert_eq!(trim_window("grok-4.7", 0), 0);
+        assert_eq!(trim_window("vendor/model", 1_000_000), 1_000_000);
+        assert!(crosses_price_step("grok-4.3", 1_000_000, 180_000));
+        assert!(!crosses_price_step("grok-4.3", 1_000_000, 179_999));
+        assert!(!crosses_price_step("grok-4.3", 0, 190_000));
+        assert!(!crosses_price_step("vendor/model", 1_000_000, 190_000));
+    }
+
+    #[test]
+    fn the_projection_starts_from_the_real_count_when_there_is_one() {
+        let items = vec![
+            text_message("user", &"a".repeat(3_000)),
+            text_message("assistant", &"b".repeat(3_000)),
+        ];
+        let added = estimate_input_tokens(&items[1..]);
+        assert_eq!(
+            projected_prompt_tokens(&items, Some((150_000, 1))),
+            150_000 + added
+        );
+        let all = estimate_input_tokens(&items);
+        assert_eq!(projected_prompt_tokens(&items, None), all * 4 / 3);
+        // A mark from a longer history (it was trimmed since) is not used.
+        assert_eq!(
+            projected_prompt_tokens(&items, Some((150_000, 5))),
+            all * 4 / 3
+        );
     }
 }

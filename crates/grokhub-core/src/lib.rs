@@ -277,8 +277,8 @@ pub use channel::{
     CHANNEL_AUTO_OFF_NOTE, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
 };
 pub use chat::{
-    accepts_reasoning_effort, agent_reasoning_effort_for_mode, cabin_spawn_model,
-    chat_request_body, chat_request_body_for_mode, chat_request_body_images,
+    accepts_effort_none, accepts_reasoning_effort, agent_reasoning_effort_for_mode,
+    cabin_spawn_model, chat_request_body, chat_request_body_for_mode, chat_request_body_images,
     chat_request_body_vision, chat_timeout_secs, effective_chat_mode, effort_label,
     extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode, needs_auth_banner,
     paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning,

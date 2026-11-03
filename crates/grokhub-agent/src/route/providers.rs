@@ -874,8 +874,8 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
             InputItem::FunctionCallOutput { call_id, output } => {
                 messages.push(json!({"role": "tool", "tool_call_id": call_id, "content": output}));
             }
-            // An xAI compaction item only xAI can read.
-            InputItem::ServerCompaction { .. } => {}
+            // xAI compaction and sealed reasoning: only xAI can read them.
+            InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
         }
     }
     let mut body = json!({"model": model, "stream": false, "messages": messages});
@@ -969,8 +969,8 @@ pub fn anthropic_body(
                     json!({"type": "tool_result", "tool_use_id": call_id, "content": output}),
                 );
             }
-            // An xAI compaction item only xAI can read.
-            InputItem::ServerCompaction { .. } => {}
+            // xAI compaction and sealed reasoning: only xAI can read them.
+            InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
         }
     }
     let max_tokens = max_output
