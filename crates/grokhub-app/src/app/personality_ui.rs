@@ -154,6 +154,7 @@ fn run_try_it(
         }),
         TryRoute::Provider(model) => {
             let req = grokhub_agent::ResponsesRequest {
+                text_format: None,
                 model: model.clone(),
                 effort: None,
                 input: try_it_input(p),

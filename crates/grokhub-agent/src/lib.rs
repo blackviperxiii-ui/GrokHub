@@ -51,8 +51,8 @@ mod unattended;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
-    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
-    Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
+    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
+    TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;

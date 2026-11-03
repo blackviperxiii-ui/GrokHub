@@ -295,6 +295,7 @@ mod tests {
 
     fn req(input: Vec<InputItem>, tools: Vec<Value>) -> ResponsesRequest {
         ResponsesRequest {
+            text_format: None,
             model: "grok-4.7".into(),
             effort: Some("high".into()),
             input,

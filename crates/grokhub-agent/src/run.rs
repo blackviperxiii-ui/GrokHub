@@ -620,6 +620,7 @@ pub fn run_loop(
             None => tools::schemas_for(&gate),
         };
         let req = ResponsesRequest {
+            text_format: None,
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
@@ -3118,6 +3119,7 @@ mod tests {
                 if output.contains(*grokhub_core::desktop_mcp::OFF_MSG)
         )));
         let body = crate::responses_body(&crate::ResponsesRequest {
+            text_format: None,
             model: "grok-4.7".into(),
             effort: None,
             input: Vec::new(),

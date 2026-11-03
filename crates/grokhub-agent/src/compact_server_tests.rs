@@ -595,6 +595,7 @@ fn other_providers_get_the_digest_and_xai_gets_only_the_sealed_item() {
     assert!(!wire.to_string().contains("OLD_TOPIC"));
 
     let req = ResponsesRequest {
+        text_format: None,
         model: "m".into(),
         effort: None,
         input: items.clone(),

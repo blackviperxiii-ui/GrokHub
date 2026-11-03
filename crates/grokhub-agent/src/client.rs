@@ -172,6 +172,33 @@ impl InputItem {
     }
 }
 
+/// A strict JSON schema the reply must follow (xAI structured outputs). Sent to
+/// Grok models only; other providers and the local model keep the caller's
+/// text parser, so the prompt still asks for the same JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextFormat {
+    /// The schema's name on the wire (letters, digits, `_`).
+    pub name: &'static str,
+    /// The JSON Schema as JSON text. Every key listed in `required`;
+    /// `additionalProperties` false.
+    pub schema: &'static str,
+}
+
+impl TextFormat {
+    /// The Responses API `text` field, or `None` when the schema text does not parse.
+    pub fn wire(&self) -> Option<Value> {
+        let schema: Value = serde_json::from_str(self.schema).ok()?;
+        Some(json!({
+            "format": {
+                "type": "json_schema",
+                "name": self.name,
+                "schema": schema,
+                "strict": true,
+            }
+        }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponsesRequest {
     pub model: String,
@@ -185,6 +212,8 @@ pub struct ResponsesRequest {
     pub hosted_search: bool,
     /// Overrides the agent timeout for this call. `None` keeps the client's idle timeout.
     pub call_timeout: Option<Duration>,
+    /// A strict JSON schema for the reply ([`TextFormat`]). `None` for free text.
+    pub text_format: Option<TextFormat>,
 }
 
 /// One call to xAI's server-side compaction.
@@ -645,6 +674,10 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
             // it in on the next request ([`InputItem::Reasoning`]).
             body["store"] = json!(false);
             body["include"] = json!(["reasoning.encrypted_content"]);
+        }
+        if let Some(text) = req.text_format.as_ref().and_then(TextFormat::wire) {
+            // Constrained decoding: the reply is the schema's JSON, no fences.
+            body["text"] = text;
         }
     }
     body
@@ -1132,6 +1165,82 @@ fn fold_events(
 mod tests {
     use super::*;
 
+    fn format_request(model: &str, format: TextFormat) -> ResponsesRequest {
+        ResponsesRequest {
+            model: model.into(),
+            effort: Some("low".into()),
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("check".into())],
+            }],
+            conversation_id: "c".into(),
+            tools: Vec::new(),
+            hosted_search: false,
+            call_timeout: None,
+            text_format: Some(format),
+        }
+    }
+
+    #[test]
+    fn every_machine_read_schema_is_strict_and_lists_every_key() {
+        for format in [
+            crate::auto_review::JUDGE_FORMAT,
+            crate::close_check::CLOSE_FORMAT,
+            crate::episode::VERIFY_FORMAT,
+        ] {
+            let wire = format.wire().expect(format.name);
+            assert_eq!(wire["format"]["type"], "json_schema", "{}", format.name);
+            assert_eq!(wire["format"]["strict"], true, "{}", format.name);
+            assert_eq!(wire["format"]["name"], format.name);
+            let mut objects = vec![wire["format"]["schema"].clone()];
+            while let Some(obj) = objects.pop() {
+                if let Some(items) = obj.get("items") {
+                    objects.push(items.clone());
+                }
+                let Some(props) = obj.get("properties").and_then(Value::as_object) else {
+                    continue;
+                };
+                assert_eq!(obj["additionalProperties"], false, "{}", format.name);
+                let required: Vec<&str> = obj["required"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect();
+                for (key, sub) in props {
+                    assert!(required.contains(&key.as_str()), "{}: {key}", format.name);
+                    objects.push(sub.clone());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_text_format_goes_to_grok_only_and_free_text_sends_none() {
+        let body = responses_body(&format_request("grok-4.3", crate::episode::VERIFY_FORMAT));
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert_eq!(body["text"]["format"]["name"], "verify_gate_verdict");
+        assert_eq!(
+            body["text"]["format"]["schema"]["properties"]["verdict"]["enum"],
+            json!(["ok", "reject"])
+        );
+        let other = responses_body(&format_request(
+            "openrouter/some-model",
+            crate::episode::VERIFY_FORMAT,
+        ));
+        assert!(other.get("text").is_none(), "{other}");
+        let mut free = format_request("grok-4.3", crate::episode::VERIFY_FORMAT);
+        free.text_format = None;
+        assert!(responses_body(&free).get("text").is_none());
+        let openai = crate::route::providers::openai_body(
+            "some-model",
+            None,
+            &format_request("some-model", crate::episode::VERIFY_FORMAT),
+        );
+        assert!(openai.get("response_format").is_none(), "{openai}");
+        assert!(openai.get("text").is_none(), "{openai}");
+    }
+
     /// A body that hands out its bytes in the given cuts, one per read.
     struct Cuts(std::collections::VecDeque<Vec<u8>>);
 
@@ -1267,6 +1376,7 @@ mod tests {
     #[test]
     fn responses_body_sends_a_legacy_minimal_effort_as_low() {
         let req = |effort: &str| ResponsesRequest {
+            text_format: None,
             model: String::new(),
             effort: Some(effort.into()),
             input: vec![InputItem::Message {
@@ -1294,6 +1404,7 @@ mod tests {
     #[test]
     fn responses_body_tools_effort_and_store_flag() {
         let plain = ResponsesRequest {
+            text_format: None,
             model: String::new(),
             effort: Some("high".into()),
             input: vec![InputItem::Message {
@@ -1329,6 +1440,7 @@ mod tests {
         assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
 
         let with_cabin = ResponsesRequest {
+            text_format: None,
             model: "grok-4.7".into(),
             effort: Some("high".into()),
             input: vec![InputItem::Message {
@@ -1371,6 +1483,7 @@ mod tests {
             .any(|t| t["type"] == "web_search" && t.get("name").is_none()));
 
         let with_image = ResponsesRequest {
+            text_format: None,
             model: "grok-4.7".into(),
             effort: Some("none".into()),
             input: vec![InputItem::Message {
@@ -1494,6 +1607,7 @@ mod tests {
 
     fn grok_req(model: &str, effort: Option<&str>) -> ResponsesRequest {
         ResponsesRequest {
+            text_format: None,
             model: model.into(),
             effort: effort.map(Into::into),
             input: vec![InputItem::Message {
