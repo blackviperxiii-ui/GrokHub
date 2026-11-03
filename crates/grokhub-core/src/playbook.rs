@@ -25,6 +25,7 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/quick-answer.toml"),
     include_str!("../assets/playbooks/plan-day.toml"),
     include_str!("../assets/playbooks/creative.toml"),
+    include_str!("../assets/playbooks/pc-tuneup.toml"),
 ];
 
 /// The moods a Brief can carry.
@@ -35,10 +36,11 @@ pub const MOODS: &[&str] = &["calm", "urgent", "frustrated", "low"];
 pub const PLAYBOOK_HEAD: &str = "Playbook for this turn:";
 /// Closes the playbook paragraph: it orders the work and never changes an approval.
 pub const PLAYBOOK_LINE: &str =
-    "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
+    "The playbook orders the work; the person's latest ask outranks it, risky steps and hard-class actions still ask first, and the cabin safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
     "system",
+    "pc-health",
     "code",
     "files",
     "desktop",
@@ -471,6 +473,7 @@ mod tests {
                 "quick-answer",
                 "plan-day",
                 "creative",
+                "pc-tuneup",
             ]
         );
         let game = parse(BUILTIN[8]).unwrap();
@@ -616,7 +619,7 @@ mod tests {
              Check: After each change, build and run the tests that cover it; a change is done only when they pass and a short summary is ready.\n\
              Undo: Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed.\n\
              Stop only when a hard approval was refused, or hardware, access or a sign-in is missing, or every approach in the playbook failed and was checked.\n\
-             The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win."
+             The playbook orders the work; the person's latest ask outranks it, risky steps and hard-class actions still ask first, and the cabin safety rules win."
         );
         // Every shipped playbook is one paragraph, so it can be swapped whole.
         for text in BUILTIN {

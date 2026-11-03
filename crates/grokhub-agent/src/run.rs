@@ -436,6 +436,11 @@ pub fn run_loop(
             volatile_intentions,
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
+        if crate::prefix_cache::settings(&config_dir).old_notes
+            == crate::prefix_cache::OldNotes::EveryTurn
+        {
+            crate::prefix_cache::drop_older_notes(history);
+        }
     } else {
         if first_turn {
             let base = style.map(|s| grokhub_core::talk::restyle_caps(input.system, s, soft_caps));
@@ -4371,7 +4376,7 @@ mod tests {
         let short = format!(
             "CABIN RULES\n\n{voice}\n\n\
              Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.\n\n\
              {VOLATILE_SAFETY_CLOSER}"
         );
         let seen = script.seen.lock().unwrap()[0].clone();
