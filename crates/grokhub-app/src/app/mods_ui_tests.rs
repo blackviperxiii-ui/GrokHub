@@ -133,7 +133,8 @@ fn offline_only_greys_search_and_keeps_installed() {
             .any(|t| t.contains("Installed mods still show")),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|t| t == "INSTALLED"), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "Installed"), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "New finds"), "{shown:?}");
     assert!(
         shown.iter().any(|t| t.contains("Singleplayer")),
         "mode note: {shown:?}"
@@ -384,6 +385,7 @@ fn for_you_cards_say_why_and_offer_not_interested() {
                 ..Default::default()
             },
             trending: false,
+            found: 0,
         },
         score: 1.0,
         why: Why::LikeYours,
@@ -394,11 +396,12 @@ fn for_you_cards_say_why_and_offer_not_interested() {
         suggest::row(ui, &rail, &mut view.clone(), &ranked)
     });
     for want in [
-        "FOR YOU",
+        "For you",
+        "Stardew Valley",
         "Lookup Anything",
-        "Stardew Valley · Like mods you have",
-        "Not interested",
-        "Open",
+        "Like mods you have",
+        "Not for me",
+        "View",
     ] {
         assert!(shown.iter().any(|t| t == want), "{want}: {shown:?}");
     }
@@ -406,7 +409,71 @@ fn for_you_cards_say_why_and_offer_not_interested() {
         suggest::row(ui, &rail, &mut view.clone(), &[])
     });
     assert!(
-        !none.iter().any(|t| t == "FOR YOU"),
+        !none.iter().any(|t| t == "For you"),
         "no suggestions, no row"
     );
+}
+
+#[test]
+fn the_title_line_says_what_mods_is_and_what_discovery_is_doing() {
+    assert_eq!(
+        page_subtitle(""),
+        "Safe, sanctioned mods for the games on this PC."
+    );
+    assert_eq!(
+        page_subtitle("Looking for new mods…"),
+        "Safe, sanctioned mods for the games on this PC. Looking for new mods…"
+    );
+    assert_eq!(new_badge(3), "3 new");
+    assert_eq!(new_badge(40), "9+ new");
+}
+
+#[test]
+fn new_finds_page_by_source_twenty_at_a_time() {
+    use grokhub_core::mods::discover::Find;
+    let find = |source: Source, id: String| Find {
+        source: source.into(),
+        m: ModSummary {
+            id,
+            ..Default::default()
+        },
+        first_seen: 1,
+        last_seen: 1,
+        trending: false,
+    };
+    let mut finds: Vec<Find> = (0..25)
+        .map(|i| find(Source::Nexus, format!("n{i}")))
+        .collect();
+    finds.push(find(Source::CurseForge, "c0".into()));
+    let first = finds_page(&finds, Source::Nexus, 0);
+    assert_eq!(first.total, Some(25));
+    assert_eq!(first.mods.len(), 20);
+    assert_eq!(first.mods[0].id, "n0");
+    let second = finds_page(&finds, Source::Nexus, 1);
+    let ids: Vec<&str> = second.mods.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["n20", "n21", "n22", "n23", "n24"]);
+    let cf = finds_page(&finds, Source::CurseForge, 0);
+    assert_eq!(cf.mods.len(), 1);
+    assert_eq!(cf.mods[0].id, "c0");
+}
+
+#[test]
+fn the_new_finds_tab_says_what_it_waits_for_when_empty() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mods-new-finds");
+    let _ = std::fs::remove_dir_all(&root);
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    let rail = mod_rail(&[game(413150, "Stardew Valley", 1, 1)], &[], false);
+    let mut view = ModsView::default();
+    view.pick("stardew".into());
+    view.tab = Tab::NewFinds;
+    let shown = texts(&mut cabin, |c, ui| {
+        c.mods_pane(ui, &rail, &mut view.clone())
+    });
+    assert!(
+        shown.iter().any(|t| t.starts_with("No new finds yet.")),
+        "{shown:?}"
+    );
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }

@@ -82,7 +82,9 @@ describe("App pages", () => {
   it("Settings keeps an unsaved edit after Chat, and an untouched field takes the fresh value", async () => {
     render(<App />);
     await userEvent.click(tab("Settings"));
-    const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+    const tabs = await screen.findByRole("navigation", { name: "Settings categories" });
+    await userEvent.click(within(tabs).getByRole("button", { name: "AI & chat" }));
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
     await userEvent.click(within(nav).getByRole("button", { name: "Defaults" }));
     const folder = await screen.findByLabelText("Work folder");
     await userEvent.clear(folder);
@@ -102,12 +104,17 @@ describe("App pages", () => {
   it("Settings opens again on the section that was open", async () => {
     render(<App />);
     await userEvent.click(tab("Settings"));
-    const nav = await screen.findByRole("navigation", { name: "Settings sections" });
-    await userEvent.click(within(nav).getByRole("button", { name: "Account" }));
+    const tabs = await screen.findByRole("navigation", { name: "Settings categories" });
+    await userEvent.click(within(tabs).getByRole("button", { name: "Account" }));
     await userEvent.click(tab("Chat"));
     await userEvent.click(tab("Settings"));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Account");
+    expect(within(tabs).getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(nav).getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
+    // The way out names the screen it goes back to.
+    await userEvent.click(screen.getByRole("button", { name: "Back to Chat" }));
+    expect(tab("Chat")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("a reply that streams in while Settings shows is in the chat log", async () => {

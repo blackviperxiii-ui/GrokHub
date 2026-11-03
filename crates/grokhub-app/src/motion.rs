@@ -6,9 +6,6 @@ use grokhub_core::cursor_motion::{travel_point, CursorMotion, TravelShape};
 
 pub mod icon;
 
-/// Settings nav click: the smooth scroll to that section. Reduced motion jumps.
-pub const SETTINGS_SCROLL_SECS: f32 = 0.2;
-
 /// Pulse idea rows enter over this long (seconds).
 pub const PULSE_CROSSFADE_SECS: f32 = 0.180;
 /// Ideas row stagger step (seconds).

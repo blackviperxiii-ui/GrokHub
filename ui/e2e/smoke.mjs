@@ -295,8 +295,37 @@ async function settled(s, el) {
   return x === x2 && y === y2;
 }
 
-/** A Settings section by its label in the Settings nav. */
+/** The top-row category each Settings page sits in (src/sections.ts). */
+const SETTINGS_CATEGORY = {
+  Account: "Account",
+  Appearance: "Look & feel",
+  Defaults: "AI & chat",
+  Personality: "AI & chat",
+  Playbooks: "AI & chat",
+  Pulse: "AI & chat",
+  "Local AI": "AI & chat",
+  General: "Your PC",
+  Behavior: "Your PC",
+  Background: "Your PC",
+  "Privacy & data": "Privacy & safety",
+  Permissions: "Privacy & safety",
+  "Web access": "Privacy & safety",
+  About: "Help & updates",
+  Labs: "Help & updates",
+};
+
+/** A Settings section by its label: its category in the top row, then the
+ * page in the side menu. */
 async function section(s, label) {
+  const category = SETTINGS_CATEGORY[label];
+  if (!category) throw new Error(`no Settings category for ${label}`);
+  const tab = await waitFor(`the ${category} category`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'settings-tabs')]/button[normalize-space()='${category}']`,
+    }),
+  );
+  await wd("POST", `${s}/element/${tab[ELEMENT]}/click`, {});
   const el = await waitFor(`the ${label} section`, () =>
     wd("POST", `${s}/element`, {
       using: "xpath",

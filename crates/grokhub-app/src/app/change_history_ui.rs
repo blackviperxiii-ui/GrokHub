@@ -149,7 +149,7 @@ impl Cabin {
             state.saved_ideas.drain(..over);
         });
         self.status = format!(
-            "Idea saved in Settings → Behavior. {} never changes its own code.",
+            "Idea saved in Settings → Your PC → Automations & limits. {} never changes its own code.",
             grokhub_core::brand::product_name()
         );
         true

@@ -741,25 +741,29 @@ fn paint_usage(
         cabin.cfg.daily_token_budget,
         cabin.harness.router.budget.week,
         cabin.cfg.weekly_spend_cap_usd,
+        cabin.harness.router.budget.cache_pct,
     );
     let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
         paint_tile_text(ui, &t, size);
+        // The daily token budget lives on AI & chat → AI models.
         if size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Budget") {
-            actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+            actions.push(ModuleAction::Settings(SettingsSec::AiModels));
         }
     });
     if card_clicked(ui, &resp, "home-usage", "Daily token budget") {
-        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+        actions.push(ModuleAction::Settings(SettingsSec::AiModels));
     }
 }
 
-/// Today's tokens against the daily cap, plus this week's spend when known.
+/// Today's tokens against the daily cap, plus this week's spend and the last
+/// day's Grok cache share when known. A share under the cache floor is flagged.
 pub(super) fn usage_text(
     used: u64,
     cap: u64,
     week: Option<crate::app::budget_ui::WeekSpend>,
     week_cap_usd: u32,
+    cache_pct: Option<u8>,
 ) -> TileText {
     use grokhub_core::{budget_level, compact_tokens, BudgetLevel};
     let caption = if cap == 0 {
@@ -774,13 +778,24 @@ pub(super) fn usage_text(
         _ if used == 0 => Tone::Quiet,
         _ => Tone::Normal,
     };
-    let detail = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
+    let spend = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
         if week_cap_usd > 0 {
             format!("${:.2} of ${week_cap_usd} this week", w.usd)
         } else {
             format!("${:.2} this week", w.usd)
         }
     });
+    let cache = cache_pct.map(|pct| {
+        if pct < grokhub_agent::cache_watch::FLOOR_PCT {
+            format!("cache {pct}% (low)")
+        } else {
+            format!("cache {pct}%")
+        }
+    });
+    let detail = match (spend, cache) {
+        (Some(s), Some(c)) => Some(format!("{s} · {c}")),
+        (s, c) => s.or(c),
+    };
     TileText {
         big: compact_tokens(used),
         caption,
@@ -1044,8 +1059,9 @@ fn paint_speeds(
         paint_tile_text(ui, &t, size);
         if size != ModuleSize::Small {
             if !f.on {
+                // The internet log row is on Your PC → App & extras.
                 if crate::cards::ghost_pill(ui, "Turn on in Settings") {
-                    actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+                    actions.push(ModuleAction::Settings(SettingsSec::Extras));
                 }
             } else if !f.testing && !f.down && crate::cards::ghost_pill(ui, "Test speed") {
                 test = true;
@@ -1056,7 +1072,7 @@ fn paint_speeds(
         cabin.start_speed_test();
     }
     if card_clicked(ui, &resp, "home-speeds", "Internet log settings") {
-        actions.push(ModuleAction::Settings(SettingsSec::Behavior));
+        actions.push(ModuleAction::Settings(SettingsSec::Extras));
     }
 }
 

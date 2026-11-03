@@ -154,21 +154,36 @@ pub const REASONING_EFFORTS: &[(&str, &str)] = &[
     ("xhigh", "Extra High"),
 ];
 
-/// Models that take `reasoning.effort` (docs.x.ai Reasoning guide): grok-4.7,
-/// grok-4.6, grok-4.5 and grok-4.20-multi-agent, with their dated or `-latest`
-/// ids. Every other xAI model answers 400 to it, and a `-non-reasoning` id never
-/// takes one.
+/// Models that take `reasoning.effort` low to xhigh (docs.x.ai Reasoning guide
+/// and model pages): grok-4.7, grok-4.6, grok-4.5, grok-4.3 and
+/// grok-4.20-multi-agent, with their dated or `-latest` ids. Every other xAI
+/// model answers 400 to it, and a `-non-reasoning` id never takes one.
 pub fn accepts_reasoning_effort(model: &str) -> bool {
     let m = model.trim().to_ascii_lowercase();
     if m.contains("non-reasoning") {
         return false;
     }
-    ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.20-multi-agent"]
-        .iter()
-        .any(|f| {
-            m.strip_prefix(f)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
-        })
+    [
+        "grok-4.7",
+        "grok-4.6",
+        "grok-4.5",
+        "grok-4.3",
+        "grok-4.20-multi-agent",
+    ]
+    .iter()
+    .any(|f| {
+        m.strip_prefix(f)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+    })
+}
+
+/// Models whose reasoning can be switched off with `reasoning.effort: "none"`:
+/// Grok 4.3 and its dated or `-latest` ids (docs.x.ai model page: none to xhigh,
+/// default low). This is what makes Fast ([`FAST_EFFORT`]) quicker than Balance.
+pub fn accepts_effort_none(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.strip_prefix("grok-4.3")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
 }
 
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
@@ -531,6 +546,8 @@ mod tests {
             "grok-4.7-latest",
             "GROK-4.6",
             "grok-4.5-0901",
+            "grok-4.3",
+            "grok-4.3-latest",
             "grok-4.20-multi-agent",
             " grok-4.20-multi-agent-0309 ",
         ] {
@@ -543,6 +560,7 @@ mod tests {
             "grok-4-fast",
             "grok-3-mini",
             "grok-4.70",
+            "grok-4.30",
             "grok-code-fast-1",
             "",
         ] {

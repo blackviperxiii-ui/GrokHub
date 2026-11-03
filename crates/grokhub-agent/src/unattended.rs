@@ -218,7 +218,7 @@ mod tests {
                     out.push_str(arguments);
                     out.push('\n');
                 }
-                InputItem::ServerCompaction { .. } => {}
+                InputItem::ServerCompaction { .. } | InputItem::Reasoning { .. } => {}
             }
         }
         out

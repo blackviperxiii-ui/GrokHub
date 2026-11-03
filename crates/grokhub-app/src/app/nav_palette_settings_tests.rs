@@ -188,7 +188,9 @@ fn settings_drops_cabin_tabs() {
     // The Host tab itself is gone; `always_permission_keeps_the_acp_session` proves
     // the variant no longer exists anywhere in the file.
     assert!(
-        settings.contains("(SettingsSec::Behavior, \"Behavior\")"),
+        settings.contains("settings_tab_pages(tab)")
+            && super::settings_tab_pages(super::SettingsTab::Pc)
+                .contains(&super::SettingsSec::Behavior),
         "the tabs that remain are the ones with a home: {settings}"
     );
     assert!(
@@ -263,7 +265,7 @@ fn settings_drops_cabin_tabs() {
 fn about_heading_opens_about_with_the_build() {
     // QA: the About heading opened a panel titled "Update" with no version.
     assert_eq!(
-        super::settings_group_home(super::SettingsGroup::About),
+        super::settings_tab_home(super::SettingsTab::Help),
         super::SettingsSec::About
     );
     let about = include_str!("settings.rs")
@@ -293,7 +295,7 @@ fn overlay_update_skips_chat() {
 #[test]
 fn general_section_opens_account() {
     assert_eq!(
-        super::settings_group_home(super::SettingsGroup::General),
+        super::settings_tab_home(super::SettingsTab::Account),
         super::SettingsSec::Account
     );
 }
@@ -311,7 +313,8 @@ fn settings_arm<'a>(settings: &'a str, start: &str, next: &str) -> &'a str {
 fn settings_defaults_section() {
     let settings = include_str!("settings.rs");
     assert!(
-        settings.contains("(SettingsSec::Defaults, \"Defaults\")"),
+        super::settings_tab_pages(super::SettingsTab::Ai).contains(&super::SettingsSec::Defaults)
+            && settings.contains("SettingsSec::Defaults => \"Defaults\""),
         "Defaults is a Settings section"
     );
     let defaults = settings_arm(
@@ -348,20 +351,13 @@ fn settings_defaults_section() {
 #[test]
 fn ai_models_holds_every_model_setting_once() {
     let settings = include_str!("settings.rs");
-    // Right under Account in the nav. Windows checks out CRLF, so compare
-    // positions rather than a literal newline.
-    let account = settings
-        .find("(SettingsSec::Account, \"Account\"),")
-        .expect("Account nav row");
-    let models = settings
-        .find("(SettingsSec::AiModels, \"AI models\"),")
-        .expect("AI models nav row");
-    let next = settings
-        .find("(SettingsSec::Privacy, \"Privacy & data\"),")
-        .expect("Privacy nav row");
-    assert!(
-        account < models && models < next,
-        "AI models sits right under Account"
+    // AI & chat is the third category; AI models is its first page.
+    assert_eq!(super::SETTINGS_TABS[1].0, super::SettingsTab::Look);
+    assert_eq!(super::SETTINGS_TABS[2].0, super::SettingsTab::Ai);
+    assert_eq!(
+        super::settings_tab_home(super::SettingsTab::Ai),
+        super::SettingsSec::AiModels,
+        "AI models opens first under AI & chat"
     );
     assert!(settings.contains("SettingsSec::AiModels => \"AI models\""));
     let models = settings_arm(
@@ -456,7 +452,10 @@ fn home_api_key_hint_points_to_defaults() {
 #[test]
 fn settings_permissions_editor_lists_rules_and_grants() {
     let settings = include_str!("settings.rs");
-    assert!(settings.contains("(SettingsSec::Permissions, \"Permissions\")"));
+    assert_eq!(
+        super::settings_tab_of(super::SettingsSec::Permissions),
+        super::SettingsTab::Privacy
+    );
     assert!(settings.contains("SettingsSec::Permissions => \"Permissions\""));
     assert!(settings.contains("SettingsSec::Permissions => self.ui_permission_editor(ui)"));
     assert!(settings.contains("fn ui_permission_editor"));
@@ -703,7 +702,7 @@ fn settings_section_titles_match_the_page() {
     );
     assert_eq!(
         super::settings::settings_sec_title(super::SettingsSec::Behavior),
-        "Behavior"
+        "PC helpers"
     );
     assert_eq!(
         super::settings::settings_sec_title(super::SettingsSec::Update),
@@ -714,11 +713,11 @@ fn settings_section_titles_match_the_page() {
         "About"
     );
     assert!(matches!(
-        super::settings::settings_group_home(super::SettingsGroup::General),
+        super::settings::settings_tab_home(super::SettingsTab::Account),
         super::SettingsSec::Account
     ));
     assert!(matches!(
-        super::settings::settings_group_home(super::SettingsGroup::About),
+        super::settings::settings_tab_home(super::SettingsTab::Help),
         super::SettingsSec::About
     ));
 }

@@ -2,6 +2,7 @@
 
 mod auto_review;
 pub mod brain;
+pub mod cache_watch;
 mod checkpoint;
 mod client;
 mod close_check;
@@ -51,12 +52,16 @@ mod unattended;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
-    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
-    Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
+    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
+    TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
+pub use eval::live::{
+    parse_budget as parse_live_budget, render_live, run_live, LiveOpts, LiveReport,
+    DEFAULT_K as LIVE_DEFAULT_K,
+};
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{

@@ -1431,6 +1431,9 @@ pub struct GrokUsage {
     /// Share of this turn's input served from the provider's prompt cache, 0-100.
     /// Set by the native engine; `None` when the turn reported no usage.
     pub turn_cache_pct: Option<u8>,
+    /// The previous turn's share when this turn's fell under the cache floor
+    /// right after it (a broken prompt prefix). Native engine only.
+    pub turn_cache_drop_from: Option<u8>,
 }
 
 /// Cached input as a whole percent of input. No input is 0%, never NaN.
@@ -1445,7 +1448,11 @@ pub fn cache_pct(cached: u64, input: u64) -> u8 {
 impl GrokUsage {
     /// "cache N%" for the usage line, when the turn carried a cache share.
     pub fn cache_note(&self) -> Option<String> {
-        self.turn_cache_pct.map(|pct| format!("cache {pct}%"))
+        let pct = self.turn_cache_pct?;
+        Some(match self.turn_cache_drop_from {
+            Some(prev) => format!("cache {pct}%, down from {prev}%"),
+            None => format!("cache {pct}%"),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1502,6 +1509,7 @@ impl GrokUsage {
         }
         if other.turn_cache_pct.is_some() {
             self.turn_cache_pct = other.turn_cache_pct;
+            self.turn_cache_drop_from = other.turn_cache_drop_from;
         }
         if other.total_tokens > 0 {
             self.total_tokens = other.total_tokens;
@@ -1728,6 +1736,7 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         meter: json_str(body, &["meter"]),
         // The CLI reports cache reads but no per-turn share.
         turn_cache_pct: None,
+        turn_cache_drop_from: None,
     };
     if u.num_turns == 0 {
         u.num_turns =
@@ -1843,6 +1852,22 @@ mod tests {
             Some(91),
             "an event without a share keeps the last one"
         );
+    }
+
+    #[test]
+    fn a_cache_drop_says_where_it_fell_from_and_the_next_turn_clears_it() {
+        let mut u = GrokUsage::default();
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(31),
+            turn_cache_drop_from: Some(92),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 31%, down from 92%"));
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(88),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 88%"));
     }
 
     use super::*;

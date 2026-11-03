@@ -386,6 +386,11 @@ impl Cabin {
         self.post_wow_cards(cards);
     }
 
+    /// The Battle.net games already found, without starting a scan.
+    pub(super) fn bnet_games_known(&self) -> &[BnetGame] {
+        &self.focus.wow.games
+    }
+
     /// The Battle.net games found so far; starts a scan the first time.
     pub(super) fn bnet_games(&mut self) -> Vec<BnetGame> {
         self.take_wow_results();
@@ -456,7 +461,7 @@ impl Cabin {
             if !self.cfg.game_watch {
                 ui.label(
                     egui::RichText::new(
-                        "Turn on the game watcher in Settings → Behavior to follow boss pulls from WoW's own combat log (type /combatlog in game).",
+                        "Turn on the game watcher in Settings → Your PC → App & extras to follow boss pulls from WoW's own combat log (type /combatlog in game).",
                     )
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),

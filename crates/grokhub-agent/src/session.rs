@@ -34,6 +34,9 @@ struct Header {
 /// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
 const SERVER_COMPACTION_RECORD: &str = "server_compaction";
 
+/// Session line type of an xAI sealed reasoning item ([`InputItem::Reasoning`]).
+const REASONING_RECORD: &str = "reasoning_item";
+
 /// What a transcript shows where xAI folded the earlier turns.
 pub const COMPACTED_NOTE: &str = "Earlier conversation compacted";
 
@@ -266,16 +269,28 @@ pub fn local_title(text: &str) -> String {
     }
 }
 
+/// A cost in xAI ticks as dollars. A tick is 1e-10 USD (docs.x.ai cost
+/// tracking), so whole cents show two places and smaller amounts keep two
+/// significant digits, down to one tick.
 pub fn format_cost_ticks(ticks: i64) -> String {
+    const TICKS_PER_USD: u64 = 10_000_000_000;
     let sign = if ticks < 0 { "-" } else { "" };
     let ticks = ticks.unsigned_abs();
-    let whole = ticks / 1_000_000;
-    let frac = ticks % 1_000_000;
-    if frac == 0 {
-        return format!("{sign}${whole}.00");
-    }
-    let mut frac_s = format!("{frac:06}");
-    while frac_s.ends_with('0') {
+    let whole = ticks / TICKS_PER_USD;
+    let frac = ticks % TICKS_PER_USD;
+    // Ten places is one tick. Keep two places, or two significant digits when
+    // the amount is under a cent.
+    let digits = format!("{frac:010}");
+    let places = if whole > 0 {
+        2
+    } else {
+        match digits.find(|c: char| c != '0') {
+            Some(first) => (first + 2).clamp(2, 10),
+            None => 2,
+        }
+    };
+    let mut frac_s = digits[..places].to_string();
+    while frac_s.len() > 2 && frac_s.ends_with('0') {
         frac_s.pop();
     }
     format!("{sign}${whole}.{frac_s}")
@@ -774,7 +789,9 @@ fn user_text(item: &InputItem) -> Option<String> {
 fn is_reply_item(item: &InputItem) -> bool {
     match item {
         InputItem::Message { role, .. } => role == "assistant",
-        InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. } => true,
+        InputItem::FunctionCall { .. }
+        | InputItem::FunctionCallOutput { .. }
+        | InputItem::Reasoning { .. } => true,
         InputItem::ServerCompaction { .. } => false,
     }
 }
@@ -820,6 +837,7 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
             Record::Item(InputItem::ServerCompaction { .. }) => {
                 out.push_str(&format!("\n_{COMPACTED_NOTE}_\n"));
             }
+            Record::Item(InputItem::Reasoning { .. }) => {}
             Record::Usage { usage, meter } => {
                 let line = usage_label(
                     usage.input_tokens,
@@ -1176,11 +1194,16 @@ fn parse_record(value: &Value) -> Option<Record> {
             call_id: string_field(value, "call_id"),
             output: string_field(value, "output"),
         })),
+        REASONING_RECORD => value
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(|raw| InputItem::reasoning(raw, &string_field(value, "model")))
+            .map(Record::Item),
         SERVER_COMPACTION_RECORD => value
             .get("raw")
             .and_then(Value::as_str)
             .and_then(InputItem::server_compaction)
-            .map(Record::Item),
+            .map(|item| Record::Item(item.with_digest(&string_field(value, "digest")))),
         "usage" => Some(Record::Usage {
             usage: Usage {
                 input_tokens: u64_field(value, "input_tokens"),
@@ -1282,9 +1305,21 @@ fn item_json(item: &InputItem) -> Value {
         }),
         // Its own type: `compaction` is this file's marker line. The item stays
         // the exact text xAI sent, as a string.
-        InputItem::ServerCompaction { raw } => json!({
-            "type": SERVER_COMPACTION_RECORD,
+        InputItem::ServerCompaction { raw, digest } => {
+            let mut record = json!({
+                "type": SERVER_COMPACTION_RECORD,
+                "raw": raw,
+            });
+            if !digest.is_empty() {
+                record["digest"] = json!(digest);
+            }
+            record
+        }
+        // Same idea: the sealed item as the exact text xAI sent, and its model.
+        InputItem::Reasoning { raw, model } => json!({
+            "type": REASONING_RECORD,
             "raw": raw,
+            "model": model,
         }),
     }
 }
@@ -1602,9 +1637,17 @@ mod tests {
         assert!(md.contains("## Tool read_file"), "{md}");
         assert!(md.contains("## Tool result"), "{md}");
         assert!(md.contains("## Usage"), "{md}");
-        assert!(md.contains("$0.000009"), "{md}");
+        assert!(md.contains("$0.0000000009"), "{md}");
         assert!(md.contains("API credits"), "{md}");
-        assert_eq!(format_cost_ticks(84_000), "$0.084");
+        // A tick is 1e-10 USD.
+        assert_eq!(format_cost_ticks(84_000), "$0.0000084");
+        assert_eq!(format_cost_ticks(37_756_000), "$0.0037");
+        assert_eq!(format_cost_ticks(840_000_000), "$0.084");
+        assert_eq!(format_cost_ticks(12_345_000_000), "$1.23");
+        assert_eq!(format_cost_ticks(5_000_000_000), "$0.50");
+        assert_eq!(format_cost_ticks(1), "$0.0000000001");
+        assert_eq!(format_cost_ticks(0), "$0.00");
+        assert_eq!(format_cost_ticks(-31_000_000), "-$0.0031");
         assert_eq!(
             local_title("<user_query>\nfix the dock\n</user_query>"),
             "fix the dock"
@@ -2112,7 +2155,10 @@ mod tests {
         let id = "native-server-compact";
         let raw =
             r#"{ "id":"cmp_7", "type":"compaction","encrypted_content":"gAAAAB+x/y==\u00e9" }"#;
-        let item = InputItem::server_compaction(raw).unwrap();
+        let digest = "User: OLD_TOPIC\nAssistant: old reply";
+        let item = InputItem::server_compaction(raw)
+            .unwrap()
+            .with_digest(digest);
         record_turn(
             id,
             "/work",
@@ -2135,6 +2181,7 @@ mod tests {
         let want = vec![
             InputItem::ServerCompaction {
                 raw: raw.to_string(),
+                digest: digest.to_string(),
             },
             assistant("keep me"),
         ];
@@ -2145,7 +2192,7 @@ mod tests {
         assert_eq!(loaded.input(), want);
         let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
         assert!(
-            file.contains(r#"{"raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
+            file.contains(r#"{"digest":"User: OLD_TOPIC\nAssistant: old reply","raw":"{ \"id\":\"cmp_7\", \"type\":\"compaction\",\"encrypted_content\":\"gAAAAB+x/y==\\u00e9\" }","type":"server_compaction"}"#),
             "{file}"
         );
         assert_eq!(
@@ -2158,5 +2205,36 @@ mod tests {
             transcript_pairs(&loaded),
             vec![("assistant".to_string(), "keep me".to_string())]
         );
+    }
+
+    /// A sealed reasoning item is saved as the exact text xAI sent, with the
+    /// model that wrote it, and resumes as the same item.
+    #[test]
+    fn a_reasoning_item_round_trips_with_its_model() {
+        let (_dir, _guard) = isolated("reasoning-item");
+        let id = "native-reasoning-item";
+        let raw =
+            r#"{"id":"rs_1","summary":[],"type":"reasoning","encrypted_content":"gAAAAB+x/y=="}"#;
+        let item = InputItem::reasoning(raw, "grok-4.7").unwrap();
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("Q"), item.clone(), assistant("A")],
+            &Usage::default(),
+            "API credits",
+            "Q",
+        )
+        .unwrap();
+        assert_eq!(
+            resume_input(id).unwrap(),
+            vec![user("Q"), item, assistant("A")]
+        );
+        let file = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(
+            file.contains(r#"{"model":"grok-4.7","raw":"{\"id\":\"rs_1\",\"summary\":[],\"type\":\"reasoning\",\"encrypted_content\":\"gAAAAB+x/y==\"}","type":"reasoning_item"}"#),
+            "{file}"
+        );
+        assert!(!export_markdown(id).unwrap().contains("gAAAA"));
     }
 }

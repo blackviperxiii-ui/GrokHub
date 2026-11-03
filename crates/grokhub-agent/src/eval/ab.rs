@@ -874,6 +874,7 @@ mod tests {
             content: vec![crate::client::ContentPart::InputText(text.into())],
         };
         let req = ResponsesRequest {
+            text_format: None,
             model: DEFAULT_MODEL.into(),
             effort: None,
             input: vec![

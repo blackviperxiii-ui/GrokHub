@@ -408,6 +408,13 @@ pub const TRIM_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
 /// Default user turns after an output before `age_out` may spool it.
 pub const AGE_OUT_USER_TURNS: usize = 3;
 
+/// Tool outputs kept whole at the end of the history; older ones are masked
+/// (spooled with a short summary and a path to re-read) once trimming is due.
+pub const KEEP_RECENT_OUTPUTS: usize = 10;
+
+/// Outputs smaller than this are never masked: the note would save little.
+pub const MASK_MIN_BYTES: usize = 2_000;
+
 const DROPPED_OUTPUT_PREFIX: &str = "[Output dropped: ";
 
 /// [`TRIM_TOOLS`] calls that returned a real result (`ToolOutput::failed` false),
@@ -446,22 +453,29 @@ pub fn trim_results(conversation_id: &str) -> std::collections::HashSet<String> 
 }
 
 /// `{config}/history_trim.toml`: `enabled = false` keeps repeated outputs;
-/// `age_out = true` spools big, old outputs (off by default: it trades quality).
+/// `age_out = false` keeps every old output whole. With `age_out` on (the
+/// default) an output is spooled once it is big and `age_out_user_turns` user
+/// turns old, or once `keep_recent_outputs` newer outputs follow it and it is
+/// at least `mask_min_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryTrimSettings {
     pub enabled: bool,
     pub age_out: bool,
     pub age_out_min_bytes: usize,
     pub age_out_user_turns: usize,
+    pub keep_recent_outputs: usize,
+    pub mask_min_bytes: usize,
 }
 
 impl Default for HistoryTrimSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            age_out: false,
+            age_out: true,
             age_out_min_bytes: TOOL_OUTPUT_COMPACT_MIN_BYTES,
             age_out_user_turns: AGE_OUT_USER_TURNS,
+            keep_recent_outputs: KEEP_RECENT_OUTPUTS,
+            mask_min_bytes: MASK_MIN_BYTES,
         }
     }
 }
@@ -485,6 +499,12 @@ fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
             }
             "age_out_user_turns" => {
                 settings.age_out_user_turns = count().unwrap_or(settings.age_out_user_turns)
+            }
+            "keep_recent_outputs" => {
+                settings.keep_recent_outputs = count().unwrap_or(settings.keep_recent_outputs)
+            }
+            "mask_min_bytes" => {
+                settings.mask_min_bytes = count().unwrap_or(settings.mask_min_bytes)
             }
             _ => {}
         }
@@ -598,11 +618,14 @@ pub fn trim_history(
 }
 
 /// With `settings.age_out` on and the history at [`HISTORY_TRIM_PERCENT`] of
-/// `ctx_len` or more: a tool output of at least `age_out_min_bytes` with
-/// `age_out_user_turns` or more user messages after it is spooled under the
-/// workspace (as [`maybe_compact_tool_output`] does) and replaced with an
-/// extractive summary plus its handle and path. No model call. Returns how
-/// many outputs changed.
+/// `ctx_len` or more: a tool output is spooled under the workspace (as
+/// [`maybe_compact_tool_output`] does) and replaced with an extractive summary
+/// plus its handle and path when it is at least `age_out_min_bytes` with
+/// `age_out_user_turns` or more user messages after it, or at least
+/// `mask_min_bytes` with `keep_recent_outputs` or more outputs after it
+/// (observation masking: the newest outputs stay whole). No model call. It
+/// runs only when trimming is due, so the prompt cache breaks once per batch.
+/// Returns how many outputs changed.
 pub fn age_out_history(
     history: &mut [InputItem],
     ctx_len: u64,
@@ -613,34 +636,59 @@ pub fn age_out_history(
     if !settings.age_out || !trim_due(history, ctx_len) {
         return 0;
     }
-    let names: std::collections::HashMap<String, String> = history
+    let calls: std::collections::HashMap<String, (String, String)> = history
         .iter()
         .filter_map(|item| match item {
-            InputItem::FunctionCall { call_id, name, .. } => Some((call_id.clone(), name.clone())),
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => Some((call_id.clone(), (name.clone(), arguments.clone()))),
             _ => None,
         })
         .collect();
     let mut users_after = 0usize;
+    let mut outputs_after = 0usize;
     let mut changed = 0;
     for item in history.iter_mut().rev() {
         match item {
             InputItem::Message { role, .. } if role == "user" => users_after += 1,
-            InputItem::FunctionCallOutput { call_id, output }
-                if users_after >= settings.age_out_user_turns
-                    && output.len() >= settings.age_out_min_bytes
-                    && !already_shrunk(output) =>
-            {
+            InputItem::FunctionCallOutput { call_id, output } => {
+                let newer = outputs_after;
+                outputs_after += 1;
+                let aged = users_after >= settings.age_out_user_turns
+                    && output.len() >= settings.age_out_min_bytes;
+                let buried = newer >= settings.keep_recent_outputs
+                    && output.len() >= settings.mask_min_bytes;
+                if !(aged || buried) || already_shrunk(output) {
+                    continue;
+                }
                 let Ok((handle, rel_path)) =
                     spool_tool_output(workspace, conversation_id, call_id, output)
                 else {
                     continue;
                 };
-                let tool = names.get(call_id.as_str()).map_or("tool", String::as_str);
+                let (tool, args) = calls
+                    .get(call_id.as_str())
+                    .map_or(("tool", ""), |(n, a)| (n.as_str(), a.as_str()));
+                // The arguments say what the output was, so the model knows
+                // whether it needs it back.
+                let mut summary = String::new();
+                if !args.is_empty() {
+                    let clipped: String = args.chars().take(160).collect();
+                    let more = if clipped.len() < args.len() {
+                        "…"
+                    } else {
+                        ""
+                    };
+                    summary.push_str(&format!("Arguments: {clipped}{more}\n"));
+                }
+                summary.push_str(&extractive_tool_output_summary(output));
                 *output = format_tool_output_compact_message(
                     tool,
                     &handle,
                     &rel_path,
-                    &extractive_tool_output_summary(output),
+                    &summary,
                     output.len(),
                 );
                 changed += 1;
@@ -691,6 +739,7 @@ fn request_tool_output_summary(
         content: vec![ContentPart::InputText(user)],
     }];
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: effort.map(str::to_string),
         input,
@@ -870,12 +919,56 @@ pub fn estimate_input_tokens(items: &[InputItem]) -> u64 {
                     .saturating_add(output.len() as u64);
             }
             // The whole item, `encrypted_content` included: never less than the blob.
-            InputItem::ServerCompaction { raw } => {
+            InputItem::ServerCompaction { raw, .. } | InputItem::Reasoning { raw, .. } => {
                 bytes = bytes.saturating_add(raw.len() as u64);
             }
         }
     }
     estimate_token_bytes(bytes).saturating_add(tokens::estimate_image_tokens(images))
+}
+
+/// xAI bills every token of a request (cached ones too) at about twice the rate
+/// once its prompt reaches this many tokens (docs.x.ai pricing, every Grok 4 model).
+pub const XAI_PRICE_STEP_TOKENS: u64 = 200_000;
+
+/// A Grok chat compacts once its next prompt would reach this many tokens: the
+/// price step less room for the tool schemas and the estimate's error.
+pub const XAI_COMPACT_CEILING: u64 = 180_000;
+
+/// The model is billed with xAI's long-context step: a Grok id, or an
+/// OpenRouter `x-ai/` slug (OpenRouter passes xAI's prices on).
+pub fn price_step_model(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.strip_prefix("x-ai/").unwrap_or(&m).starts_with("grok-")
+}
+
+/// The window trim works in: the model's own, capped at the price step for a
+/// Grok model so trimming starts in time, whatever the window (500k, 1M).
+/// `0` (auto-compact off) stays `0`.
+pub fn trim_window(model: &str, context_length: u64) -> u64 {
+    if context_length > 0 && price_step_model(model) {
+        context_length.min(XAI_PRICE_STEP_TOKENS)
+    } else {
+        context_length
+    }
+}
+
+/// Prompt tokens the next request will carry. `mark` is the last request's real
+/// `input_tokens` from the provider and the history length it was sent with;
+/// what was added since is estimated. With no real count yet the estimate is
+/// read at 3 bytes a token (code and JSON run denser than prose).
+pub fn projected_prompt_tokens(items: &[InputItem], mark: Option<(u64, usize)>) -> u64 {
+    match mark {
+        Some((real, sent_len)) if sent_len <= items.len() => {
+            real.saturating_add(estimate_input_tokens(&items[sent_len..]))
+        }
+        _ => estimate_input_tokens(items).saturating_mul(4) / 3,
+    }
+}
+
+/// A Grok request would cross xAI's long-context price step: compact first.
+pub fn crosses_price_step(model: &str, context_length: u64, projected: u64) -> bool {
+    context_length > 0 && price_step_model(model) && projected >= XAI_COMPACT_CEILING
 }
 
 pub fn needs_auto_compact(items: &[InputItem], context_length: u64) -> bool {
@@ -992,8 +1085,16 @@ fn server_compact(
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
+    let digest = fallback_digest(&rest[..tail_at]);
+    let mut items_out = out.items;
+    if let Some(at) = items_out
+        .iter()
+        .rposition(|item| matches!(item, InputItem::ServerCompaction { .. }))
+    {
+        items_out[at] = items_out[at].clone().with_digest(&digest);
+    }
     let mut rebuilt = head.to_vec();
-    rebuilt.extend(out.items);
+    rebuilt.extend(items_out);
     rebuilt.extend_from_slice(&rest[tail_at..]);
     crate::image_budget::apply_image_budget(&mut rebuilt);
     let detail = grokhub_core::wire::CompactDetail {
@@ -1008,6 +1109,107 @@ fn server_compact(
             server: Some(detail),
         },
     )))
+}
+
+/// Most characters a [`fallback_digest`] keeps. The newest lines win.
+pub const FALLBACK_DIGEST_MAX_CHARS: usize = 8_000;
+/// Characters kept from one message in the digest.
+const DIGEST_MESSAGE_CHARS: usize = 300;
+/// Characters kept from one tool call's arguments or one tool result.
+const DIGEST_TOOL_CHARS: usize = 120;
+
+/// A plain-text copy of `folded` for providers that can't read xAI's sealed
+/// compaction: one line per user or assistant message, tool call and tool result,
+/// each clipped, newest kept when the whole runs past
+/// [`FALLBACK_DIGEST_MAX_CHARS`]. An older compaction's own digest comes first,
+/// so chained compactions keep their history. Built locally, no model call.
+pub fn fallback_digest(folded: &[InputItem]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for item in folded {
+        match item {
+            InputItem::ServerCompaction { digest, .. } => {
+                lines.extend(digest.lines().map(str::to_string));
+            }
+            InputItem::Message { role, content } => {
+                let who = match role.as_str() {
+                    "user" => "User",
+                    "assistant" => "Assistant",
+                    _ => continue,
+                };
+                let mut text = Vec::new();
+                for part in content {
+                    match part {
+                        ContentPart::InputText(t) => text.push(t.as_str()),
+                        ContentPart::InputImage(_) => text.push("[image]"),
+                    }
+                }
+                let line = clip_line(&text.join(" "), DIGEST_MESSAGE_CHARS);
+                if !line.is_empty() {
+                    lines.push(format!("{who}: {line}"));
+                }
+            }
+            InputItem::FunctionCall {
+                name, arguments, ..
+            } => {
+                lines.push(format!(
+                    "Tool call: {name}({})",
+                    clip_line(arguments, DIGEST_TOOL_CHARS)
+                ));
+            }
+            InputItem::FunctionCallOutput { output, .. } => {
+                lines.push(format!(
+                    "Tool result: {}",
+                    clip_line(output, DIGEST_TOOL_CHARS)
+                ));
+            }
+            InputItem::Reasoning { .. } => {}
+        }
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    let mut cut = false;
+    for line in lines.iter().rev() {
+        let cost = line.chars().count() + 1;
+        if used + cost > FALLBACK_DIGEST_MAX_CHARS {
+            cut = true;
+            break;
+        }
+        used += cost;
+        kept.push(line);
+    }
+    kept.reverse();
+    let body = kept.join("\n");
+    let body = if cut && !body.is_empty() {
+        format!("[Older lines dropped]\n{body}")
+    } else {
+        body
+    };
+    neutralize_compaction_control_tokens(&body)
+        .replace("</conversation_summary>", "<\u{200b}/conversation_summary>")
+}
+
+/// `text` on one line (whitespace runs become one space), at most `max` chars.
+fn clip_line(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// The message OpenRouter and the local model get in place of a sealed xAI
+/// compaction item, or `None` when it has no digest.
+pub fn fallback_digest_message(digest: &str) -> Option<String> {
+    let digest = digest.trim();
+    (!digest.is_empty()).then(|| {
+        format!(
+            "This session is being continued from a previous conversation that ran out of context. \
+             The digest below is a clipped copy of the earlier portion of the conversation.\n\n\
+             <conversation_summary>\n{digest}\n</conversation_summary>"
+        )
+    })
 }
 
 /// Leading system messages, then the rest.
@@ -1089,6 +1291,7 @@ pub fn request_summary(
         content: vec![ContentPart::InputText(prompt)],
     });
     let req = ResponsesRequest {
+        text_format: None,
         model: model.to_string(),
         effort: effort.map(str::to_string),
         input,
@@ -1288,6 +1491,8 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
                 used = used.saturating_add(cost);
                 acc.push(items[i].clone());
             }
+            // Sealed reasoning is optional context: leave it out of the kept tail.
+            InputItem::Reasoning { .. } => continue,
             InputItem::Message { .. } | InputItem::ServerCompaction { .. } => break,
         }
     }
@@ -2357,5 +2562,42 @@ mod tests {
             crate::run::StopReason::Error(CONTEXT_STILL_TOO_LARGE.into())
         );
         assert!(out.compacted);
+    }
+
+    #[test]
+    fn grok_chats_are_held_under_the_200k_price_step() {
+        assert!(price_step_model("grok-4.7"));
+        assert!(price_step_model("x-ai/Grok-4.3"));
+        assert!(!price_step_model("vendor/model"));
+        assert!(!price_step_model("qwen3:8b"));
+        assert_eq!(trim_window("grok-4.3", 1_000_000), 200_000);
+        assert_eq!(trim_window("grok-4.7", 500_000), 200_000);
+        assert_eq!(trim_window("grok-4.7", 128_000), 128_000);
+        assert_eq!(trim_window("grok-4.7", 0), 0);
+        assert_eq!(trim_window("vendor/model", 1_000_000), 1_000_000);
+        assert!(crosses_price_step("grok-4.3", 1_000_000, 180_000));
+        assert!(!crosses_price_step("grok-4.3", 1_000_000, 179_999));
+        assert!(!crosses_price_step("grok-4.3", 0, 190_000));
+        assert!(!crosses_price_step("vendor/model", 1_000_000, 190_000));
+    }
+
+    #[test]
+    fn the_projection_starts_from_the_real_count_when_there_is_one() {
+        let items = vec![
+            text_message("user", &"a".repeat(3_000)),
+            text_message("assistant", &"b".repeat(3_000)),
+        ];
+        let added = estimate_input_tokens(&items[1..]);
+        assert_eq!(
+            projected_prompt_tokens(&items, Some((150_000, 1))),
+            150_000 + added
+        );
+        let all = estimate_input_tokens(&items);
+        assert_eq!(projected_prompt_tokens(&items, None), all * 4 / 3);
+        // A mark from a longer history (it was trimmed since) is not used.
+        assert_eq!(
+            projected_prompt_tokens(&items, Some((150_000, 5))),
+            all * 4 / 3
+        );
     }
 }

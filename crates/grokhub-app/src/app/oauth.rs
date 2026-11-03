@@ -624,7 +624,8 @@ mod tests {
     /// Every text Settings paints with Account in view, after it settles.
     fn settings_texts(cabin: &mut Cabin) -> Vec<String> {
         cabin.nav = Nav::Settings;
-        cabin.settings_sec = SettingsSec::Account;
+        // Sign in with Grok lives on AI models; Settings shows one page at a time.
+        cabin.settings_sec = SettingsSec::AiModels;
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let raw = egui::RawInput {

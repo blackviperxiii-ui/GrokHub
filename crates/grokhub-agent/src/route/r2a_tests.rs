@@ -654,6 +654,7 @@ impl ModelClient for Echo {
 
 fn req(model: &str, session: &str, text: &str) -> ResponsesRequest {
     ResponsesRequest {
+        text_format: None,
         model: model.into(),
         effort: None,
         input: vec![InputItem::Message {

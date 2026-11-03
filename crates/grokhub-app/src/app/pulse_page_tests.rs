@@ -1342,7 +1342,18 @@ fn behavior_settings_list_the_pc_helpers_first() {
         .split("SettingsSec::Behavior => {")
         .nth(1)
         .expect("Behavior section");
-    let helpers = behavior.find("\"PC helpers\"").expect("PC helpers header");
+    // PC helpers is its own page now: its title comes from the page name,
+    // and its rows sit in the first block of the shared Your PC arm.
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Behavior),
+        "PC helpers"
+    );
+    let helpers = behavior
+        .find("if s == SettingsSec::Behavior {")
+        .expect("PC helpers block");
+    let extras = behavior
+        .find("if s == SettingsSec::Extras {")
+        .expect("App & extras block");
     let tray = behavior
         .find("\"Tray & wall\"")
         .expect("Tray & wall header");
@@ -1353,8 +1364,8 @@ fn behavior_settings_list_the_pc_helpers_first() {
         .find("ui_downloads_tidy_row(ui)")
         .expect("tidy row");
     assert!(
-        helpers < wind && wind < tidy && tidy < tray,
-        "helpers come first"
+        helpers < wind && wind < tidy && tidy < extras && extras < tray,
+        "helpers come first, on their own page"
     );
     assert_eq!(src.matches("ui_wind_down_row(ui)").count(), 1);
     assert_eq!(src.matches("ui_downloads_tidy_row(ui)").count(), 1);
