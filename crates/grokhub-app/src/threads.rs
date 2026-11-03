@@ -1,7 +1,7 @@
 use grokhub_core::{clean_tab_title, empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use crate::config;
 
@@ -316,8 +316,8 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
     let path = threads_path();
     // Delete all waits for the save that carries the emptied list. That save
     // keeps no backup of the old history and removes the ones already made.
-    let all_cleared = ALL_CLEARED.load(Ordering::SeqCst)
-        && threads.iter().all(|t| t.main && t.messages.is_empty());
+    let all_cleared =
+        ALL_CLEARED.is_owed(&path) && threads.iter().all(|t| t.main && t.messages.is_empty());
     // A bad in-memory list must not be the only remaining copy of a long history.
     if !all_cleared && let Ok(prev) = std::fs::metadata(&path) {
         let prev_len = prev.len() as usize;
@@ -330,11 +330,7 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
         }
     }
     config::atomic_write(&path, s.as_bytes())?;
-    if all_cleared
-        && ALL_CLEARED
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    {
+    if all_cleared && ALL_CLEARED.take(&path) {
         for copy in backup_copies(&path) {
             let _ = std::fs::remove_file(copy);
         }
@@ -342,34 +338,62 @@ fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
     // Main's Clear chat waits for the save that carries the empty Main, then
     // takes Main's old transcript out of every backup, the one just made too.
     let main_now_empty = threads.iter().any(|t| t.main && t.messages.is_empty());
-    if main_now_empty
-        && MAIN_CLEARED
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    {
+    if main_now_empty && MAIN_CLEARED.take(&path) {
         scrub_main_from_backups(&path);
     }
     Ok(())
 }
 
-/// Set by [`forget_main_history`] until the next save that holds an empty Main.
-static MAIN_CLEARED: AtomicBool = AtomicBool::new(false);
+/// Backup clean-ups that wait for a save, each keyed by the `threads.json` it
+/// was asked for. Only a save of that same file takes the request. With one
+/// flag for the whole process, a save of another config dir (a dropped Cabin's
+/// worker in tests) could take it, and this file's backups kept the history.
+struct OwedCleanups(Mutex<BTreeSet<std::path::PathBuf>>);
 
-/// Main's Clear chat. The next save of an empty Main also scrubs Main's
-/// transcript out of `threads.json.bak` and the quarantined copies, so no
-/// backup keeps it. Every other chat in those copies stays as it was.
-pub fn forget_main_history() {
-    MAIN_CLEARED.store(true, Ordering::SeqCst);
+impl OwedCleanups {
+    const fn new() -> Self {
+        Self(Mutex::new(BTreeSet::new()))
+    }
+
+    fn owed(&self) -> std::sync::MutexGuard<'_, BTreeSet<std::path::PathBuf>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn ask(&self, path: std::path::PathBuf) {
+        self.owed().insert(path);
+    }
+
+    fn is_owed(&self, path: &std::path::Path) -> bool {
+        self.owed().contains(path)
+    }
+
+    /// True once per request: the save that gets true does the clean-up.
+    fn take(&self, path: &std::path::Path) -> bool {
+        self.owed().remove(path)
+    }
 }
 
-/// Set by [`forget_all_history`] until the next save of an emptied list.
-static ALL_CLEARED: AtomicBool = AtomicBool::new(false);
+/// Asked by [`forget_main_history`]; taken by the next save of that file
+/// that holds an empty Main.
+static MAIN_CLEARED: OwedCleanups = OwedCleanups::new();
 
-/// History's Delete all. The next save of the emptied list removes
-/// `threads.json.bak` and the quarantined copies instead of backing up the
-/// history that was just deleted.
+/// Main's Clear chat. The next save of an empty Main to the current
+/// `threads.json` also scrubs Main's transcript out of `threads.json.bak` and
+/// the quarantined copies, so no backup keeps it. Every other chat in those
+/// copies stays as it was.
+pub fn forget_main_history() {
+    MAIN_CLEARED.ask(threads_path());
+}
+
+/// Asked by [`forget_all_history`]; taken by the next save of that file
+/// that holds only an empty Main.
+static ALL_CLEARED: OwedCleanups = OwedCleanups::new();
+
+/// History's Delete all. The next save of the emptied list to the current
+/// `threads.json` removes `threads.json.bak` and the quarantined copies
+/// instead of backing up the history that was just deleted.
 pub fn forget_all_history() {
-    ALL_CLEARED.store(true, Ordering::SeqCst);
+    ALL_CLEARED.ask(threads_path());
 }
 
 /// `threads.json.bak` and the quarantined `.corrupt-` / `.recovered-` copies.
@@ -1356,6 +1380,102 @@ mod tests {
         assert!(!fs::read_to_string(&path).unwrap().contains("Night watch"));
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    }
+
+    /// Saves pinned to a dir, as the persist worker pins each job: another
+    /// store's save between Clear chat and this store's save takes nothing.
+    #[test]
+    fn clear_main_scrubs_its_own_store_when_another_store_saves_first() {
+        let here = crate::config::test_config_root("clear-main-here");
+        let there = crate::config::test_config_root("clear-main-there");
+        let mut main = ChatThread::new("Main", false);
+        main.main = true;
+        let mut told = main.clone();
+        told.messages_mut()
+            .push(("user".into(), "the vault code is kumquat".into()));
+        let mut other = ChatThread::new("Pier light", false);
+        other
+            .messages_mut()
+            .push(("user".into(), "bring the lamp".into()));
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            let mut theirs = main.clone();
+            theirs.messages_mut().push(("user".into(), "fig".into()));
+            save(&[theirs]).expect("seed the other store");
+            fs::copy(there.join("threads.json"), there.join("threads.json.bak"))
+                .expect("seed the other bak");
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save(&[told, other.clone()]).expect("seed save");
+            fs::copy(here.join("threads.json"), here.join("threads.json.bak")).expect("seed bak");
+            forget_main_history();
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            save(&[main.clone()]).expect("the other store saves an empty Main");
+        }
+        let theirs = fs::read_to_string(there.join("threads.json.bak")).expect("other bak");
+        assert!(
+            theirs.contains("fig"),
+            "another store's backup was scrubbed"
+        );
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save(&[main, other]).expect("save the cleared Main");
+        }
+        let bak = fs::read_to_string(here.join("threads.json.bak")).expect("bak");
+        assert!(
+            !bak.contains("kumquat"),
+            "the backup still holds Main: {bak}"
+        );
+        assert!(
+            bak.contains("bring the lamp"),
+            "the backup lost another chat"
+        );
+        let _ = fs::remove_dir_all(&here);
+        let _ = fs::remove_dir_all(&there);
+    }
+
+    #[test]
+    fn delete_all_clears_its_own_store_when_another_store_saves_first() {
+        let here = crate::config::test_config_root("delete-all-here");
+        let there = crate::config::test_config_root("delete-all-there");
+        let mut main = ChatThread::new("Main", false);
+        main.main = true;
+        let mut old = ChatThread::new("Night watch", false);
+        old.messages_mut()
+            .push(("user".into(), "keep the lamp lit".into()));
+        for (dir, list) in [
+            (&there, vec![main.clone()]),
+            (&here, vec![main.clone(), old]),
+        ] {
+            let _pin = crate::config::TestConfigDir::set(dir.clone());
+            save(&list).expect("seed save");
+            fs::copy(dir.join("threads.json"), dir.join("threads.json.bak")).expect("seed bak");
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            forget_all_history();
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            save(&[main.clone()]).expect("the other store saves only an empty Main");
+        }
+        assert!(
+            there.join("threads.json.bak").exists(),
+            "another store's backup was removed"
+        );
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save(&[main]).expect("save the emptied list");
+        }
+        assert!(
+            !here.join("threads.json.bak").exists(),
+            "no backup keeps the deleted history"
+        );
+        let _ = fs::remove_dir_all(&here);
+        let _ = fs::remove_dir_all(&there);
     }
 
     #[test]
