@@ -243,6 +243,33 @@ fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
     }
     let ws = ws.canonicalize().unwrap();
     let _pin = crate::perm::ConfigGuard::set(&config);
+    // The sandbox falls back to no token when it can't be set up, so check
+    // each step here: a failure names the step instead of a stray write.
+    let plan = crate::sandbox::plan_for_call(
+        "run_terminal_command",
+        &json!({ "command": "Get-Location" }),
+        &ws,
+    )
+    .expect("a sandbox plan");
+    assert_eq!(plan.writable.first(), Some(&ws), "{:?}", plan.writable);
+    assert!(
+        !plan.writable.iter().any(|root| outside.starts_with(root)),
+        "the outside folder sits under a writable root: {:?}",
+        plan.writable
+    );
+    crate::sandbox::windows::grant(&ws).expect("grant on the workspace");
+    drop(crate::sandbox::windows::restricted_token().expect("the restricted token"));
+    let acl = |path: &std::path::Path| {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command"])
+            .arg(format!(
+                "(Get-Acl -LiteralPath '{}').AccessToString; whoami /groups /fo list",
+                path.display()
+            ))
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
     let run =
         |command: String| crate::tools::shell::run(&ws, &json!({ "command": command }), &|| false);
 
@@ -255,8 +282,12 @@ fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
         "Set-Content -Path '{}' -Value out -ErrorAction Stop",
         target.display()
     ));
-    assert!(out.failed, "{}", out.text);
-    assert!(!target.exists(), "{}", out.text);
+    assert!(
+        out.failed && !target.exists(),
+        "a write outside the workspace went through: {}\n{}",
+        out.text,
+        acl(&outside)
+    );
 
     let out = run(format!(
         "Set-Content -Path '{}' -Value x -ErrorAction Stop",
