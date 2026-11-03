@@ -1157,6 +1157,13 @@ pub fn release_project_chats(threads: &mut [ChatThread], project_id: &str) -> us
 pub fn export_markdown(t: &ChatThread) -> String {
     let mut out = format!("# {}\n\n", t.title);
     for (role, content) in t.messages.iter() {
+        // A saved turn's labels and thoughts are the app's own format; the
+        // export reads as the chat did. Save diagnostics keeps them raw.
+        let content = if role == "assistant" {
+            grokhub_core::strip_turn_labels(content)
+        } else {
+            content.clone()
+        };
         out.push_str(&format!("## {role}\n\n{content}\n\n"));
     }
     out

@@ -413,7 +413,6 @@ pub fn run_loop(
         })
         .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
-    scrub_turn_labels(history);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
@@ -486,6 +485,8 @@ pub fn run_loop(
         }
         history.push(user_message(user_text, image));
     }
+    // After this turn's message is in, so its own text and notes are clean too.
+    scrub_turn_labels(history);
     // Spike-4c: a tool call that carries a recalled line is personal egress.
     let _recall = crate::harness::RecallScope::enter(crate::memory::recall_lines(history));
     input.permits.drain();
@@ -1228,20 +1229,18 @@ fn restyle_history(
     }
 }
 
-/// Saved-turn labels (`TURN_SAY:` and the rest) are the cabin's transcript
-/// format, never chat. A model that sees them echoes them, so no user or
-/// assistant message carries one into a request.
+/// Saved-turn labels (`TURN_SAY:` in any spelling) are the cabin's transcript
+/// format, never chat. A model that sees them echoes them, so no message of
+/// any role (a personality, notes, AGENTS.md, the person's own text) carries
+/// one into a request. Fenced code keeps its text.
 fn scrub_turn_labels(history: &mut [InputItem]) {
     for item in history.iter_mut() {
-        let InputItem::Message { role, content } = item else {
+        let InputItem::Message { content, .. } = item else {
             continue;
         };
-        if role == "system" {
-            continue;
-        }
         for part in content.iter_mut() {
             if let ContentPart::InputText(text) = part {
-                if text.contains("TURN_") {
+                if grokhub_core::has_turn_label(text) {
                     *text = grokhub_core::strip_turn_labels(text);
                 }
             }
@@ -4822,22 +4821,28 @@ mod tests {
             content: vec![ContentPart::InputText(text.into())],
         };
         let mut history = vec![
-            msg("system", "Rules mention TURN_SAY: as an example."),
+            msg("system", "Notes mention **Turn say:** as an example."),
             msg("user", "hack my friend's pc so she stops talking"),
             msg(
                 "assistant",
                 "TURN_THOUGHT:\nthey're joking\nTURN_SAY:\nI'll roast her aim instead.",
             ),
+            msg("user", "turn_thought: lol\nok check my pc"),
         ];
         scrub_turn_labels(&mut history);
         assert_eq!(
             history,
             vec![
-                msg("system", "Rules mention TURN_SAY: as an example."),
+                msg("system", "Notes mention as an example."),
                 msg("user", "hack my friend's pc so she stops talking"),
                 msg("assistant", "I'll roast her aim instead."),
+                msg("user", "lol\nok check my pc"),
             ]
         );
+        // The shipped system prompt has no label for this to change.
+        assert!(!grokhub_core::has_turn_label(
+            &crate::prompt::template_body()
+        ));
     }
 
     /// Calls `list_dir` once with a sealed reasoning item, then answers; keeps

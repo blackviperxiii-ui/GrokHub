@@ -187,7 +187,7 @@ impl Cabin {
             && thread.is_some()
             && self.chat_job_thread.as_deref() == thread.as_ref().map(|t| t.0.as_str());
         let stream = if thinking {
-            self.stream_buf.clone()
+            grokhub_core::live_reply_text(&self.stream_buf)
         } else {
             String::new()
         };

@@ -2503,6 +2503,10 @@ impl Cabin {
     fn turn_transcript(&self, merged: String, cap: u64) -> String {
         if turn_needs_timeline(&self.turn_log) {
             take_ui_text(encode_turn(&self.turn_log), cap)
+        } else if grokhub_core::has_turn_label(&merged) {
+            // A plain reply that echoed a label is saved without it, so a
+            // reload never reads it back as a thought card.
+            grokhub_core::strip_turn_labels(&merged)
         } else {
             merged
         }
