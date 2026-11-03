@@ -343,6 +343,30 @@ pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
 }
 
 /// The model this episode already runs on, unless `turn` is a new user message.
+/// From here a chat's history is big enough that switching models costs more
+/// in uncached re-sends than a cheaper model saves on the next turn.
+pub const SESSION_KEEP_TOKENS: u64 = 16_000;
+
+static SESSION_MODELS: Mutex<Option<BTreeMap<String, String>>> = Mutex::new(None);
+
+/// The model a chat's last typed turn went to.
+fn session_model(key: &str) -> Option<String> {
+    SESSION_MODELS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(key).cloned())
+}
+
+fn keep_session_model(key: &str, model: &str) {
+    let mut g = SESSION_MODELS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = g.get_or_insert_with(BTreeMap::new);
+    if m.len() >= EPISODES_CAP && !m.contains_key(key) {
+        m.clear();
+    }
+    m.insert(key.to_string(), model.to_string());
+}
+
 fn episode_model(key: &str, turn: u64) -> Option<String> {
     let c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     c.episodes
@@ -520,24 +544,45 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         .prefer_local()
         .then(super::local::runtime)
         .flatten();
-    let d = estimate(
-        &DifficultyInput {
-            text: call.text,
-            planned_tools: call.planned_tools,
-            plan_mode: call.plan_mode,
-            ctx_tokens: call.ctx_tokens,
-        },
-        rt.as_deref(),
-    );
+    let key = episode_key(call);
+    let base_row = class_row(call.class);
+    // A typed chat turn reads its own kind: the lane (its band and model
+    // needs) and the effort to start at. Everything else keeps its class.
+    let ask = (base_row.is_some_and(|r| r.class == super::ask::CHAT_CLASS)
+        && !call.text.trim().is_empty())
+    .then(|| {
+        super::ask::read(
+            call.text,
+            &super::ask::AskContext {
+                ctx_tokens: call.ctx_tokens,
+                needs_image: call.needs_image,
+                planned_tools: call.planned_tools,
+                plan_mode: call.plan_mode,
+                prior: super::ask::prior(key),
+            },
+        )
+    });
+    let lane = ask.as_ref().map(|a| a.lane());
+    let d = match &ask {
+        Some(a) if rt.is_none() => a.d,
+        _ => estimate(
+            &DifficultyInput {
+                text: call.text,
+                planned_tools: call.planned_tools,
+                plan_mode: call.plan_mode,
+                ctx_tokens: call.ctx_tokens,
+            },
+            rt.as_deref(),
+        ),
+    };
     let care_first = crate::brain::care_first_enabled(config_dir);
     let steer = ladder::steer_for_turn(call.text, care_first);
     laps.mark("route:difficulty");
-    let row = class_row(call.class);
+    let row = lane.and_then(class_row).or(base_row);
     let bump = row
         .and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps))
         .unwrap_or(0);
     laps.mark("route:overrides");
-    let key = episode_key(call);
     let holdout = holdout_eligible(call.class) && in_holdout(key);
     let facing = row.is_some_and(|r| user_facing(r.class));
     let (rejects, verify_ok) = if facing && !key.is_empty() {
@@ -557,7 +602,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         pinned,
         hard_tool: call.hard_tool,
     };
-    let st = learn::step_tune(&tuned, call.class, key, &risk);
+    let st = learn::step_tune(&tuned, lane.unwrap_or(call.class), key, &risk);
     laps.mark("route:tune");
     let turn = turn_hash(call.text);
     // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
@@ -578,7 +623,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             ..Pick::default()
         }),
         Some(r) if user_facing(r.class) && !key.is_empty() => {
-            let band = Band::tuned(r, bump, st.start.as_deref());
+            let mut band = Band::tuned(r, bump, st.start.as_deref());
+            if let Some(a) = &ask {
+                // Start where the read says, shifted by what tuning and the
+                // guard learned for the lane, inside its floor and ceiling.
+                let shift = band.start as isize - ladder::Band::of(r, 0).start as isize;
+                band.start = (a.effort as isize + shift)
+                    .clamp(band.floor as isize, band.ceiling.max(band.floor) as isize)
+                    as usize;
+            }
             if ladder::is_new_turn(key, r.class, turn) {
                 let sig = if call.signature.is_empty() {
                     topic_signature(call.text)
@@ -607,7 +660,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             let hold = ladder::hold_chat_drops(r.class, care_first);
             let start = super::goal::goal_start(
                 band,
-                ladder::start_holding(band, d, steer, true, hold),
+                // The read already weighed difficulty into the start.
+                ladder::start_holding(band, if ask.is_some() { 0.5 } else { d }, steer, true, hold),
                 steer,
                 goal.as_ref(),
             );
@@ -624,11 +678,22 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     };
     laps.mark("route:ladder");
     let recover = pick.as_ref().is_some_and(|p| p.recover);
-    let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
+    // Keyed by the call's own class, so a chat keeps one model across lanes.
+    let class_key = format!(
+        "{key}\u{1f}{}",
+        base_row.map(|r| r.class).unwrap_or(call.class)
+    );
     let sticky = if key.is_empty() {
         None
     } else {
-        episode_model(&class_key, turn)
+        episode_model(&class_key, turn).or_else(|| {
+            // A long chat keeps its model between turns: a switch re-sends the
+            // whole history uncached. Attention still breaks it for a turn
+            // that needs a stronger model; nothing downgrades it to save money.
+            (ask.is_some() && call.ctx_tokens >= SESSION_KEEP_TOKENS)
+                .then(|| session_model(key))
+                .flatten()
+        })
     };
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
@@ -708,8 +773,16 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prior_escalated,
         care_first,
         prefs: super::prefs::model_prefs(),
+        lane,
     };
-    let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    if let Some(a) = &ask {
+        route.rule_ids.splice(0..0, a.rules.iter().cloned());
+        super::ask::remember(key, a.kind);
+        if !route.no_route && !key.is_empty() {
+            keep_session_model(key, route.base.as_deref().unwrap_or(&route.model));
+        }
+    }
     laps.mark("route:choose");
     let mut tune_mark = st.mark.clone();
     if let (Some(c), Some(r)) = (&st.shadow, row) {
@@ -1198,6 +1271,21 @@ pub fn stream_routed(
         effort.clone()
     };
     sent.model = model.clone();
+    // Model and effort show nowhere; only a turn that asks gets told, truthfully.
+    let asks_route = super::ask::route_question(&text).any();
+    let route_note = |model: &str, effort: Option<&str>, local: bool| {
+        let name = local
+            .then(|| super::local_sidecar::model_name(&dir))
+            .flatten();
+        super::ask::route_note(
+            &super::identity::describe(model, name.as_deref(), false),
+            effort,
+        )
+    };
+    if asks_route {
+        let n = route_note(&model, sent.effort.as_deref(), on_device);
+        super::ask::add_route_note(&mut sent.input, &n);
+    }
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));
     let enter = timing::take_enter();
@@ -1293,6 +1381,14 @@ pub fn stream_routed(
                 on_device = true;
                 if screen.heads_up_local.is_some() {
                     note = screen.heads_up_local.clone();
+                }
+                if asks_route {
+                    let n = route_note(
+                        super::local::live_tier(),
+                        sent.effort.as_deref(),
+                        true,
+                    );
+                    super::ask::add_route_note(&mut sent.input, &n);
                 }
                 let out = super::local::serve_request(class, &sent, cancel);
                 if let Ok(turn) = &out {

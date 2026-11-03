@@ -8,6 +8,7 @@
 //! [`providers::call_model`], only under its key and your destination grant.
 
 pub mod adult;
+pub mod ask;
 pub mod attention;
 pub mod budget;
 pub mod cabin;
@@ -343,6 +344,20 @@ pub struct RouteInput<'a> {
     pub prior_escalated: bool,
     /// Care-first holds `chat:default` and the caller has already dropped keyword steer.
     pub care_first: bool,
+    /// The class-table row a typed chat turn reads as ([`ask::AskKind::lane`]):
+    /// drives the band, the model needs and the ranking. Eligibility (privacy,
+    /// the local gate, cloud-only) stays on `class`.
+    pub lane: Option<&'a str>,
+}
+
+/// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
+const LOW_RUNG: usize = 2;
+
+impl RouteInput<'_> {
+    /// The row the choice is made for: the turn's lane, else its class.
+    pub fn lane(&self) -> &str {
+        self.lane.unwrap_or(self.class)
+    }
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -506,9 +521,9 @@ impl Router {
             rules.push("registry:empty".into());
             return keep(current);
         }
-        let tier = table::SpeedQuality::of(input.class);
+        let tier = table::SpeedQuality::of(input.lane());
         let need_reasoning =
-            tier.needs_reasoning() || capabilities::class_need(input.class).require_reasoning;
+            tier.needs_reasoning() || capabilities::class_need(input.lane()).require_reasoning;
         // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick
         // still use `ids`). A provider's listing seldom says whether a model
         // reasons, so only one named non-reasoning is left out; the ranking decides.
@@ -548,10 +563,10 @@ impl Router {
         let allowed = |m: &str| {
             let added = policy::is_new_provider(reg, m);
             (input.pinned && m.trim() == current)
-                || (input.prefs.auto_allows(m, input.class, added) && !(added && over_ceiling(m)))
+                || (input.prefs.auto_allows(m, input.lane(), added) && !(added && over_ceiling(m)))
         };
         let attn = attention::decide(&attention::AttentionInput {
-            class: input.class,
+            class: input.lane(),
             text: input.text,
             d: input.d,
             needs_tools: input.needs_tools,
@@ -607,9 +622,9 @@ impl Router {
             };
             let mut ranked = if efficient {
                 rules.push("auto:efficient".into());
-                policy::rank_efficient(input.class, pool, reg, input.ctx_tokens, now_ms)
+                policy::rank_efficient(input.lane(), pool, reg, input.ctx_tokens, now_ms)
             } else {
-                policy::rank(input.class, pool, table, reg, current, input.ctx_tokens)
+                policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens)
             };
             if e2 {
                 let away = input.episode_model.unwrap_or(current).trim().to_string();
@@ -650,8 +665,8 @@ impl Router {
         let preferred: Vec<&str> = ids
             .iter()
             .copied()
-            .filter(|m| allowed(m) || table.row(input.class, m).is_some())
-            .filter(|m| auto_ok(m) || table.row(input.class, m).is_some())
+            .filter(|m| allowed(m) || table.row(input.lane(), m).is_some())
+            .filter(|m| auto_ok(m) || table.row(input.lane(), m).is_some())
             .collect();
         // A degraded model is still eligible, but a pin or an episode leaves it
         // when a healthy one can take over.
@@ -706,7 +721,7 @@ impl Router {
                     replaced: Some(from.to_string()),
                 };
             }
-            let ranked = policy::rank(input.class, pool, table, reg, current, input.ctx_tokens);
+            let ranked = policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens);
             let chain = policy::fallback_chain(from, pool);
             match chain.first().or(if input.pinned && !priced_out(from) {
                 None
@@ -758,7 +773,7 @@ impl Router {
                 // Mid-flow: break sticky when attention says the ask needs a stronger model.
                 let ranked = attention::rank_models(
                     attn.kind,
-                    input.class,
+                    input.lane(),
                     &preferred,
                     table,
                     reg,
@@ -779,7 +794,7 @@ impl Router {
         }
         if !gb
             && reg.entitlement.credential == Credential::ApiKey
-            && table.rows(input.class).is_empty()
+            && table.rows(input.lane()).is_empty()
             && ids.contains(&current)
             && !e2
             && !attn.kind.breaks_episode_sticky()
@@ -794,11 +809,11 @@ impl Router {
         }
         let mut ranked = if efficient {
             rules.push("auto:efficient".into());
-            policy::rank_efficient(input.class, &preferred, reg, input.ctx_tokens, now_ms)
+            policy::rank_efficient(input.lane(), &preferred, reg, input.ctx_tokens, now_ms)
         } else {
             attention::rank_models(
                 attn.kind,
-                input.class,
+                input.lane(),
                 &preferred,
                 table,
                 reg,
@@ -817,7 +832,7 @@ impl Router {
         }
         match ranked.first() {
             Some(m) => {
-                let row = table.row(input.class, m).is_some();
+                let row = table.row(input.lane(), m).is_some();
                 rules.push(if row { "table" } else { "model:cheapest" }.into());
                 if !row && policy::is_new_provider(reg, m) {
                     // Your model preferences put it in Auto's pool.
@@ -850,9 +865,9 @@ impl Router {
             ctx_tokens: input.ctx_tokens,
             grok_build: provider == live::PROVIDER_GROK_BUILD,
         };
-        let tier = table::SpeedQuality::of(input.class);
+        let tier = table::SpeedQuality::of(input.lane());
         let attn = attention::decide(&attention::AttentionInput {
-            class: input.class,
+            class: input.lane(),
             text: input.text,
             d: input.d,
             needs_tools: input.needs_tools,
@@ -897,7 +912,7 @@ impl Router {
             // "Never" in Settings takes a model out of every pool Auto builds.
             .filter(|id| !input.prefs.excluded(id) || keep_despite_prefs(id))
             .collect();
-        let row = policy::class_row(input.class);
+        let row = policy::class_row(input.lane());
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let mut pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
@@ -1276,7 +1291,9 @@ impl Router {
                     }
                     // A provider you added sends only an effort its own listing names.
                     None if policy::is_new_provider(reg, sent_model) => None,
-                    None if takes_effort => Some(rung_name.to_string()),
+                    // With no listing, an xAI reasoning model takes low and up:
+                    // "none" exists only where a listing names it.
+                    None if takes_effort => Some(EFFORT_LADDER[pick.rung.max(LOW_RUNG)].to_string()),
                     None => None,
                 };
                 // `minimal` and `max` are not sent: they go out as low and xhigh.
@@ -1381,7 +1398,7 @@ impl Router {
                 if model != input.current_model.trim() || input.episode_model.is_none() =>
             {
                 let why = table
-                    .row(input.class, &model)
+                    .row(input.lane(), &model)
                     .map(|r| r.why.clone())
                     .unwrap_or_default();
                 format!(
@@ -1415,6 +1432,8 @@ impl Router {
     }
 }
 
+#[cfg(test)]
+mod ask_eval;
 #[cfg(test)]
 mod auto_tests;
 
@@ -1809,6 +1828,75 @@ mod tests {
             .unwrap()
     }
 
+    /// The text of the newest user message the client was sent.
+    fn sent_user_text(echo: &Echo) -> String {
+        let g = echo.0.lock().unwrap();
+        let r = g.last().unwrap();
+        r.input
+            .iter()
+            .rev()
+            .find_map(|i| match i {
+                InputItem::Message { role, content } if role == "user" => {
+                    content.iter().find_map(|c| match c {
+                        ContentPart::InputText(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn model_and_effort_reach_the_chat_only_when_the_turn_asks() {
+        let dir = crate::harness::test_dir("route-ask-note");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let echo = Echo(Mutex::new(Vec::new()));
+        let s = auto_session("ask-note");
+        // An ordinary turn carries no route note: the words go out as typed.
+        live::stream_routed(
+            &echo,
+            &req("grok-4.7", None, &s, "tell me a joke about creepers"),
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+        .unwrap();
+        assert_eq!(sent_user_text(&echo), "tell me a joke about creepers");
+        // Asked: the answering model learns what it really is and at what effort.
+        live::stream_routed(
+            &echo,
+            &req("grok-4.7", None, &s, "btw what model are you and what effort?"),
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+        .unwrap();
+        let (model, effort) = {
+            let g = echo.0.lock().unwrap();
+            let r = g.last().unwrap();
+            (r.model.clone(), r.effort.clone())
+        };
+        let text = sent_user_text(&echo);
+        assert!(
+            text.contains(&format!("This turn is answered by `{model}` by xAI")),
+            "{text}"
+        );
+        let effort = effort.expect("a Grok reasoning model gets an effort");
+        assert!(
+            text.contains(&format!(
+                "at {} reasoning effort",
+                grokhub_core::effort_label(&effort)
+            )),
+            "{text}"
+        );
+        assert_eq!(
+            crate::prefix_cache::visible_user_text(&text),
+            "btw what model are you and what effort?"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn chat_effort_is_automatic_and_think_hard_lasts_one_episode() {
         let dir = crate::harness::test_dir("route-steer");
@@ -1845,7 +1933,7 @@ mod tests {
             Some("xhigh"),
             "a tool step in the same episode keeps it"
         );
-        let next = "Debug why the parser fails";
+        let next = "Explain how the parser works";
         assert_eq!(
             sent_effort(
                 &echo,
@@ -1867,7 +1955,8 @@ mod tests {
             .as_deref(),
             Some("high")
         );
-        // E3: a correction starts the next turn one higher than its start (low → medium).
+        // E3: a correction keeps the chat's kind (an explanation starts at
+        // medium) and starts one higher (medium → high).
         assert_eq!(
             sent_effort(
                 &echo,
@@ -1875,14 +1964,14 @@ mod tests {
                 "chat:default"
             )
             .as_deref(),
-            Some("medium")
+            Some("high")
         );
         let (effort, reason) = live::last_user_pick().unwrap();
         assert_eq!(
             (effort.as_deref(), reason.as_str()),
             (
-                Some("medium"),
-                "balanced · Medium: you corrected the last answer."
+                Some("high"),
+                "balanced · High: you corrected the last answer."
             )
         );
         let _ = std::fs::remove_dir_all(dir);
