@@ -386,6 +386,11 @@ impl Cabin {
         self.post_wow_cards(cards);
     }
 
+    /// The Battle.net games already found, without starting a scan.
+    pub(super) fn bnet_games_known(&self) -> &[BnetGame] {
+        &self.focus.wow.games
+    }
+
     /// The Battle.net games found so far; starts a scan the first time.
     pub(super) fn bnet_games(&mut self) -> Vec<BnetGame> {
         self.take_wow_results();

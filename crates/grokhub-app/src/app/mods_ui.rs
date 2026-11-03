@@ -8,8 +8,13 @@
 //! a collapsed "Can't mod" with its reason and never gets a search box.
 //! Every lookup runs off the UI thread ([`jobs`]); the cached page shows at
 //! once and the fresh one replaces it when it comes.
+//!
+//! Loadout also looks for mods on its own ([`discover`]): a new game's mods
+//! at the next sweep, every game's top mods weekly, a deeper page a day. What
+//! it finds feeds For you and each game's New finds tab.
 
 pub(super) mod agent;
+mod discover;
 mod drawer;
 mod install;
 mod jobs;
@@ -164,17 +169,26 @@ pub(super) enum Tab {
     #[default]
     Popular,
     Trending,
+    /// What discovery found for the game in the last two weeks.
+    NewFinds,
     Updated,
     Installed,
 }
 
 impl Tab {
-    const ORDER: [Tab; 4] = [Tab::Popular, Tab::Trending, Tab::Updated, Tab::Installed];
+    const ORDER: [Tab; 5] = [
+        Tab::Popular,
+        Tab::Trending,
+        Tab::NewFinds,
+        Tab::Updated,
+        Tab::Installed,
+    ];
 
     fn label(self) -> &'static str {
-        match self.browse() {
-            Some(b) => b.label(),
-            None => "Installed",
+        match self {
+            Tab::NewFinds => "New finds",
+            Tab::Installed => "Installed",
+            _ => self.browse().map_or("Popular", Browse::label),
         }
     }
 
@@ -183,7 +197,7 @@ impl Tab {
             Tab::Popular => Some(Browse::Popular),
             Tab::Trending => Some(Browse::Trending),
             Tab::Updated => Some(Browse::Updated),
-            Tab::Installed => None,
+            Tab::NewFinds | Tab::Installed => None,
         }
     }
 }
@@ -304,6 +318,22 @@ impl Cabin {
         self.cfg.explicit_personalities && self.cfg.adult_confirmed
     }
 
+    /// From the heartbeat: start a discovery sweep when one is due, from the
+    /// games already read (no new Library scan).
+    pub(super) fn tick_mod_discovery(&mut self) {
+        let now = now_ms();
+        if cfg!(test) || grokhub_core::offline::enabled() || !discover::check_due(now) {
+            return;
+        }
+        if self.heartbeat_halted(now) {
+            return;
+        }
+        let (_, steam) = self.steam_library(now);
+        let steam = steam.to_vec();
+        let rail = mod_rail(&steam, self.bnet_games_known(), minecraft_dir().is_some());
+        discover::tick(None, &rail, false);
+    }
+
     pub(super) fn ui_mods(&mut self, ui: &mut egui::Ui) {
         let id = egui::Id::new(VIEW_ID);
         let mut view: ModsView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
@@ -311,6 +341,10 @@ impl Cabin {
         let steam = steam.to_vec();
         let bnet = self.bnet_games();
         let rail = mod_rail(&steam, &bnet, minecraft_dir().is_some());
+        let offline = grokhub_core::offline::enabled();
+        if !cfg!(test) {
+            discover::tick(Some(ui.ctx()), &rail, offline);
+        }
         egui::Frame::NONE
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
@@ -322,11 +356,15 @@ impl Cabin {
                         .font(crate::theme::title_font(28.0))
                         .color(crate::theme::fg()),
                 );
-                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new(page_subtitle(&discover::status_line(offline)))
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(16.0);
                 if let Err(e) = requested_card(ui) {
                     self.status = e;
                 }
-                let offline = grokhub_core::offline::enabled();
                 let ranked = suggest::suggestions(ui.ctx(), &rail, self.adult_ok(), offline);
                 suggest::row(ui, &rail, &mut view, &ranked);
                 if view.picked.is_none() {
@@ -339,7 +377,7 @@ impl Cabin {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(RAIL_W);
-                            mods_rail(ui, &rail, &mut view);
+                            mods_rail(ui, &rail, &mut view, self.adult_ok());
                         },
                     );
                     ui.vertical(|ui| self.mods_pane(ui, &rail, &mut view));
@@ -407,8 +445,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             for tab in Tab::ORDER {
-                if crate::cards::felt_segment(ui, &tab.label().to_uppercase(), view.tab == tab)
-                    .clicked()
+                if crate::cards::felt_segment(ui, tab.label(), view.tab == tab).clicked()
                 {
                     view.tab = tab;
                     view.page = 0;
@@ -449,7 +486,18 @@ impl Cabin {
     ) {
         let game_id = game.entry.id;
         let q = view.query();
-        let slot = if offline {
+        let slot = if view.tab == Tab::NewFinds && view.searched.trim().is_empty() {
+            discover::mark_viewed(game_id);
+            jobs::Slot {
+                value: Some(finds_page(
+                    &discover::new_finds(game_id, self.adult_ok()),
+                    source,
+                    view.page,
+                )),
+                busy: false,
+                error: None,
+            }
+        } else if offline {
             jobs::Slot {
                 value: jobs::cached_page(game_id, source, &q),
                 busy: false,
@@ -500,8 +548,13 @@ impl Cabin {
         };
         let shown = visible_mods(&page, self.adult_ok());
         if shown.is_empty() && !slot.busy {
+            let line = if view.tab == Tab::NewFinds && view.searched.trim().is_empty() {
+                "No new finds yet. Loadout checks for new mods every day and lists them here."
+            } else {
+                "Nothing here yet."
+            };
             ui.label(
-                egui::RichText::new("Nothing here yet.")
+                egui::RichText::new(line)
                     .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::muted()),
             );
@@ -845,13 +898,20 @@ fn search_row(ui: &mut egui::Ui, view: &mut ModsView, offline: bool) {
 }
 
 /// The left rail: moddable games, then "Can't mod" collapsed.
-fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView) {
+fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView, adult_ok: bool) {
     egui::ScrollArea::vertical()
         .id_salt("mods-rail")
         .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Your games")
+                    .size(crate::theme::TYPE_CAPTION)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(4.0);
             for g in &rail.games {
                 let on = view.picked.as_deref() == Some(g.entry.id);
-                if rail_row(ui, g.entry.name, &g.entry.mode_note(), on) {
+                let new = discover::unseen(g.entry.id, adult_ok);
+                if rail_row(ui, g.entry.name, &g.entry.mode_note(), on, new) {
                     view.pick(g.entry.id.to_string());
                 }
             }
@@ -860,8 +920,8 @@ fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView) {
             }
             ui.add_space(12.0);
             let label = format!(
-                "{} CAN'T MOD ({})",
-                if view.show_cant { "HIDE" } else { "SHOW" },
+                "{} games Loadout can't mod ({})",
+                if view.show_cant { "Hide" } else { "Show" },
                 rail.cant.len()
             );
             if ui
@@ -869,7 +929,6 @@ fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView) {
                     egui::Label::new(
                         egui::RichText::new(label)
                             .size(crate::theme::TYPE_CAPTION)
-                            .extra_letter_spacing(1.2)
                             .color(crate::theme::muted()),
                     )
                     .sense(egui::Sense::click()),
@@ -881,7 +940,7 @@ fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView) {
             if view.show_cant {
                 for c in &rail.cant {
                     let on = view.picked.as_deref() == Some(c.key.as_str());
-                    if rail_row(ui, &c.name, &c.reason, on) {
+                    if rail_row(ui, &c.name, &c.reason, on, 0) {
                         let keep = view.show_cant;
                         view.pick(c.key.clone());
                         view.show_cant = keep;
@@ -891,7 +950,7 @@ fn mods_rail(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView) {
         });
 }
 
-fn rail_row(ui: &mut egui::Ui, name: &str, note: &str, on: bool) -> bool {
+fn rail_row(ui: &mut egui::Ui, name: &str, note: &str, on: bool, new: usize) -> bool {
     let fill = if on {
         crate::theme::raised()
     } else {
@@ -903,12 +962,27 @@ fn rail_row(ui: &mut egui::Ui, name: &str, note: &str, on: bool) -> bool {
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(
-                egui::RichText::new(name)
-                    .size(crate::theme::TYPE_BODY)
-                    .strong()
-                    .color(crate::theme::fg()),
-            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(name)
+                            .size(crate::theme::TYPE_BODY)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    )
+                    .truncate(),
+                );
+                if new > 0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(new_badge(new))
+                                .size(crate::theme::TYPE_CAPTION)
+                                .strong()
+                                .color(crate::theme::amber()),
+                        );
+                    });
+                }
+            });
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(note)
@@ -944,6 +1018,43 @@ fn cant_mod_pane(ui: &mut egui::Ui, cant: &CantMod) {
         .size(crate::theme::TYPE_CAPTION)
         .color(crate::theme::muted()),
     );
+}
+
+/// The line under the title: what Mods is, then what discovery is doing.
+pub(super) fn page_subtitle(status: &str) -> String {
+    let lead = "Safe, sanctioned mods for the games on this PC.";
+    if status.is_empty() {
+        lead.to_string()
+    } else {
+        format!("{lead} {status}")
+    }
+}
+
+/// "3 new", "9+ new".
+pub(super) fn new_badge(n: usize) -> String {
+    if n > 9 {
+        "9+ new".into()
+    } else {
+        format!("{n} new")
+    }
+}
+
+/// One page of a game's new finds on one source, as a results page.
+pub(super) fn finds_page(
+    finds: &[grokhub_core::mods::discover::Find],
+    source: Source,
+    page: u32,
+) -> Page {
+    let per = grokhub_core::mods::source::PAGE_SIZE as usize;
+    let mine: Vec<ModSummary> = finds
+        .iter()
+        .filter(|f| f.source() == source)
+        .map(|f| f.m.clone())
+        .collect();
+    Page {
+        total: Some(mine.len() as u64),
+        mods: mine.into_iter().skip(page as usize * per).take(per).collect(),
+    }
 }
 
 /// "1.2M", "34K", "980".

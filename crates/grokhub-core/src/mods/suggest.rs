@@ -22,7 +22,15 @@ pub const PLAY_WINDOW_SECS: u64 = 60 * 24 * 60 * 60;
 /// At most this many games get a pool.
 pub const MAX_GAMES: usize = 5;
 /// At most this many suggestions show.
-pub const MAX_SUGGESTIONS: usize = 8;
+pub const MAX_SUGGESTIONS: usize = 5;
+/// At most this many of them from one game, while other games have picks.
+pub const PER_GAME: usize = 2;
+/// A game Loadout found this recently counts a little before it is played.
+pub const NEW_GAME_SECS: u64 = 14 * 24 * 60 * 60;
+/// The weight a new, unplayed game gets.
+const NEW_GAME_WEIGHT: f64 = 0.5;
+/// A mod discovery found this recently gets a small lift.
+const NEW_FIND_DAYS: f64 = 7.0;
 /// A game's pool is fetched again at most once a day.
 pub const REFRESH_SECS: u64 = 24 * 60 * 60;
 const HALF_LIFE_DAYS: f64 = 14.0;
@@ -34,13 +42,19 @@ pub struct Play {
     pub game: String,
     pub playtime_min: u64,
     pub last_played: u64,
+    /// When Loadout first saw the game on this PC, 0 when unknown.
+    pub added: u64,
 }
 
 /// How much a game counts: log playtime, halved every 14 days idle. Zero
-/// outside the 60-day window.
+/// outside the 60-day window, except that a game added in the last 14 days
+/// and not played since gets a small weight so its mods can show.
 pub fn game_weight(p: &Play, now: u64) -> f64 {
     if p.last_played == 0 || now.saturating_sub(p.last_played) > PLAY_WINDOW_SECS {
-        return 0.0;
+        let new = p.added > 0
+            && p.added > p.last_played
+            && now.saturating_sub(p.added) < NEW_GAME_SECS;
+        return if new { NEW_GAME_WEIGHT } else { 0.0 };
     }
     let hours = p.playtime_min as f64 / 60.0;
     let idle_days = now.saturating_sub(p.last_played) as f64 / 86_400.0;
@@ -83,6 +97,8 @@ pub struct Candidate {
     pub m: ModSummary,
     /// From the Trending page rather than Popular.
     pub trending: bool,
+    /// When discovery first found it (Unix seconds), 0 when it came from a page.
+    pub found: u64,
 }
 
 /// What the user has, for the affinity and dependency terms.
@@ -103,6 +119,7 @@ pub struct Have {
 pub enum Why {
     Needed,
     LikeYours,
+    NewFind,
     Trending,
     Popular,
 }
@@ -112,8 +129,20 @@ impl Why {
         match self {
             Why::Needed => "Something you have needs it".into(),
             Why::LikeYours => "Like mods you have".into(),
+            Why::NewFind => format!("New find for {game}"),
             Why::Trending => format!("Trending for {game}"),
             Why::Popular => format!("Popular for {game}"),
+        }
+    }
+
+    /// The same reason without the game, for a card that already names it.
+    pub fn short(self) -> &'static str {
+        match self {
+            Why::Needed => "Something you have needs it",
+            Why::LikeYours => "Like mods you have",
+            Why::NewFind => "New find",
+            Why::Trending => "Trending now",
+            Why::Popular => "Popular",
         }
     }
 }
@@ -197,11 +226,23 @@ pub fn rank(
                 || have.needed.contains(&c.m.name.to_lowercase());
             let boost = if needed { 1.5 } else { 0.0 };
             let trend = if c.trending { 0.1 } else { 0.0 };
-            let score = weights[&c.game] * (pct + fresh + affinity + boost + trend);
+            let found_days = if c.found == 0 {
+                f64::INFINITY
+            } else {
+                (now_secs - c.found as f64).max(0.0) / 86_400.0
+            };
+            let found = if found_days < NEW_FIND_DAYS {
+                0.3 * (1.0 - found_days / NEW_FIND_DAYS)
+            } else {
+                0.0
+            };
+            let score = weights[&c.game] * (pct + fresh + affinity + boost + trend + found);
             let why = if needed {
                 Why::Needed
             } else if affinity > 0.0 {
                 Why::LikeYours
+            } else if found > 0.0 {
+                Why::NewFind
             } else if c.trending {
                 Why::Trending
             } else {
@@ -222,6 +263,35 @@ pub fn rank(
             .then_with(|| a.c.m.id.cmp(&b.c.m.id))
     });
     out
+}
+
+/// The row: the best [`MAX_SUGGESTIONS`], at most [`PER_GAME`] from one
+/// game while another game has a pick left. Spread picks come first, then
+/// the held-back ones fill any slot left.
+pub fn pick(ranked: &[Suggestion]) -> Vec<Suggestion> {
+    let mut out: Vec<&Suggestion> = Vec::new();
+    let mut per: HashMap<&str, usize> = HashMap::new();
+    let mut held = Vec::new();
+    for s in ranked {
+        if out.len() == MAX_SUGGESTIONS {
+            break;
+        }
+        let n = per.entry(&s.c.game).or_default();
+        if *n < PER_GAME {
+            *n += 1;
+            out.push(s);
+        } else {
+            held.push(s);
+        }
+    }
+    // Fewer games than slots: fill from what was held back, best first.
+    for s in held {
+        if out.len() == MAX_SUGGESTIONS {
+            break;
+        }
+        out.push(s);
+    }
+    out.into_iter().cloned().collect()
 }
 
 /// What the user told the suggestions, and when each game's pool was fetched.
@@ -274,6 +344,7 @@ mod tests {
             game: game.into(),
             playtime_min: hours * 60,
             last_played: NOW - days_ago * DAY,
+            added: 0,
         }
     }
 
@@ -288,6 +359,7 @@ mod tests {
                 ..Default::default()
             },
             trending: false,
+            found: 0,
         }
     }
 
@@ -409,6 +481,62 @@ mod tests {
             due(&idle, &Prefs::default(), NOW).is_empty(),
             "no fetch for idle games"
         );
+    }
+
+    #[test]
+    fn the_row_is_five_and_no_game_takes_more_than_two_while_others_wait() {
+        let plays = [play("a", 900, 1), play("b", 10, 1), play("c", 5, 1)];
+        let mut pool: Vec<Candidate> = (0..6)
+            .map(|i| cand("a", &format!("a{i}"), 1_000 - i))
+            .collect();
+        pool.push(cand("b", "b0", 10));
+        pool.push(cand("c", "c0", 10));
+        let ranked = rank(&pool, &plays, &Have::default(), &Prefs::default(), false, NOW);
+        assert_eq!(ranked.len(), 8);
+        let row = pick(&ranked);
+        assert_eq!(row.len(), MAX_SUGGESTIONS);
+        let games: Vec<&str> = row.iter().map(|s| s.c.game.as_str()).collect();
+        assert_eq!(games.iter().filter(|g| **g == "b").count(), 1);
+        assert_eq!(games.iter().filter(|g| **g == "c").count(), 1);
+        assert_eq!(
+            ids(&row),
+            ["a0", "a1", "b0", "c0", "a2"],
+            "two from a, then b and c, then a fills the last slot"
+        );
+        // One game alone still fills all five.
+        let only_a: Vec<Candidate> = pool.iter().filter(|c| c.game == "a").cloned().collect();
+        let row = pick(&rank(&only_a, &plays, &Have::default(), &Prefs::default(), false, NOW));
+        assert_eq!(ids(&row), ["a0", "a1", "a2", "a3", "a4"]);
+    }
+
+    #[test]
+    fn a_new_unplayed_game_gets_a_small_weight_for_two_weeks() {
+        let mut p = play("new", 0, 0);
+        p.last_played = 0;
+        assert_eq!(game_weight(&p, NOW), 0.0, "unknown add time");
+        p.added = NOW - DAY;
+        assert_eq!(game_weight(&p, NOW), 0.5);
+        p.added = NOW - 15 * DAY;
+        assert_eq!(game_weight(&p, NOW), 0.0, "past two weeks");
+        let mut idle = play("idle", 900, 90);
+        idle.added = NOW - DAY;
+        assert_eq!(game_weight(&idle, NOW), 0.5, "reinstalled after a long break");
+    }
+
+    #[test]
+    fn a_fresh_find_rises_and_says_so() {
+        let plays = [play("stardew", 10, 1)];
+        let mut fresh = cand("stardew", "new", 10);
+        fresh.found = NOW - DAY;
+        let mut stale = cand("stardew", "seen", 12);
+        stale.found = NOW - 30 * DAY;
+        // "same" is as popular as the new find; only the find's lift differs.
+        let pool = [cand("stardew", "same", 10), fresh, stale];
+        let out = rank(&pool, &plays, &Have::default(), &Prefs::default(), false, NOW);
+        assert_eq!(ids(&out), ["seen", "new", "same"]);
+        assert_eq!(out[1].why, Why::NewFind);
+        assert_eq!(out[1].why.line("Stardew Valley"), "New find for Stardew Valley");
+        assert_eq!(out[0].why, Why::Popular, "a month-old find is just popular");
     }
 
     #[test]
