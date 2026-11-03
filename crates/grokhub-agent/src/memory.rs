@@ -997,6 +997,9 @@ struct Near {
     cos: f32,
 }
 
+/// One entry with its cached vector: body, scope, created_at, hash, vector.
+type EntryRow = (String, String, i64, String, Option<Vec<u8>>);
+
 /// Up to [`SEMANTIC_POOL`] notes in `paths` at or over [`SEMANTIC_FLOOR`],
 /// closest first. Vectors missing from the cache are made and stored.
 fn nearest_entries(
@@ -1021,7 +1024,7 @@ fn nearest_entries(
     let mut args: Vec<&str> = Vec::with_capacity(paths.len() + 1);
     args.push(tag);
     args.extend(paths.iter().map(String::as_str));
-    let rows: Vec<(String, String, i64, String, Option<Vec<u8>>)> = {
+    let rows: Vec<EntryRow> = {
         let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
         stmt.query_map(params_from_iter(args), |row| {
             Ok((

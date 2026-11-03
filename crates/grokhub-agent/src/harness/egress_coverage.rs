@@ -67,6 +67,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
         "MCP registry refresh: https allowlist + public_only_resolve (official registry, no user data)",
     ),
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
+    ("grokhub-agent/src/memory_embed.rs", 1, "HuggingFace::get: guard_quiet, then public_only on every hop"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
     ("grokhub-agent/src/tools/web_search.rs", 1, "search_brave: guard_or_park before its http::agent; DDG/SearXNG go through PageFetch"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
