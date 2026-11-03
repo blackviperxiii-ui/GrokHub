@@ -408,6 +408,13 @@ pub const TRIM_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
 /// Default user turns after an output before `age_out` may spool it.
 pub const AGE_OUT_USER_TURNS: usize = 3;
 
+/// Tool outputs kept whole at the end of the history; older ones are masked
+/// (spooled with a short summary and a path to re-read) once trimming is due.
+pub const KEEP_RECENT_OUTPUTS: usize = 10;
+
+/// Outputs smaller than this are never masked: the note would save little.
+pub const MASK_MIN_BYTES: usize = 2_000;
+
 const DROPPED_OUTPUT_PREFIX: &str = "[Output dropped: ";
 
 /// [`TRIM_TOOLS`] calls that returned a real result (`ToolOutput::failed` false),
@@ -446,22 +453,29 @@ pub fn trim_results(conversation_id: &str) -> std::collections::HashSet<String> 
 }
 
 /// `{config}/history_trim.toml`: `enabled = false` keeps repeated outputs;
-/// `age_out = true` spools big, old outputs (off by default: it trades quality).
+/// `age_out = false` keeps every old output whole. With `age_out` on (the
+/// default) an output is spooled once it is big and `age_out_user_turns` user
+/// turns old, or once `keep_recent_outputs` newer outputs follow it and it is
+/// at least `mask_min_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryTrimSettings {
     pub enabled: bool,
     pub age_out: bool,
     pub age_out_min_bytes: usize,
     pub age_out_user_turns: usize,
+    pub keep_recent_outputs: usize,
+    pub mask_min_bytes: usize,
 }
 
 impl Default for HistoryTrimSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            age_out: false,
+            age_out: true,
             age_out_min_bytes: TOOL_OUTPUT_COMPACT_MIN_BYTES,
             age_out_user_turns: AGE_OUT_USER_TURNS,
+            keep_recent_outputs: KEEP_RECENT_OUTPUTS,
+            mask_min_bytes: MASK_MIN_BYTES,
         }
     }
 }
@@ -485,6 +499,12 @@ fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
             }
             "age_out_user_turns" => {
                 settings.age_out_user_turns = count().unwrap_or(settings.age_out_user_turns)
+            }
+            "keep_recent_outputs" => {
+                settings.keep_recent_outputs = count().unwrap_or(settings.keep_recent_outputs)
+            }
+            "mask_min_bytes" => {
+                settings.mask_min_bytes = count().unwrap_or(settings.mask_min_bytes)
             }
             _ => {}
         }
@@ -598,11 +618,14 @@ pub fn trim_history(
 }
 
 /// With `settings.age_out` on and the history at [`HISTORY_TRIM_PERCENT`] of
-/// `ctx_len` or more: a tool output of at least `age_out_min_bytes` with
-/// `age_out_user_turns` or more user messages after it is spooled under the
-/// workspace (as [`maybe_compact_tool_output`] does) and replaced with an
-/// extractive summary plus its handle and path. No model call. Returns how
-/// many outputs changed.
+/// `ctx_len` or more: a tool output is spooled under the workspace (as
+/// [`maybe_compact_tool_output`] does) and replaced with an extractive summary
+/// plus its handle and path when it is at least `age_out_min_bytes` with
+/// `age_out_user_turns` or more user messages after it, or at least
+/// `mask_min_bytes` with `keep_recent_outputs` or more outputs after it
+/// (observation masking: the newest outputs stay whole). No model call. It
+/// runs only when trimming is due, so the prompt cache breaks once per batch.
+/// Returns how many outputs changed.
 pub fn age_out_history(
     history: &mut [InputItem],
     ctx_len: u64,
@@ -613,34 +636,59 @@ pub fn age_out_history(
     if !settings.age_out || !trim_due(history, ctx_len) {
         return 0;
     }
-    let names: std::collections::HashMap<String, String> = history
+    let calls: std::collections::HashMap<String, (String, String)> = history
         .iter()
         .filter_map(|item| match item {
-            InputItem::FunctionCall { call_id, name, .. } => Some((call_id.clone(), name.clone())),
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => Some((call_id.clone(), (name.clone(), arguments.clone()))),
             _ => None,
         })
         .collect();
     let mut users_after = 0usize;
+    let mut outputs_after = 0usize;
     let mut changed = 0;
     for item in history.iter_mut().rev() {
         match item {
             InputItem::Message { role, .. } if role == "user" => users_after += 1,
-            InputItem::FunctionCallOutput { call_id, output }
-                if users_after >= settings.age_out_user_turns
-                    && output.len() >= settings.age_out_min_bytes
-                    && !already_shrunk(output) =>
-            {
+            InputItem::FunctionCallOutput { call_id, output } => {
+                let newer = outputs_after;
+                outputs_after += 1;
+                let aged = users_after >= settings.age_out_user_turns
+                    && output.len() >= settings.age_out_min_bytes;
+                let buried = newer >= settings.keep_recent_outputs
+                    && output.len() >= settings.mask_min_bytes;
+                if !(aged || buried) || already_shrunk(output) {
+                    continue;
+                }
                 let Ok((handle, rel_path)) =
                     spool_tool_output(workspace, conversation_id, call_id, output)
                 else {
                     continue;
                 };
-                let tool = names.get(call_id.as_str()).map_or("tool", String::as_str);
+                let (tool, args) = calls
+                    .get(call_id.as_str())
+                    .map_or(("tool", ""), |(n, a)| (n.as_str(), a.as_str()));
+                // The arguments say what the output was, so the model knows
+                // whether it needs it back.
+                let mut summary = String::new();
+                if !args.is_empty() {
+                    let clipped: String = args.chars().take(160).collect();
+                    let more = if clipped.len() < args.len() {
+                        "…"
+                    } else {
+                        ""
+                    };
+                    summary.push_str(&format!("Arguments: {clipped}{more}\n"));
+                }
+                summary.push_str(&extractive_tool_output_summary(output));
                 *output = format_tool_output_compact_message(
                     tool,
                     &handle,
                     &rel_path,
-                    &extractive_tool_output_summary(output),
+                    &summary,
                     output.len(),
                 );
                 changed += 1;
