@@ -2,6 +2,7 @@
 
 mod auto_review;
 pub mod brain;
+pub mod cache_watch;
 mod checkpoint;
 mod client;
 mod close_check;

@@ -55,6 +55,9 @@ pub struct NativeEngine {
     /// Brain 1: an ask the rules can't sort gets one fast-model call. Off
     /// means the default Brief, with no extra request.
     brief_model: bool,
+    /// The last finished turn's cache share, to spot a drop ([`crate::cache_watch`]).
+    /// `None` before the first turn and right after a compaction.
+    last_turn_cache_pct: Option<u8>,
 }
 
 /// What the cabin says about the episode a prompt belongs to (Spike-3b).
@@ -117,6 +120,7 @@ impl NativeEngine {
             episode_seed: None,
             episode: None,
             brief_model: false,
+            last_turn_cache_pct: None,
         }
     }
 
@@ -319,6 +323,26 @@ impl NativeEngine {
     }
 }
 
+impl NativeEngine {
+    /// Remember this turn's cache share and return the share it fell from, if
+    /// it dropped under the floor. A compaction rebuilds the prompt on purpose,
+    /// so it never counts and the next turn starts fresh.
+    fn watch_turn_cache(&mut self, turn: &Usage, compacted: bool) -> Option<u8> {
+        if compacted {
+            self.last_turn_cache_pct = None;
+            return None;
+        }
+        if turn.input_tokens == 0 {
+            return None;
+        }
+        let pct = grokhub_core::wire::cache_pct(turn.cached_tokens, turn.input_tokens);
+        let dropped =
+            crate::cache_watch::dropped_from(self.last_turn_cache_pct, pct, turn.input_tokens);
+        self.last_turn_cache_pct = Some(pct);
+        dropped
+    }
+}
+
 impl Engine for NativeEngine {
     fn cancel(&self) {
         self.cancel.cancel();
@@ -469,6 +493,7 @@ impl Engine for NativeEngine {
                     kind,
                     meter_used,
                     meter_limit,
+                    None,
                 ));
             }
             other => {
@@ -507,12 +532,14 @@ impl Engine for NativeEngine {
             }
         };
         let used = crate::compact::estimate_input_tokens(&self.history);
+        let dropped = self.watch_turn_cache(&delta, out.compacted);
         emit(turn_usage_event(
             &self.usage,
             &delta,
             self.auth_kind,
             used,
             self.context_length,
+            dropped,
         ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
@@ -801,6 +828,7 @@ impl NativeEngine {
             kind,
             used,
             limit,
+            None,
         ));
         emit(AcpEvent::Done {
             stop_reason: "end_turn".into(),
@@ -1028,18 +1056,21 @@ fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> Acp
 }
 
 /// Session totals plus the share of this turn's input the prompt cache served.
+/// `dropped_from` is the previous turn's share when this one fell under the floor.
 fn turn_usage_event(
     total: &Usage,
     turn: &Usage,
     kind: AuthKind,
     used: u64,
     limit: u64,
+    dropped_from: Option<u8>,
 ) -> AcpEvent {
     let mut usage = grok_usage(total, kind, used, limit);
     usage.turn_cache_pct = Some(grokhub_core::wire::cache_pct(
         turn.cached_tokens,
         turn.input_tokens,
     ));
+    usage.turn_cache_drop_from = dropped_from;
     AcpEvent::Usage(usage)
 }
 
@@ -1125,7 +1156,7 @@ mod tests {
             cached_tokens: 870,
             ..Usage::default()
         };
-        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0) {
+        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0, None) {
             AcpEvent::Usage(u) => {
                 assert_eq!(u.turn_cache_pct, Some(87));
                 assert_eq!(u.cache_read_input_tokens, 2000);
@@ -1133,7 +1164,14 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        match turn_usage_event(&Usage::default(), &Usage::default(), AuthKind::ApiKey, 0, 0) {
+        match turn_usage_event(
+            &Usage::default(),
+            &Usage::default(),
+            AuthKind::ApiKey,
+            0,
+            0,
+            None,
+        ) {
             AcpEvent::Usage(u) => assert_eq!(u.turn_cache_pct, Some(0), "0 input is 0%, not NaN"),
             other => panic!("{other:?}"),
         }
@@ -1503,6 +1541,40 @@ mod tests {
         // A clean ask after it goes out as usual.
         eng.prompt("hello there", None, &mut |_| {}).unwrap();
         assert_eq!(client.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_turn_that_loses_its_cache_is_flagged_once_and_compaction_never_counts() {
+        let dir = crate::harness::test_dir("eng-cache-drop");
+        let mut eng = engine(&dir, "cache-drop", Arc::new(Recorder::default()));
+        let turn = |input: u64, cached: u64| Usage {
+            input_tokens: input,
+            cached_tokens: cached,
+            ..Usage::default()
+        };
+        assert_eq!(
+            eng.watch_turn_cache(&turn(9_000, 0), false),
+            None,
+            "first turn"
+        );
+        assert_eq!(eng.watch_turn_cache(&turn(10_000, 9_100), false), None);
+        assert_eq!(eng.watch_turn_cache(&turn(11_000, 2_200), false), Some(91));
+        assert_eq!(
+            eng.watch_turn_cache(&turn(11_000, 2_200), false),
+            None,
+            "already low"
+        );
+        assert_eq!(eng.watch_turn_cache(&turn(12_000, 11_000), false), None);
+        assert_eq!(
+            eng.watch_turn_cache(&turn(4_000, 0), true),
+            None,
+            "compaction"
+        );
+        assert_eq!(
+            eng.watch_turn_cache(&turn(5_000, 100), false),
+            None,
+            "the turn after a compaction starts fresh"
+        );
     }
 
     fn engine(
